@@ -1709,3 +1709,215 @@ export function defersWork(text: string): boolean {
   if (holdEmoji.test(text)) return true;
   return holdsStart(lower) || holdsStart(casualWords(text).toLowerCase());
 }
+
+/**
+ * True when the words name code work by what they name: a code file name, a
+ * code artifact (a repository, a branch, a commit, a function), a command to
+ * run, a diff to review, code to pull, or a soft code noun (a file, a test, the
+ * code) outside a label of the screen. A verb alone names none: "add it to the
+ * cart", "change the size" and "remove the filter" are words for the screen.
+ */
+export function namesCodeWork(text: string): boolean {
+  return splitSentences(normalize(text).cased).some((sentence) => {
+    const noUrlCased = stripUrls(sentence)
+      .replace(/[.!?]+$/, "")
+      .trim();
+    if (!noUrlCased) return false;
+    const noUrlLower = noUrlCased.toLowerCase();
+    if (codeFileName.test(noUrlLower)) return true;
+    const unquotedCased = maskQuoted(noUrlCased);
+    const unquotedLower = unquotedCased.toLowerCase();
+    if (
+      strongCodeArtifact.test(unquotedLower) ||
+      runCommandPattern.test(unquotedLower) ||
+      reviewDiffPattern.test(unquotedLower) ||
+      pullCodePattern.test(unquotedLower)
+    )
+      return true;
+    const withoutUiLabels = unquotedCased
+      .replace(
+        /\b(?:the|this|that|a|an)\s+(?:[A-Za-z0-9_-]+\s+){1,3}(?:button|tab|menu|link|section|dialog|popup|window|bar|box|field|page|icon|item|option|dropdown)s?\b/gi,
+        " ",
+      )
+      .replace(
+        /\b(?:verification|confirmation|security|access|promo|coupon|invite|referral|zip|postal)\s+codes?\b/gi,
+        " ",
+      )
+      .replace(/\btype\s+[^,;!?]+?(?=\s+(?:in|into|on)\b|$)/gi, " ");
+    return softCodeArtifact.test(withoutUiLabels);
+  });
+}
+
+// Words while a task runs. The worker goes on by itself. Every message that
+// is not a stop steers the task: it goes to the planner as the newest words,
+// and the task keeps going. Only three kinds of words are read apart: a plain
+// request to pause ("wait", "hold on", "let me do it"), a question about how
+// the task goes ("are you done?"), and a plain go or thanks ("continue",
+// "ok", "thanks") that carries nothing to steer with. `readWords` stays the
+// reader of stops. A stop always wins.
+
+/** What a message that arrives while a computer task runs does to that task. */
+export type MidTaskKind = "stop" | "pause" | "status" | "go" | "steer";
+
+/** Where a message splits into parts for the readers below. A dot inside a web address splits nothing. */
+const midTaskSplit =
+  /[,;:!?…]+|\.+(?=\s|$)|\s+-+\s+|[–—]|\s+(?:and\s+then|and|then)\s+/;
+/** Words that may open or close any part, and say nothing by themselves. */
+const midTaskLead =
+  /^(?:(?:ok|okay|k|kk|hey|hi|hello|yo|bro|bruh|dude|man|um+|uh+|hm+|oh|ah|so|well|actually|please|pls|plz|just|now|sorry|oops|alright|all\s+right|and|but|no|nope|nah|clawdtime|clawd)\s+)+/;
+const midTaskTrail =
+  /(?:\s+(?:please|pls|plz|bro|bruh|dude|man|thanks|thank\s+you|thx|now|right\s+now|ok|okay|clawdtime))+$/;
+/** A part that only says yes, no, sorry or thanks. It may stand beside a pause. */
+const midTaskNeutral =
+  /^(?:ok|okay|k|kk|hey|hi|hello|yo|bro|bruh|dude|man|um+|uh+|hm+|oh|ah|so|well|actually|please|pls|plz|just|now|sorry|oops|alright|all\s+right|no|nope|nah|no\s+no|yes|yeah|yep|sure|right|thanks|thank\s+you|thx|ty|clawdtime|clawd)$/;
+
+/** A short time to wait: "a sec", "one moment", "2 minutes", "a bit". */
+const pauseSpan = String.raw`(?:(?:a|one|1|a\s+few|few|a\s+couple(?:\s+of)?|couple(?:\s+of)?|two|2|three|3|five|5|ten|10|\d{1,2})\s*(?:sec(?:ond)?s?|moments?|minutes?|mins?|ticks?|mo)\b|a\s+(?:bit|while|tick))`;
+/** What may follow the words of a pause and keep them a pause. */
+const pauseTail = String.raw`(?:please|pls|plz|now|right\s+now|for\s+now|for\s+(?:just\s+)?me|for\s+(?:just\s+)?${pauseSpan}|just\s+${pauseSpan}|${pauseSpan}|there|here|then|first|up|on|it|that|this|everything|all|(?:until|till)\s+i\s+(?:say(?:\s+so)?|tell\s+you(?:\s+to)?|(?:am|'m)\s+(?:back|done|ready|finished)|come\s+back|get\s+back|(?:have|'ve)\s+(?:checked|looked|done\s+it))|bro|bruh|dude|man|thanks|thank\s+you|thx)`;
+/** What the person does on the Mac themselves: "let me do it", "I'll type the code". */
+const takeVerb = String.raw`(?:do|handle|finish|type|fill(?:\s+(?:in|out))?|enter|solve|sort(?:\s+out)?|take\s+care\s+of|take\s+over|take\s+it(?:\s+from\s+here)?|take\s+(?:this|that)(?:\s+one)?|drive|fix|try|click|log\s+in|sign\s+in|pay)`;
+/** What the person looks at themselves: "let me check", "I need to see something". */
+const lookVerb = String.raw`(?:check|look|see|think|read|take\s+a\s+look|have\s+a\s+look|look\s+at)`;
+/** Up to six more words of what the person does themselves. */
+const someWords = String.raw`(?:\s+[a-z0-9'"./@-]+){0,6}`;
+/** Only what the person looks at or does now, in a few words. */
+const selfObject = String.raw`(?:\s+(?:it|this|that|something|smth|sth|first|now|myself|real\s+quick|quickly|quick|a\s+sec|for\s+a\s+sec|one\s+sec|again|here|at\s+(?:it|this|that|something)|the\s+rest|this\s+(?:one|part|step|bit)|that\s+(?:one|part|step|bit)|what\s+(?:you|u)\s+(?:did|do|are\s+doing)|the\s+(?:screen|page|mac|tab|window|captcha|code|password|login|sign[- ]?in|form|payment))){0,4}`;
+/** The words of a plain request to pause, each as a whole part of the message. */
+const pauseHead = [
+  String.raw`wait(?:\s+up)?`,
+  String.raw`hold(?:\s+(?:on|up|off|it|that|everything))?`,
+  String.raw`hang\s+(?:on|tight)`,
+  String.raw`pause(?:\s+(?:the\s+task|the\s+work|everything|for\s+now))?`,
+  String.raw`(?:just\s+)?(?:a|one|1)\s+(?:sec(?:ond)?|moment|minute|min|tick|mo)`,
+  String.raw`sec`,
+  String.raw`give\s+me\s+(?:just\s+)?(?:${pauseSpan}|(?:a\s+)?(?:sec(?:ond)?|moment|minute|min))`,
+  String.raw`not\s+(?:yet|now|just\s+yet|right\s+now)`,
+  String.raw`(?:don't|dont|do\s+not)\s+(?:do|touch|click|type|press|move)\s+anything(?:\s+(?:yet|now|else))?`,
+  String.raw`(?:let\s+me|i(?:'ll|\s+will)|i(?:'m|\s+am)\s+(?:going\s+to|gonna))\s+${takeVerb}${someWords}`,
+  String.raw`let\s+me\s+${lookVerb}${selfObject}`,
+  String.raw`i(?:'ve|\s+have)?\s+got\s+(?:this|it\s+from\s+here)`,
+  String.raw`i\s+(?:need|have)\s+to\s+(?:${takeVerb}|${lookVerb})${selfObject}`,
+  String.raw`i(?:'m|\s+am)\s+(?:checking|looking|doing|typing|reading|fixing|trying|entering|handling|taking\s+over)${selfObject}`,
+  String.raw`my\s+turn`,
+  String.raw`hands\s+off(?:\s+the\s+(?:mac|mouse|keyboard|computer))?`,
+  String.raw`(?:i(?:'ll|\s+will)\s+)?be\s+(?:right\s+)?back`,
+  String.raw`back\s+off`,
+].join("|");
+const pausePart = String.raw`(?:${pauseHead})(?:\s+${pauseTail})*`;
+const pauseClause = new RegExp(String.raw`^${pausePart}(?:\s+${pausePart})*$`);
+/** Emoji that ask to wait: a raised hand, a pause button, an hourglass. */
+const pauseEmoji = /[⏸⏳⌛✋\u{1F91A}\u{1F590}]/gu;
+
+/** The message as plain lower-case words, as written and as the casual reader reads it. */
+function midTaskReadings(text: string): string[] {
+  const forms = [text, latinLookalikes(text)];
+  const readings = new Set<string>();
+  for (const form of forms) {
+    for (const words of [normalize(form).cased, casualWords(form)])
+      readings.add(
+        words
+          .replace(pauseEmoji, " wait ")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
+  }
+  return [...readings];
+}
+
+/**
+ * The parts of a message, each with the words that open it and say nothing
+ * taken off, and once more with the words that close it taken off too ("not
+ * right now" stays itself, "wait now" is "wait").
+ */
+function midTaskParts(lower: string): string[][] {
+  return lower.split(midTaskSplit).map((part) => {
+    const opened = part
+      .replace(/["()*]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(midTaskLead, "")
+      .trim();
+    return [opened, opened.replace(midTaskTrail, "").trim()];
+  });
+}
+
+/** True when every part of the message is a pause or says nothing, and one part is a pause. */
+function pausesAll(lower: string): boolean {
+  let pause = false;
+  for (const forms of midTaskParts(lower)) {
+    if (forms.some((part) => !part || midTaskNeutral.test(part))) continue;
+    if (!forms.some((part) => pauseClause.test(part))) return false;
+    pause = true;
+  }
+  return pause;
+}
+
+/** Words that may open a question about the task. */
+const statusLead = String.raw`(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|hold\s+on|hang\s+on|and|but|uh+|um+|hm+|oh|clawdtime|clawd)[,\s]+)*`;
+/** A question about how the task goes, as a whole sentence. */
+const statusAsks = [
+  String.raw`(?:are|r)\s+(?:you|u)\s+(?:(?:still|almost|nearly|already|all)\s+)?(?:done|finished|ready|there|here|stuck|frozen|hung|working|busy|on\s+it|close|okay|ok|alive|going|awake)(?:\s+(?:yet|now|already|right\s+now|with\s+(?:it|that|this)))?`,
+  String.raw`(?:is|has)\s+(?:it|that|this|the\s+(?:task|page|tab|window|screen|site|computer\s+task|work))\s+(?:(?:still|already|all|almost)\s+)?(?:done|finished|ready|open(?:ed)?|loaded|loading|working|running|over|stuck|going)(?:\s+(?:yet|now|already))?`,
+  String.raw`what\s+(?:are|r)\s+(?:you|u)\s+(?:doing|doin|up\s+to|on|working\s+on|looking\s+at)(?:\s+(?:now|right\s+now))?`,
+  String.raw`what(?:'s|\s+is)\s+(?:happening|going\s+on|the\s+(?:status|progress|holdup|hold\s+up)|up|taking\s+(?:so\s+)?long)(?:\s+(?:now|there))?`,
+  String.raw`where\s+(?:are|r)\s+(?:you|u)(?:\s+(?:now|at|up\s+to|with\s+(?:it|that|this)))?`,
+  String.raw`how(?:'s|\s+is)\s+(?:it|that|this|the\s+task|everything|it\s+all)\s+going`,
+  String.raw`how\s+(?:are|r)\s+(?:you|u)\s+(?:doing|getting\s+on)(?:\s+with\s+(?:it|that|this))?`,
+  String.raw`how\s+far\s+(?:along\s+)?(?:are\s+(?:you|u)|is\s+it)`,
+  String.raw`how\s+(?:much\s+)?(?:long(?:er)?|more)(?:\s+(?:will\s+(?:it|this|that)\s+take|left|to\s+go|now))?`,
+  String.raw`(?:did|does)\s+(?:it|that|this)\s+work`,
+  String.raw`what\s+did\s+(?:you|u)\s+(?:just\s+)?(?:do|open|click|type)`,
+  String.raw`(?:do\s+(?:you|u)\s+)?need\s+(?:any\s+)?help(?:\s+with\s+(?:it|that|this))?`,
+].join("|");
+/** Short questions that ask only with their question mark: "done?", "still there?", "progress?". */
+const statusShort = String.raw`(?:(?:you|u)\s+(?:(?:still|almost)\s+)?(?:done|finished|there|stuck|ok|okay|working|on\s+it)(?:\s+(?:yet|now))?|still\s+(?:working|going|there|on\s+it|at\s+it)|done(?:\s+yet)?|finished(?:\s+yet)?|almost\s+(?:done|there)|(?:any\s+)?(?:progress|status|update|news)(?:\s+(?:yet|now))?|which\s+step|what\s+step(?:\s+are\s+(?:you|u)\s+on)?)`;
+const statusSentence = new RegExp(
+  String.raw`^${statusLead}(?:(?:${statusAsks})[\s?!.]*|(?:${statusShort})\s*\?[\s?!.]*)$`,
+);
+
+/** True when every sentence of the message asks how the task goes. */
+function asksStatus(lower: string): boolean {
+  const sentences = lower
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.replace(midTaskTrail, "").trim())
+    .filter(Boolean);
+  return (
+    sentences.length > 0 &&
+    sentences.every((part) =>
+      statusSentence.test(part.replace(/\s+([?!.])/g, "$1")),
+    )
+  );
+}
+
+/** A message that only says go on, yes or thanks: it carries nothing to steer with. */
+const goOnly =
+  /^(?:(?:ok|okay|k|kk|cool|nice|great|good|perfect|awesome|fine|thanks|thank\s+you|thx|ty|alright|all\s+right|sure|yes|yeah|yep|yup|right|got\s+it|sounds\s+good|looks\s+good|go|lgtm|nice\s+one|good\s+job|well\s+done|bro|dude|man|please|pls)[\s,.!]*)+$/;
+
+/**
+ * Reads a message that arrives while a computer task runs:
+ * - "stop": `readWords` reads a stop (also a typo, a lookalike letter or a
+ *   casual form of one). It always wins.
+ * - "pause": every part of the message is a plain request to pause ("wait",
+ *   "hold on", "one sec", "give me a minute", "let me do it", "I'll take it
+ *   from here"), or a yes, a no or a thanks beside one.
+ * - "status": every sentence asks how the task goes ("are you done?", "what
+ *   are you doing?").
+ * - "go": a plain continue phrase, or only a yes, an ok or a thanks.
+ * - "steer": everything else. "not instagram, flipkart", "no, the other one",
+ *   "hmm try the search box" and "that's wrong, go back" all steer.
+ */
+export function readMidTask(text: string): MidTaskKind {
+  if (readWords(text) === "stop") return "stop";
+  const readings = midTaskReadings(text);
+  if (readings.some(pausesAll)) return "pause";
+  if (readings.some(asksStatus)) return "status";
+  if (
+    readWords(text) === "continue" ||
+    readings.some((words) => !words.replace(/[\s,.!]+/g, "")) ||
+    readings.some((words) => goOnly.test(words))
+  )
+    return "go";
+  return "steer";
+}

@@ -22,9 +22,13 @@
  * - Done counts only after an observation that came after the last action.
  * - A request whose result is not known is never repeated. It is `uncertain`
  *   and blocks new work until the person clears it.
- * - What the person says while a request runs is for that request. It goes to
- *   the planner as their newest words. It starts no second request, it is no
- *   answer to a question, and it is no yes to an action.
+ * - What the person says while a request runs is for that request, and the
+ *   request goes on by itself (`readMidTask` in `orders.ts`). Every message
+ *   that is not a stop goes to the planner as their newest words. It starts
+ *   no second request, it is no answer to a question, and it is no yes to an
+ *   action. Only a plain request to pause pauses, and any next message ends
+ *   the pause. With the owner's trust a pause also ends by itself after a
+ *   bounded time. Words that hold a secret are never kept, and pause nothing.
  * - An action that was not sent is kept as not sent, and is not planned again
  *   and again in silence. When the person took over, the request pauses at
  *   once and says what it wanted to do. Three held steps in a row with the
@@ -96,7 +100,7 @@ import {
   type JournalRequest,
   type RequestState,
 } from "./journal.js";
-import { casualWords, defersWork, readWords } from "./orders.js";
+import { casualWords, defersWork, readMidTask, readWords } from "./orders.js";
 import { HandsTimeout } from "./panel-hands.js";
 import {
   activationRefusal,
@@ -153,26 +157,16 @@ const guidanceLength = 600;
 /** How many ids of such words the worker remembers, so that none of them starts a request later. */
 const rememberedWords = 256;
 /**
- * What the person hears when their words went into the request that runs.
- * Each sentence says where the words are now. None says that they were done.
+ * What the person hears about their words while a request runs. The task goes
+ * on by itself: no sentence asks for a magic word to go on. Each sentence says
+ * where the words are now. None says that they were done.
  */
 const guidedText = "Got it. I take that into the task that runs.";
 const resumedText = "Got it. I go on with the task and take that into it.";
-const alreadyRunningText = "The task is already running.";
-const pausingText =
-  "I am pausing at your word. Say continue once paused, or stop.";
-const startingHoldText =
-  "I hold before the first action, and I did not take those words into the task. Say continue to go on, or stop.";
-const heldText =
-  "Got it. I hold now and take that into the task. Say continue to go on, or stop.";
-const heldNotKeptText = (why: string) =>
-  `I hold now, without taking those words into the task. ${why} Say continue to go on, or stop.`;
-const holdPauseText =
-  "I am paused at your word. Say continue to go on, or stop.";
-const stillPausedText = (pause?: "takeover" | "hold") =>
-  pause === "hold"
-    ? "I am still paused. Say continue, or tell me what to do next, or stop."
-    : "I am still paused, because you used the Mac. Say continue, or tell me what to do next.";
+const goingOnText = "I go on with the task.";
+const continuingText = "Continuing.";
+const pausedText = "Paused. Your next message goes on with it.";
+const stillPausedText = "Still paused. Your next message goes on with it.";
 const atEndText =
   "The task is at its end, so it takes no more words. Ask again when it has ended.";
 /** The words came while a yes or an answer was awaited: what waited is set aside, and nothing is approved. */
@@ -181,20 +175,18 @@ const asideText = {
     "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
   free: "Got it. I take that into the task and choose again. The question that waited is set aside.",
 } as const;
-const asideContinueHoldText = {
+const asidePausedText = {
   yes_no:
-    "That was no yes: what waited for one is set aside, and I hold now. Say continue to go on, or stop.",
-  free: "The question that waited is set aside, and I hold now. Say continue to go on, or stop.",
+    "Paused, and what waited for your yes is set aside. Your next message goes on with it.",
+  free: "Paused, and the question that waited is set aside. Your next message goes on with it.",
 } as const;
-const asideHoldText = {
-  yes_no:
-    "Got it. I hold now and take that into the task. That was no yes: what waited for one is set aside. Say continue to go on, or stop.",
-  free: "Got it. I hold now and take that into the task. The question that waited is set aside. Say continue to go on, or stop.",
-} as const;
-const asideHoldNotKeptText = (mode: "yes_no" | "free", why: string) =>
-  mode === "yes_no"
-    ? `I hold now, without taking those words into the task. That was no yes: what waited for one is set aside. ${why} Say continue to go on, or stop.`
-    : `I hold now, without taking those words into the task. The question that waited is set aside. ${why} Say continue to go on, or stop.`;
+const asideGoText =
+  "The question that waited is set aside, and I go on with the task.";
+const noYesText = (question: string) =>
+  `That was no yes, so it still waits. ${question}`;
+const waitsText = (question: string) => `It waits for your answer. ${question}`;
+/** With the owner's trust, a pause with no message ends by itself after this time. */
+const resumePauseMs = 60_000;
 const unclearText = (question: string) =>
   `I did not get a clear answer. ${question}`;
 const guidanceFullText = `This task already took ${guidanceLimit} additions from you, and it takes no more.`;
@@ -211,13 +203,13 @@ const idleText = "Computer use is on. No computer task runs now.";
 export const offText =
   "Computer use is off. Turn it on with: clawdtime computer on";
 const takeoverText =
-  "You moved the mouse or pressed a key, so I paused. Say continue to go on, or stop.";
+  "You moved the mouse or pressed a key, so I paused. Your next message goes on with it.";
 /**
  * The pause when an action was held back for the person. `wanted` is what
  * the action would have done. No sentence here says that it was done.
  */
 const holdText = (wanted: string) =>
-  `You are using the Mac, so I hold. Next I wanted to ${wanted}. Say continue when your hands are off, or stop.`;
+  `You are using the Mac, so I paused. Next I wanted to ${wanted}. Your next message goes on with it.`;
 /** This many held steps in a row with the same reason end the task. */
 const heldLimit = 3;
 /** This many held steps in a row across any reasons end the task. */
@@ -381,7 +373,7 @@ const planLoopText =
   "The planner changed its plan again and again and chose no action, so I stopped. Nothing more was sent. Ask again, perhaps in other words.";
 const faultText = `Something failed inside the worker, so I stopped. An action may have been sent. ${clearHint}`;
 const secretText =
-  "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.";
+  "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself.";
 const unwrittenText =
   "The record of computer tasks could not be written, so nothing was started.";
 const grantText = {
@@ -526,6 +518,12 @@ export interface ComputerWorkerOptions {
    * it on (`CLAWDTIME_COMPUTER_TRUST=on` for the desktop service).
    */
   trust?: boolean;
+  /**
+   * With the owner's trust, a pause with no message from the person ends by
+   * itself after this time, and the task goes on. Without trust a pause waits
+   * for the next message. Read against `now`. 60 seconds unless set.
+   */
+  resumeMs?: number;
   /** The most time for one request, with the time it waits for the person. */
   maxMs?: number;
   /** How long one call to the browser may take. */
@@ -562,6 +560,8 @@ interface Question {
   mode: "yes_no" | "continue" | "free";
   /** Why a continue pause is held, when `mode` is `"continue"`. */
   pause?: "takeover" | "hold";
+  /** When the question began, by `now`. */
+  since: number;
   /** What the person is told when their answer ends the request. */
   refusal: string;
   /** For a free question of the worker itself: a plain no or a stop word ends the request. */
@@ -1024,17 +1024,6 @@ function readApproval(words: string): boolean | null {
   if (explicitApprovalNo.test(words)) return false;
   return readYes(words) === false ? false : null;
 }
-/** Continue or stop. A yes or a no counts too. */
-function readContinue(words: string): boolean | null {
-  const plain = readYes(words);
-  if (plain !== null) return plain;
-  const said = interpret(words, {
-    kind: "question",
-    options: ["Continue", "Stop"],
-  });
-  if (said?.decision === "deny") return false;
-  return said?.decision === "answer" ? said.text === "Continue" : null;
-}
 
 export class ComputerWorker implements DesktopExecutorPort {
   private ownershipGuard: () => boolean = () => true;
@@ -1079,6 +1068,9 @@ export class ComputerWorker implements DesktopExecutorPort {
   private readonly settleMs: number;
   private readonly settleLimit: number;
   private readonly transientMs: number;
+  private readonly resumeMs: number;
+  /** How many answers came at a pause, to give each one an id of its own. */
+  private answers = 0;
 
   constructor(private readonly options: ComputerWorkerOptions) {
     this.hands = options.hands;
@@ -1095,6 +1087,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.settleMs = options.settleMs ?? settlePauseMs;
     this.settleLimit = options.settleLimit ?? settleLimit;
     this.transientMs = options.transientMs ?? transientPauseMs;
+    this.resumeMs = Math.max(0, options.resumeMs ?? resumePauseMs);
     this.timing = options.timing;
     // A request that was running when the service stopped has an unknown
     // result. It becomes uncertain here, and nothing runs it again.
@@ -1191,7 +1184,29 @@ export class ComputerWorker implements DesktopExecutorPort {
   /** A request that waits for the person ends when the switch goes off or its time runs out. */
   private expire() {
     const run = this.current;
-    if (run?.question) this.halted(run);
+    if (run?.question && !this.halted(run)) this.resumeDue(run);
+  }
+  /**
+   * With the owner's trust, a pause that waited `resumeMs` with no message
+   * ends by itself, and the task goes on. True when it ended now. Without
+   * trust a pause waits for the person.
+   */
+  private resumeDue(run: Run): boolean {
+    const question = run.question;
+    if (
+      !this.options.trust ||
+      this.current !== run ||
+      question?.mode !== "continue" ||
+      this.now() - question.since < this.resumeMs
+    )
+      return false;
+    run.question = null;
+    run.state = "running";
+    this.say(
+      `No message came in ${Math.round(this.resumeMs / 1000)} seconds, so I go on with the task.`,
+    );
+    question.settle({ kind: "yes" });
+    return true;
   }
 
   status(): ComputerStatus {
@@ -1419,22 +1434,23 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
 
   /**
-   * The person spoke while a request runs. Words are read by `readWords` in
-   * `orders.ts`, which is safe by default:
-   * - "stop" stops the request at once, also during initial navigation or the
-   *   first look, at the step limit, when words cannot be kept, or on secrets.
-   * - "order" (a strict screen order on the last sentence) is kept when it can
-   *   be kept and steers the task, resumes a pause, or sets aside a waiting
-   *   approval/question without ever approving it.
-   * - "continue" resumes a pause; while running it changes nothing; at a
-   *   waiting approval or question it never approves, sets it aside and holds.
-   * - "hold" (everything else) pauses the task at once, keeps a pause paused,
-   *   or sets aside a waiting approval/question and pauses. The hold takes
-   *   effect even if the words cannot be kept (8-cap, unwritable, step limit,
-   *   or secret).
-   * - While the planner's first reading (navigation) or the first look is in
-   *   flight, anything other than "stop" sets the hold so no first input goes
-   *   out.
+   * The person spoke while a request runs. The task goes on by itself. Words
+   * are read by `readMidTask` in `orders.ts`:
+   * - "stop" stops the request at once, in every state: during the initial
+   *   reading or the first look, at a pause, at a question, at the step limit,
+   *   when the words cannot be kept, and when they also look like a secret.
+   * - Words that hold a secret are never kept and never go to the planner.
+   *   They change nothing else: a running task goes on, a pause stays a pause,
+   *   and a question still waits.
+   * - "pause" (a plain request to pause) pauses before the next input. Any
+   *   next message ends that pause, and goes into the task when it steers.
+   * - "status" (a question about how it goes) gets a short answer, and
+   *   changes nothing. At a pause it goes on, as every message does.
+   * - "go" (continue, ok, thanks) carries nothing to steer with: the task
+   *   goes on, and a pause ends.
+   * - "steer" (everything else) is kept as the person's newest words, and the
+   *   task goes on with them: the planner chooses again. At a pause the task
+   *   goes on. At a question it never approves: what waited is set aside.
    */
   private async guide(
     run: Run,
@@ -1452,7 +1468,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         !sameSpeaker(run.authority, authority))
     )
       return busyText;
-    const kind = readWords(words);
+    const kind = readMidTask(words);
     // A move that the planner can never make is a request of its own.
     if (
       this.current === run &&
@@ -1534,96 +1550,109 @@ export class ComputerWorker implements DesktopExecutorPort {
       (run.step > 0 || run.inFlight);
     if (!question && navInFlight) {
       recordSeen();
-      if (kind === "hold") run.hold = true;
+      if (kind === "pause") run.hold = true;
       return atEndText;
     }
-    // While the planner's first reading (navigation) or the first look is in
-    // flight (before any action), anything other than "stop" sets the hold so
-    // no first input goes out.
-    const navigating =
-      !run.inFlight &&
-      run.step === 0 &&
-      ((run.navigation === undefined &&
-        this.planner.navigation !== undefined) ||
-        (run.navigation !== undefined && run.navigation.kind !== "none"));
-    const firstLook = !run.inFlight && !run.firstLookDone && run.step === 0;
-    if (!question && (navigating || firstLook)) {
-      run.hold = true;
-      run.wake?.();
-      if (navigating || kind === "continue") {
+    // A secret is never kept, and it pauses nothing and ends no pause.
+    if (secret) {
+      recordSeen();
+      if (question?.mode === "continue")
+        return `${secretText} ${stillPausedText}`;
+      if (question) return `${secretText} ${question.text}`;
+      return `${secretText} ${goingOnText}`;
+    }
+
+    // Paused (the person took over, or asked to pause): any message goes on.
+    if (question?.mode === "continue") {
+      const resume = () => {
+        run.question = null;
+        run.state = "running";
+        question.settle({ kind: "yes" });
+      };
+      if (kind === "pause") {
         recordSeen();
-        return startingHoldText;
+        return stillPausedText;
+      }
+      if (kind === "status") {
+        recordSeen();
+        resume();
+        return `I go on with "${clean(run.shown, 120)}" now, from step ${run.step}.`;
+      }
+      if (kind === "go") {
+        recordSeen();
+        resume();
+        return continuingText;
       }
       const kept = tryKeep();
-      return kept.kept ? heldText : heldNotKeptText(kept.why);
+      resume();
+      if (kept.kept) return resumedText;
+      return kept.why === atEndText ? atEndText : `${kept.why} ${goingOnText}`;
     }
 
-    // Paused (takeover or hold on words).
-    if (question?.mode === "continue") {
-      if (kind === "continue") {
-        recordSeen();
-        run.question = null;
-        question.settle({ kind: "yes" });
-        return "Continuing.";
-      }
-      if (kind === "order") {
-        const kept = tryKeep();
-        if (!kept.kept) return `${kept.why} ${question.text}`;
-        run.question = null;
-        question.settle({ kind: "yes" });
-        return resumedText;
-      }
-      recordSeen();
-      if (secret) return `${secretText} ${stillPausedText(question.pause)}`;
-      return stillPausedText(question.pause);
-    }
-
-    // Waiting on an approval (yes_no) or a planner question (free).
+    // Waiting on an approval (yes_no) or a planner question (free). Nothing
+    // here is a yes and nothing here is an answer.
     if (question) {
-      if (kind === "order") {
+      if (kind === "status") {
+        recordSeen();
+        return waitsText(question.text);
+      }
+      if (kind === "go" && question.mode === "yes_no") {
+        recordSeen();
+        return noYesText(question.text);
+      }
+      if (kind === "steer") {
         const kept = tryKeep();
         if (!kept.kept) return `${kept.why} ${question.text}`;
         run.question = null;
         question.settle({ kind: "aside" });
         return asideText[question.mode];
       }
-      // "continue" or "hold": never approve; set aside and hold, whatever happens to the words.
-      run.hold = true;
+      recordSeen();
       run.question = null;
-      question.settle({ kind: "aside" });
-      if (kind === "continue") {
-        recordSeen();
-        return asideContinueHoldText[question.mode];
+      if (kind === "pause") {
+        run.hold = true;
+        question.settle({ kind: "aside" });
+        return asidePausedText[question.mode];
       }
-      const kept = tryKeep();
-      return kept.kept
-        ? asideHoldText[question.mode]
-        : asideHoldNotKeptText(question.mode, kept.why);
+      question.settle({ kind: "aside" });
+      return asideGoText;
     }
 
-    // Running.
-    if (kind === "continue") {
+    // Running, or about to take the first action. Any message other than a
+    // pause ends a pause that was asked for and has not begun yet.
+    if (kind === "pause") {
       recordSeen();
-      return run.hold ? pausingText : alreadyRunningText;
+      run.hold = true;
+      run.wake?.();
+      return this.pauseSays(pausedText);
     }
-    if (kind === "order") {
-      const kept = tryKeep();
-      if (kept.kept) return run.hold ? heldText : guidedText;
-      if (kept.why === secretText) {
-        run.hold = true;
-        run.wake?.();
-        return heldNotKeptText(secretText);
-      }
-      if (run.hold) return heldNotKeptText(kept.why);
-      return kept.why === guidanceFullText
-        ? `${guidanceFullText} Stop it, or wait for it to end, and ask again.`
-        : kept.why;
+    if (kind === "status") {
+      recordSeen();
+      return this.statusText(run);
     }
-    // "hold": pause at once, whatever happens to the words.
-    run.hold = true;
-    run.wake?.();
+    run.hold = false;
+    if (kind === "go") {
+      recordSeen();
+      return goingOnText;
+    }
     const kept = tryKeep();
-    return kept.kept ? heldText : heldNotKeptText(kept.why);
+    if (kept.kept) return guidedText;
+    return kept.why === guidanceFullText
+      ? `${guidanceFullText} ${goingOnText}`
+      : kept.why;
+  }
+  /** What the person hears about a task that runs, in one short sentence. It never says done. */
+  private statusText(run: Run) {
+    const goal = clean(run.shown, 120);
+    return run.step === 0
+      ? `I am starting on "${goal}", and it is not done yet.`
+      : `Still working on "${goal}", at step ${run.step}, and it is not done yet.`;
+  }
+  /** A pause says when it ends by itself: with the owner's trust, after a bounded time. */
+  private pauseSays(text: string) {
+    return this.options.trust
+      ? `${text} With no message, I go on by myself in ${Math.round(this.resumeMs / 1000)} seconds.`
+      : text;
   }
   /**
    * True when the person's words for a request hold a secret: a credential
@@ -1802,21 +1831,26 @@ export class ComputerWorker implements DesktopExecutorPort {
       question.settle({ kind: "text", text: words });
       return { message: "Thank you. I go on." };
     }
-    const said =
-      question.mode === "continue" ? readContinue(words) : readApproval(words);
+    // A pause takes any message, as words that come while the task runs do:
+    // a stop stops, a pause stays, everything else goes on.
+    if (question.mode === "continue") {
+      if (!words) return { message: question.text };
+      const id = `answer_${createHash("sha256")
+        .update(`${run.id}\n${++this.answers}\n${words}`)
+        .digest("hex")
+        .slice(0, 40)}`;
+      return {
+        message: await this.guide(run, id, words, undefined, run.authority),
+      };
+    }
+    const said = readApproval(words);
     if (said === null) return { message: unclearText(question.text) };
     if (said) {
       run.question = null;
       question.settle({ kind: "yes" });
-      return { message: "Continuing." };
+      return { message: continuingText };
     }
-    this.finish(
-      run,
-      "canceled",
-      question.mode === "continue" ? "stopped" : "refused_by_person",
-      question.refusal,
-      false,
-    );
+    this.finish(run, "canceled", "refused_by_person", question.refusal, false);
     return { message: question.refusal };
   }
 
@@ -1831,15 +1865,18 @@ export class ComputerWorker implements DesktopExecutorPort {
   ): Promise<Reply> {
     if (this.halted(run)) return Promise.resolve({ kind: "over" });
     let timer: NodeJS.Timeout | undefined;
+    let resumer: NodeJS.Timeout | undefined;
     return new Promise<Reply>((settle) => {
-      run.question = {
-        text: clip(text),
+      const question: Question = {
+        text: clip(mode === "continue" ? this.pauseSays(text) : text),
         mode,
         refusal,
         settle,
+        since: this.now(),
         ...(pause ? { pause } : {}),
         ...(stopOnNo ? { stopOnNo } : {}),
       };
+      run.question = question;
       run.state = "waiting_for_person";
       this.journal.set(run.id, "waiting_for_person", "question");
       timer = setTimeout(
@@ -1847,10 +1884,30 @@ export class ComputerWorker implements DesktopExecutorPort {
         Math.max(0, run.deadline - this.now()) + 50,
       );
       timer.unref();
-      this.say(run.question.text);
-      run.opening.spoke(run.question.text);
+      // With the owner's trust a pause ends by itself. The clock decides,
+      // so the timer looks again when it fired before the time was up.
+      if (mode === "continue" && this.options.trust) {
+        const look = () => {
+          if (run.question !== question || this.resumeDue(run)) return;
+          resumer = setTimeout(
+            look,
+            Math.max(
+              50,
+              Math.min(
+                this.resumeMs,
+                question.since + this.resumeMs - this.now(),
+              ),
+            ),
+          );
+          resumer.unref();
+        };
+        look();
+      }
+      this.say(question.text);
+      run.opening.spoke(question.text);
     }).then((reply) => {
       clearTimeout(timer);
+      clearTimeout(resumer);
       if (this.current === run && reply.kind !== "over") {
         if (reply.kind === "text") this.taught(run, reply.text);
         run.state = "running";
@@ -2081,13 +2138,15 @@ export class ComputerWorker implements DesktopExecutorPort {
           const reply = await this.ask(
             run,
             "continue",
-            holdPauseText,
+            pausedText,
             stoppedText,
             "hold",
           );
           if (reply.kind !== "yes") return;
-          if (run.guidance.length > 0) run.navigation = { kind: "none" };
         }
+        // The person's newest words win over the reading of the first ones:
+        // with words added before the move went out, the planner plans.
+        if (run.guidance.length > 0) run.navigation = { kind: "none" };
         if (
           run.navigation.kind !== "none" &&
           (await this.navigate(run, run.navigation)) !== "plan"
@@ -2104,7 +2163,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           const text =
             reason === "takeover"
               ? (run.pauseText ?? takeoverText)
-              : holdPauseText;
+              : pausedText;
           run.takeover = false;
           run.hold = false;
           run.personNear = false;
@@ -2399,7 +2458,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       const reply = await this.ask(
         run,
         "continue",
-        holdPauseText,
+        pausedText,
         stoppedText,
         "hold",
       );
@@ -2409,6 +2468,11 @@ export class ComputerWorker implements DesktopExecutorPort {
         return "plan";
       }
       return this.navigate(run, intent);
+    }
+    // Words that came during that look steer: the planner plans with them.
+    if (run.guidance.length > 0) {
+      run.navigation = { kind: "none" };
+      return "plan";
     }
     const before = looked.result?.observation;
     if (run.takeover)
