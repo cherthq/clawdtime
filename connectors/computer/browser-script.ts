@@ -38,7 +38,9 @@ export type PageCall =
   | { do: "back" }
   | { do: "hover"; index: number }
   | { do: "select"; index: number; option: string }
-  | { do: "key"; combo: PageKey };
+  | { do: "key"; combo: PageKey }
+  /** Where element N is, for a driver that sends real input. It sends no event. */
+  | { do: "locate"; index: number };
 
 /** The keys that a page takes, as the planner names them. */
 export const pageKeys = [
@@ -1040,6 +1042,72 @@ function key(combo) {
   return { ok: true };
 }
 
+// Locate: for a driver that sends real input events at a point. It brings
+// element N into view and says where its centre is, what kind of element it
+// is, and whether the element is the topmost one at its centre, so that a
+// pointer there reaches it and nothing else. It sends no event and reads no
+// value: of a password field it says only that it is one.
+function topAt(x, y) {
+  var top = typeof doc.elementFromPoint === "function" ? doc.elementFromPoint(x, y) : null;
+  // A pointer goes into open shadow trees.
+  for (var depth = 0; top && top.shadowRoot && depth < 30; depth++) {
+    var inner = typeof top.shadowRoot.elementFromPoint === "function" ? top.shadowRoot.elementFromPoint(x, y) : null;
+    if (!inner || inner === top) break;
+    top = inner;
+  }
+  return top;
+}
+// Whether the node is the element or inside it, also across a shadow tree.
+function within(node, el) {
+  for (var depth = 0; node && depth < 1000; depth++) {
+    if (node === el) return true;
+    node = node.parentNode || (node.nodeType === 11 ? node.host : null);
+  }
+  return false;
+}
+// A click on the label of a field reaches the field.
+function labels(node, el) {
+  var label = node && typeof node.closest === "function" ? node.closest("label") : null;
+  return !!label && label.control === el;
+}
+function focusedNow() {
+  var active = doc.activeElement;
+  for (var depth = 0; active && active.shadowRoot && active.shadowRoot.activeElement && depth < 30; depth++) active = active.shadowRoot.activeElement;
+  return active;
+}
+function locate(index) {
+  var state = held();
+  var el = find(index);
+  var facts = factsOf(el);
+  var name = nameOf(index, el);
+  bring(el);
+  var rect = el.getBoundingClientRect();
+  if (!shown(el, rect)) fail(name + " is hidden now. Read the page again.");
+  state.leaving = false;
+  var x = rect.left + rect.width / 2;
+  var y = rect.top + rect.height / 2;
+  var top = topAt(x, y);
+  var hit = !!top && (within(top, el) || labels(top, el));
+  var answer = {
+    ok: true,
+    x: x,
+    y: y,
+    inside: x >= 0 && y >= 0 && x < (win.innerWidth || 0) && y < (win.innerHeight || 0),
+    hit: hit,
+    tag: cut(tagOf(el), 40),
+    role: facts ? facts.role : "",
+    kind: kindOf(el),
+    name: name,
+    disabled: off(el),
+    readOnly: el.readOnly === true || attr(el, "aria-readonly") === "true",
+    password: secret(el),
+    focused: within(focusedNow(), el)
+  };
+  if (!hit && top) answer.cover = cut(tagOf(top), 40);
+  return answer;
+}
+// End of locate.
+
 var answer;
 try {
   if (call.do === "read") answer = read();
@@ -1051,6 +1119,7 @@ try {
   else if (call.do === "select") answer = select(call.index, String(call.option));
   else if (call.do === "key") answer = key(String(call.combo));
   else if (call.do === "ping") answer = { ok: true };
+  else if (call.do === "locate") answer = locate(call.index);
   else fail("The page was asked for a step that it does not know.");
 } catch (problem) {
   if (problem && typeof problem.told === "string") answer = { ok: false, error: problem.told };
