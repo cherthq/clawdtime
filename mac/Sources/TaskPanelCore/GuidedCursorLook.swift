@@ -37,8 +37,9 @@ public enum GuidedLook {
   /// The pointer of the Mac is "there" when its tip is this near to the middle of the ring.
   public static let near = 14.0
   /// One turn of the ring's colors, in seconds. How long the ring takes to close in when the cursor arrives,
-  /// and the small pointer to step aside. While the cursor glides, the ring is this many times its size.
-  public static let turn = 5.0, settle = 0.26, aside = 0.16, flight = 1.16
+  /// and the small pointer to step aside. Both fit in the short wait before the input, so the ring is solid
+  /// when the hands act. While the cursor glides, the ring is this many times its size.
+  public static let turn = 5.0, settle = 0.10, aside = 0.08, flight = 1.16
 
   /// ClawdTime's own pointer stands beside the place, not on it: the tip of the Mac's pointer is there.
   public static func standsBeside(tip: CGPoint, pointer: CGPoint) -> Bool {
