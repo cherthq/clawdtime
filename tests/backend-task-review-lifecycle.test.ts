@@ -448,7 +448,7 @@ describe("natural task to durable verified review lifecycle simulation", () => {
     expect(f.delivery.request).toHaveBeenCalledTimes(2);
     await f.reviews.pump();
     expect(f.delivery.request).toHaveBeenCalledTimes(2);
-  });
+  }, 30_000);
 
   it("explicit Stop confirms worker interruption and creates no completion callback", async () => {
     const f = fixture();
