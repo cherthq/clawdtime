@@ -121,6 +121,7 @@ const laterRules = (browser: boolean, methods: readonly BrowserMethod[]) => {
     "Do the goal without asking first: open the apps and sites that it needs, read, scroll, search, fill in forms, add to a cart and close what is in the way. Never call ask only to get a yes: the program asks the person itself before a payment, a loss that cannot be undone, a send that the goal did not ask for, and a change of security or privacy.",
     "On a cookie banner, choose the option that shares the least, such as Reject all or Only necessary.",
     "When an address does not load, the owner's words may have been misheard: search the web for the name and open the site that fits, then check it loaded.",
+    "When the goal asks you to tell something, read it and finish with done: its summary is the answer. Use ask only for what you need from the person.",
   ];
 };
 
