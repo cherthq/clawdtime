@@ -183,6 +183,68 @@ seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
   you say more. After the first addition a close asks again, whatever the
   addition says.
 
+## When the task does not move on
+
+The worker does not end at the first odd screen. It tries other ways first,
+and it asks you before it gives up. Each way here only looks, waits or asks.
+None of them sends an input again by itself, and every action still goes
+through all the checks.
+
+- **A screen that does not hold still.** Three actions in a row can be held
+  back for the same reason: the target moved or went away, the screen
+  changed, another window came to the front, a list lies over the place, or
+  the page changed. Five held actions in a row for mixed reasons count the
+  same way. Then the worker sends nothing and waits. It looks at the screen
+  every 0.4 seconds, with no input, until two looks in a row show the same
+  app, window and elements, and the same page when a page was held. It looks
+  8 times or for 6 seconds at most. Then the planner chooses again from a new
+  look, with a note that the screen settled. This happens twice at most in
+  one request. When the screen does not settle, or a third such row comes,
+  the request ends with what happened and what you can do: "What I tried to
+  use kept moving or disappearing before I could act, also after I waited
+  for the window to settle, so nothing was sent. Wait until the window
+  settles, then ask again." An action that the panel could not run for
+  another reason ends the row as before.
+- **Steps that go in circles.** `progress.ts` reads each step: the action, a
+  digest of the screen before and after it, and whether an input went out.
+  It finds a swing: the same two or three actions twice in a row, with no new
+  screen in the second round (open, close, open, close). It also finds a
+  still screen: four inputs of more than one action after which the screen
+  showed nothing that the request had not seen before. A screen that is new,
+  also after a wait or a reading, is progress. The first two times, the
+  planner reads a note with other ways that fit what is in front: the
+  browser reading when a page is in front and the browser was not used, the
+  keys (Tab, Return, Escape, a menu shortcut), a scroll, a search field,
+  `open_url` when your words hold a web address, and `open_app`. The third
+  time the worker asks you one short question: "I keep going back and forth,
+  and the screen shows nothing new. What should I try next? Say it in a few
+  words, or say no to stop." Your answer goes to the planner, as the answer
+  to a question of the planner does. A plain no or a stop word ends the
+  request. After two such questions the next circle ends the request. One
+  and the same action again and again stays with "No third time" and the
+  repeat rule below.
+- **A give_up.** The first give_up of a request goes back to the planner
+  with the ways that it did not try, and the planner chooses again. A
+  give_up about you, an account, a permission, a password, a secret, money
+  or a risk ends at once, as before. The second give_up ends the request: "I
+  could not finish. (the reason) Tell me another way to try, or do this step
+  yourself."
+- **Trouble of the planner.** The planner says what went wrong with its
+  call. After a short failure that it already tried again, such as a busy or
+  slow service, the worker waits 3 seconds, or the time that the service
+  asked for up to 15 seconds. Then the planner chooses again from a new
+  look. That happens 3 times at most in one request, and always within the
+  15 minutes. No quota left, or a key that the service refuses, ends the
+  request at once and says what to do. An answer with no usable action, or a
+  refusal of the model, ends the request after two in a row, as before. Each
+  call to the planner gets a signal, and the worker aborts it when it stops
+  waiting for the answer: at Stop, at a hold, at the time limit and at the
+  end.
+
+Stop wins here too: during a wait for the screen, during a wait for the
+planner, and while a question waits. A hold pauses a wait at once. Every end
+text says what happened first, and then what you can say or do next.
+
 ## Turn it on
 
 ```sh
@@ -351,7 +413,12 @@ only, never a text of the screen. `clawdtime computer timing` prints the newest
 20 steps: `2026-11-22T09:00:00.000Z step 3 click_element: look 310 ms, plan
 1840 ms, act 420 ms`. The look is the screen before the plan, the plan is the
 language model, and the act is the checks, a question to you when there is one,
-and the action.
+and the action. A step also says, in fixed words, what the worker did to get
+moving before it, and how long it waited: `To get moving: transient, settled,
+waited 3400 ms`. The words are `nudge_swing`, `nudge_still`, `ask_swing`,
+`ask_still`, `end_swing`, `end_still`, `give_up_nudge`, `settled`,
+`unsettled` and `transient`. When the request ends before a next step, one
+more line of the kind `end` says them.
 
 The panel needs two permissions in System Settings, Privacy & Security:
 Accessibility, and Screen & System Audio Recording. When one is missing, the
@@ -795,6 +862,9 @@ sharing, independent disable control, zoom integration and acceptance gaps.
 | One call to the language model | 75 seconds, 4 requests, one repair          |
 | Planner failures in a row      | 2 end the request                           |
 | Breaker of the planner         | 30 seconds, after 8 failures in a row       |
+| Waits after a short failure    | 3 in one request, of 3 to 15 seconds        |
+| Waits for the screen to settle | 2 in one request, of 8 looks or 6 seconds   |
+| Steps that go in circles       | 2 notes to the planner, then 2 questions    |
 | One call to the browser        | 30 seconds                                  |
 | Typed text                     | 4000 characters, one line                   |
 | Elements in one observation    | 400, of which the planner gets 150          |
@@ -814,7 +884,12 @@ the real screen, draws the cursor or calls a language model.
   action; each question with yes and with no; the screen that changed while you
   answered; you take over; both missing permissions; a restart; a lost result;
   the step and time limits; `done` before a fresh observation; the journal
-  holds no typed text.
+  holds no typed text. Also: a screen that settles and one that never does,
+  Stop during each wait, steps that swing, a still screen, a first give_up,
+  each trouble of the planner, and the signal that Stop aborts.
+- `progress` (18): the swing of two and of three actions, the still screen,
+  no alarm while the screen changes, the order of notes, questions and the
+  end, and the other ways that fit what is in front.
 - `browser-script` (49) and `browser` (30): the page script in a made-up page,
   and the driver over a scripted command runner.
 - `talk` (26): the person's next message answers the worker; and each of
