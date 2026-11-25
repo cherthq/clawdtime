@@ -47,7 +47,12 @@ export type ScreenElement = z.infer<typeof elementSchema>;
 export const observationSchema = z
   .object({
     at: finite,
-    /** Native surface generation. A changed/missing generation retires old coordinates. */
+    /**
+     * Native surface generation. It changes with the desktop or the display,
+     * and with a move of the hands to another app or desktop; a new window of
+     * the app in front does not change it. A changed/missing generation
+     * retires old coordinates.
+     */
     surfaceEpoch: z.number().int().nonnegative().optional(),
     screen: z.object({ width: finite, height: finite, scale: finite }).strict(),
     cursor: z.object({ x: finite, y: finite }).strict(),

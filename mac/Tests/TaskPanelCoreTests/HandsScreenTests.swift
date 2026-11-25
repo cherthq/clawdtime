@@ -137,6 +137,15 @@ final class HandsScreenTests: XCTestCase {
     XCTAssertNil(ElementCleaner.element(raw("AXStaticText", value: " ")))
     XCTAssertNotNil(ElementCleaner.element(raw("AXGroup", title: "Sidebar")))
     XCTAssertNotNil(ElementCleaner.element(raw("AXButton")))
+    // The element with the keyboard says where typed text goes, also with no name: the canvas of a
+    // document, the view of a document, a web page that draws its own editor.
+    for role in ["AXLayoutArea", "AXScrollArea", "AXWebArea", "AXGroup"] {
+      let focused = ElementCleaner.element(raw(role, focused: true))
+      XCTAssertEqual(focused?.role, role)
+      XCTAssertEqual(focused?.focused, true)
+      XCTAssertEqual(focused?.title, "")
+      XCTAssertNil(ElementCleaner.element(raw(role)), role)
+    }
     // No size, or a size that is not a number.
     XCTAssertNil(ElementCleaner.element(raw("AXButton", title: "Save", frame: CGRect(x: 1, y: 1, width: 0, height: 20))))
     XCTAssertNil(ElementCleaner.element(raw("AXButton", title: "Save", frame: CGRect(x: 1, y: 1, width: 20, height: 0.5))))

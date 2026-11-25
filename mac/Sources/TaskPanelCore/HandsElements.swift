@@ -59,7 +59,9 @@ public enum ElementCleaner {
     role == "AXSecureTextField" || subrole == "AXSecureTextField"
   }
   /// The element as the contract carries it, or nil for one that says nothing:
-  /// no size, outside `bounds`, or a part of the layout with no name.
+  /// no size, outside `bounds`, or a part of the layout with no name and no keyboard.
+  /// The element with the keyboard stays with no name: it says where typed text goes,
+  /// as the canvas of a document or a web page that draws its own editor does.
   public static func element(_ raw: RawElement, id: Int = 0, within bounds: CGRect? = nil) -> ScreenElement? {
     var frame = raw.frame.standardized
     guard frame.minX.isFinite, frame.minY.isFinite, frame.width.isFinite, frame.height.isFinite, frame.width >= 1, frame.height >= 1 else { return nil }
@@ -75,7 +77,7 @@ public enum ElementCleaner {
     if raw.role == "AXStaticText" && !secure { names.append(raw.value) }
     let title = names.lazy.compactMap { $0 }.map { line($0) }.first(where: { !$0.isEmpty }) ?? ""
     let value = !secure && holders.contains(raw.role) ? raw.value.map { line($0) } : nil
-    guard !title.isEmpty || value != nil || controls.contains(raw.role) || secure else { return nil }
+    guard !title.isEmpty || value != nil || controls.contains(raw.role) || secure || raw.focused else { return nil }
     func tenth(_ number: CGFloat) -> Double { (Double(number) * 10).rounded() / 10 }
     return ScreenElement(id: id, role: role, title: title, value: value, x: tenth(frame.minX), y: tenth(frame.minY),
                          w: tenth(frame.width), h: tenth(frame.height), enabled: raw.enabled, focused: raw.focused, secure: secure)

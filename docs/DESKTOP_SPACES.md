@@ -188,7 +188,16 @@ The previous screenshot, coordinates, and browser page are retired before
 any app activation, previous-app or directional switching. Observations carry a native `surfaceEpoch`; a changed or missing
 epoch prevents the worker from adapting an old plan to a newly observed screen,
 even if the app and window titles look identical. Display size/scale changes
-also refuse old-frame actions. A successful activation returns its verified
+also refuse old-frame actions. Only a change of the desktop or of the display,
+the session going away, and a move of the hands to another app or desktop move
+`surfaceEpoch` (`DesktopObservationLease.retire`). A new window of the app in
+front, the first window of an app, a list in front of it, a look with no window
+and an app that comes forward by itself retire only the input lease of the
+panel: the worker finds its target again in the newer look by app, window,
+role, name and place, and tells the planner "Another app or window came to the
+front" where the window changed. A step held for a real change of the desktop
+or the display is no try of its action; a change that keeps coming gets the
+wait for the screen to settle. A successful activation returns its verified
 observation, and the worker still obtains a new full observation for its next
 plan. Older panels that only acknowledge `open_app` without this evidence cannot
 claim success with the new worker.

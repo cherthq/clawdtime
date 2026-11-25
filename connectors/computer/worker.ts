@@ -77,7 +77,7 @@ import {
   type BrowserCall,
   type Checked,
   type View,
-  hasTextFocus,
+  hasTypingFocus,
   closerPart,
   yesQuestion,
 } from "./guards.js";
@@ -90,6 +90,7 @@ import {
   closerShowsSecure,
   type CloserScene,
 } from "./closer.js";
+import { inFront, openedKey, quitAtEnd, quitOpenNote } from "./quit-done.js";
 import { textKeyHold } from "./text-keys.js";
 import {
   guidanceLimit,
@@ -684,6 +685,10 @@ interface Run {
   stillNoted?: boolean;
   /** A done while the browser showed an error page was sent back once. */
   errorPageNoted?: boolean;
+  /** A done while the app that the goal asks to quit was in front was sent back once. */
+  quitNoted?: boolean;
+  /** The bundle identifier that open_app found, by the name as it was said (`quit-done.ts`). */
+  opened?: Record<string, string>;
   /** Finds steps that go in circles. One for each request. */
   progress: ProgressGuard;
   /** How many of the person's additions the progress guard knows of. */
@@ -2077,6 +2082,13 @@ export class ComputerWorker implements DesktopExecutorPort {
       // The person stopped it at the hands. After Stop here, they know already.
       this.finish(run, "canceled", "stopped", stoppedText, !run.stop);
     if (this.halted(run)) return { sent: true, over: true, result };
+    // The app that open_app found for this name: a quit at the end of the
+    // goal knows it by this, also when the Mac shows its name in another language.
+    if (command.kind === "open_app" && result.ok && result.resolvedBundleId)
+      run.opened = {
+        ...run.opened,
+        [openedKey(command.name)]: result.resolvedBundleId,
+      };
     if (result.interrupted) {
       if (planning) run.personNear = true;
       else run.takeover = true;
@@ -2655,6 +2667,28 @@ export class ComputerWorker implements DesktopExecutorPort {
             "",
             `not taken yet: ${notLoadedNote(shows)} Only when the goal is to see this page, call done again.`,
             "done_error_page",
+          );
+        }
+        // A done while the app that the end of the goal asks to quit is still
+        // in front goes back once: "Then quit Tips." was often left undone.
+        // Only the app in front is seen. A second done is taken.
+        const quitting =
+          this.options.unchangedDone && !run.quitNoted && run.observation
+            ? quitAtEnd(this.spoken(run))
+            : null;
+        if (
+          quitting &&
+          run.observation &&
+          inFront(quitting, run.observation.app, run.opened)
+        ) {
+          run.quitNoted = true;
+          return this.note(
+            run,
+            action,
+            why,
+            "",
+            `not taken yet: ${quitOpenNote(clean(quitting, 60))}`,
+            "done_app_open",
           );
         }
         this.note(run, action, why, "", "ok", "ok");
@@ -3246,12 +3280,7 @@ export class ComputerWorker implements DesktopExecutorPort {
   ) {
     this.note(run, action, why, ready.target, `refused: ${reason}`, "refused");
     if ((run.refusals = refused + 1) >= 3)
-      this.finish(
-        run,
-        "blocked",
-        "too_many_refusals",
-        `${refusalsText} The last reason: ${reason}`,
-      );
+      this.finish(run, "blocked", "too_many_refusals", refusalsText(reason));
   }
   /**
    * The action was not sent: the screen is not what the planner saw, or the
@@ -3302,7 +3331,12 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.tried = "free";
       return;
     }
-    run.tried = "unsent";
+    // A change of the desktop or of the display retired the coordinates of
+    // the look (`surfaceEpoch`): the action did nothing wrong, and the next
+    // look is a fresh one. It is no try of the action. A change that keeps
+    // coming still fills the row of held steps below, and gets the wait for
+    // the screen to settle.
+    run.tried = reason === retiredReason ? "free" : "unsent";
     const key = heldKey(reason);
     const count = run.heldRow?.key === key ? run.heldRow.count + 1 : 1;
     const total = (run.heldRow?.total ?? 0) + 1;
@@ -3642,7 +3676,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       action.kind === "type" &&
       !send.focus &&
       lastLook &&
-      !hasTextFocus(lastLook)
+      !hasTypingFocus(lastLook)
     ) {
       run.tried = "sent";
       return this.note(

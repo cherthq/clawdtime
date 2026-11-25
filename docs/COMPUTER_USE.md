@@ -428,6 +428,15 @@ through all the checks.
   taken. A goal about an error itself ("why does the shop show a 404?") is
   not read this way. The planner reads only a fixed label, never the text of
   the page.
+- **A quit at the end of the goal.** A request that ends with "Then quit
+  Tips." often ended with done while the app was still open. A done while
+  the app that the end of the goal asks to quit is in front goes back to the
+  planner once: "The goal also asks to quit Tips; it is still open." The app
+  is known by the name that it shows, by its bundle identifier, or as the
+  app that `open_app` found for that name, so "Colour" in the language of the
+  Mac is the "Color" that you said. Only the app in front is seen; a second
+  done is taken. The same option as the check of a done after an input that
+  changed nothing turns it on (`quit-done.ts`).
 - **A give_up.** The first give_up of a request goes back to the planner
   with the ways that it did not try, and the planner chooses again. A
   give_up about you, an account, a permission, a password, a secret, money
@@ -1127,7 +1136,7 @@ from one of them.
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | pay      | Buy, Pay, Place order, Subscribe, Donate, Send money, Book, Rent, a button that is only a price, a Confirm or a Submit while the screen shows a total, a Continue where the screen says that it charges ("your card will be charged"), a Transfer of an amount, and the same names in other languages ("Jetzt kaufen", "Pagar", "Payer")                                                                                        | (always asks)                                                                                            |
 | loss     | Delete forever, Empty Trash, Erase, Delete account, Uninstall, Terminate, Factory reset, Revoke, Overwrite, Shut down, a log out of the Mac, a Delete, Remove or OK where the screen says that it cannot be undone, a Replace of a file that exists, a terminal command that deletes for good (`rm`, `find -delete`, a delete in a script, a move to `/dev/null`), and a terminal move of files that your request does not name | (always asks)                                                                                            |
-| unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save, and a quit or a close while the window shows unsaved changes ("Report (Edited)")                                                                                                                                                                                                                                                               | asks to lose the changes: "without saving", "discard", "throw away"                                      |
+| unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save (also its Delete for a new document that was never saved, where the sheet says that it cannot be undone), and a quit or a close while the window shows unsaved changes ("Report (Edited)")                                                                                                                                                      | asks to lose the changes: "without saving", "discard", "throw away"                                      |
 | send     | Send, Reply, Reply All, Forward, Post, Comment, Publish, Submit, Share, Return in a messages or mail app, the submit of a message box, a terminal command that publishes (`git push`), and an address with a long part that you did not write                                                                                                                                                                                   | asks for a send of that kind, to the people that the screen shows. A long part of an address always asks |
 | public   | Like, Follow, Repost, Upvote                                                                                                                                                                                                                                                                                                                                                                                                    | asks to like, follow or repost                                                                           |
 | account  | a change of a password, two-factor, recovery, privacy or visibility, a switch of the security and privacy settings of macOS, and a terminal command that runs as an administrator (`sudo`), changes the security of the Mac or runs code from the web                                                                                                                                                                           | (always asks)                                                                                            |
@@ -1238,10 +1247,17 @@ question of a page names its site. A no ends the request.
   message box and your request does not ask to send. A search asks nothing.
 - **Keys that edit text go to text.** Select all (Command+A), cut, paste and
   delete a word (Option+Delete) are held back when the look just before them
-  names elements and none of them is a text field with the focus. The planner
+  names elements and none of them takes typing with the focus. The planner
   reads "No text field has the focus. Click into the text first." It counts
   as a refusal. A look that names no element cannot say where the focus is,
-  and the key goes as before.
+  and the key goes as before. A text field is not the only thing that takes
+  typing: a spreadsheet cell or its sheet (AXCell, AXTable), a grid
+  (AXGrid), the canvas of a document (AXLayoutArea), a web page that draws
+  its own editor (AXWebArea, as web sheets and slides do) and the view of a
+  document (AXScrollArea) count too, and so do they for the note "sent, but
+  no text field had the focus" after typed text. Return and Space still
+  count only a text field: a list or a sheet with the focus passes them on
+  to the default button of the window.
 - **You take over.** When the hands report that you moved the mouse or pressed
   a key, the worker pauses. Your next message goes on with it, and a stop
   stops it.

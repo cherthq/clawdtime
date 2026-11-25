@@ -969,6 +969,29 @@ describe("typed text and the focus", () => {
     await there.worker.idle();
     expect(there.planner.inputs[1]!.history[0]!.outcome).toBe("ok");
   });
+  it("says ok for text typed into a cell, a sheet, a canvas or a web editor with the focus", async () => {
+    for (const role of [
+      "AXCell",
+      "AXTable",
+      "AXGrid",
+      "AXLayoutArea",
+      "AXWebArea",
+      "AXScrollArea",
+    ]) {
+      const sheet = observation([
+        element(1, { title: "Name Box", role: "AXComboBox", value: "A1" }),
+        element(2, { title: "A1", role, focused: true }),
+      ]);
+      const { worker, planner, hands } = setup(
+        [{ kind: "type", text: "10" }, done],
+        { screens: [sheet] },
+      );
+      await worker.submit("r1", "Type 10 in A1");
+      await worker.idle();
+      expect(hands.sent, role).toEqual([{ kind: "type", text: "10" }]);
+      expect(planner.inputs[1]!.history[0]!.outcome, role).toBe("ok");
+    }
+  });
   it("passes the person's request to the checks: a send that was asked for needs no question", async () => {
     const screen = observation([element(1, { title: "Send" })]);
     const said = setup([{ kind: "click_element", element: 1 }, done], {
@@ -3746,11 +3769,11 @@ describe("an action that is not sent, or that moves nothing", () => {
       [...again(enter, 4), done],
       { screens: [bar()] },
     );
-    // The look just before the second key shows another generation of the screen.
+    // The look just before the second key shows another window in front.
     let looks = 0;
     hands.answer = (command) =>
       command.kind === "observe" && !command.image && ++looks === 2
-        ? { observation: bar(2) }
+        ? { observation: { ...bar(), app: { ...front, window: "Other" } } }
         : undefined;
     await worker.submit("r1", "Type example.com/app in the address bar");
     await worker.idle();
@@ -3772,6 +3795,39 @@ describe("an action that is not sent, or that moves nothing", () => {
         { kind: "key", target: "return", outcome: "not_sent_repeat" },
       ],
     });
+  });
+
+  it("does not count a step held for a change of the desktop or the display as a try of the action", async () => {
+    const { worker, hands, planner, journal, said } = setup(
+      [...again(enter, 4), done],
+      { screens: [bar()] },
+    );
+    // The desktop changes once, just before the second key: that look and
+    // every look after it have the new generation of the screen.
+    let looks = 0;
+    let epoch = 1;
+    hands.answer = (command) => {
+      if (command.kind !== "observe") return undefined;
+      if (!command.image && ++looks === 2) epoch = 2;
+      return { observation: bar(epoch) };
+    };
+    await worker.submit("r1", "Type example.com/app in the address bar");
+    await worker.idle();
+    // The planner reads why, and the next look is a fresh one.
+    expect(planner.inputs[2]!.history.at(-1)!.outcome).toBe(
+      `not sent: ${retired}`,
+    );
+    expect(planner.inputs[2]!.observation?.surfaceEpoch).toBe(2);
+    // The held step is no try: three keys went out before the row told the planner.
+    expect(hands.sent).toEqual(again(enter, 3));
+    expect(said).toEqual(["Done. The note is saved."]);
+    expect(journal.get("r1")!.steps.map((step) => step.outcome)).toEqual([
+      "ok",
+      "not_sent",
+      "ok",
+      "ok",
+      "ok",
+    ]);
   });
 
   it("goes on when the planner chooses another way after it was told", async () => {

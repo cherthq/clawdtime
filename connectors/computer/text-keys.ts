@@ -9,14 +9,20 @@
  * 2 of 3 runs.
  *
  * So the worker holds such a key back when the last look before it names
- * elements and none of them is a text field with the focus. The planner reads
+ * elements and none of them takes typing with the focus. The planner reads
  * why and clicks into the text first. When the look names no element at all,
  * the worker cannot tell where the focus is, and the key goes as before.
+ *
+ * A text field is not the only thing that takes typing: a spreadsheet cell
+ * or its sheet, a grid, the canvas of a document and a web page that draws
+ * its own editor do too (`hasTypingFocus`). The stress run on the owner's Mac
+ * (26 Nov 2026) typed into cells of a spreadsheet, and the worker read that
+ * as typing with no field.
  *
  * cmd+delete is not in the list: in Finder it moves a file to the Trash, and
  * that key has its own question.
  */
-import { hasTextFocus, parseCombo } from "./guards.js";
+import { hasTypingFocus, parseCombo } from "./guards.js";
 import type { Action, Observation } from "./ports.js";
 
 /** The combos that edit text, written as `parseCombo` writes them. */
@@ -51,5 +57,5 @@ export function textKeyHold(
 ): string | null {
   if (action.kind !== "key" || !editsText(action.combo)) return null;
   if (!seen || seen.elements.length === 0) return null;
-  return hasTextFocus(seen) ? null : noTextFocusText;
+  return hasTypingFocus(seen) ? null : noTextFocusText;
 }

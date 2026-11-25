@@ -71,6 +71,34 @@ final class DesktopTransitionTests: XCTestCase {
     lease.record(surface, at: 10.4)
     XCTAssertNotEqual(lease.epoch, epoch)
   }
+  func testOnlyAChangeOfTheDesktopOrTheDisplayChangesTheSurfaceEpochOfAnObservation() {
+    // The epoch that an observation carries to the worker retires all old coordinates there. A new window of
+    // the app in front, the first window of an app, a look with no window and an app that came forward retire
+    // only the input of the panel: the worker finds its target again in the newer look.
+    var lease = DesktopObservationLease<Surface>()
+    var start = Surface(), document = Surface()
+    start.window = 1; document.window = 2
+    lease.record(start, at: 1)
+    let input = lease.epoch
+    lease.record(document, at: 2) // the app in front opened a window
+    XCTAssertGreaterThan(lease.epoch, input)
+    XCTAssertFalse(lease.permits(start, at: 2))
+    XCTAssertTrue(lease.permits(document, at: 2))
+    lease.invalidate() // an app came forward, or a look found no window
+    XCTAssertFalse(lease.permits(document, at: 2))
+    lease.record(document, at: 3)
+    XCTAssertEqual(lease.surfaceEpoch, 0)
+    // A change of the desktop or of the display, or a move of the hands to another app or desktop.
+    let before = lease.epoch
+    lease.retire()
+    XCTAssertEqual(lease.surfaceEpoch, 1)
+    XCTAssertGreaterThan(lease.epoch, before)
+    XCTAssertNil(lease.held)
+    XCTAssertFalse(lease.permits(document, at: 3))
+    lease.record(document, at: 4)
+    XCTAssertTrue(lease.permits(document, at: 4))
+    XCTAssertEqual(lease.surfaceEpoch, 1)
+  }
   func testGeometryDisplayScaleWindowAndAppMustMatchLastObservation() {
     let original = Surface()
     var lease = DesktopObservationLease<Surface>()
@@ -129,6 +157,36 @@ final class DesktopTransitionTests: XCTestCase {
       XCTAssertEqual(error as? HandError, .ambiguousTarget)
     }
     XCTAssertThrowsError(try DesktopAppSelection.path(named: "Absent", candidates: [one, two]).get()) { error in
+      XCTAssertEqual(error as? HandError, .notFound)
+    }
+  }
+  func testAnAppOfTheAppFoldersWinsOverAHelperOfTheSystemWithTheSameName() throws {
+    // macOS keeps small helpers in CoreServices whose name in Finder is the name of an app:
+    // "Tips" is also the Finder name of a helper there. The app of the app folders is the one a person means.
+    let app = DesktopAppCandidate(path: "/System/Applications/Fixture.app", names: ["Fixture", "Fixture"])
+    let helper = DesktopAppCandidate(path: "/System/Library/CoreServices/FixtureHandler.app", names: ["FixtureHandler", "Fixture"])
+    let mine = DesktopAppCandidate(path: "/Applications/Mine.app", names: ["Mine", "Mine"])
+    let mineHelper = DesktopAppCandidate(path: "/System/Library/CoreServices/MineAgent.app", names: ["MineAgent", "Mine"])
+    let utility = DesktopAppCandidate(path: "/System/Applications/Utilities/Meter.app", names: ["Meter", "Meter"])
+    let meterHelper = DesktopAppCandidate(path: "/Users/someone/Applications/Meter.app", names: ["Meter", "Meter"])
+    // The system browser lives in its own place, which is where /Applications leads it.
+    let browser = DesktopAppCandidate(path: "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Browser.app", names: ["Browser", "Browser"])
+    let browserCopy = DesktopAppCandidate(path: "/Users/someone/Downloads/Browser.app", names: ["Browser", "Browser"])
+    let all = [helper, app, mineHelper, mine, meterHelper, utility, browserCopy, browser]
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Fixture", candidates: all).get(), app.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "fixture", candidates: all).get(), app.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Mine", candidates: all).get(), mine.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Meter", candidates: all).get(), utility.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Browser", candidates: all).get(), browser.path)
+    // A helper is still found by its own name.
+    XCTAssertEqual(try DesktopAppSelection.path(named: "FixtureHandler", candidates: all).get(), helper.path)
+    // Two apps of the app folders with that name are still two: nothing is chosen.
+    let twin = DesktopAppCandidate(path: "/Applications/Fixture.app", names: ["Fixture", "Fixture"])
+    XCTAssertThrowsError(try DesktopAppSelection.path(named: "Fixture", candidates: all + [twin]).get()) { error in
+      XCTAssertEqual(error as? HandError, .ambiguousTarget)
+    }
+    // A part of a name is no name.
+    XCTAssertThrowsError(try DesktopAppSelection.path(named: "Fix", candidates: all).get()) { error in
       XCTAssertEqual(error as? HandError, .notFound)
     }
   }
