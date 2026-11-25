@@ -34,7 +34,7 @@ import { inspectDesktopReadiness } from "../connectors/agents/desktop-readiness.
 import { readReach } from "../connectors/computer/reach.js";
 import { Routines } from "../connectors/computer/routines.js";
 
-export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself, one checked action at a time
+export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself
   computer status   on or off, and the last request
   computer on       turn it on. Start the ClawdTime desktop service again after this
   computer off      turn it off. A request that runs stops before its next action
