@@ -8,6 +8,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { Supervisor } from "../connectors/agents/brain.js";
+import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import {
   readMidTask,
@@ -607,4 +609,104 @@ describe("autonomy: secrets are never kept, in any state", () => {
       await asked.worker.idle();
     },
   );
+});
+
+describe("autonomy: the chat hands the words to the task that runs", () => {
+  /** The chat in front of a real worker, with no language model. */
+  const chat = (run: ComputerWorker, home: string) =>
+    new Supervisor(
+      {
+        now: () => 1_000_000,
+        board: () => null,
+        desk: new DecisionDesk(home, () => 1_000_000),
+        focus: async () => ({ ok: false }),
+        send: async () => ({ ok: false, route: "none" }),
+        clis: () => [],
+        execution: run,
+      },
+      null,
+    );
+
+  it("steers the task with the owner's correction, and the task goes on", async () => {
+    const run = await running();
+    const words = "Bro, open flipkart.com, not instagram.com.";
+    expect(await chat(run.worker, run.home).reply([], words, "chat")).toBe(
+      taken,
+    );
+    run.release();
+    await run.worker.idle();
+    expect(run.worker.snapshot().state).toBe("completed");
+    expect(run.planner.inputs[2]).toMatchObject({ guidance: [words] });
+    expect(run.said.join(" ")).not.toMatch(/Paused/);
+  });
+
+  it.each([
+    "not instagram, flipkart",
+    "no, the other one",
+    "hmm try the search box",
+    "that's wrong, go back",
+  ])("hands %j to the task: no message is swallowed", async (words) => {
+    const run = await running();
+    expect(await chat(run.worker, run.home).reply([], words, "chat")).toBe(
+      taken,
+    );
+    run.release();
+    await run.worker.idle();
+    expect(run.planner.inputs[2]).toMatchObject({ guidance: [words] });
+  });
+
+  it("pauses on a wait, goes on with the next message, and stops on a stop", async () => {
+    const run = await running();
+    const talk = chat(run.worker, run.home);
+    expect(await talk.reply([], "hold on", "chat")).toBe(paused);
+    await until(() => run.worker.snapshot().waiting === "takeover");
+    run.release();
+    expect(await talk.reply([], "not instagram, flipkart", "chat")).toBe(
+      resumed,
+    );
+    await run.worker.idle();
+    expect(run.worker.snapshot().state).toBe("completed");
+    expect(run.planner.inputs.at(-1)).toMatchObject({
+      guidance: ["not instagram, flipkart"],
+    });
+
+    const again = await pausedTask();
+    expect(await chat(again.worker, again.home).reply([], "stop", "chat")).toBe(
+      stoppedText,
+    );
+    await again.worker.idle();
+    expect(again.worker.snapshot().state).toBe("canceled");
+  });
+
+  it("answers a question from the state of the task, and keeps going", async () => {
+    const run = await running();
+    const said = await chat(run.worker, run.home).reply(
+      [],
+      "are you done?",
+      "chat",
+    );
+    expect(said).toMatch(/still runs: it has not reported that it is done/);
+    expect(run.journal.guidance("r1")).toEqual([]);
+    expect(run.worker.snapshot().state).toBe("running");
+    run.release();
+    await run.worker.idle();
+    expect(run.worker.snapshot().state).toBe("completed");
+  });
+
+  it("keeps a secret away from the task and the planner, and the task goes on", async () => {
+    const run = await running();
+    await chat(run.worker, run.home).reply(
+      [],
+      "the password is hunter22, type it in",
+      "chat",
+    );
+    run.release();
+    await run.worker.idle();
+    expect(run.worker.snapshot().state).toBe("completed");
+    expect(readFileSync(run.journal.guidanceFile, "utf8")).not.toContain(
+      "hunter22",
+    );
+    const heard = run.planner.inputs.flatMap((input) => input.guidance ?? []);
+    expect(heard.join(" ")).not.toContain("hunter22");
+  });
 });

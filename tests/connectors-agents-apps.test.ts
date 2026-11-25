@@ -32,7 +32,7 @@ import { BoardFeed } from "../connectors/agents/feed.js";
 import type { Runner } from "../connectors/agents/focus.js";
 import type { TaskPort } from "../connectors/agents/tasks.js";
 import type { BoardSnapshot } from "../connectors/agents/types.js";
-import { readWords } from "../connectors/computer/orders.js";
+import { readMidTask, readWords } from "../connectors/computer/orders.js";
 import { fakeSystem } from "./connectors-agents-fixture.js";
 
 const now = Date.UTC(2026, 10, 21, 2, 0, 0);
@@ -1256,13 +1256,14 @@ describe("the chat says of a computer task only what its engine reported", () =>
   });
 
   it("gives the model the state of a task that is not over, with the engine's newest message, before it answers", async () => {
-    const told = async (f: ReturnType<typeof withTask>) => {
+    // A question: while a task runs, a remark would steer it, and a
+    // question gets its answer from the state.
+    const told = async (
+      f: ReturnType<typeof withTask>,
+      words = "does the page look right?",
+    ) => {
       const run = drafts(["It still works on that."]);
-      await new Supervisor(f.value, run.model).reply(
-        [],
-        "the page looks weird",
-        "chat",
-      );
+      await new Supervisor(f.value, run.model).reply([], words, "chat");
       return toldByTools(run.given[0]!);
     };
     expect(await told(withTask("running", working))).toContain(stillRuns);
@@ -1286,9 +1287,14 @@ describe("the chat says of a computer task only what its engine reported", () =>
     for (const state of ["idle", "completed"])
       expect([
         state,
-        await told(withTask(state, "Done. The page is open.")),
+        await told(
+          withTask(state, "Done. The page is open."),
+          "the page looks weird",
+        ),
       ]).toEqual([state, ""]);
-    expect(await told(withTask("canceled", stopped))).toContain(
+    expect(
+      await told(withTask("canceled", stopped), "the page looks weird"),
+    ).toContain(
       `The computer task was stopped: it did not report that it is done. Its newest report: ${stopped}`,
     );
   });
@@ -1329,7 +1335,7 @@ describe("the chat says of a computer task only what its engine reported", () =>
       expect(
         await new Supervisor(f.value, run.model).reply(
           [],
-          "the page looks weird",
+          "does the page look right?",
           "chat",
         ),
       ).toBe(sentence);
@@ -1379,7 +1385,7 @@ describe("the chat says of a computer task only what its engine reported", () =>
       const run = drafts([draft]);
       const said = await new Supervisor(f.value, run.model).reply(
         before,
-        "the page looks weird",
+        "does the page look right?",
         "call",
       );
       expect([draft, said]).toEqual([draft, draft]);
@@ -1732,7 +1738,7 @@ describe("the chat says of a computer task only what its engine reported", () =>
     };
     const idle = withTask("idle", "Computer use is on.");
     const live = withTask("running", working);
-    const words = "tell me a joke about the weather";
+    const words = "can you tell me a joke about the weather?";
     const said = await new Supervisor(live.value, silent).reply(
       [],
       words,
@@ -2025,8 +2031,9 @@ describe("words for a running computer task reach its engine", () => {
     }
   });
 
-  it("lets a model offer stand for words outside the screen grammar without forcing submit", async () => {
+  it("hands words outside the screen grammar to the running task, with no offer and no question back", async () => {
     const words = "put hello into the right-hand input";
+    // The strict reader of orders still reads no order here.
     expect(guidesComputerTask(words)).toBe(false);
     for (const draft of [
       "You want me to put hello into the right-hand input now?",
@@ -2041,10 +2048,11 @@ describe("words for a running computer task reach its engine", () => {
         words,
         "call",
       );
-      expect([draft, said]).toEqual([draft, draft]);
-      expect(f.submitted).toEqual([]);
+      expect([draft, said]).toEqual([draft, guided]);
+      expect(f.submitted).toEqual([words]);
       expect(f.answered).toEqual([]);
       expect(f.started).toEqual([]);
+      expect(run.calls()).toBe(0);
     }
   });
 
@@ -2146,11 +2154,13 @@ describe("words for a running computer task reach its engine", () => {
       expect(f.answered).toEqual([]);
       expect(run.calls()).toBe(0);
     }
+    // A remark steers the task now. A question that is no state question
+    // goes to the model, with the note.
     const remark = withWorker("running", working, { goal });
     const remarkRun = drafts(["It still runs."]);
     await new Supervisor(remark.value, remarkRun.model).reply(
       before,
-      "the page looks weird",
+      "does the page look right?",
       "call",
     );
     const note = remarkRun.given[0]!.filter(
@@ -2645,7 +2655,7 @@ describe("chat routing safety and truth for computer tasks", () => {
     return { model, inputs, calls: () => step };
   }
 
-  it("blocker 1: never hands remarks, holds, voice questions, negations or dictation to submit when the model offers or deflects", async () => {
+  it("blocker 1, now: remarks, waits, negations and dictation go to the running task, whatever the model would offer or deflect", async () => {
     const cases: [string, string][] = [
       ["the page looks weird", "Should I refresh the page?"],
       ["the page looks weird", deflectionDraft],
@@ -2671,14 +2681,24 @@ describe("chat routing safety and truth for computer tasks", () => {
         words,
         "call",
       );
-      expect([words, draft, f.submitted, said]).toEqual([
+      // The worker reads the words: a wait pauses, everything else steers.
+      expect([words, f.submitted, said, run.calls()]).toEqual([
         words,
-        draft,
-        [],
-        draft,
+        [words],
+        guidedText,
+        0,
       ]);
       expect(f.answered).toEqual([]);
       expect(f.execStops()).toBe(0);
+    }
+    // A question gets its answer from the state, and goes to no worker.
+    for (const words of ["is it open?", "what do you see on the page?"]) {
+      const f = withFakeWorker("running", working, { goal });
+      await new Supervisor(
+        f.value,
+        scriptedChat([deflectionDraft]).model,
+      ).reply(before, words, "call");
+      expect([words, f.submitted]).toEqual([words, []]);
     }
   });
 
@@ -2752,14 +2772,14 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(buildStop.submitted).toEqual([]);
   });
 
-  it("blocker 3: coding work, other-person speech, later times, questions-as-orders and full session names never go to submit", async () => {
+  it("blocker 3, now: coding work and full session names never go to submit; speech and later times steer the running task", async () => {
     const codingMessages = [
       "open the settings file and fix the typo",
       "open package.json and bump the version",
       "push it to origin",
-      "use tailwind instead",
-      "clear the cache",
       "search for TODO in the project",
+      "find out why the login is slow",
+      "tell Claude to run the tests",
     ];
     for (const words of codingMessages) {
       expect([words, guidesComputerTask(words)]).toEqual([words, false]);
@@ -2782,11 +2802,12 @@ describe("chat routing safety and truth for computer tasks", () => {
       "don't open it. Open it when I get back.",
       "look at the screen and tell me what it says",
     ]) {
+      // No order for the strict reader, and words for the task all the same.
       expect([words, guidesComputerTask(words)]).toEqual([words, false]);
       const f = withFakeWorker("running", working, { goal });
       const run = scriptedChat(["Okay."]);
       await new Supervisor(f.value, run.model).reply(before, words, "call");
-      expect([words, f.submitted]).toEqual([words, []]);
+      expect([words, f.submitted]).toEqual([words, [words]]);
     }
 
     for (const words of [
@@ -2925,7 +2946,7 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(saidWaiting).toContain(approval);
   });
 
-  it("blocker 5: approval takes only seen explicit yes or explicit no to answer and orders to submit; question takes answers; takeover only resumes on continue or orders", async () => {
+  it("blocker 5: approval takes only seen explicit yes or explicit no to answer and orders to submit; question takes answers; takeover goes on with any message", async () => {
     const beforeApproval: ChatMessage[] = [
       ...before,
       { role: "assistant", text: approval, at: at + 10_000, via: "call" },
@@ -3029,8 +3050,9 @@ describe("chat routing safety and truth for computer tasks", () => {
         stoppedText,
       ]);
     }
-    // Non-stop, non-continue, non-order words at takeover follow origin/main's execution.answer path.
-    for (const words of ["ok", "okay", "sure", "approve", "yes", "hmm"]) {
+    // A bare ok or yes at takeover carries nothing to steer with: it goes to
+    // the worker as the answer, and the worker goes on.
+    for (const words of ["ok", "okay", "sure", "yes"]) {
       const f = withFakeWorker("waiting_for_person", paused, {
         goal,
         waiting: "takeover",
@@ -3047,6 +3069,26 @@ describe("chat routing safety and truth for computer tasks", () => {
         [],
         0,
         "Continuing.",
+      ]);
+    }
+    // Any other words at takeover steer: they go into the task, and it goes on.
+    for (const words of ["approve", "hmm", "no, the other tab"]) {
+      const f = withFakeWorker("waiting_for_person", paused, {
+        goal,
+        waiting: "takeover",
+      });
+      const run = scriptedChat(["Okay."]);
+      const said = await new Supervisor(f.value, run.model).reply(
+        before,
+        words,
+        "call",
+      );
+      expect([words, f.answered, f.submitted, f.execStops(), said]).toEqual([
+        words,
+        [],
+        [words],
+        0,
+        resumedText,
       ]);
     }
   });
@@ -3216,11 +3258,12 @@ describe("chat routing safety and truth for computer tasks", () => {
     expect(deskNote).not.toContain("replaced by handing them to the engine");
     expect(deskNote).not.toContain("delegate_computer_task");
 
+    // A remark goes straight to the native worker; a question reaches the model.
     const nativeF = withFakeWorker("running", working, { goal });
     const nativeRun = scriptedChat(["It still runs."]);
     await new Supervisor(nativeF.value, nativeRun.model).reply(
       before,
-      "the page looks weird",
+      "does the page look right?",
       "call",
     );
     const nativeTool = nativeRun.inputs[0]!.tools.find(
@@ -3252,17 +3295,13 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     "Stopped. An action that was already sent may have finished.";
   const guidedText = "Got it. I take that into the task that runs.";
   const resumedText = "Got it. I go on with the task and take that into it.";
-  const alreadyRunningText = "The task is already running.";
-  const heldText =
-    "Got it. I hold now and take that into the task. Say continue to go on, or stop.";
-  const stillPausedText =
-    "I am still paused, because you used the Mac. Say continue, or tell me what to do next.";
+  const goingOnText = "I go on with the task.";
+  const pausedText = "Paused. Your next message goes on with it.";
+  const stillPausedText = "Still paused. Your next message goes on with it.";
   const asideApprovalText =
     "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.";
-  const asideContinueHoldApprovalText =
-    "That was no yes: what waited for one is set aside, and I hold now. Say continue to go on, or stop.";
-  const asideHoldApprovalText =
-    "Got it. I hold now and take that into the task. That was no yes: what waited for one is set aside. Say continue to go on, or stop.";
+  const asidePausedApprovalText =
+    "Paused, and what waited for your yes is set aside. Your next message goes on with it.";
   const refusedApprovalText = 'Canceled. I did not do it: Click "Send".';
   const stillRuns = `The computer task still runs: it has not reported that it is done. Its newest report: ${working}`;
   const deflectionDraft =
@@ -3330,7 +3369,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     ],
   });
 
-  /** Fake execution port that answers as the real ComputerWorker does (using readWords and interpret). */
+  /** Fake execution port that answers as the real ComputerWorker does (using readMidTask and interpret). */
   function withRealishWorker(
     state: string,
     message: string,
@@ -3426,24 +3465,28 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     };
     const guideReply = (text: string): string => {
       if (state === "idle") return startedText;
-      const kind = readWords(text);
+      const kind = readMidTask(text);
       if (kind === "stop") {
         execStops++;
         return stoppedText;
       }
+      // A pause takes any message: a wait keeps it, everything else goes on.
       if (options.waiting === "takeover") {
-        if (kind === "continue") return "Continuing.";
-        if (kind === "order") return resumedText;
-        return stillPausedText;
+        if (kind === "pause") return stillPausedText;
+        if (kind === "go") return "Continuing.";
+        return resumedText;
       }
       if (options.waiting === "approval") {
-        if (kind === "order") return asideApprovalText;
-        if (kind === "continue") return asideContinueHoldApprovalText;
-        return asideHoldApprovalText;
+        if (kind === "pause") return asidePausedApprovalText;
+        if (kind === "go" || kind === "status")
+          return `That was no yes, so it still waits. ${message}`;
+        return asideApprovalText;
       }
-      if (kind === "continue") return alreadyRunningText;
-      if (kind === "order") return guidedText;
-      return heldText;
+      if (kind === "pause") return pausedText;
+      if (kind === "go") return goingOnText;
+      if (kind === "status")
+        return `Still working on "${goal}", at step 19, and it is not done yet.`;
+      return guidedText;
     };
     f.value.execution = {
       snapshot: () => snapshot,
@@ -3471,17 +3514,9 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
               answered.push(text);
               if (options.waiting === "question")
                 return { message: "Thank you. I go on." };
-              if (options.waiting === "takeover") {
-                const said = interpret(text, {
-                  kind: "question",
-                  options: ["Continue", "Stop"],
-                });
-                if (said?.decision === "answer" && said.text === "Continue")
-                  return { message: "Continuing." };
-                if (said?.decision === "deny" || said?.text === "Stop")
-                  return { message: stoppedText };
-                return { message: `I did not get a clear answer. ${paused}` };
-              }
+              // A pause takes the chat's answer as words for the task.
+              if (options.waiting === "takeover")
+                return { message: guideReply(text) };
               const said = interpret(text, { kind: "permission", options: [] });
               if (said?.decision === "allow") return { message: "Continuing." };
               if (said?.decision === "deny")
@@ -3866,9 +3901,19 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       expect([words, f.submitted, f.started]).toEqual([words, [], [words]]);
     }
 
-    // Even when a model tries to call delegate_computer_task on coding work or a hold, delegate blocks submit.
+    // Even when a model tries to call delegate_computer_task on coding work, delegate blocks submit.
+    const coding = withRealishWorker("running", working, { goal });
+    await new Supervisor(
+      coding.value,
+      scriptedChat([
+        [call("delegate_computer_task")],
+        "Okay, leaving the running task alone.",
+      ]).model,
+    ).reply(before, "open the settings file and fix the typo", "call");
+    expect(coding.submitted).toEqual([]);
+    // A remark and words outside the screen grammar are guidance: they reach
+    // the task with no model at all.
     for (const words of [
-      "open the settings file and fix the typo",
       "the page looks weird",
       "put hello into the right-hand input",
     ]) {
@@ -3878,10 +3923,11 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
         "Okay, leaving the running task alone.",
       ]);
       await new Supervisor(f.value, run.model).reply(before, words, "call");
-      expect([words, f.submitted]).toEqual([words, []]);
+      expect([words, f.submitted, run.calls()]).toEqual([words, [words], 0]);
     }
 
-    // While paused on takeover, coding holds never go to submit (origin/main sends non-orders to answer).
+    // While paused on takeover, coding work never goes to the screen task:
+    // it keeps its own road, and the model starts the job.
     for (const words of [
       "open the settings file and fix the typo",
       "open package.json and bump the version",
@@ -3897,7 +3943,12 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
         "Started.",
       ]);
       await new Supervisor(f.value, run.model).reply(before, words, "call");
-      expect([words, f.submitted, f.answered]).toEqual([words, [], [words]]);
+      expect([words, f.submitted, f.answered, f.started]).toEqual([
+        words,
+        [],
+        [],
+        [words],
+      ]);
     }
   });
 
@@ -3937,7 +3988,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       const said = await new Supervisor(
         f.value,
         scriptedChat([draft]).model,
-      ).reply(before, "the page looks weird", "call");
+      ).reply(before, "does the page look right?", "call");
       expect([draft, said]).toEqual([draft, stillRuns]);
     }
 
@@ -3953,7 +4004,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     expect(
       await new Supervisor(boardF.value, boardRun.model).reply(
         before,
-        "the page looks weird",
+        "does the page look right?",
         "call",
       ),
     ).toBe(stillRuns);
@@ -4074,8 +4125,8 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
     expect(jobSaid).toBe("The job found three big files in Downloads.");
   });
 
-  it("round2 rests 8, 9, 10: takeover non-orders follow origin/main answer path, 'open the task tab' reaches submit, and contradictory approval phrases never call answer while 'sure, stop' stops", async () => {
-    // Rest 8: takeover non-orders ("no, the other tab", "in the browser instead") never submit (origin/main answer path).
+  it("round2 rests 8, 9, 10: takeover non-orders steer the task through submit, 'open the task tab' reaches submit, and contradictory approval phrases never call answer while 'sure, stop' stops", async () => {
+    // Rest 8, now: takeover non-orders ("no, the other tab", "in the browser instead") steer the task and it goes on.
     for (const words of ["no, the other tab", "in the browser instead"]) {
       const f = withRealishWorker("waiting_for_person", paused, {
         goal,
@@ -4085,8 +4136,8 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       await new Supervisor(f.value, run.model).reply(before, words, "call");
       expect([words, f.submitted, f.answered, f.execStops()]).toEqual([
         words,
-        [],
         [words],
+        [],
         0,
       ]);
     }
@@ -4351,9 +4402,24 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       ]);
     }
 
-    // Questions, normal remarks, and non-screen stops never stop the screen task.
+    // A remark never stops the screen task: it steers it.
+    const enough = withRealishWorker("running", working, {
+      goal,
+      board: boardWith("deploy fix"),
+      codingTaskRunning: true,
+    });
+    expect(
+      await new Supervisor(
+        enough.value,
+        scriptedChat(["Normal reply."]).model,
+      ).reply(before, "that's good enough", "call"),
+    ).toBe(guidedText);
+    expect([enough.execStops(), enough.submitted]).toEqual([
+      0,
+      ["that's good enough"],
+    ]);
+    // Questions and non-screen stops never stop the screen task.
     for (const words of [
-      "that's good enough",
       "is that enough?",
       "did it stop?",
       "why did it stop?",
@@ -4628,7 +4694,8 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       "Not accepted.",
     ]);
 
-    // Takeover pause & planner question: origin/main path for non-stop/non-continue/non-order.
+    // Takeover pause: any words go on with the task, here through submit.
+    // Planner question: the words are its answer.
     const takeF = withRealishWorker("waiting_for_person", paused, {
       goal,
       waiting: "takeover",
@@ -4638,8 +4705,8 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       "hmm",
       "call",
     );
-    expect(takeF.answered).toEqual(["hmm"]);
-    expect(takeF.submitted).toEqual([]);
+    expect(takeF.answered).toEqual([]);
+    expect(takeF.submitted).toEqual(["hmm"]);
 
     const qF = withRealishWorker("waiting_for_person", question, {
       goal,
@@ -4887,7 +4954,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       const run = scriptedChat([draft]);
       const said = await new Supervisor(f.value, run.model).reply(
         before,
-        "the page looks weird",
+        "does the page look right?",
         "call",
       );
       expect([draft, said]).toEqual([draft, stillRuns]);

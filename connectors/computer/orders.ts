@@ -1711,6 +1711,16 @@ export function defersWork(text: string): boolean {
 }
 
 /**
+ * True when the words read as code work to the strict reader: what they name
+ * (see `namesCodeWork`), or a verb of code work at the head of a clause ("add
+ * dark mode", "fix the typo"). Such a verb is also a verb for the screen
+ * ("add it to the cart"), so this only says that the words may be code work.
+ */
+export function holdsCodeWork(text: string): boolean {
+  return splitSentences(normalize(text).cased).some(hasCodeWorkInSentence);
+}
+
+/**
  * True when the words name code work by what they name: a code file name, a
  * code artifact (a repository, a branch, a commit, a function), a command to
  * run, a diff to review, code to pull, or a soft code noun (a file, a test, the
@@ -1893,7 +1903,7 @@ function asksStatus(lower: string): boolean {
 
 /** A message that only says go on, yes or thanks: it carries nothing to steer with. */
 const goOnly =
-  /^(?:(?:ok|okay|k|kk|cool|nice|great|good|perfect|awesome|fine|thanks|thank\s+you|thx|ty|alright|all\s+right|sure|yes|yeah|yep|yup|right|got\s+it|sounds\s+good|looks\s+good|go|lgtm|nice\s+one|good\s+job|well\s+done|bro|dude|man|please|pls)[\s,.!]*)+$/;
+  /^(?:(?:ok|okay|k|kk|cool|nice|great|good|perfect|awesome|fine|thanks|thank\s+you|thx|ty|alright|all\s+right|sure|yes|yeah|yep|yup|right|got\s+it|sounds\s+good|looks\s+good|go|lgtm|nice\s+one|good\s+job|well\s+done|bro|dude|man|please|pls|hey|hi|hello|yo)[\s,.!]*)+$/;
 
 /**
  * Reads a message that arrives while a computer task runs:
