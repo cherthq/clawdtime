@@ -16,16 +16,16 @@
  *   npx tsx tests/computer-planner.eval.ts --check
  *   npx tsx tests/computer-planner.eval.ts --check --new-actions
  *
- * Each argument is a model, with ":low" for a small picture. With no argument
- * it measures the model that the service would use. REPEATS (default 2) is
- * how often each task runs; ONLY names a part of a task's name; OUT names a
- * file for every answer.
+ * Each argument is provider/model, or a bare model of OpenAI, with ":low" for
+ * a small picture. With no argument it measures the model that the service
+ * would use. REPEATS (default 2) is how often each task runs; ONLY names a
+ * part of a task's name; OUT names a file for every answer.
  *
  * A task can come with a closer picture, as after look_closer: one part of
  * its screen three times larger, rendered as the hands take it (zoom).
  *
- * With a model it needs a key for the language model in the environment, as
- * the service does, and the Chromium of Playwright (`npm run
+ * With a model it needs a key for the language model in the environment or
+ * the key store, as the service does, and the Chromium of Playwright (`npm run
  * cua:install-browser`). It costs real model calls: tasks times repeats for
  * each argument. It opens no window, sends no input and reads nothing of the
  * person's screen.
@@ -41,6 +41,7 @@
  * still checked, and its line says so.
  */
 import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { chromium, type Browser, type Page } from "@playwright/test";
 import {
   browserMethodNames,
@@ -48,9 +49,13 @@ import {
   closerPart,
 } from "../connectors/computer/guards.js";
 import { pageScript } from "../connectors/computer/browser-script.js";
+import { stateRoot } from "../connectors/agents/hooks.js";
 import {
   defaultComputerModel,
+  ModelPlanner,
   OpenAIPlanner,
+  plannerFor,
+  type PlannerOptions,
 } from "../connectors/computer/planner.js";
 import type {
   Action,
@@ -77,13 +82,13 @@ for (const flag of flags)
     throw new Error(`Unknown flag ${flag}. Use --check and --new-actions.`);
 const checking = flags.has("--check");
 const withNew = flags.has("--new-actions");
-// The check mode never reads a key: it calls no model.
-const key = checking
-  ? ""
-  : (process.env.CLAWDTIME_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? "");
-if (!checking && !key)
-  throw new Error(
-    "The planner test needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in the environment, or --check for the checks alone.",
+// The check mode never reads a key: it calls no model. With a model, the key
+// comes from the environment or the key store, as the service takes it.
+const keyFor = (model: string | null) =>
+  plannerFor(
+    model,
+    process.env,
+    stateRoot({ env: process.env, home: homedir() }),
   );
 
 // The picture is 1280 wide, as the hands send it. The screen is a 1512 by 982 display.
@@ -1223,32 +1228,42 @@ const chosen = tasks.filter(
 interface Config {
   label: string;
   model: string;
+  /** The provider, the model and the key. Absent in the check mode. */
+  planner?: PlannerOptions;
   detail: "high" | "low";
   /** The reasoning effort that the request asks for. Absent: the model's own default. */
   effort?: string;
 }
 const models = words.filter((word) => !word.startsWith("--"));
-const configs: Config[] = (
-  models.length
-    ? models
-    : [process.env.CLAWDTIME_COMPUTER_MODEL || defaultComputerModel]
-).map((word) => {
-  // "model", "model:low" for a small picture, "model@effort" for a reasoning effort.
-  const [named, effort] = word.split("@");
-  const [model, detail] = (named ?? "").split(":");
+const configs: Config[] = (models.length ? models : [null]).map((word) => {
+  // "provider/model" or a bare model of OpenAI, ":low" for a small picture,
+  // "@effort" for a reasoning effort. A colon of the model itself stays.
+  const [named, effort] = (word ?? "").split("@");
+  const [, model, detail] = /^(.*?)(?::(low|high))?$/.exec(named ?? "") ?? [];
   if (
-    !model ||
-    (detail !== undefined && detail !== "low" && detail !== "high") ||
+    (word !== null && !model) ||
     (effort !== undefined && !/^[a-z]+$/.test(effort))
   )
     throw new Error(
-      `Use a model, with :low for a small picture and @effort for a reasoning effort. Got: ${word}`,
+      `Use provider/model, with :low for a small picture and @effort for a reasoning effort. Got: ${word}`,
     );
+  const chosen = checking ? null : keyFor(model || null);
+  // Anthropic takes the effort as a setting of its request, not in the body.
+  const own = chosen?.options.provider === "anthropic" && effort !== undefined;
+  if (own && !["low", "medium", "high"].includes(effort))
+    throw new Error(`Anthropic takes @low, @medium or @high. Got: ${word}`);
   return {
-    label: word,
-    model,
+    label: word ?? chosen?.name ?? defaultComputerModel,
+    model: model || (chosen?.name ?? defaultComputerModel),
+    ...(chosen
+      ? {
+          planner: own
+            ? { ...chosen.options, effort: effort as "low" | "medium" | "high" }
+            : chosen.options,
+        }
+      : {}),
     detail: detail === "low" ? "low" : "high",
-    ...(effort ? { effort } : {}),
+    ...(effort && !own ? { effort } : {}),
   };
 });
 const repeats = Math.max(1, Math.floor(Number(process.env.REPEATS ?? "2")));
@@ -1305,10 +1320,9 @@ async function measure(
       return fetch(url, { ...init, body: JSON.stringify(body) });
     };
     const planners = {
-      screen: new OpenAIPlanner({ key, model: config.model, request }),
-      browser: new OpenAIPlanner({
-        key,
-        model: config.model,
+      screen: new ModelPlanner({ ...config.planner!, request }),
+      browser: new ModelPlanner({
+        ...config.planner!,
         request,
         browser: true,
         browserMethods: browserMethodNames,

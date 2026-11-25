@@ -20,12 +20,12 @@
  *   npx tsx tests/computer-request.eval.ts --check
  *   npx tsx tests/computer-request.eval.ts --check --new-actions
  *
- * Each argument is a model. With none it uses the model that the service
- * would use. REPEATS (default 1) is how often each request runs; ONLY names a
+ * Each argument is provider/model, or a bare model of OpenAI. With none it
+ * uses the model that the service would use. REPEATS (default 1) is how often each request runs; ONLY names a
  * part of a request's name; OUT names a file for every result.
  *
- * With a model it needs a key for the language model in the environment and
- * the Chromium of Playwright. It costs real model calls: about two for each
+ * With a model it needs a key for the language model in the environment or
+ * the key store, and the Chromium of Playwright. It costs real model calls: about two for each
  * step. It opens no window, sends no input to the Mac and reads nothing of
  * its screen. It is not physical acceptance: the apps are pages, not the apps
  * of a Mac.
@@ -44,14 +44,16 @@
  * offer is skipped, with a line that says so.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "@playwright/test";
 import { browserMethods } from "../connectors/computer/guards.js";
 import { ComputerJournal } from "../connectors/computer/journal.js";
+import { stateRoot } from "../connectors/agents/hooks.js";
 import {
-  defaultComputerModel,
-  OpenAIPlanner,
+  ModelPlanner,
+  plannerFor,
+  type PlannerOptions,
 } from "../connectors/computer/planner.js";
 import type { Hands } from "../connectors/computer/ports.js";
 import {
@@ -100,13 +102,13 @@ for (const flag of flags)
     throw new Error(`Unknown flag ${flag}. Use --check and --new-actions.`);
 const checking = flags.has("--check");
 const withNew = flags.has("--new-actions");
-// The check mode never reads a key: it calls no model.
-const key = checking
-  ? ""
-  : (process.env.CLAWDTIME_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? "");
-if (!checking && !key)
-  throw new Error(
-    "The request test needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in the environment, or --check for the scripted paths.",
+// The check mode never reads a key: it calls no model. With a model, the key
+// comes from the environment or the key store, as the service takes it.
+const keyFor = (model: string | null) =>
+  plannerFor(
+    model,
+    process.env,
+    stateRoot({ env: process.env, home: homedir() }),
   );
 
 /** What the person does when the worker asks: the answer, after any typing of their own on the page. */
@@ -1046,9 +1048,19 @@ const requests: Request[] = [
   },
 ];
 
-const models = words.filter((word) => !word.startsWith("--"));
-if (!models.length)
-  models.push(process.env.CLAWDTIME_COMPUTER_MODEL || defaultComputerModel);
+// Each argument is provider/model, or a bare model of OpenAI.
+const planners = new Map<string, PlannerOptions>(
+  checking
+    ? []
+    : (words.some((word) => !word.startsWith("--"))
+        ? words.filter((word) => !word.startsWith("--"))
+        : [null]
+      ).map((word) => {
+        const chosen = keyFor(word);
+        return [word ?? chosen.name, chosen.options];
+      }),
+);
+const models = [...planners.keys()];
 const repeats = Math.max(1, Math.floor(Number(process.env.REPEATS ?? "1")));
 const only = process.env.ONLY;
 const chosen = requests.filter(
@@ -1131,9 +1143,10 @@ async function one(
             always: !chooser.path.ideal,
           })
         : null;
-    const planner = new OpenAIPlanner({
-      key: script ? "no-key-scripted" : key,
-      model: "model" in chooser ? chooser.model : "scripted",
+    const planner = new ModelPlanner({
+      ...(script || !("model" in chooser)
+        ? { key: "no-key-scripted", model: "scripted" }
+        : planners.get(chooser.model)!),
       request: withModelFaults(
         script ? scriptedModel(script.choose) : fetch,
         request.faults?.model ?? [],
