@@ -154,9 +154,14 @@ const strictSecretShapes = [
   ),
   // Key-value forms with : or = (full-width colon/equals fold via NFKC).
   new RegExp(String.raw`\b${secretNoun}\s*[:=]\s*\S+`, "i"),
-  // Quoted or bare value directly after a secret noun.
+  // Quoted or bare value directly after a secret noun. A bare value has a digit or a symbol inside it: "token anywhere." is words.
   new RegExp(
-    String.raw`\b${secretNoun}\s+(?:["'][^"'\s][^"']*["']|(?!${nonSecretBareWord})[A-Za-z0-9!@#$%^&*_+=~./-]{4,})`,
+    String.raw`\b${secretNoun}\s+(?:["'][^"'\s][^"']*["']|(?!${nonSecretBareWord})(?=[A-Za-z0-9!@#$%^&*_+=~./-]*(?:[\d!@#$%^&*_+=~/-]|\.[A-Za-z0-9]))[A-Za-z0-9!@#$%^&*_+=~./-]{4,})`,
+    "i",
+  ),
+  // A plain word right after a person's own secret noun: "type my secret swordfish in the box".
+  new RegExp(
+    String.raw`\b(?:my|our|your|his|her|their)\s+(?:[A-Za-z]+\s+)?${secretNoun}\s+(?!${nonSecretBareWord})[A-Za-z0-9!@#$%^&*_+=~./-]{4,}`,
     "i",
   ),
   // A 4 to 8 digit code (with or without spaces/hyphens) after pin, code, otp, passcode, or 2fa, or 3 to 4 digits after cvv/cvc.
