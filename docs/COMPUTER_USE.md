@@ -108,6 +108,16 @@ computer.
 6. The action goes to the hands or to the browser. Then the worker looks again
    and the planner picks the next action.
 
+A look takes the picture and walks the Accessibility tree at the same time,
+so the slower of the two sets its time. The picture is 1280 pixels on its
+longer side, a JPEG of quality 0.5, written off the main thread. The walk
+reads the tree in its own order, leaves out each part of the window that does
+not show (a long list gives only the rows in view), and stops at 2000
+elements, 60 levels or 0.6 seconds. When more than 400 elements remain, the
+field with the keyboard, a password field and the controls that can be used
+stay first, in the order of the tree. The look just before an input takes no
+picture.
+
 One request runs at a time. A request ends after 40 actions or 15 minutes,
 whichever comes first. A request with a plan of 3 subgoals or more may take 80
 actions (see [Plans and multi-step tasks](#plans-and-multi-step-tasks)). The 15
@@ -621,6 +631,23 @@ waited 3400 ms`. The words are `nudge_swing`, `nudge_still`, `ask_swing`,
 `unsettled` and `transient`. When the request ends before a next step, one
 more line of the kind `end` says them.
 
+The panel also says where its part of the step went, and the line then ends
+with it: `(hands: capture 91 ms, encode 3 ms, image 158 KB, walk 287 ms, glide
+352 ms, poll wait 0 ms)`. Capture is taking the picture, encode is writing it
+as a JPEG, image is its size, walk is the Accessibility tree of every look of
+the step, glide is the cursor before each input, and poll wait is how long the
+commands of the step waited before the panel read them. Each part is there
+only when the step had it. The panel sends these numbers in a header of the
+result, `X-ClawdTime-Hands-Cost`. A service that does not know the header
+takes the result as before.
+
+`npm run bench:computer:speed` shows the same parts with no screen: the real
+worker does one request with a planner that thinks for no time, over made-up
+hands that act out the costs of the panel before this change and now. The
+glide, the wait at the target and the read of the next command are the
+panel's own rules; the picture and the walk are assumptions that the output
+names. It opens no window and calls no language model.
+
 The panel needs two permissions in System Settings, Privacy & Security:
 Accessibility, and Screen & System Audio Recording. When one is missing, the
 request ends as `blocked` and the message names the permission to grant.
@@ -1092,13 +1119,19 @@ so does a person who watches the shared screen on a phone.
   label of a key names the key, and the label of a click names the element as
   the screen names it.
 - **The glide.** The cursor goes on from where it is. The first time it comes
-  out of the mascot. A glide takes 0.45 to 0.70 seconds, longer for a longer
-  way, and the cursor then waits 0.3 seconds at the target. It stays 3
-  seconds after the command and then fades: longer than a look and a plan, so
-  it goes from one action to the next. When it already points at the target
-  (the next key in the same field), it does not glide and waits 0.15 seconds
-  for the new label. The picture of a call defaults to
-  20 frames a second, so the shortest glide is in nine of them or more.
+  out of the mascot. A glide takes 0.15 seconds, and 1 ms more for each 4
+  points of the way, up to 0.26 seconds: the usual way of 150 to 400 points
+  takes 0.19 to 0.25 seconds. The cursor then waits 0.10 seconds at the
+  target, and the ring closes in that time. So a glide and its wait take 0.38
+  seconds at most, where they took up to one second before. The picture of a
+  call defaults to 20 frames a second, so the shortest glide is in three of
+  them. The cursor stays 3 seconds after the command and then fades: longer
+  than a look and a plan, so it goes from one action to the next.
+- **The same place.** When the cursor already points at the target (the next
+  key in the same field, or more text in it), it does not glide. It waits
+  0.05 seconds, one frame of a call, for a new label, and not at all when the
+  label is the same. After the glide the real pointer of the Mac moves there
+  in 0.05 to 0.12 seconds, before a click, a scroll or a drag.
 - **The ring in motion.** While the cursor is out, the colors of the ring turn
   slowly, one turn in five seconds. On its way the ring is open and light. At
   the place it closes in and is solid. At a click the ring gives way and comes
@@ -1113,7 +1146,7 @@ so does a person who watches the shared screen on a phone.
   pointer is 16 points, a little smaller than the pointer of the Mac. The
   colors and the typeface of the pill are those of the panel.
 - **Reduce Motion.** With the macOS setting Reduce Motion the cursor jumps to
-  the target with no glide, waits 0.4 seconds, and the ring of a click shows
+  the target with no glide, waits 0.12 seconds, and the ring of a click shows
   with no growth. The colors of the ring do not turn, the ring does not open
   or close, and the small pointer changes its place with no slide.
 
@@ -1190,11 +1223,11 @@ ClawdTime. Close what you do not want in the picture before you start a task.
 All three need the panel credential, as the other `/desktop/` routes do. They
 refuse a browser origin.
 
-| Route                             | What it is                                                                                                                              |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /desktop/hands/next?after=N` | The command that waits for the hands, when its number is above `N`, and what runs. Shape `handsNextSchema`                              |
-| `POST /desktop/hands/result`      | What came of one command. Shape `handResultSchema`, body up to 6 megabytes (MB). Answers `{ "ok": false }` when no command waits for it |
-| `GET /desktop/computer`           | `enabled`, `state`, `message`, `step`, `goal` and `question`. Shape `computerStatusSchema` in `worker.ts`                               |
+| Route                             | What it is                                                                                                                                                           |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /desktop/hands/next?after=N` | The command that waits for the hands, when its number is above `N`, and what runs. Shape `handsNextSchema`. With `&wait=MS` (up to 2000) the read is held, see below |
+| `POST /desktop/hands/result`      | What came of one command. Shape `handResultSchema`, body up to 6 megabytes (MB). Answers `{ "ok": false }` when no command waits for it                              |
+| `GET /desktop/computer`           | `enabled`, `state`, `message`, `step`, `goal` and `question`. Shape `computerStatusSchema` in `worker.ts`                                                            |
 
 While a request runs, `GET /desktop/computer` can also carry `guidance`, what
 you said for the request after its start, and `waiting`, why it waits for you:
@@ -1204,6 +1237,18 @@ reads carries the same two, with the `goal`.
 The same command is served until its result arrives, with the same number. The
 panel must never run one number twice. The numbers start at the time of the
 service start in milliseconds, so they stay above those of an earlier run.
+
+The panel holds its read of the next command: it asks with `wait=1000`, and
+the service answers as soon as a command waits, as soon as what runs changes
+(a look every 0.1 seconds), or after the second. The answer then has the
+header `X-ClawdTime-Hands-Wait`, and the panel reads again at once, never more
+often than 50 times a second. So no command waits for the next read: before,
+the panel read every 0.12 seconds and slept 0.12 seconds after each result,
+and each command of a step waited 0.06 to 0.12 seconds for it. A held read
+serves nothing by itself and runs nothing: its answer is the same as an
+ordinary read. A read that the panel gives up ends at once. The check just
+before an input reads with no wait. A service that does not know `wait`
+answers at once, and the panel then reads at the old pace.
 
 A service where no worker runs still answers all three, with `enabled` false,
 no command, and the reason in `message`. That holds for a service with another
@@ -1280,6 +1325,10 @@ sharing, independent disable control, zoom integration and acceptance gaps.
 | One call to the browser        | 30 seconds                                  |
 | Typed text                     | 4000 characters, one line                   |
 | Elements in one observation    | 400, of which the planner gets 150          |
+| The picture of the screen      | 1280 pixels on its longer side, JPEG 0.5    |
+| One walk of the tree           | 2000 elements, 60 levels, 0.6 seconds       |
+| A glide of the cursor and wait | 0.38 seconds at most                        |
+| One held read of the panel     | 1 second, at most 2                         |
 | A result that the panel posts  | 6 MB                                        |
 | Requests in the journal        | 30                                          |
 
@@ -1325,10 +1374,10 @@ the real screen, draws the cursor or calls a language model.
 - `hands` (10), `journal` (12), `planner` (12), `cli` (9).
 - `plan` (29): the states of a plan, its bounds, the facts with secrets, the
   plan in the brief; the outline and `plan_update` through the planner's
-  repair; and in the worker: one outline, an update that sends nothing, the
-  note before a done, a failed outline, Stop and a hold during the outline,
-  facts that never reach the journal, and 80 actions only with a plan of 3
-  subgoals or more.
+  repair; and in the worker: one outline beside the first turn, an update
+  that sends nothing, a done that is taken at once, a failed outline, Stop
+  during the outline, facts that never reach the journal, and 80 actions only
+  with a plan of 3 subgoals or more.
 - `reach` (37): no call for a question answered in the chat in time; one
   call for an unanswered one; the spoken yes, no, stop and unclear words that
   the worker reads itself; one text after a call that failed, rang out, had
@@ -1343,6 +1392,11 @@ the real screen, draws the cursor or calls a language model.
   wait and a skip when busy, never during a live call, no late run, no second
   start, the chat line with no text settings, a real worker request, and the
   command.
+- `speed` (13): the held read of the next command with a clock of the test:
+  at once when a command comes, after its time, at a change of what runs, and
+  when the panel gives it up; the wait of each command for the panel; the cost
+  header; the parts in the timing record and its line; and the held route
+  over a real worker.
 - `planner-resilience` (45): each status with and without a retry,
   Retry-After in its three forms, errors of the network, the timeout of one
   request, the budget, an abort during a wait and during a request, each kind
@@ -1365,7 +1419,10 @@ contract, the last check before an event, the key plans, the picture and the
 elements, and for the cursor the
 time and the start of the glide, the jump with Reduce Motion, the sizes in a
 picture 720 pixels high, the place of the pill at every edge of the screen,
-the place for typed keys, and the rule of the window.
+the place for typed keys, and the rule of the window. For the look: the size
+of the picture for common screens, the JPEG, the walk that leaves out what
+does not show and stops at its limits, the order of the elements that are
+kept, the pace of the held read, and the cost header.
 
 Not tested, and so not proven:
 
@@ -1421,7 +1478,7 @@ Not tested, and so not proven:
   sends on Enter with no such button, as some chats do, is not asked about.
 - Between the look just before an input and the input itself, the screen can
   still change. The hands are the last place that can refuse. The glide of the
-  cursor and its wait add up to one second to that time. A command for the
+  cursor and its wait add up to 0.38 seconds to that time. A command for the
   hands names a point, not an element, so the hands cannot check what is under
   the point just before the click.
 - A question reaches you in the chat first. A call of the line says it after
