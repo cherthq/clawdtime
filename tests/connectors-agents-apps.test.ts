@@ -450,26 +450,45 @@ describe("the brain opens an application", () => {
   });
 
   it("does not let a draft in the engine's voice stand when nothing went to the engine", async () => {
+    // The engine's own line, as it came through the chat by itself.
+    const engineLine = "Opening TextEdit to close the Untitled document.";
+    const said: ChatMessage[] = [
+      { role: "user", text: "close the document", at: now, via: "chat" },
+      {
+        role: "assistant",
+        text: engineLine,
+        at: now,
+        via: "chat",
+        engine: true,
+      },
+    ];
     for (const draft of [
       "Done. Closed the Untitled document without saving and quit TextEdit.",
-      "Started. I look at the screen and take one checked action at a time. Say stop to stop me. Done. Closed the document.",
+      // An older engine opened with this word.
+      "Started. Done. Closed the document.",
     ])
       expect(speaksAsTheEngine(draft)).toBe(true);
+    // A copy of a line that the engine said, known by the way it came.
+    expect(speaksAsTheEngine(`Sure. ${engineLine}`, said)).toBe(true);
+    expect(speaksAsTheEngine(engineLine)).toBe(false);
+    expect(
+      speaksAsTheEngine(engineLine, [{ ...said[1]!, engine: undefined }]),
+    ).toBe(false);
     for (const draft of [
       "Two sessions work and one waits for you.",
       "It is done when the tests pass.",
       "I started a job for that.",
     ])
-      expect(speaksAsTheEngine(draft)).toBe(false);
+      expect(speaksAsTheEngine(draft, said)).toBe(false);
     // The model copies the engine's answers twice: the person hears what is true.
     const f = withExecution();
     const copies = scripted([
       "Done. Closed the Untitled document without saving and quit TextEdit.",
-      "Started. I look at the screen and take one checked action at a time. Say stop to stop me. Done. Closed it.",
+      engineLine,
     ]);
     expect(
       await new Supervisor(f.value, copies.model).reply(
-        [],
+        said,
         "tidy that editor window away for me",
         "chat",
       ),
@@ -1109,9 +1128,10 @@ describe("the chat says of a computer task only what its engine reported", () =>
     },
     {
       role: "assistant",
-      text: "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+      text: "Opening example.com in Chrome to find the roadmap board.",
       at,
       via: "call",
+      engine: true,
     },
     {
       role: "assistant",
@@ -1220,8 +1240,8 @@ describe("the chat says of a computer task only what its engine reported", () =>
         "Done. The page is open.",
         "All set.",
         "Not stuck. The page is loaded and the board is up.",
-        // A copy of the engine's first answer: nothing started for a question.
-        "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+        // A copy of the engine's first line: nothing started for a question.
+        "Opening example.com in Chrome to find the roadmap board.",
       ]) {
         const f = withTask("running", working);
         const run = drafts([draft]);
@@ -1748,9 +1768,10 @@ describe("words for a running computer task reach its engine", () => {
     },
     {
       role: "assistant",
-      text: "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+      text: "Opening the chat app to find the roadmap board.",
       at,
       via: "call",
+      engine: true,
     },
   ];
   const deploySession: BoardSnapshot = {
@@ -2417,8 +2438,7 @@ describe("chat routing safety and truth for computer tasks", () => {
   const approval =
     'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.';
   const question = "Which workspace should I open?";
-  const startedText =
-    "Started. I look at the screen and take one checked action at a time. Say stop to stop me.";
+  const startedText = "Opening the chat app to find the roadmap board.";
   const stoppedText =
     "Stopped. An action that was already sent may have finished.";
   const guidedText = "Got it. I take that into the task that runs.";
@@ -2441,6 +2461,7 @@ describe("chat routing safety and truth for computer tasks", () => {
       text: startedText,
       at,
       via: "call",
+      engine: true,
     },
   ];
   const sessionBoard = (name: string): BoardSnapshot => ({
@@ -3226,8 +3247,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
   const approval =
     'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.';
   const question = "Which workspace should I open?";
-  const startedText =
-    "Started. I look at the screen and take one checked action at a time. Say stop to stop me.";
+  const startedText = "Opening the chat app to find the roadmap board.";
   const stoppedText =
     "Stopped. An action that was already sent may have finished.";
   const guidedText = "Got it. I take that into the task that runs.";
@@ -3260,6 +3280,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       text: startedText,
       at,
       via: "call",
+      engine: true,
     },
   ];
   const beforeWithApproval: ChatMessage[] = [

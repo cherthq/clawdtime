@@ -168,9 +168,7 @@ describe("verified desktop activation", () => {
       expect(f.journal.get("refused")?.steps[0]?.outcome).toBe(error);
       expect(f.worker.status().state).toBe("completed");
       expect(f.journal.unresolved()).toBeNull();
-      expect((await f.worker.submit("next", "Another task")).message).toMatch(
-        /^Started/,
-      );
+      expect((await f.worker.submit("next", "Another task")).message).toBe("");
     },
   );
 
@@ -229,9 +227,7 @@ describe("verified desktop activation", () => {
     );
     expect(f.journal.get("absent")?.reason).toBe("too_many_refusals");
     expect(f.journal.unresolved()).toBeNull();
-    expect((await f.worker.submit("next", "Another task")).message).toMatch(
-      /^Started/,
-    );
+    expect((await f.worker.submit("next", "Another task")).message).toBe("");
   });
 
   it("counts a refusal of the hands and a refusal of the checks in one row", async () => {

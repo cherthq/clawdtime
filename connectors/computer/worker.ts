@@ -124,7 +124,8 @@ import {
   type ProgressContext,
   type ProgressStep,
 } from "./progress.js";
-import { TaskPlan } from "./plan.js";
+import { planUpdateSchema, TaskPlan } from "./plan.js";
+import { Opening } from "./opening.js";
 import type { ComputerMemory } from "./remembered.js";
 import type {
   Action,
@@ -145,8 +146,6 @@ export const stoppedText =
   "Stopped. An action that was already sent may have finished.";
 const offStoppedText =
   "Computer use was turned off, so I stopped. An action that was already sent may have finished.";
-const startedText =
-  "Started. I look at the screen and take one checked action at a time. Say stop to stop me.";
 const busyText =
   "A computer task is already running. Stop it, or wait for it to end, before a new one.";
 /** The most characters of what the person adds to a request that runs. */
@@ -207,8 +206,8 @@ const saidMoreText = "The person said more before it went out.";
 const heldByWordReason = "The person asked to hold before it went out.";
 const ownershipText =
   "Screen input is held by the current phone walkthrough or an unresolved owner. No new computer action was sent.";
-const idleText =
-  "Computer use is on. Ask me to do something on this Mac, and I take one checked action at a time.";
+/** The state when nothing runs: a fact for the state route and the chat's model, no invitation. */
+const idleText = "Computer use is on. No computer task runs now.";
 export const offText =
   "Computer use is off. Turn it on with: clawdtime computer on";
 const takeoverText =
@@ -498,8 +497,14 @@ export interface ComputerWorkerOptions {
   browser?: BrowserPort;
   /** Whether computer use is still on. It is read before every action, so turning it off stops a request. */
   enabled?: () => boolean;
-  /** Says something to the person when no message of theirs waits for an answer: a question, the result. */
+  /**
+   * Says something to the person when no message of theirs waits for an
+   * answer: the first line of a request (`opening.ts`), a question, the
+   * result.
+   */
   notify?: (text: string) => void;
+  /** How long the outline's line for the person may take before the planner's first reason stands in (`opening.ts`). */
+  openingMs?: number;
   /** Hears the time of each step, for a person who looks for the slow part. */
   timing?: (entry: StepTiming) => void;
   now?: () => number;
@@ -711,6 +716,8 @@ interface Run {
   plan?: TaskPlan;
   /** The outline was asked for once. It is not asked again, whatever came of it. */
   outlined?: boolean;
+  /** The first words of the request to the person, and its one line on a revision (`opening.ts`). */
+  opening: Opening;
   question: Question | null;
   stop: boolean;
   /** The hands said that the person moved the mouse or pressed a key. */
@@ -1056,6 +1063,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     step: number;
   } | null = null;
   private ended: Promise<void> = Promise.resolve();
+  /** The first words of the newest request, by its id, for `firstWords`. */
+  private opened: { id: string; opening: Opening } | null = null;
   private readonly hands: Hands;
   private readonly planner: Planner;
   private readonly journal: ComputerJournal;
@@ -1158,6 +1167,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.plannerAbort?.abort();
     run.halt();
     if (tell) this.say(message);
+    run.opening.end(tell ? clip(message) : "");
   }
 
   /**
@@ -1383,11 +1393,29 @@ export class ComputerWorker implements DesktopExecutorPort {
       halt,
       halted,
       ...(read ? { navigation: read } : {}),
+      opening: new Opening((line) => this.say(line), this.options.openingMs),
     };
     this.current = run;
     this.last = null;
+    this.opened = { id, opening: run.opening };
     this.ended = this.loop(run);
-    return { message: startedText };
+    // No fixed sentence: the request's first words come by `notify`, and
+    // `firstWords` gives them to a caller that has one answer only.
+    return { message: "" };
+  }
+
+  /**
+   * The first words of the request with this id to the person: its start
+   * line (`opening.ts`), a question or its end, whichever came first. They
+   * went to `notify` as well. For a caller that shows or speaks one answer
+   * only: a call, a spoken reply, a terminal. "" when none came within
+   * `withinMs`, when the request ended with no words for the person, or when
+   * the id is not of the newest request.
+   */
+  firstWords(eventId: string, withinMs: number): Promise<string> {
+    const opened = this.opened;
+    if (!opened || opened.id !== eventId) return Promise.resolve("");
+    return opened.opening.words(withinMs);
   }
 
   /**
@@ -1820,6 +1848,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       );
       timer.unref();
       this.say(run.question.text);
+      run.opening.spoke(run.question.text);
     }).then((reply) => {
       clearTimeout(timer);
       if (this.current === run && reply.kind !== "over") {
@@ -2303,11 +2332,15 @@ export class ComputerWorker implements DesktopExecutorPort {
         const before = progressPrint(run.observation);
         run.stepInput = false;
         delete run.signed;
-        await this.act(
-          run,
-          chosen,
-          clean(String((planned as { why?: unknown }).why ?? ""), 200),
+        const why = clean(
+          String((planned as { why?: unknown }).why ?? ""),
+          200,
         );
+        // The first line, when the outline gave none: the planner's own reason.
+        // Done, give_up and ask say their own words.
+        if (kind !== "done" && kind !== "give_up" && kind !== "ask")
+          run.opening.acting(why);
+        await this.act(run, chosen, why);
         // Plan: an action came, so the plan updates in a row start again.
         run.plan?.acted();
         // The next look says what came of this step.
@@ -3824,7 +3857,11 @@ export class ComputerWorker implements DesktopExecutorPort {
   private outline(run: Run) {
     run.outlined = true;
     const planner = this.options.planner;
-    if (!planner.outline || directAddress(run.goal)) return;
+    if (!planner.outline || directAddress(run.goal)) {
+      // No outline, so no line from it: the planner's first reason may say what it does.
+      run.opening.lapse();
+      return;
+    }
     const abort = new AbortController();
     const late = setTimeout(
       () => abort.abort(),
@@ -3837,7 +3874,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     };
     void run.halted.then(over, over);
     void this.ended?.then(over, over);
-    let made: Promise<import("./plan.js").Subgoal[]>;
+    let made: ReturnType<NonNullable<Planner["outline"]>>;
     try {
       made = planner.outline({
         goal: run.goal,
@@ -3852,18 +3889,27 @@ export class ComputerWorker implements DesktopExecutorPort {
       });
     } catch {
       over();
+      run.opening.lapse();
       return;
     }
+    run.opening.asked();
     made.then(
       (outline) => {
         over();
         // A request that ended or changed takes no plan from an old call.
         if (this.current !== run || run.plan || run.stop) return;
-        const plan = outline ? TaskPlan.from(outline) : null;
+        // A bare list is an outline with no line for the person.
+        const plan = outline
+          ? TaskPlan.from(Array.isArray(outline) ? outline : outline.subgoals)
+          : null;
         if (plan) run.plan = plan;
+        run.opening.outlined(Array.isArray(outline) ? undefined : outline?.say);
       },
       // What the planner threw can hold what was sent to it: it is not passed on.
-      over,
+      () => {
+        over();
+        if (this.current === run) run.opening.lapse();
+      },
     );
   }
 
@@ -3875,8 +3921,18 @@ export class ComputerWorker implements DesktopExecutorPort {
    */
   private replan(run: Run, update: unknown): boolean {
     if (!run.plan) return false;
-    if (run.plan.apply(update).kind === "over") return false;
+    const outcome = run.plan.apply(update);
+    if (outcome.kind === "over") return false;
     run.plannerFailures = 0;
+    // A revision that the plan took may say one line, once, in the planner's own words.
+    const revised = planUpdateSchema.safeParse(update);
+    if (
+      outcome.kind === "taken" &&
+      revised.success &&
+      revised.data.op === "revise" &&
+      this.current === run
+    )
+      run.opening.revise(revised.data.reason);
     return true;
   }
 

@@ -82,7 +82,14 @@ const subgoalSchema = z.object({
 /** The arguments of the outline function. Text that is too long is cut later, not refused. */
 export const outlineSchema = z.object({
   subgoals: z.array(subgoalSchema).min(1).max(planLimits.subgoals),
+  /** One line for the person as the work begins (`opening.ts`). Checked there before it is said. */
+  say: z.string().max(2000).optional(),
 });
+/** What the outline of the planner gives: the subgoals, and the line for the person when it wrote one. */
+export interface Outline {
+  subgoals: Subgoal[];
+  say?: string;
+}
 const factList = z.array(z.string().max(2000)).max(10);
 const filled = z.string().trim().min(1).max(2000);
 /** The arguments of the plan_update function. Unknown fields are dropped. */

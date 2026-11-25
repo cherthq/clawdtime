@@ -351,7 +351,7 @@ describe("which engine does the computer work in a desktop service", () => {
     expect((await f.post("/desktop/execution/decision", {})).status).toBe(404);
     expect(
       await chosen.execution!.submit("talk_1_execution", "Save the note"),
-    ).toMatchObject({ message: expect.stringMatching(/^Started\./) });
+    ).toEqual({ message: "" });
     // A stand-in for the panel: it takes each command once and posts a made-up result.
     const before = observation([element(1, { title: "Save" })]);
     // After the click the app shows that it saved: a done then rests on a change.

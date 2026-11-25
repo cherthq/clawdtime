@@ -122,6 +122,13 @@ export const chatMessageSchema = z
      * gets it as data.
      */
     news: z.literal(true).optional(),
+    /**
+     * A line that the computer engine said through the chat by itself while
+     * its task ran: what it does first, or a change of its plan. Its
+     * questions and its end are not marked. A draft of the model that
+     * repeats a marked line claims work on the screen (`speaksAsTheEngine`).
+     */
+    engine: z.literal(true).optional(),
   })
   .strict();
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
@@ -428,13 +435,33 @@ export interface ModelClient {
 /** How long the first request to the model may take, and the one after it. */
 export const modelWaitMs = 15_000;
 /**
- * A draft that speaks in the computer engine's voice: the engine's answers
- * open with "Started." and "Done.", and its first one says "one checked action
- * at a time". A conversation holds many of them, and a model copies them.
+ * A draft that speaks in the computer engine's voice. The engine's lines of
+ * what it does are known by the way they came: through the chat by itself
+ * while its task ran (`engine` in `said`), so a draft that repeats one of
+ * them copies the engine. Its ends open with "Done.", and an older engine
+ * opened with "Started.": a draft that opens so copies it too. A
+ * conversation holds many of them, and a model copies them.
  */
-export const speaksAsTheEngine = (text: string) =>
-  /^(?:Started\.|Done\.)(?:\s|$)/.test(text.trim()) ||
-  /\bone checked action at a time\b/i.test(text);
+export const speaksAsTheEngine = (
+  text: string,
+  said: readonly ChatMessage[] = [],
+) => {
+  if (/^(?:Started\.|Done\.)(?:\s|$)/.test(text.trim())) return true;
+  const plain = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim();
+  const draft = ` ${plain(text)} `;
+  return said.some((message) => {
+    if (message.role !== "assistant" || message.engine !== true) return false;
+    const own = plain(message.text);
+    // A short line ("Stopped.") is no copy: the model may say it in its own words.
+    return own.length >= 16 && draft.includes(` ${own} `);
+  });
+};
+/** How long a turn that started a request of the app-owned worker waits for its first words. */
+export const firstWordsMs = 8000;
 /**
  * The message speaks of what the supervisor itself manages: agent sessions,
  * jobs, tasks, requests, and the coding work in them (tests, builds,
@@ -1370,6 +1397,12 @@ export interface SupervisorWorld {
       text: string,
       reading: NavigationIntent,
     ): Promise<{ message: string }>;
+    /**
+     * The app-owned worker answers a start with no words. Its first words
+     * to the person (its own line of what it does first, a question or the
+     * end) come here, and by the chat. "" when none came within `withinMs`.
+     */
+    firstWords?(eventId: string, withinMs: number): Promise<string>;
   };
   /** What the watcher found, one sentence each, most urgent first. */
   incidents?: () => string[];
@@ -5617,7 +5650,11 @@ export class Supervisor {
     const last = history.at(-1)!;
     if (last.role === "assistant") {
       const shown = clean(last.text, 1200);
-      if (speaksAsTheEngine(shown) || screenEngineReply.test(shown))
+      if (
+        last.engine === true ||
+        speaksAsTheEngine(shown) ||
+        screenEngineReply.test(shown)
+      )
         return true;
       const prompt = clean(snapshot.message ?? "", 600);
       return !!prompt && (shown === prompt || shown.endsWith(prompt));
@@ -9929,7 +9966,9 @@ export class Supervisor {
       const screen = await this.delegate(turn, road.screen, true, {
         kind: "none",
       });
-      text = `Code first: ${said} Then the screen part, "${road.screen}": ${screen}`;
+      text = screen
+        ? `Code first: ${said} Then the screen part, "${road.screen}": ${screen}`
+        : `Code first: ${said} Then the screen part: "${road.screen}".`;
     } else
       text = `Code first: ${said} Then the screen part, "${road.screen}": ${this.computerOff(road.screen)}`;
     turn.done.set("roads", text);
@@ -10166,13 +10205,23 @@ export class Supervisor {
     const goal = asked?.kind === "engine" && asked.goal ? asked.goal : spoken;
     let result: string;
     try {
+      const eventId = `${turn.id}_execution`;
       // Only ClawdTime's own worker takes a reading. Another engine gets the
       // request as before.
       result = (
         reading && execution.submitRead
-          ? await execution.submitRead(`${turn.id}_execution`, goal, reading)
-          : await execution.submit(`${turn.id}_execution`, goal)
+          ? await execution.submitRead(eventId, goal, reading)
+          : await execution.submit(eventId, goal)
       ).message;
+      // The app-owned worker starts with no fixed sentence. Its first words
+      // (the planner's own line, a question or the end) are this answer:
+      // a call and a spoken reply have this answer only.
+      // A failed read of the words is no failed start: the words come by
+      // the chat then.
+      if (!result && execution.firstWords)
+        result = await execution
+          .firstWords(eventId, firstWordsMs)
+          .catch(() => "");
       // What the person asked of the engine, for the offer of a next step.
       this.screenGoal = clean(spoken, 300);
     } catch {
@@ -12670,10 +12719,10 @@ export class Supervisor {
                 .map((message) => message.text),
             ].join("\n");
             if (
-              // "Started." and "Done." in the engine's own voice: a copy of
-              // its lines in the conversation. Nothing started and nothing
-              // ended for this message.
-              speaksAsTheEngine(reply.text) ||
+              // A line in the engine's own voice: a copy of its lines in
+              // the conversation. Nothing started and nothing ended for
+              // this message.
+              speaksAsTheEngine(reply.text, turn.whole ?? turn.history) ||
               screenClaims(reply.text, {
                 report,
                 told,
@@ -12788,8 +12837,8 @@ export class Supervisor {
               "\nA check of your last draft: it said that you typed or told something, or opened a session, but that did not happen in this turn. The person's last message asked for none of that. Answer it again with what is true. You type only words that the person says themselves: say that they can tell the session in their own words.";
             continue;
           }
-          // The draft speaks in the computer engine's own voice ("Started.",
-          // "Done. Closed the document"), and nothing went to the engine in
+          // The draft speaks in the computer engine's own voice (a line that
+          // the engine said, "Done. Closed the document"), and nothing went to the engine in
           // this turn and no tool acted: the model copied the engine's
           // answers from the conversation. Nothing ran on the screen. It
           // answers once more and can hand the message to the engine then;
@@ -12799,7 +12848,7 @@ export class Supervisor {
             this.world.execution.snapshot().configured &&
             !turn.done.has("execution") &&
             !acted() &&
-            speaksAsTheEngine(reply.text) &&
+            speaksAsTheEngine(reply.text, turn.whole ?? turn.history) &&
             // Not when the person asks about the task and the engine
             // reported its end in these same words ("Is it open now?",
             // "Done. The page is open."): the report is the true answer.

@@ -489,10 +489,28 @@ export class BoardFeed implements AgentBoardPort {
     if (!text || this.log.recent(1)[0]?.text === text) return;
     this.log.append({ role: "assistant", text, at, via: "chat" });
   }
-  /** Durable bridge invokes this once after it records a terminal result. */
+  /**
+   * What the computer engine says by itself: its first words, a question,
+   * its result. A durable bridge invokes this once after it records a
+   * terminal result. A line said while the task runs (what the engine does
+   * first, a change of its plan) is marked as the engine's own.
+   */
   appendExecutionResult(text: string) {
     const now = this.options.now ?? Date.now;
-    this.log.append({ role: "assistant", text, at: now(), via: "chat" });
+    if (!text.trim()) return;
+    let working = false;
+    try {
+      working = this.options.execution?.snapshot().state === "running";
+    } catch {
+      working = false;
+    }
+    this.log.append({
+      role: "assistant",
+      text,
+      at: now(),
+      via: "chat",
+      ...(working ? { engine: true as const } : {}),
+    });
     this.offerNextStep(text);
   }
   /**
@@ -601,7 +619,20 @@ export class BoardFeed implements AgentBoardPort {
       // The question that the task asks comes with its choices, as buttons.
       ...(answer.choices.length ? { choices: answer.choices } : {}),
     };
-    this.log.append(reply);
+    // An answer with no words shows nothing. The computer engine's first
+    // words may be the answer, and they are in the chat already, after the
+    // person's message: they are not written twice.
+    const since = this.log.recent(20);
+    const after = since.slice(
+      since.findLastIndex((message) => message.role === "user") + 1,
+    );
+    const told =
+      !answer.choices.length &&
+      after.some(
+        (message) =>
+          message.role === "assistant" && message.text === answer.text,
+      );
+    if (answer.text.trim() && !told) this.log.append(reply);
     return reply;
   }
   /**
