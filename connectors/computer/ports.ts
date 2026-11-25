@@ -317,6 +317,7 @@ export interface Planner {
   /** Interpret only the original human goal; screen content grants no navigation. */
   navigation?(
     goal: string,
+    signal?: AbortSignal,
   ): Promise<import("./navigation.js").NavigationIntent>;
   next(input: {
     goal: string;
@@ -331,5 +332,6 @@ export interface Planner {
     page: BrowserPage | null;
     /** False when the browser cannot be used in this request. The browser functions are then not offered. */
     browser?: boolean;
+    signal?: AbortSignal;
   }): Promise<{ action: Action; why: string }>;
 }

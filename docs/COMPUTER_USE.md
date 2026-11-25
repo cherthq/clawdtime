@@ -730,6 +730,47 @@ A service where no worker runs still answers all three, with `enabled` false,
 no command, and the reason in `message`. That holds for a service with another
 engine, with the switch off, with no key, and for one that a test started.
 
+## When the language model has trouble
+
+A call to the language model has no effect on the Mac, so the planner may
+send it again. It is the only thing that is sent again by itself. Every
+action on the Mac keeps its rule: no blind retry.
+
+- **Busy or out of reach.** A 408, 409, 425, 429, 500, 502, 503 or 504, a
+  reset connection or another error of the network, an answer that is not
+  JSON, or a request with no answer after 45 seconds is transient. The
+  planner sends the same request again after a wait: a random part of 400
+  milliseconds, then of 800 milliseconds, then of 1.6 seconds, never more than
+  8 seconds. When the service sends `retry-after-ms` or `Retry-After` (in
+  seconds or as a date), the planner waits that long. It does not wait more
+  than 20 seconds: the call fails and says how long the service asked for.
+  One answer gets 4 requests at most.
+- **Budget.** The requests, the waits and the repair of one call share 75
+  seconds. A retry starts only when 2 seconds are left after its wait.
+- **No retry.** A 429 with `insufficient_quota` or a billing code is `quota`.
+  A 401 is `auth`. A 403 or a 404 for the default model goes once to the model
+  before it, as before. After that a 403 is `auth` and a 404 is `other`. Every
+  other status is `other`. None of these goes out again.
+- **An answer that cannot be used.** No tool call, more than one tool call,
+  arguments that are not one JSON object, a function that was not offered, or
+  arguments that do not fit the action: nothing runs. The planner sends the
+  request once more, with the answer of the model and a short message. The
+  message says what was wrong and asks for exactly one of the offered
+  functions. A second such answer fails as `malformed`. A refusal of the model
+  fails as `refused`, with no second request. The reading of a request for a
+  move gets no repair: a second try could guess a move.
+- **Breaker.** After 8 transient failures in a row, across calls, the planner
+  fails each call at once for 30 seconds, and says how much of that time is
+  left. Then one request goes through. An answer closes the breaker. A failure
+  opens it again.
+- **Stop.** The caller can give the planner an abort signal. It ends a wait or
+  a request at once, and nothing goes out again after it.
+
+Each failure is a `PlannerError` with its trouble: `transient`, `quota`,
+`auth`, `malformed`, `refused` or `other`. The message names a status, an
+error code of the service or a code of the network. It never holds the
+request, the picture, the key or the body of an answer.
+
 ## Limits
 
 The native worker supports [desktop navigation and verified activation](DESKTOP_SPACES.md).
@@ -750,7 +791,10 @@ sharing, independent disable control, zoom integration and acceptance gaps.
 | Actions for one request        | 40                                          |
 | Time for one request           | 15 minutes                                  |
 | One command to the hands       | 20 seconds, more for a wait and a long text |
-| One call to the language model | 60 seconds. Two failures in a row end it    |
+| One request to the model       | 45 seconds                                  |
+| One call to the language model | 75 seconds, 4 requests, one repair          |
+| Planner failures in a row      | 2 end the request                           |
+| Breaker of the planner         | 30 seconds, after 8 failures in a row       |
 | One call to the browser        | 30 seconds                                  |
 | Typed text                     | 4000 characters, one line                   |
 | Elements in one observation    | 400, of which the planner gets 150          |
@@ -787,6 +831,11 @@ the real screen, draws the cursor or calls a language model.
   task and with Stop, a test's service, the switch off, no key, actors and no
   board.
 - `hands` (10), `journal` (12), `planner` (12), `cli` (9).
+- `planner-resilience` (45): each status with and without a retry,
+  Retry-After in its three forms, errors of the network, the timeout of one
+  request, the budget, an abort during a wait and during a request, each kind
+  of repair, a refusal, the breaker from closed to open to closed, the model
+  fallback with retries, and errors that never hold the key or the goal.
 
 15 tests in `tests/connectors-agents-desktop-chat.test.ts`: where
 `clawdtime chat TEXT` looks for the service, each reason to answer by itself,
@@ -815,6 +864,8 @@ Not tested, and so not proven:
   are checked by the type checker and by nothing else.
 - The browser driver against a real browser, and the driver in the service:
   it is not connected.
+- The retries against the real service. No test shows which headers and
+  error codes the real service sends when it is busy or out of quota.
 - The planner against the real language model. Its request has the shape that
   the tests check. No test shows that the model picks good actions.
 - The supervisor's language model. No test shows which tool the real model
@@ -863,5 +914,7 @@ Not tested, and so not proven:
   the service has shown that it is the one that wrote the files. A process of
   the same user that takes the port after a crash would get it.
 - While the worker runs the panel shows two windows with a Stop button.
+- The planner reports each retry to an `onAttempt` callback, but the service
+  records none of them yet. A retry is not shown to you.
 - The cursor is the only window of ClawdTime in a screen share during a run.
   The mascot that it comes out of is not in the share.

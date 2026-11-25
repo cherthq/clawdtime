@@ -5,6 +5,7 @@ import {
   directOpening,
   fallbackComputerModel,
   OpenAIPlanner,
+  PlannerError,
   plannerFromEnvironment,
 } from "../connectors/computer/planner.js";
 import type { Action, StepRecord } from "../connectors/computer/ports.js";
@@ -572,15 +573,39 @@ describe("the planner on the chat completions API", () => {
     }
   });
 
-  it("passes on what it cannot read as an action, for the checks to refuse", async () => {
-    const { request } = fakeFetch(
-      toolCall("format_disk", '{"disk":"/","why":"clean up"}'),
-    );
+  it("passes on no function that was not offered: it asks once more, then fails", async () => {
+    const unknown = toolCall("format_disk", '{"disk":"/","why":"clean up"}');
+    const answers = [unknown, toolCall("wait", '{"ms":1,"why":"look"}')];
+    const sent: Sent["body"][] = [];
+    const request = (async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify(answers.shift() ?? unknown));
+    }) as typeof fetch;
     const planned = await new OpenAIPlanner({ key: "k", request }).next(
       input(),
     );
-    expect(planned.action).toEqual({ kind: "format_disk", disk: "/" });
-    expect(actionSchema.safeParse(planned.action).success).toBe(false);
+    expect(planned.action).toEqual({ kind: "wait", ms: 1 });
+    expect(actionSchema.safeParse(planned.action).success).toBe(true);
+    expect(sent).toHaveLength(2);
+    // Twice in a row: nothing unknown reaches the worker.
+    const always = fakeFetch(unknown);
+    await expect(
+      new OpenAIPlanner({ key: "k", request: always.request }).next(input()),
+    ).rejects.toMatchObject({ trouble: "malformed" });
+    expect(always.sent).toHaveLength(2);
+  });
+
+  it("still leaves the checks to the worker: an offered function with arguments of the right shape passes", async () => {
+    // Element 999 is on no screen. Only the worker's checks can know that.
+    const { request } = fakeFetch(
+      toolCall("click_element", '{"element":999,"why":"w"}'),
+    );
+    expect(
+      (await new OpenAIPlanner({ key: "k", request }).next(input())).action,
+    ).toEqual({ kind: "click_element", element: 999 });
   });
 
   it("fails with the status only, and when no tool call or no valid arguments come", async () => {
@@ -591,6 +616,10 @@ describe("the planner on the chat completions API", () => {
     await expect(
       new OpenAIPlanner({ key: "k", request: refused.request }).next(input()),
     ).rejects.toThrow(/^The language model answered 401\.$/);
+    await expect(
+      new OpenAIPlanner({ key: "k", request: refused.request }).next(input()),
+    ).rejects.toBeInstanceOf(PlannerError);
+    expect(refused.sent).toHaveLength(2);
     const silent = fakeFetch({ choices: [{ message: { content: "Done!" } }] });
     await expect(
       new OpenAIPlanner({ key: "k", request: silent.request }).next(input()),
@@ -605,8 +634,8 @@ describe("the planner on the chat completions API", () => {
     ).rejects.toThrow("no action");
   });
 
-  it("takes the first tool call only when the model sends more than one", async () => {
-    const { request } = fakeFetch({
+  it("runs none of several tool calls: it asks once more for one", async () => {
+    const two = {
       choices: [
         {
           message: {
@@ -620,10 +649,12 @@ describe("the planner on the chat completions API", () => {
           },
         },
       ],
-    });
-    expect(
-      (await new OpenAIPlanner({ key: "k", request }).next(input())).action,
-    ).toEqual({ kind: "wait", ms: 1 });
+    };
+    const always = fakeFetch(two);
+    await expect(
+      new OpenAIPlanner({ key: "k", request: always.request }).next(input()),
+    ).rejects.toMatchObject({ trouble: "malformed" });
+    expect(always.sent).toHaveLength(2);
   });
 
   it("is built from the environment: the key, and the model with a default", () => {
@@ -737,15 +768,21 @@ describe("the planner on the chat completions API", () => {
       expect(models).toEqual([defaultComputerModel]);
     });
     it("keeps the default after another failure, and reports a key that no model accepts", async () => {
-      // A fault of the service is no refusal of the model.
+      // A fault of the service is no refusal of the model. It is asked
+      // again, with the same model each time.
       const busy = fakeFetch({}, 500);
-      const planner = new OpenAIPlanner({ key: "k", request: busy.request });
+      const planner = new OpenAIPlanner({
+        key: "k",
+        request: busy.request,
+        sleep: async () => {},
+      });
       await expect(planner.next(input())).rejects.toThrow(
         "The language model answered 500.",
       );
-      expect(busy.sent.map((item) => item.body.model)).toEqual([
-        defaultComputerModel,
-      ]);
+      expect(busy.sent.length).toBeGreaterThan(1);
+      expect(new Set(busy.sent.map((item) => item.body.model))).toEqual(
+        new Set([defaultComputerModel]),
+      );
       // A key that is refused for both models: two requests, then the status.
       const refused = fakeFetch({}, 403);
       const none = new OpenAIPlanner({ key: "k", request: refused.request });
@@ -756,6 +793,9 @@ describe("the planner on the chat completions API", () => {
         defaultComputerModel,
         fallbackComputerModel,
       ]);
+      await expect(none.next(input())).rejects.toMatchObject({
+        trouble: "auth",
+      });
     });
   });
 });

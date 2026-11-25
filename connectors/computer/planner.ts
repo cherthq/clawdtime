@@ -10,7 +10,13 @@
  * What comes back is not trusted. This file only turns the function call into
  * the shape of an action. The worker checks every action in code before
  * anything is sent, so nothing here is a safety rule. The rules in the prompt
- * only make a good choice more likely.
+ * only make a good choice more likely. An answer that is no single offered
+ * function call goes back to the model once, with what was wrong: that is no
+ * safety rule either, only a second chance.
+ *
+ * A failed call to the model is asked again when the trouble can pass
+ * (`model-call.ts`): the call has no effect on the Mac. Every failure is a
+ * `PlannerError` that names its trouble.
  */
 import type {
   Action,
@@ -28,6 +34,23 @@ import {
   parseNavigationCalls,
   type NavigationIntent,
 } from "./navigation.js";
+import { actionSchema } from "./guards.js";
+import {
+  callWithRetries,
+  CircuitBreaker,
+  defaultRetryPolicy,
+  errorCode,
+  PlannerError,
+  realClock,
+  retryAfterMs,
+  statusTrouble,
+  type Attempt,
+  type AttemptReport,
+  type Clock,
+  type RetryPolicy,
+} from "./model-call.js";
+
+export { PlannerError, type PlannerTrouble } from "./model-call.js";
 
 /**
  * The model of the planner. It is the one that did best in the planner test
@@ -409,6 +432,206 @@ export function brief(
   return parts.join("\n");
 }
 
+/** A message of an answer of the chat completions API. Nothing in it is trusted. */
+interface ChatMessage {
+  content?: unknown;
+  refusal?: unknown;
+  tool_calls?: unknown;
+}
+interface ToolCall {
+  id?: unknown;
+  function?: { name?: unknown; arguments?: unknown };
+}
+/** What one answer of the model gives. */
+type Reading =
+  | { kind: "action"; action: Action; why: string }
+  | { kind: "refused" }
+  | {
+      kind: "malformed";
+      /** A fixed word for the error message. */
+      code: string;
+      /** The messages that tell the model what was wrong. */
+      reply: Record<string, unknown>[];
+    };
+
+const completionsUrl = "https://api.openai.com/v1/chat/completions";
+
+/** The message and the end of the first choice of an answer. */
+function firstChoice(body: unknown): { message: ChatMessage; finish: unknown } {
+  const choices =
+    body && typeof body === "object"
+      ? (body as { choices?: unknown }).choices
+      : undefined;
+  const choice: { message?: unknown; finish_reason?: unknown } =
+    Array.isArray(choices) && choices[0] && typeof choices[0] === "object"
+      ? choices[0]
+      : {};
+  const message =
+    choice.message && typeof choice.message === "object"
+      ? (choice.message as ChatMessage)
+      : {};
+  return { message, finish: choice.finish_reason };
+}
+
+const toolCalls = (message: ChatMessage): ToolCall[] =>
+  Array.isArray(message.tool_calls)
+    ? message.tool_calls.filter(
+        (call): call is ToolCall => !!call && typeof call === "object",
+      )
+    : [];
+
+/** The model refused: a content filter ended the answer, or it wrote a refusal. */
+const refusedIn = (message: ChatMessage, finish: unknown) =>
+  finish === "content_filter" ||
+  (typeof message.refusal === "string" && message.refusal.trim() !== "");
+
+const refusal = () =>
+  new PlannerError(
+    "refused",
+    "The language model refused to choose an action.",
+  );
+const unreadable = (code: string) =>
+  new PlannerError(
+    "malformed",
+    `The planner chose no action that can be read (${code}).`,
+  );
+
+/** The shape of an action from one function call. The worker checks it before anything runs. */
+function toAction(
+  name: string,
+  parsed: Record<string, unknown>,
+): { action: Action; why: string } {
+  const { why, ...rest } = parsed;
+  // A model writes null for an argument that it leaves out.
+  const given = Object.fromEntries(
+    Object.entries(rest).filter(([, value]) => value !== null),
+  );
+  return {
+    // The shape of an action only. The worker checks it before anything runs.
+    action: { ...given, kind: name } as unknown as Action,
+    why: typeof why === "string" ? why : "",
+  };
+}
+
+/**
+ * The messages that go back to the model after an answer that cannot be
+ * used: its own answer, a result for each of its tool calls (the service
+ * needs one), and what was wrong.
+ */
+function repairReply(
+  message: ChatMessage,
+  calls: ToolCall[],
+  problem: string,
+): Record<string, unknown>[] {
+  const tell = {
+    role: "user",
+    content: `The program could not use your last answer. ${problem} Nothing was run. Call exactly one of the offered functions, with its arguments as one JSON object.`,
+  };
+  const content =
+    typeof message.content === "string" && message.content.trim()
+      ? message.content
+      : null;
+  const echoed = calls.map((call) => ({
+    id: call.id,
+    name: call.function?.name,
+    arguments: call.function?.arguments,
+  }));
+  if (
+    echoed.length > 0 &&
+    echoed.every(
+      (call) =>
+        typeof call.id === "string" &&
+        call.id !== "" &&
+        typeof call.name === "string" &&
+        call.name !== "",
+    )
+  )
+    return [
+      {
+        role: "assistant",
+        content,
+        tool_calls: echoed.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: {
+            name: call.name,
+            arguments: typeof call.arguments === "string" ? call.arguments : "",
+          },
+        })),
+      },
+      ...echoed.map((call) => ({
+        role: "tool",
+        tool_call_id: call.id,
+        content: "Not run.",
+      })),
+      tell,
+    ];
+  return [...(content !== null ? [{ role: "assistant", content }] : []), tell];
+}
+
+/**
+ * One answer of the model as one action. An answer that is not exactly one
+ * call of an offered function, with one JSON object of arguments that fit
+ * that action, is malformed.
+ */
+function readAnswer(body: unknown, offered: ReadonlySet<string>): Reading {
+  const { message, finish } = firstChoice(body);
+  if (refusedIn(message, finish)) return { kind: "refused" };
+  const calls = toolCalls(message);
+  const malformed = (code: string, problem: string): Reading => ({
+    kind: "malformed",
+    code,
+    reply: repairReply(message, calls, problem),
+  });
+  if (calls.length === 0)
+    return malformed("no_tool_call", "It had no tool call.");
+  if (calls.length > 1)
+    return malformed(
+      "several_tool_calls",
+      `It had ${calls.length} tool calls, and only one is taken, so none of them ran.`,
+    );
+  const call = calls[0]!.function ?? {};
+  const name = typeof call.name === "string" ? call.name : "";
+  if (!name)
+    return malformed("no_function_name", "Its tool call named no function.");
+  if (!offered.has(name))
+    return malformed(
+      "unknown_function",
+      `"${quoted(name, 64)}" is not one of the offered functions.`,
+    );
+  const args = typeof call.arguments === "string" ? call.arguments : "";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(args.trim() ? args : "{}");
+  } catch {
+    return malformed(
+      "bad_json",
+      `The arguments of ${name} are not valid JSON.`,
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+    return malformed(
+      "not_an_object",
+      `The arguments of ${name} are not one JSON object.`,
+    );
+  const planned = toAction(name, parsed as Record<string, unknown>);
+  const checked = actionSchema.safeParse(planned.action);
+  if (!checked.success) {
+    const issues = checked.error.issues
+      .slice(0, 3)
+      .map(
+        (issue) =>
+          `${issue.path.map(String).join(".") || "arguments"}: ${line(issue.message, 160)}`,
+      )
+      .join("; ");
+    return malformed(
+      "invalid_arguments",
+      `The arguments of ${name} do not fit its parameters: ${issues}.`,
+    );
+  }
+  return { kind: "action", ...planned };
+}
+
 export class OpenAIPlanner implements Planner {
   private readonly key: string;
   private model: string;
@@ -416,7 +639,11 @@ export class OpenAIPlanner implements Planner {
   private fallback: string | null;
   private readonly request: typeof fetch;
   private readonly browser: boolean;
-  private readonly timeoutMs: number;
+  private readonly policy: RetryPolicy;
+  private readonly clock: Clock;
+  /** One for each planner: it counts failures across calls. */
+  private readonly breaker: CircuitBreaker;
+  private readonly onAttempt: AttemptReport | undefined;
   constructor(options: {
     key: string;
     model?: string;
@@ -424,14 +651,66 @@ export class OpenAIPlanner implements Planner {
     request?: typeof fetch;
     /** A browser is connected, so the browser functions are offered. */
     browser?: boolean;
+    /** The time for one request to the language model. */
     timeoutMs?: number;
+    /** The time for one whole call: every request, every wait and the repair. */
+    budgetMs?: number;
+    /** The clock of the waits. Tests replace it, so that no test waits. */
+    sleep?: Clock["sleep"];
+    now?: Clock["now"];
+    random?: Clock["random"];
+    /** Told of each request that failed, for example to count retries. */
+    onAttempt?: AttemptReport;
   }) {
     this.key = options.key;
     this.model = options.model || defaultComputerModel;
     this.fallback = options.model ? null : fallbackComputerModel;
     this.request = options.request ?? fetch;
     this.browser = options.browser === true;
-    this.timeoutMs = options.timeoutMs ?? 60_000;
+    const attemptTimeoutMs =
+      options.timeoutMs ?? defaultRetryPolicy.attemptTimeoutMs;
+    this.policy = {
+      ...defaultRetryPolicy,
+      attemptTimeoutMs,
+      budgetMs:
+        options.budgetMs ??
+        Math.max(defaultRetryPolicy.budgetMs, attemptTimeoutMs),
+    };
+    this.clock = {
+      now: options.now ?? realClock.now,
+      sleep: options.sleep ?? realClock.sleep,
+      random: options.random ?? realClock.random,
+    };
+    this.breaker = new CircuitBreaker(this.policy, () => this.clock.now());
+    this.onAttempt = options.onAttempt;
+  }
+
+  private report(attempt: number, trouble: "malformed", delay: number | null) {
+    try {
+      this.onAttempt?.(attempt, trouble, delay);
+    } catch {
+      // A report that fails changes nothing.
+    }
+  }
+
+  /**
+   * One answer of the language model, as parsed JSON, with the retries of
+   * `callWithRetries`. Every failure is a `PlannerError`, or the caller's
+   * own abort.
+   */
+  private send(
+    body: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    deadline: number,
+  ): Promise<unknown> {
+    return callWithRetries((attempt) => this.attempt(body, attempt), {
+      signal,
+      deadline,
+      policy: this.policy,
+      clock: this.clock,
+      breaker: this.breaker,
+      onAttempt: this.onAttempt,
+    });
   }
 
   /**
@@ -440,55 +719,105 @@ export class OpenAIPlanner implements Planner {
    * model (404), the same request goes out once more with the model before
    * it, and the planner stays on that one.
    */
-  private async send(body: Record<string, unknown>): Promise<Response> {
+  private async attempt(
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<Attempt<unknown>> {
     const post = () =>
-      this.request("https://api.openai.com/v1/chat/completions", {
+      this.request(completionsUrl, {
         method: "POST",
         headers: {
           authorization: `Bearer ${this.key}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({ model: this.model, ...body }),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal,
       });
-    const response = await post();
+    let response = await post();
     if (
-      this.fallback === null ||
-      (response.status !== 403 && response.status !== 404)
-    )
-      return response;
-    this.model = this.fallback;
-    this.fallback = null;
-    return post();
+      this.fallback !== null &&
+      (response.status === 403 || response.status === 404)
+    ) {
+      response.body?.cancel().catch(() => {});
+      this.model = this.fallback;
+      this.fallback = null;
+      response = await post();
+    }
+    if (response.ok) {
+      const text = await response.text();
+      try {
+        return { ok: true, value: JSON.parse(text) as unknown };
+      } catch {
+        // A cut or garbled answer: the next request can pass.
+        return {
+          ok: false,
+          error: new PlannerError(
+            "transient",
+            "The language model sent an answer that is not JSON.",
+          ),
+        };
+      }
+    }
+    // The body of a failure can echo the request: only its error code is read.
+    let code: string | null = null;
+    try {
+      code = errorCode(await response.text());
+    } catch {
+      // No body: the status says enough.
+    }
+    const wait = retryAfterMs(response.headers, this.clock.now());
+    return {
+      ok: false,
+      error: new PlannerError(
+        statusTrouble(response.status, code),
+        `The language model answered ${response.status}${code ? ` (${code})` : ""}.`,
+      ),
+      ...(wait !== undefined ? { retryAfterMs: wait } : {}),
+    };
   }
 
-  async navigation(goal: string): Promise<NavigationIntent> {
-    const response = await this.send({
-      messages: [
-        { role: "system", content: navigationRules },
-        { role: "user", content: goal },
-      ],
-      tools: navigationTools.map((tool) => ({
-        type: "function",
-        function: tool,
-      })),
-      tool_choice: "required",
-      parallel_tool_calls: false,
-    });
-    if (!response.ok)
-      throw new Error(`The language model answered ${response.status}.`);
-    const body = (await response.json()) as {
-      choices?: {
-        message?: {
-          tool_calls?: { function?: { name?: string; arguments?: string } }[];
-        };
-      }[];
-    };
-    return parseNavigationCalls(
-      (body.choices?.[0]?.message?.tool_calls ?? []).map(
-        (call) => call.function ?? {},
-      ),
+  async navigation(
+    goal: string,
+    signal?: AbortSignal,
+  ): Promise<NavigationIntent> {
+    const body = await this.send(
+      {
+        messages: [
+          { role: "system", content: navigationRules },
+          { role: "user", content: goal },
+        ],
+        tools: navigationTools.map((tool) => ({
+          type: "function",
+          function: tool,
+        })),
+        tool_choice: "required",
+        parallel_tool_calls: false,
+      },
+      signal,
+      this.clock.now() + this.policy.budgetMs,
     );
+    const { message, finish } = firstChoice(body);
+    if (refusedIn(message, finish)) throw refusal();
+    // No repair here: a reading that is not one clean call ends the request,
+    // and no move is guessed from a second try.
+    try {
+      return parseNavigationCalls(
+        toolCalls(message).map(({ function: call }) => ({
+          ...(typeof call?.name === "string" ? { name: call.name } : {}),
+          ...(typeof call?.arguments === "string"
+            ? { arguments: call.arguments }
+            : {}),
+        })),
+      );
+    } catch (error) {
+      // The reader's own reasons are fixed sentences. Any other error can quote the answer.
+      throw new PlannerError(
+        "malformed",
+        error instanceof Error && error.constructor === Error
+          ? error.message
+          : "Navigation interpretation is invalid.",
+      );
+    }
   }
 
   async next(
@@ -497,63 +826,74 @@ export class OpenAIPlanner implements Planner {
     const browser = this.browser && input.browser !== false;
     const text = brief(input, browser);
     const image = input.observation?.image;
-    const response = await this.send({
-      messages: [
-        { role: "system", content: rules(browser) },
-        {
-          role: "user",
-          content: [
-            { type: "text", text },
-            ...(image
-              ? [
-                  {
-                    type: "image_url",
-                    image_url: {
-                      url: `data:image/jpeg;base64,${image}`,
-                      detail: "high",
+    return this.decide(
+      {
+        messages: [
+          { role: "system", content: rules(browser) },
+          {
+            role: "user",
+            content: [
+              { type: "text", text },
+              ...(image
+                ? [
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: `data:image/jpeg;base64,${image}`,
+                        detail: "high",
+                      },
                     },
-                  },
-                ]
-              : []),
-          ],
-        },
-      ],
-      tools: browser ? [...screenTools, ...browserTools] : screenTools,
-      // One action for each turn: a function call, and only one.
-      tool_choice: "required",
-      parallel_tool_calls: false,
-    });
-    // The body of a failure can echo the request: only the status is reported.
-    if (!response.ok)
-      throw new Error(`The language model answered ${response.status}.`);
-    const body = (await response.json()) as {
-      choices?: {
-        message?: {
-          tool_calls?: { function?: { name?: string; arguments?: string } }[];
-        };
-      }[];
-    };
-    const call = body.choices?.[0]?.message?.tool_calls?.[0]?.function;
-    const unread = new Error("The planner chose no action that can be read.");
-    if (!call?.name) throw unread;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(call.arguments?.trim() ? call.arguments : "{}");
-    } catch {
-      throw unread;
-    }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
-      throw unread;
-    const { why, ...rest } = parsed as Record<string, unknown>;
-    // A model writes null for an argument that it leaves out.
-    const given = Object.fromEntries(
-      Object.entries(rest).filter(([, value]) => value !== null),
+                  ]
+                : []),
+            ],
+          },
+        ],
+        tools: browser ? [...screenTools, ...browserTools] : screenTools,
+        // One action for each turn: a function call, and only one.
+        tool_choice: "required",
+        parallel_tool_calls: false,
+      },
+      input.signal,
     );
-    return {
-      // The shape of an action only. The worker checks it before anything runs.
-      action: { ...given, kind: call.name } as unknown as Action,
-      why: typeof why === "string" ? why : "",
-    };
+  }
+
+  /**
+   * The request of one turn, and at most one repair. An answer that is not
+   * one call of an offered function goes back to the model once, with what
+   * was wrong. A second such answer, or a refusal, is a failure.
+   */
+  private async decide(
+    body: {
+      messages: Record<string, unknown>[];
+      tools: readonly { function: { name: string } }[];
+    } & Record<string, unknown>,
+    signal: AbortSignal | undefined,
+  ): Promise<{ action: Action; why: string }> {
+    const deadline = this.clock.now() + this.policy.budgetMs;
+    const offered = new Set(body.tools.map((tool) => tool.function.name));
+    const first = readAnswer(await this.send(body, signal, deadline), offered);
+    if (first.kind === "action")
+      return { action: first.action, why: first.why };
+    if (first.kind === "refused") throw refusal();
+    // A repair needs the time for one more request.
+    if (deadline - this.clock.now() < this.policy.minAttemptMs) {
+      this.report(1, "malformed", null);
+      throw unreadable(first.code);
+    }
+    this.report(1, "malformed", 0);
+    const second = readAnswer(
+      await this.send(
+        { ...body, messages: [...body.messages, ...first.reply] },
+        signal,
+        deadline,
+      ),
+      offered,
+    );
+    if (second.kind === "action")
+      return { action: second.action, why: second.why };
+    if (second.kind === "refused") throw refusal();
+    this.report(2, "malformed", null);
+    throw unreadable(second.code);
   }
 }
 
@@ -604,8 +944,10 @@ export function directOpening(planner: Planner): Planner {
     get: () => {
       const read = planner.navigation;
       if (!read) return undefined;
-      return async (goal: string) =>
-        directAddress(goal) ? { kind: "none" } : read.call(planner, goal);
+      return async (goal: string, signal?: AbortSignal) =>
+        directAddress(goal)
+          ? { kind: "none" }
+          : read.call(planner, goal, signal);
     },
   });
   return wrapped;
