@@ -379,6 +379,116 @@ const sound = page(
    });
    document.addEventListener("mouseup", function () { dragging = null; });
    window.state = function () { return { volume: levels["Output volume"], alert: levels["Alert volume"] }; };`,
+/*
+ * Apps for requests of several steps, where a plan helps: find, copy and
+ * confirm; sign in, then change a setting; a form of three pages.
+ */
+
+/** The notes app with one more note, whose name holds the word invoice, far down the list. */
+const invoiceRow = `["Workshop notes", "Bring markers."]`;
+if (!notes.includes(invoiceRow))
+  throw new Error("The notes app changed: the invoice note has no place.");
+const invoiceNotes = notes.replace(
+  invoiceRow,
+  `${invoiceRow}, ["Workshop invoice", "From the print shop. Invoice number 30417, due on Friday."]`,
+);
+
+/** Sign in, then a settings page with switches that say their state. */
+const ledger = page(
+  "Ledger",
+  `.form { margin: 90px auto; width: 340px; } .form label { display: block; margin: 14px 0 5px; color: #444; }
+   .form input { width: 100%; height: 32px; border: 1px solid #c4c4c4; border-radius: 7px; padding: 0 9px; font: inherit; }
+   .form button { margin-top: 22px; width: 100%; height: 34px; } .home { margin: 80px auto; width: 460px; font-size: 18px; }
+   .home button { margin-top: 18px; }
+   .pane { flex: 1; padding: 24px 40px; } .setting { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid #e3e3e3; font-size: 14px; }
+   .switch { width: 42px; height: 24px; border-radius: 12px; background: #d1d1d6; position: relative; display: inline-block; }
+   .switch i { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+   .switch.on { background: #34c759; } .switch.on i { left: 20px; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Ledger</div></div><div class="content">
+     <div class="form" id="form"><h2 data-role="AXStaticText" data-title="Sign in">Sign in</h2>
+       <label>Email</label><input id="email" data-role="AXTextField" data-title="Email">
+       <label>Password</label><input id="password" type="password" data-role="AXSecureTextField" data-title="Password">
+       <button class="push primary" id="go" data-role="AXButton" data-title="Sign in">Sign in</button>
+       <p id="problem" data-role="AXStaticText" data-title=""></p></div>
+     <div class="home" id="home" hidden><div id="hello" data-role="AXStaticText" data-title=""></div>
+       <button class="push" id="open" data-role="AXButton" data-title="Settings">Settings</button></div>
+     <div class="pane" id="pane" hidden><h2 data-role="AXStaticText" data-title="Settings">Settings</h2></div>
+   </div></div>`,
+  `var signedIn = "", passwordLength = 0, changes = [];
+   var turned = { "Email receipts": true, "Paper statements": false, "Weekly summary": false };
+   document.getElementById("go").onclick = function () {
+     var email = document.getElementById("email").value, password = document.getElementById("password").value, problem = document.getElementById("problem");
+     if (!email || !password) { var text = "Give the email and the password."; problem.textContent = text; problem.setAttribute("data-title", text); return; }
+     signedIn = email; passwordLength = password.length;
+     document.getElementById("form").hidden = true; document.getElementById("home").hidden = false;
+     var hello = document.getElementById("hello"), words = "Welcome, " + email; hello.textContent = words; hello.setAttribute("data-title", words);
+   };
+   document.getElementById("open").onclick = function () { document.getElementById("home").hidden = true; document.getElementById("pane").hidden = false; };
+   var pane = document.getElementById("pane");
+   Object.keys(turned).forEach(function (label) {
+     var row = document.createElement("div"); row.className = "setting";
+     var name = document.createElement("span"); name.textContent = label; row.appendChild(name);
+     var knob = document.createElement("span"); knob.setAttribute("data-role", "AXCheckBox"); knob.setAttribute("data-title", label);
+     knob.appendChild(document.createElement("i"));
+     function show() { knob.className = "switch" + (turned[label] ? " on" : ""); knob.setAttribute("data-value", turned[label] ? "1" : "0"); }
+     knob.onclick = function () { turned[label] = !turned[label]; changes.push(label); show(); };
+     show(); row.appendChild(knob); pane.appendChild(row);
+   });
+   window.state = function () { return { signedIn: signedIn, passwordLength: passwordLength, switches: turned, changes: changes }; };`,
+);
+
+/** A form of three pages: a name, a date, a seat. Sending it shows a reference. */
+const trip = page(
+  "Trip request",
+  `.step { margin: 70px auto; width: 380px; } .step label { display: block; margin: 14px 0 5px; color: #444; }
+   .step input { width: 100%; height: 32px; border: 1px solid #c4c4c4; border-radius: 7px; padding: 0 9px; font: inherit; }
+   .step .next { margin-top: 22px; } .seat { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 14px; }
+   .radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #8a8a8e; display: inline-block; }
+   .radio.on { border-color: #0a7aff; background: radial-gradient(#0a7aff 45%, transparent 50%); }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Trip request</div></div><div class="content">
+     <div class="step" id="one"><h2 data-role="AXStaticText" data-title="Step 1 of 3: who travels">Step 1 of 3: who travels</h2>
+       <label>Full name</label><input id="name" data-role="AXTextField" data-title="Full name">
+       <button class="push primary next" id="next1" data-role="AXButton" data-title="Next">Next</button>
+       <p class="problem" data-role="AXStaticText" data-title=""></p></div>
+     <div class="step" id="two" hidden><h2 data-role="AXStaticText" data-title="Step 2 of 3: when">Step 2 of 3: when</h2>
+       <label>Travel date</label><input id="date" data-role="AXTextField" data-title="Travel date">
+       <button class="push primary next" id="next2" data-role="AXButton" data-title="Next">Next</button>
+       <p class="problem" data-role="AXStaticText" data-title=""></p></div>
+     <div class="step" id="three" hidden><h2 data-role="AXStaticText" data-title="Step 3 of 3: seat">Step 3 of 3: seat</h2>
+       <div class="seat"><span class="radio" data-seat="Window" data-role="AXRadioButton" data-title="Window"></span>Window</div>
+       <div class="seat"><span class="radio" data-seat="Aisle" data-role="AXRadioButton" data-title="Aisle"></span>Aisle</div>
+       <button class="push primary next" id="send" data-role="AXButton" data-title="Send request">Send request</button>
+       <p class="problem" data-role="AXStaticText" data-title=""></p></div>
+     <div class="step" id="sent" hidden><h2 data-role="AXStaticText" data-title="Request sent">Request sent</h2>
+       <p data-role="AXStaticText" data-title="Your reference is TR-5521.">Your reference is TR-5521.</p></div>
+   </div></div>`,
+  `var held = { name: "", date: "", seat: "", sent: false };
+   function show(id) { ["one", "two", "three", "sent"].forEach(function (step) { document.getElementById(step).hidden = step !== id; }); }
+   function problem(id, text) { var line = document.querySelector("#" + id + " .problem"); line.textContent = text; line.setAttribute("data-title", text); }
+   document.getElementById("next1").onclick = function () {
+     held.name = document.getElementById("name").value.trim();
+     if (!held.name) return problem("one", "Give the full name.");
+     show("two");
+   };
+   document.getElementById("next2").onclick = function () {
+     held.date = document.getElementById("date").value.trim();
+     if (!held.date) return problem("two", "Give the travel date.");
+     show("three");
+   };
+   Array.prototype.forEach.call(document.querySelectorAll(".radio"), function (el) {
+     el.setAttribute("data-value", "0");
+     el.onclick = function () {
+       held.seat = el.getAttribute("data-seat");
+       Array.prototype.forEach.call(document.querySelectorAll(".radio"), function (other) {
+         var on = other === el; other.className = "radio" + (on ? " on" : ""); other.setAttribute("data-value", on ? "1" : "0");
+       });
+     };
+   });
+   document.getElementById("send").onclick = function () {
+     if (!held.seat) return problem("three", "Choose a seat.");
+     held.sent = true; show("sent");
+   };
+   window.state = function () { return held; };`,
 );
 
 export interface App {
@@ -433,6 +543,22 @@ export const apps = {
       window: "Sound",
     },
     html: sound,
+  },
+  invoiceNotes: {
+    app: { name: "Notes", bundleId: "com.example.notes", window: "Notes" },
+    html: invoiceNotes,
+  },
+  ledger: {
+    app: { name: "Ledger", bundleId: "com.example.ledger", window: "Ledger" },
+    html: ledger,
+  },
+  trip: {
+    app: {
+      name: "Trips",
+      bundleId: "com.example.trips",
+      window: "Trip request",
+    },
+    html: trip,
   },
 } satisfies Record<string, App>;
 

@@ -848,6 +848,63 @@ const requests: Request[] = [
       ]),
     ],
   },
+  // Requests of several steps. The worker plans them first (plan.ts).
+  {
+    id: "find a note by a word, copy a number from it into another note, confirm",
+    app: "invoiceNotes",
+    goal: "Find the note whose name has the word invoice, copy its invoice number into the note named Call list as a new line, then tell me the number.",
+    done: (state, said) => {
+      const held = state as unknown as NotesState;
+      return (
+        /Dentist on Monday\.[\s\S]*30417/.test(
+          noteOf(state, "Call list")?.text ?? "",
+        ) &&
+        noteOf(state, "Workshop invoice")?.text ===
+          "From the print shop. Invoice number 30417, due on Friday." &&
+        held.notes.length === 16 &&
+        held.notes.filter((note) => note.text.includes("30417")).length === 2 &&
+        /30417/.test(said)
+      );
+    },
+  },
+  {
+    id: "sign in, the person types the password, then change a setting",
+    app: "ledger",
+    goal: "Sign in to Ledger with the email ada@example.com, I type the password myself. Then turn on Weekly summary in its settings.",
+    // At a question with an empty password field, the person types into it, then says yes.
+    person: async (_question, page) => {
+      const field = page.locator("#password");
+      if ((await field.isVisible()) && !(await field.inputValue())) {
+        await field.click();
+        await page.keyboard.type("a-test-password");
+      }
+      return "yes";
+    },
+    done: (state) => {
+      const now = switches(state);
+      return (
+        state.signedIn === "ada@example.com" &&
+        (state.passwordLength as number) > 0 &&
+        now["Weekly summary"] === true &&
+        now["Email receipts"] === true &&
+        now["Paper statements"] === false &&
+        JSON.stringify(state.changes) === JSON.stringify(["Weekly summary"])
+      );
+    },
+  },
+  {
+    id: "a form of three pages, sent, and its reference read",
+    app: "trip",
+    goal: "Fill in the trip request: the name Ada Lovelace on the first page, the date 12 March on the second, a window seat on the third. Then send it and tell me its reference.",
+    person: yes,
+    done: (state, said, final) =>
+      state.sent === true &&
+      state.name === "Ada Lovelace" &&
+      state.date === "12 March" &&
+      state.seat === "Window" &&
+      final === "completed" &&
+      /TR-5521/.test(said),
+  },
 ];
 
 const models = words.filter((word) => !word.startsWith("--"));
