@@ -1,13 +1,16 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 
 /// The picture of the screen is smaller than the screen. This maps between a
 /// pixel of the picture and a point of the screen, and between the two ways
 /// that macOS counts the height: from the top, as the contract and the input
 /// events do, and from the bottom, as windows do.
 public struct ScreenMap: Equatable, Sendable {
-  /// The widest picture that the hands send, in pixels.
-  public static let maxImageWidth = 1280
+  /// The longest side of the picture that the hands send, in pixels. The language model reads the
+  /// picture of a usual laptop screen at this size with no loss of its own, and a larger picture costs
+  /// more time to send and to read. Small drawn targets are for a zoom, not for a larger picture.
+  public static let maxImageSide = 1280
   /// The main display in points.
   public let width: Double, height: Double
   /// Pixels for one point: 1 on a plain display, 2 on a dense one.
@@ -16,13 +19,17 @@ public struct ScreenMap: Equatable, Sendable {
   public let imageWidth: Int, imageHeight: Int
 
   /// Nil for a display with no size.
-  public init?(width: Double, height: Double, scale: Double, maxImageWidth: Int = ScreenMap.maxImageWidth) {
-    guard width.isFinite, height.isFinite, scale.isFinite, width >= 1, height >= 1, scale > 0, maxImageWidth >= 1 else { return nil }
+  public init?(width: Double, height: Double, scale: Double, maxImageSide: Int = ScreenMap.maxImageSide) {
+    guard width.isFinite, height.isFinite, scale.isFinite, width >= 1, height >= 1, scale > 0, maxImageSide >= 1 else { return nil }
     self.width = width; self.height = height; self.scale = scale
-    // The picture never has more pixels than the display, and never more than the limit.
-    // Each limit comes before the whole number, so no size of display can stop the app.
-    imageWidth = max(1, Int(min(Double(maxImageWidth), (width * scale).rounded())))
-    imageHeight = max(1, Int(min(Double(maxImageWidth) * 16, (Double(imageWidth) * height / width).rounded())))
+    // The picture never has more pixels than the display, and its longer side never more than the limit.
+    // The sides keep the shape of the display. Each limit comes before the whole number, so no size of
+    // display can stop the app: a product too large to count is the limit, and a share is at most 1.
+    let long = max(width, height), short = min(width, height)
+    let longPixels = min(Double(maxImageSide), long * scale)
+    let shortPixels = longPixels * (short / long)
+    imageWidth = max(1, Int((width >= height ? longPixels : shortPixels).rounded()))
+    imageHeight = max(1, Int((width >= height ? shortPixels : longPixels).rounded()))
   }
   /// The screen point under a pixel of the picture.
   public func point(pixel: CGPoint) -> CGPoint {
@@ -45,6 +52,34 @@ public struct ScreenMap: Equatable, Sendable {
   /// A frame counted from the top left, as a frame counted from the bottom left, and back.
   public func flip(_ rect: CGRect) -> CGRect {
     CGRect(x: rect.minX, y: CGFloat(height) - rect.maxY, width: rect.width, height: rect.height)
+  }
+}
+
+/// The picture as the hands send it: a JPEG of moderate quality. A screen has large flat parts and
+/// sharp text, and the language model reads both well at this quality. A lower quality comes only
+/// when a picture would not fit in the contract.
+public enum ScreenPicture {
+  /// The qualities that are tried, best first. The first that fits is sent.
+  public static let qualities = [0.5, 0.35, 0.25]
+  /// The most bytes of one JPEG: base64 makes four characters of three bytes, and the contract holds
+  /// `Observation.maxImageCharacters` characters.
+  public static var budget: Int { Observation.maxImageCharacters / 4 * 3 }
+  /// One JPEG of `image` at `quality`, written in memory only. Nil when ImageIO cannot write it.
+  public static func jpeg(_ image: CGImage, quality: Double) -> Data? {
+    let data = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, "public.jpeg" as CFString, 1, nil) else { return nil }
+    let options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: max(0, min(1, quality))]
+    CGImageDestinationAddImage(destination, image, options as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return data as Data
+  }
+  /// The JPEG that is sent: the best quality that fits in `budget` bytes. Nil when none fits.
+  public static func encode(_ image: CGImage, budget: Int = ScreenPicture.budget) -> Data? {
+    for quality in qualities {
+      guard let data = jpeg(image, quality: quality) else { return nil }
+      if data.count <= budget { return data }
+    }
+    return nil
   }
 }
 

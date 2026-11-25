@@ -80,13 +80,22 @@ public enum ElementCleaner {
     return ScreenElement(id: id, role: role, title: title, value: value, x: tenth(frame.minX), y: tenth(frame.minY),
                          w: tenth(frame.width), h: tenth(frame.height), enabled: raw.enabled, focused: raw.focused, secure: secure)
   }
+  /// Which elements stay first when there are more than the contract holds: the one with the keyboard
+  /// and a password field, then the controls that a person can use now, then the controls that are off,
+  /// then the rest. Every element here shows on the screen already.
+  public static func rank(_ item: ScreenElement) -> Int {
+    if item.focused || item.secure { return 0 }
+    if controls.contains(item.role) { return item.enabled ? 1 : 2 }
+    return 3
+  }
   /// Every element that says something, in the order of the tree, numbered from
-  /// zero. With more than the contract holds, the ones that a person acts on stay first.
+  /// zero. With more than the contract holds, those of the best `rank` are kept, and
+  /// they stay in the order of the tree.
   public static func clean(_ raw: [RawElement], within bounds: CGRect? = nil) -> [ScreenElement] {
     var kept = raw.compactMap { element($0, within: bounds) }
     if kept.count > maxElements {
-      var chosen = Set(kept.indices.filter { controls.contains(kept[$0].role) || kept[$0].secure }.prefix(maxElements))
-      for index in kept.indices where chosen.count < maxElements { chosen.insert(index) }
+      // A stable order: the rank first, then the place in the tree.
+      let chosen = Set(kept.indices.sorted { (rank(kept[$0]), $0) < (rank(kept[$1]), $1) }.prefix(maxElements))
       kept = kept.indices.filter(chosen.contains).map { kept[$0] }
     }
     return kept.enumerated().map { index, item in
