@@ -9,7 +9,10 @@
  * worker must take the action. A case that needs a kind that is not offered
  * is skipped, with a line that says so.
  */
-import { actionSchema } from "../connectors/computer/guards.js";
+import {
+  actionSchema,
+  browserMethodNames,
+} from "../connectors/computer/guards.js";
 import { OpenAIPlanner } from "../connectors/computer/planner.js";
 import type { Action } from "../connectors/computer/ports.js";
 import { readAsk, toolAnswer } from "./computer-eval-model.js";
@@ -137,6 +140,7 @@ export async function offeredTools(): Promise<Map<string, string[]>> {
     key: "no-key-scripted",
     model: "scripted",
     browser: true,
+    browserMethods: browserMethodNames,
     request: async (_url, init) => {
       tools = readAsk(init).tools;
       return toolAnswer("done", { summary: "Nothing to do." });

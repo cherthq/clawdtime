@@ -46,6 +46,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "@playwright/test";
+import { browserMethods } from "../connectors/computer/guards.js";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import {
   defaultComputerModel,
@@ -942,7 +943,7 @@ async function one(
         request.faults?.model ?? [],
         applied,
       ),
-      ...(port ? { browser: true } : {}),
+      ...(port ? { browser: true, browserMethods: browserMethods(port) } : {}),
     });
     const said: string[] = [];
     const timed: StepTiming[] = [];

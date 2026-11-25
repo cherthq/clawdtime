@@ -32,7 +32,14 @@ export function readAsk(init: RequestInit | undefined): PlannerAsk {
         tool.function.name,
         Object.keys(tool.function.parameters?.properties ?? {}),
       );
-  const last = body.messages?.at(-1)?.content;
+  // The brief is the last message of the person with parts; a repair adds a
+  // plain message of words after it.
+  const last = (
+    [...(body.messages ?? [])]
+      .reverse()
+      .find((message) => Array.isArray(message.content)) ??
+    body.messages?.at(-1)
+  )?.content;
   const brief = Array.isArray(last)
     ? last
         .map((part: { type?: string; text?: string }) =>

@@ -38,6 +38,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { chromium, type Page } from "@playwright/test";
+import { browserMethodNames } from "../connectors/computer/guards.js";
 import { pageScript } from "../connectors/computer/browser-script.js";
 import {
   defaultComputerModel,
@@ -1122,6 +1123,7 @@ async function measure(seen: Record<string, Seen>) {
         model: config.model,
         request,
         browser: true,
+        browserMethods: browserMethodNames,
       }),
     };
     let failures = 0;
@@ -1219,6 +1221,7 @@ async function check(seen: Record<string, Seen>) {
       model: "scripted",
       request,
       browser: true,
+      browserMethods: browserMethodNames,
     }),
   };
   let failed = 0;
