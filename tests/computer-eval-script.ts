@@ -133,6 +133,31 @@ export async function pointIn(
   };
 }
 
+/**
+ * A point of the first picture in the pixels of the closer picture of this
+ * turn, read from the brief as the model reads it: the part of the first
+ * picture that the closer picture shows, and its size.
+ */
+export function inCloser(view: ScriptView, point: { x: number; y: number }) {
+  const m =
+    /the second picture is the part of the first picture from (\d+),(\d+) to (\d+),(\d+), (\d+) by (\d+) pixels/.exec(
+      view.ask.brief,
+    );
+  if (!m) throw new Error("this turn has no closer picture");
+  const [left, top, right, bottom, width, height] = m.slice(1).map(Number) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  return {
+    x: Math.round(((point.x - left) * width) / (right - left)),
+    y: Math.round(((point.y - top) * height) / (bottom - top)),
+  };
+}
+
 /** The number of the listed element whose middle lies in this element of the app. */
 export async function under(view: ScriptView, selector: string) {
   const box = await boxOf(view, selector);
@@ -206,6 +231,16 @@ export const act = {
   ask: (question: string): ScriptAction => ({ kind: "ask", question }),
   done: (summary: string): ScriptAction => ({ kind: "done", summary }),
   giveUp: (reason: string): ScriptAction => ({ kind: "give_up", reason }),
+  lookCloser: (point: { x: number; y: number }): ScriptAction => ({
+    kind: "look_closer",
+    ...point,
+  }),
+  /** A click at a point of the closer picture of this turn, in its pixels. */
+  clickInCloser: (point: { x: number; y: number }): ScriptAction => ({
+    kind: "click_at",
+    ...point,
+    closer: true,
+  }),
   read: (): ScriptAction => ({ kind: "browser_read" }),
   pageClick: (index: number): ScriptAction => ({
     kind: "browser_click",

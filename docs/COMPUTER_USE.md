@@ -519,6 +519,14 @@ goal says. With all 27 tasks and 5 repeats, `gpt-5.4` was right 135 of 135
 times. `gpt-4.1` was right 105 of 135 times: besides the drawn targets, it
 opened the row that the note named, and not the row of the goal, 5 times in 5.
 
+Two of the small drawn targets, the x and the stars, also count a closer
+look near them as a right step. One more task comes with a closer picture of
+the stars, as after `look_closer`: the test renders it as the hands take it,
+three times larger, and the right answer is a click on the third star, in the
+closer picture or in the first one. In `--check`, a click in the closer
+picture goes through the planner's own mapping, and the same point read as a
+point of the first picture is a wrong answer.
+
 On a real desktop service, for a request that only looks, the answer of the
 planner took 1.25 to 1.27 seconds with `gpt-5.4` and 1.40 to 1.82 seconds with
 `gpt-4.1`. The test is not physical acceptance: its screens are rendered pages,
@@ -564,7 +572,9 @@ wrong row) must not. Each planner task does the same with an ideal answer and
 wrong answers. So the check proves that each case can be done and that its
 check tells right from wrong, before any model is measured. A path that needs
 an action that this build does not offer yet is skipped, and the line says
-which. Run it after every change to a test or an app:
+which. The hands of the request test take a closer look too: the request
+with the drawn stars has a path that looks closer first and clicks in the
+closer picture. Run it after every change to a test or an app:
 `npx tsx tests/computer-request.eval.ts --check --new-actions`.
 
 Results of November 22, 2026, 13 requests, 3 runs of each, `gpt-5.4`:
@@ -717,6 +727,9 @@ On the screen:
   that must move.
 - `open_app`, `quit_app` and `open_url`: an app or a web address by its name,
   with no pointer and no key.
+- `look_closer`: a larger picture of one part of the screen around a point,
+  for the next turn. It sends nothing to an app. See
+  [A closer look](#a-closer-look).
 - `wait`, `ask`, `done` and `give_up`.
 
 In the browser, when the driver is on:
@@ -748,6 +761,41 @@ In the browser, when the driver is on:
 The planner gets a browser action only when the driver has its method:
 `browserMethods` in `guards.ts` reads them from the driver. The checks refuse
 an action whose method the driver lacks.
+
+### A closer look
+
+A small thing that has no element in the Accessibility tree (one star of a
+rating, a small icon, a check box, a thin line) can be hard to tell apart in
+the picture of the whole screen. The planner can then call `look_closer` at a
+point of the picture. The code is in `connectors/computer/closer.ts`.
+
+- **The part.** A quarter of the picture's width and of its height around the
+  point, moved inside the picture near an edge.
+- **The picture.** The hands take that part of the screen, three times
+  larger than the same part of the last picture (command `zoom`). The
+  windows of ClawdTime are left out, as in every picture. Nothing is sent to
+  an app, and no question is asked.
+- **The next turn.** The planner gets the closer picture as a second picture,
+  with the part of the first picture that it shows, for that one turn only.
+  To click a thing in it, the planner calls `click_at` with `closer` true and
+  a point of the second picture. The planner turns that point into a point of
+  the first picture, so the worker and its checks see an ordinary click, and
+  all of them run as for any click. A `click_at` with `closer` in a turn with
+  no closer picture, or with a point outside it, goes back to the model once
+  as a malformed answer. The point is never guessed.
+- **A look, not an input.** A zoom whose result never comes back makes
+  nothing uncertain: the request stops as for a silent panel. The person's
+  mouse during it pauses nothing.
+- **A few for each request.** A request sends at most 6 closer looks. The
+  next one is refused, and the planner reads why.
+- **No password field.** A part with a password field in it, or within 8
+  points of one, is refused before the zoom. When the look after the zoom
+  finds a password field in the part, the closer picture never goes to the
+  planner, and the planner reads why.
+
+The panel scales the part to the asked size (`scalesToFit`): without it, the
+part stays at its own size in a corner and the rest of the picture is empty.
+A capture on the laptop showed the difference.
 
 ## The guards
 

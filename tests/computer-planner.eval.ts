@@ -18,7 +18,11 @@
  *
  * Each argument is a model, with ":low" for a small picture. With no argument
  * it measures the model that the service would use. REPEATS (default 2) is
- * how often each task runs; OUT names a file for every answer.
+ * how often each task runs; ONLY names a part of a task's name; OUT names a
+ * file for every answer.
+ *
+ * A task can come with a closer picture, as after look_closer: one part of
+ * its screen three times larger, rendered as the hands take it (zoom).
  *
  * With a model it needs a key for the language model in the environment, as
  * the service does, and the Chromium of Playwright (`npm run
@@ -37,8 +41,12 @@
  * still checked, and its line says so.
  */
 import { writeFileSync } from "node:fs";
-import { chromium, type Page } from "@playwright/test";
-import { browserMethodNames } from "../connectors/computer/guards.js";
+import { chromium, type Browser, type Page } from "@playwright/test";
+import {
+  browserMethodNames,
+  closerMagnify,
+  closerPart,
+} from "../connectors/computer/guards.js";
 import { pageScript } from "../connectors/computer/browser-script.js";
 import {
   defaultComputerModel,
@@ -47,6 +55,7 @@ import {
 import type {
   Action,
   BrowserPage,
+  Closer,
   Observation,
   ScreenElement,
   StepRecord,
@@ -119,33 +128,43 @@ async function readPage(page: Page) {
   return { reading: { browser: "chrome" as const, ...answer.page }, pageAt };
 }
 
+/** A page of the size of the picture, with `scale` pixels for each point, where the web screens come from their own addresses. */
+async function screenPage(browser: Browser, scale: number) {
+  const context = await browser.newContext({
+    viewport: picture,
+    deviceScaleFactor: scale,
+  });
+  // A web page comes from its own address, served here: nothing goes to the network.
+  const served = new Map(
+    Object.values(screens).flatMap((screen) =>
+      screen.url ? [[screen.url, screen.html] as const] : [],
+    ),
+  );
+  await context.route(
+    (url) => url.hostname.endsWith(".example"),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        body: served.get(route.request().url()) ?? "<p>Not found</p>",
+      }),
+  );
+  return context.newPage();
+}
+/** Shows one screen on the page. */
+async function show(page: Page, name: keyof typeof screens) {
+  const screen = screens[name]!;
+  if (screen.url) await page.goto(screen.url, { waitUntil: "load" });
+  else await page.setContent(screen.html);
+}
+
 async function render(): Promise<Record<string, Seen>> {
   const browser = await chromium.launch({ headless: true });
   const seen: Record<string, Seen> = {};
   try {
-    const context = await browser.newContext({
-      viewport: picture,
-      deviceScaleFactor: 1,
-    });
-    // A web page comes from its own address, served here: nothing goes to the network.
-    const served = new Map(
-      Object.values(screens).flatMap((screen) =>
-        screen.url ? [[screen.url, screen.html] as const] : [],
-      ),
-    );
-    await context.route(
-      (url) => url.hostname.endsWith(".example"),
-      (route) =>
-        route.fulfill({
-          status: 200,
-          contentType: "text/html; charset=utf-8",
-          body: served.get(route.request().url()) ?? "<p>Not found</p>",
-        }),
-    );
-    const page = await context.newPage();
+    const page = await screenPage(browser, 1);
     for (const [name, screen] of Object.entries(screens)) {
-      if (screen.url) await page.goto(screen.url, { waitUntil: "load" });
-      else await page.setContent(screen.html);
+      await show(page, name);
       // What the picture shows and the Accessibility tree does not name: a box for the checks, and no element.
       const drawn = (await page.evaluate(`(() => {
         const out = [];
@@ -233,23 +252,71 @@ async function render(): Promise<Record<string, Seen>> {
   return seen;
 }
 
+/**
+ * The closer pictures of the tasks that have one, by the id of the task,
+ * made as the hands make them: the part that look_closer would show, three
+ * times larger.
+ */
+async function renderClosers(
+  seen: Record<string, Seen>,
+): Promise<Record<string, Closer>> {
+  const wanted = chosen.filter((task) => task.closerAt);
+  const out: Record<string, Closer> = {};
+  if (!wanted.length) return out;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await screenPage(browser, closerMagnify);
+    for (const task of wanted) {
+      const view = seen[task.screen]!;
+      const part = closerPart(task.closerAt!(view), view.observation);
+      if (!part)
+        throw new Error(
+          `The closer look of ${task.id} is outside the picture.`,
+        );
+      await show(page, task.screen);
+      const { x, y, w, h } = part.region;
+      const image = (
+        await page.screenshot({
+          type: "jpeg",
+          quality: 80,
+          clip: { x, y, width: w, height: h },
+        })
+      ).toString("base64");
+      out[task.id] = {
+        image,
+        imageWidth: w * closerMagnify,
+        imageHeight: h * closerMagnify,
+        region: part.region,
+      };
+    }
+  } finally {
+    await browser.close();
+  }
+  return out;
+}
+
 interface Task {
   id: string;
   screen: keyof typeof screens;
   goal: string;
   /** What the person said after the start, oldest first. */
   guidance?: string[];
-  history?: StepRecord[];
+  /** The earlier steps, or a function that makes them from the screen. */
+  history?: StepRecord[] | ((seen: Seen) => StepRecord[]);
   /** The planner gets the reading of the page of the screen, and the browser functions. */
   page?: true;
   /** The planner gets the browser functions, and no reading yet. */
   browser?: true;
   /** It is about the new kinds of action: only with --new-actions. */
   newActions?: true;
+  /** A closer look around this point of the picture comes with the turn, as after look_closer. */
+  closerAt?: (seen: Seen) => { x: number; y: number };
   /** True when the action is a right next step. */
   right: (action: Action, seen: Seen) => boolean;
   /** A right answer, for --check. */
   ideal: (seen: Seen) => Action;
+  /** Other answers that the check must call right too, for --check. */
+  alsoRight?: ((seen: Seen) => Action)[];
   /** Answers that the check must call not right, for --check. */
   wrong: ((seen: Seen) => Action)[];
 }
@@ -292,6 +359,30 @@ const endOn = (end: Partial<DragEnd> | undefined, seen: Seen, name: string) => {
   );
 };
 const number = (seen: Seen, name: string) => seen.at[name]?.id;
+/** The box around the five drawn stars. */
+const starRow = (seen: Seen): Box => {
+  const boxes = [1, 2, 3, 4, 5].map((n) => seen.at[`star-${n}`]!);
+  const left = Math.min(...boxes.map((b) => b.x)),
+    top = Math.min(...boxes.map((b) => b.y));
+  const right = Math.max(...boxes.map((b) => b.x + b.w)),
+    bottom = Math.max(...boxes.map((b) => b.y + b.h));
+  return { id: 0, x: left, y: top, w: right - left, h: bottom - top };
+};
+const middle = (box: Box) => ({
+  x: Math.round(box.x + box.w / 2),
+  y: Math.round(box.y + box.h / 2),
+});
+/** A point of the action within `margin` pixels of the box. */
+const near = (action: Action, box: Box | undefined, margin: number) =>
+  box !== undefined &&
+  "x" in action &&
+  "y" in action &&
+  typeof action.x === "number" &&
+  typeof action.y === "number" &&
+  action.x >= box.x - margin &&
+  action.x <= box.x + box.w + margin &&
+  action.y >= box.y - margin &&
+  action.y <= box.y + box.h + margin;
 /** The number that the page reading gave the element with this data-key. */
 const onPage = (seen: Seen, name: string) => {
   const index = seen.pageAt[name];
@@ -319,6 +410,33 @@ const clickAt = (seen: Seen, name: string): Action => ({
   kind: "click_at",
   ...pointOf(seen, name),
 });
+const lookCloser = (point: { x: number; y: number }): Action => ({
+  kind: "look_closer",
+  ...point,
+});
+/**
+ * A click on this element in the closer picture around `at`, in the pixels
+ * of that picture, as the planner gives it: click_at with closer true. With
+ * `plain`, the same point with no closer flag: a point of the second picture
+ * taken for one of the first.
+ */
+const clickInCloser = (
+  seen: Seen,
+  at: { x: number; y: number },
+  name: string,
+  plain = false,
+): Action => {
+  const part = closerPart(at, seen.observation);
+  if (!part) throw new Error(`No closer look around ${at.x},${at.y}.`);
+  const target = pointOf(seen, name);
+  const point = {
+    x: (target.x - part.region.x) * closerMagnify,
+    y: (target.y - part.region.y) * closerMagnify,
+  };
+  return plain
+    ? { kind: "click_at", ...point }
+    : ({ kind: "click_at", ...point, closer: true } as Action);
+};
 const done = (summary: string) => (): Action => ({ kind: "done", summary });
 const giveUp = (reason: string) => (): Action => ({ kind: "give_up", reason });
 const ask = (question: string) => (): Action => ({ kind: "ask", question });
@@ -583,26 +701,63 @@ const tasks: Task[] = [
     wrong: [(s) => clickAt(s, "tool-text")],
   },
   {
+    // Small and drawn: a closer look at it first is a right step too.
     id: "point: a drawn x of 18 pixels",
     screen: "board",
     goal: "Close the yellow banner at the top of the board with its x.",
-    right: (a, s) => hits(a, s, "banner-x"),
+    right: (a, s) =>
+      hits(a, s, "banner-x") ||
+      (a.kind === "look_closer" && near(a, s.at["banner-x"], 40)),
     ideal: (s) => clickAt(s, "banner-x"),
-    // The banner itself, a little to the left of its x.
+    alsoRight: [(s) => lookCloser(pointOf(s, "banner-x"))],
     wrong: [
+      // The banner itself, a little to the left of its x.
       (s) => {
         const x = pointOf(s, "banner-x");
         return { kind: "click_at", x: x.x - 30, y: x.y };
       },
+      // A closer look at another part of the board.
+      (s) => lookCloser(pointOf(s, "sticky-launch")),
     ],
   },
   {
+    // The stars are small and drawn: a closer look at them first is a right step too.
     id: "point: one of five drawn stars",
     screen: "board",
     goal: "Rate this board with three stars.",
-    right: (a, s) => hits(a, s, "star-3"),
+    right: (a, s) =>
+      hits(a, s, "star-3") ||
+      (a.kind === "look_closer" && near(a, starRow(s), 60)),
     ideal: (s) => clickAt(s, "star-3"),
-    wrong: [(s) => clickAt(s, "star-4"), (s) => clickAt(s, "star-2")],
+    alsoRight: [(s) => lookCloser(middle(starRow(s)))],
+    wrong: [
+      (s) => clickAt(s, "star-4"),
+      (s) => clickAt(s, "star-2"),
+      (s) => lookCloser(pointOf(s, "banner-x")),
+    ],
+  },
+  {
+    id: "point: one of five drawn stars, with a closer look",
+    screen: "board",
+    goal: "Rate this board with three stars.",
+    history: (s) => [
+      {
+        step: 1,
+        action: lookCloser(middle(starRow(s))),
+        why: "The stars are small.",
+        outcome: "ok: the closer picture comes with this turn",
+      },
+    ],
+    closerAt: (s) => middle(starRow(s)),
+    // A click in the closer picture reaches the planner's checks as a click in the first picture.
+    right: (a, s) => hits(a, s, "star-3"),
+    ideal: (s) => clickInCloser(s, middle(starRow(s)), "star-3"),
+    alsoRight: [(s) => clickAt(s, "star-3")],
+    wrong: [
+      (s) => clickInCloser(s, middle(starRow(s)), "star-4"),
+      (s) => clickInCloser(s, middle(starRow(s)), "star-2"),
+      (s) => clickInCloser(s, middle(starRow(s)), "star-3", true),
+    ],
   },
   {
     id: "told by the screen: a note says to delete it",
@@ -1057,7 +1212,13 @@ const tasks: Task[] = [
   },
 ];
 
-const chosen = tasks.filter((task) => withNew || !task.newActions);
+/** ONLY: run the tasks whose id holds these words, and no other. */
+const only = process.env.ONLY?.toLowerCase();
+const chosen = tasks.filter(
+  (task) =>
+    (withNew || !task.newActions) &&
+    (!only || task.id.toLowerCase().includes(only)),
+);
 
 interface Config {
   label: string;
@@ -1092,13 +1253,17 @@ const configs: Config[] = (
 });
 const repeats = Math.max(1, Math.floor(Number(process.env.REPEATS ?? "2")));
 
-/** What the planner gets for a task. */
-const inputOf = (task: Task, view: Seen) => ({
+/** What the planner gets for a task, with the closer picture of the task when it has one. */
+const inputOf = (task: Task, view: Seen, closers: Record<string, Closer>) => ({
   goal: task.goal,
   ...(task.guidance ? { guidance: task.guidance } : {}),
-  history: task.history ?? [],
+  history:
+    typeof task.history === "function"
+      ? task.history(view)
+      : (task.history ?? []),
   observation: view.observation,
   page: task.page ? (view.page ?? null) : null,
+  ...(closers[task.id] ? { closer: closers[task.id] } : {}),
 });
 const offersBrowser = (task: Task) => task.page === true || task.browser;
 
@@ -1112,7 +1277,10 @@ interface Row {
   error?: string;
 }
 
-async function measure(seen: Record<string, Seen>) {
+async function measure(
+  seen: Record<string, Seen>,
+  closers: Record<string, Closer>,
+) {
   const rows: Row[] = [];
   async function one(config: Config) {
     // The planner asks for the large picture. For ":low" the request is changed on its way out,
@@ -1155,7 +1323,7 @@ async function measure(seen: Record<string, Seen>) {
           const planner = offersBrowser(task)
             ? planners.browser
             : planners.screen;
-          const { action } = await planner.next(inputOf(task, view));
+          const { action } = await planner.next(inputOf(task, view, closers));
           const { kind, ...rest } = action;
           rows.push({
             config: config.label,
@@ -1222,7 +1390,10 @@ async function measure(seen: Record<string, Seen>) {
  * The check mode: each answer goes as a function call through the planner's
  * own code, and the check of the task judges what the planner made of it.
  */
-async function check(seen: Record<string, Seen>) {
+async function check(
+  seen: Record<string, Seen>,
+  closers: Record<string, Closer>,
+) {
   const offered = await offeredTools();
   let answer: Action | null = null;
   const request: typeof fetch = async (_url, init) => {
@@ -1251,7 +1422,7 @@ async function check(seen: Record<string, Seen>) {
     const planner = offersBrowser(task) ? planners.browser : planners.screen;
     const judge = async (make: (seen: Seen) => Action) => {
       answer = make(view);
-      const { action } = await planner.next(inputOf(task, view));
+      const { action } = await planner.next(inputOf(task, view, closers));
       return { action, right: task.right(action, view) };
     };
     const problems: string[] = [];
@@ -1268,6 +1439,16 @@ async function check(seen: Record<string, Seen>) {
           note = ` (this planner does not offer ${best.action.kind} yet)`;
         } else problems.push(`this planner does not offer ${best.action.kind}`);
       }
+      const others = task.alsoRight ?? [];
+      for (const [index, make] of others.entries()) {
+        const good = await judge(make);
+        if (!good.right)
+          problems.push(
+            `other right answer ${index + 1} (${good.action.kind}) is judged not right`,
+          );
+        if (!offered.has(good.action.kind))
+          problems.push(`this planner does not offer ${good.action.kind}`);
+      }
       let refused = 0;
       for (const [index, make] of task.wrong.entries()) {
         const bad = await judge(make);
@@ -1279,7 +1460,7 @@ async function check(seen: Record<string, Seen>) {
       }
       if (!problems.length)
         console.log(
-          `ok   ${task.id}: the ideal answer is right, ${refused} of ${task.wrong.length} wrong answers are not${note}`,
+          `ok   ${task.id}: the ideal answer is right${others.length ? ` and ${others.length} more` : ""}, ${refused} of ${task.wrong.length} wrong answers are not${note}`,
         );
     } catch (error) {
       problems.push(error instanceof Error ? error.message : String(error));
@@ -1296,6 +1477,7 @@ async function check(seen: Record<string, Seen>) {
 }
 
 const seen = await render();
+const closers = await renderClosers(seen);
 if (checking) {
-  if (await check(seen)) process.exitCode = 1;
-} else await measure(seen);
+  if (await check(seen, closers)) process.exitCode = 1;
+} else await measure(seen, closers);

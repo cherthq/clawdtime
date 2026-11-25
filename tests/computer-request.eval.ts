@@ -79,6 +79,7 @@ import {
 } from "./computer-eval-model.js";
 import {
   act,
+  inCloser,
   inRow,
   named,
   onPage,
@@ -243,6 +244,16 @@ const askPassword: Step = () =>
   act.ask(
     "Please type your password into the Password field on the Mac yourself, then say yes.",
   );
+/** A closer look at the middle of an element of the app. */
+const closerAt =
+  (selector: string): Step =>
+  async (v) =>
+    act.lookCloser(await pointIn(v, selector));
+/** A click on an element of the app, at its point in the closer picture of this turn. */
+const clickInCloserOn =
+  (selector: string): Step =>
+  async (v) =>
+    act.clickInCloser(inCloser(v, await pointIn(v, selector)));
 
 const requests: Request[] = [
   {
@@ -466,8 +477,21 @@ const requests: Request[] = [
         clickAtIn('.star[data-star="4"]'),
         doneStep("The board is rated with four stars."),
       ]),
+      ideal(
+        [
+          closerAt(".rating"),
+          clickInCloserOn('.star[data-star="4"]'),
+          doneStep("The board is rated with four stars."),
+        ],
+        "a closer look first",
+      ),
       wrong("the third star", [
         clickAtIn('.star[data-star="3"]'),
+        doneStep("The board is rated with four stars."),
+      ]),
+      wrong("the third star, in the closer picture", [
+        closerAt(".rating"),
+        clickInCloserOn('.star[data-star="3"]'),
         doneStep("The board is rated with four stars."),
       ]),
     ],

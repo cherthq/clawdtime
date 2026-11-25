@@ -3,10 +3,11 @@
  * that can be put in front of them.
  *
  * The hands look at a page in headless Chromium and click and type there, in
- * place of the Mac. The fault layer wraps them and changes nothing of the
- * product: a window that moves at the first looks and then settles, and a
- * screen that does not take some clicks. Nothing here touches the real
- * mouse, keyboard or screen.
+ * place of the Mac. A closer look (zoom) is a larger picture of one part of
+ * the page, as the panel takes it. The fault layer wraps them and changes
+ * nothing of the product: a window that moves at the first looks and then
+ * settles, and a screen that does not take some clicks. Nothing here
+ * touches the real mouse, keyboard or screen.
  */
 import type { Page } from "@playwright/test";
 import type {
@@ -134,7 +135,12 @@ export class PageHands implements Hands {
 
   async run(command: HandCommand): Promise<HandResult> {
     const seq = ++this.seq;
-    if (command.kind !== "observe" && command.kind !== "wait")
+    // A look, a wait and a closer look send nothing to the app.
+    if (
+      command.kind !== "observe" &&
+      command.kind !== "wait" &&
+      command.kind !== "zoom"
+    )
       this.sent.push(command);
     const page = this.desk.page();
     const at = (value: number) => value / toScreen;
@@ -148,6 +154,33 @@ export class PageHands implements Hands {
       case "wait":
         await page.waitForTimeout(Math.min(command.ms, 1500));
         return { seq, ok: true };
+      case "zoom": {
+        // A closer look, as the panel takes it: one part, scaled up to the asked pixels.
+        const x = at(command.x),
+          y = at(command.y),
+          w = at(command.w),
+          h = at(command.h);
+        const cdp = await page.context().newCDPSession(page);
+        try {
+          const shot = (await cdp.send("Page.captureScreenshot", {
+            format: "jpeg",
+            quality: 80,
+            clip: { x, y, width: w, height: h, scale: command.width / w },
+          })) as { data: string };
+          return {
+            seq,
+            ok: true,
+            observation: {
+              ...(await this.observe(false, false)),
+              image: shot.data,
+              imageWidth: command.width,
+              imageHeight: command.height,
+            },
+          };
+        } finally {
+          await cdp.detach();
+        }
+      }
       case "move":
         await page.mouse.move(at(command.x), at(command.y));
         return { seq, ok: true };
