@@ -1633,3 +1633,68 @@ function readPlainWords(text: string): WordKind {
   }
   return reread === "hold" ? "hold" : written;
 }
+
+// Words that hold back work that has not started yet. A new message is read
+// with them before it goes to the computer engine, and the request of the
+// worker before it counts as a yes ahead of time. Such words never start work
+// on the screen at once: "hang on, reply to Sam", "reply to Sam tomorrow",
+// "book the 3pm slot once I confirm". They are the hold, wait, doubt and
+// condition cues of the reader above, and words for a later time. A word in
+// quotes is what the person quotes, not what they ask.
+
+/** The hold, wait, doubt and condition cues of `deferOrDoubt` that hold back a start. */
+const startHoldCue =
+  /\b(?:wait|waiting|hold|holding|pause|paused|pausing|later|when|whenever|after|once|until|till|before|if|unless|maybe|perhaps|hang\s+on|give\s+me|one\s+sec(?:ond)?|a\s+sec(?:ond)?|a\s+moment|on\s+my\s+cue|not\s+yet|not\s+now|let\s+me|as\s+soon\s+as)\b|\bin\s+(?:\d+|[a-z]+(?:\s+[a-z]+)?)\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|moments?|bit|few|while)\b/;
+const weekday = "(?:mon|tues|wednes|thurs|fri|satur|sun)day";
+/** A later time for the work itself: "tomorrow", "tonight", "next week", "at 5pm". */
+const laterTime = new RegExp(
+  String.raw`\b(?:tomorrow|tmrw|tmr|tonight|tonite|later\s+today|this\s+(?:morning|afternoon|evening|weekend)|next\s+(?:week|month|year|weekend|${weekday})|(?:in|by)\s+the\s+(?:morning|afternoon|evening)|first\s+thing|end\s+of\s+(?:the\s+)?(?:day|week)|eod|on\s+${weekday}|at\s+(?:noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2}|\d{1,2}\s+o'?clock))\b`,
+  "g",
+);
+/** A time that names the thing, not when to work: "for tomorrow", "to Friday", "tomorrow's meeting". */
+const timeOfThing = /\b(?:for|to|from|of|through|thru)\s+$/;
+/** Fillers and polite leads before the first verb. */
+const startLead =
+  /^(?:(?:hey|hi|hello|yo|ok|okay|so|now|also|and|then|please|pls|plz|just|kindly|can\s+you|could\s+you|would\s+you|will\s+you|can\s+u|go\s+ahead\s+and|i\s+(?:want|need)\s+you\s+to|help\s+me(?:\s+to)?)[,\s]+)*/;
+/** A verb that makes or moves something with a date: the time is that thing's. */
+const datedVerb =
+  /^(?:schedule|reschedule|book|reserve|set(?:\s+up)?|add|create|make|plan|arrange|move|put|block|invite|accept|decline|rsvp|cancel)\b/;
+/** "Pause the music", "hold the shift key": the verb of the work, not a hold. */
+const holdAsVerb =
+  /^(?:pause|hold)\s+(?=(?:the|my|this|that|a|an|all|it|playback|music|video|song)\b)/;
+/** Words that only join two parts of the work: "check my mail, after that reply to Sam". */
+const sequenceJoiner =
+  /(?<=\S)\s*,?\s+(?:and\s+)?(?:after\s+that|afterwards|once\s+(?:that|it|this)(?:'s|\s+is)\s+done|when\s+(?:that|it|this)(?:'s|\s+is)\s+done)\s*,?\s+(?=\S)/g;
+
+function holdsStart(lower: string): boolean {
+  const words = stripUrls(maskQuoted(lower))
+    .replace(sequenceJoiner, ", then ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!words) return false;
+  const opening = words.replace(startLead, "");
+  if (startHoldCue.test(opening.replace(holdAsVerb, "do "))) return true;
+  if (datedVerb.test(opening)) return false;
+  for (const found of words.matchAll(laterTime)) {
+    const at = found.index ?? 0;
+    const after = words.slice(at + found[0].length);
+    if (timeOfThing.test(words.slice(0, at)) || /^'s\b/.test(after)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * True when the words hold back work that has not started: a hold or a wait
+ * ("hang on", "pause, then", "but wait for me"), a doubt ("maybe"), a
+ * condition ("once I confirm", "if it is cheap"), or a later time ("tomorrow",
+ * "after the meeting"). It reads the words as written and as the casual
+ * reader reads them, and an emoji of doubt or delay holds too. It changes
+ * nothing of `readWords`.
+ */
+export function defersWork(text: string): boolean {
+  const { lower } = normalize(text);
+  if (!lower) return false;
+  if (holdEmoji.test(text)) return true;
+  return holdsStart(lower) || holdsStart(casualWords(text).toLowerCase());
+}

@@ -31,6 +31,7 @@ import {
 } from "../computer/navigation.js";
 import {
   asksWhatItCanDo,
+  defersWork,
   latinLookalikes,
   readWords,
   spellStopWords,
@@ -2137,7 +2138,7 @@ const nextStepOf = (text: string): string | null => {
     )
   )
     return null;
-  return roadOf(step).kind === "engine" ? step : null;
+  return roadOf(step).kind === "engine" && !defersWork(step) ? step : null;
 };
 
 /** Added to the instructions only where the view of a call can change. */
@@ -9678,7 +9679,11 @@ export class Supervisor {
       // Words with the name of a coding agent can be for a session of it:
       // the readers of agents and the model place them.
       mentionsCodingAgent(words) ||
-      this.forSession(words)
+      this.forSession(words) ||
+      // A hold, a wait, a doubt, a condition or a later time: the work does
+      // not start now ("hang on, reply to Sam", "reply to Sam tomorrow",
+      // "book the 3pm slot once I confirm"). The model reads it.
+      defersWork(words)
     )
       return null;
     const road = roadOf(words);
@@ -9745,9 +9750,19 @@ export class Supervisor {
     if (task && !taskIsOver(task) && (task.canAnswer || task.canAccept))
       return null;
     const road = roadOf(clean(spoken, 2000));
-    if (road.kind === "both") return this.bothRoads(turn, road);
+    // Screen work that the words hold back, put off or make hang on
+    // something is no job, and the code starts no screen work for it now.
+    const held =
+      road.kind !== "job" &&
+      road.kind !== "answer" &&
+      defersWork(clean(spoken, 2000));
+    if (held && picked === "job" && !this.computerIsOff()) return heldAnswer;
+    // With computer use off, both roads start no screen work: the screen
+    // part gets the sentence that turns computer use on.
+    if (road.kind === "both" && (!held || this.computerIsOff()))
+      return this.bothRoads(turn, road);
     if (picked === "job" && road.kind === "engine") {
-      if (this.ownEngineFree())
+      if (this.ownEngineFree() && !held)
         return this.delegate(turn, spoken, true, { kind: "none" });
       // The worker has a task that is not over: its own gates decide.
       if (this.ownEngineOn()) return this.delegate(turn, spoken);
@@ -10118,7 +10133,8 @@ export class Supervisor {
         // the browser, and the old tool stays for when it is off.
         if (this.ownEngineOn())
           return this.ownEngineFree() &&
-            roadOf(clean(spoken, 2000)).kind === "engine"
+            roadOf(clean(spoken, 2000)).kind === "engine" &&
+            !defersWork(clean(spoken, 2000))
             ? this.delegate(turn, spoken, true, { kind: "none" })
             : this.delegate(turn, spoken);
         const key = `browse:${action}:${String(args.tab ?? "")}`;
@@ -10151,7 +10167,8 @@ export class Supervisor {
         // The engine reads the screen where ClawdTime's own worker is on.
         if (this.ownEngineOn())
           return this.ownEngineFree() &&
-            roadOf(clean(spoken, 2000)).kind === "engine"
+            roadOf(clean(spoken, 2000)).kind === "engine" &&
+            !defersWork(clean(spoken, 2000))
             ? this.delegate(turn, spoken, true, { kind: "none" })
             : this.delegate(turn, spoken);
         const before = turn.done.get("look");

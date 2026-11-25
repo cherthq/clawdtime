@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  defersWork,
   readWords,
   readWordsAsWritten,
   type WordKind,
@@ -486,5 +487,49 @@ describe("readWords", () => {
       }
     }
     expect(checked).toBeGreaterThan(1500);
+  });
+});
+
+describe("defersWork", () => {
+  it.each([
+    "hang on, reply to Sam",
+    "hold on and reply to Sam",
+    "pause, then reply to Sam",
+    "reply to Sam but wait for me",
+    "Reply to Sam tomorrow",
+    "reply to Sam after the meeting",
+    "Book the 3pm slot once I confirm",
+    "send the report to Sam tonight",
+    "post it next week",
+    "reply to Sam at 5pm",
+    "maybe reply to Sam",
+    "reply to Sam if he asks again",
+    "email Sam in 10 minutes",
+    "reply to Sam on Friday",
+    "reply to Sam \u23f3",
+  ])("holds back the start of %j", (words) => {
+    expect(defersWork(words)).toBe(true);
+  });
+
+  it.each([
+    "reply to Sam on Slack",
+    "book the 3pm slot",
+    "schedule a meeting with Sam tomorrow at 3",
+    "reschedule my 2pm with Jane to Friday",
+    "set an alarm for 7am",
+    "text Sam that I'm running late",
+    "check my calendar for tomorrow",
+    "open tomorrow's agenda in Calendar",
+    "pause the music on Spotify",
+    "check my email, after that reply to Sam",
+    'type "wait for me" in the message box',
+    "close the Untitled document in TextEdit without saving it, then quit TextEdit",
+  ])("does not hold back %j", (words) => {
+    expect(defersWork(words)).toBe(false);
+  });
+
+  it("reads no order less strictly than before", () => {
+    for (const words of ["click Send", "scroll down", "press return"])
+      expect(readWords(words)).toBe("order");
   });
 });

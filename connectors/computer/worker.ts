@@ -96,7 +96,7 @@ import {
   type JournalRequest,
   type RequestState,
 } from "./journal.js";
-import { casualWords, readWords } from "./orders.js";
+import { casualWords, defersWork, readWords } from "./orders.js";
 import { HandsTimeout } from "./panel-hands.js";
 import {
   activationRefusal,
@@ -1598,8 +1598,14 @@ export class ComputerWorker implements DesktopExecutorPort {
    * words can mean "not that one" in many ways, and no pattern knows them
    * all. So after the first of them a close asks again, whatever they say.
    */
+  /**
+   * The request as the checks read it, to see what it asked for already. It
+   * says no yes ahead of time when the person said more since, or when its
+   * own words hold the work back, put it off or make it hang on something
+   * ("hang on, reply to Sam", "reply to Sam tomorrow").
+   */
   private spoken(run: Run) {
-    return run.guidance.length ? "" : run.goal;
+    return run.guidance.length || defersWork(run.goal) ? "" : run.goal;
   }
   /**
    * True when the person said more since the planner chose the action that

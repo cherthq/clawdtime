@@ -1053,6 +1053,9 @@ How the rows read a name:
   shows who a message goes to ("To: Jane"), each of them must be named in the
   request. Only the request itself counts, and only until you say more. After
   your first added words such an action asks again, whatever the words say.
+  A request that holds the work back, puts it off or makes it hang on
+  something ("hang on, reply to Sam", "reply to Sam tomorrow", "reply to Sam
+  but wait for me") says no yes ahead of time: every action of the table asks.
 - **A text field.** A click that only gives a text field the focus asks
   nothing.
 - **A point or an icon.** For a point with no named element, for a control

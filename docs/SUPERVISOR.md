@@ -800,6 +800,16 @@ How the code reads a message:
   page: "did Sam reply on Slack?", "any new emails?". A question about whether
   something is open or done, about code, or about how to do something is an
   answer.
+- Words that hold the work back never go to the engine by the code's own
+  road: a hold or a wait ("hang on, reply to Sam", "pause, then reply to
+  Sam", "reply to Sam but wait for me"), a doubt ("maybe"), a condition ("book
+  the 3pm slot once I confirm", "if he asks") or a later time ("reply to Sam
+  tomorrow", "after the meeting", "at 5pm"). The language model reads them.
+  They stay screen work, so they never become a job, and the worker asks
+  before every action of its ask table for them. A time of the thing itself
+  does not hold: "schedule a meeting with Sam tomorrow at 3", "check my
+  calendar for tomorrow". `defersWork` in `connectors/computer/orders.ts`
+  reads these words.
 - An answer is no refusal. The language model reads the message with the tools
   of the turn, and picks one.
 

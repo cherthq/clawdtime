@@ -452,6 +452,30 @@ describe("with ClawdTime's own computer engine on", () => {
   });
 });
 
+describe("words that hold the work back, with the engine on and free", () => {
+  const held = [
+    "hang on, reply to Sam",
+    "Reply to Sam tomorrow",
+    "reply to Sam after the meeting",
+    "Book the 3pm slot once I confirm",
+    "check my email, then reply to Sam tonight",
+  ];
+  it.each(held)(
+    "starts no job and no screen work for %j when the model would start a job",
+    async (words) => {
+      const f = mac();
+      const run = scripted([[call("start_job")], "Okay."]);
+      const said = await new Supervisor(f.world, run.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(f.events).toEqual([]);
+      expect(said).not.toBe(startedText);
+    },
+  );
+});
+
 describe("with computer use off", () => {
   const screenWork = table
     .filter(([, road]) => road === "engine")
