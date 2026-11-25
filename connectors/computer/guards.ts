@@ -184,7 +184,7 @@ export const askPolicy = {
     reason: "What it removes is gone for good.",
   },
   unsaved: {
-    asks: "Losing changes that are not saved: Don't Save, Discard, Revert, a button of a sheet that asks to save (also its Delete for a new document that was never saved), and a quit or a close while the window shows unsaved work.",
+    asks: "Losing changes that are not saved: Don't Save, Discard, Revert, a button of a sheet that asks to save (also its Delete for a new document that was never saved), a quit or a close while the window shows unsaved work, a force quit of an app, and a stop of a process that is no app.",
     unless:
       "The request asks to lose the changes: without saving, discard, throw away, revert.",
     reason: "Changes that are not saved are lost.",
@@ -513,8 +513,8 @@ function requestHolds(goal: string, words: RegExp) {
     if (!denial.test(said.slice(0, found.index))) return true;
   return false;
 }
-/** The request asks to lose the changes that are not saved. */
-const asksToLose = (goal: string) =>
+/** The request asks to lose the changes that are not saved. The chat's force quit reads it too. */
+export const asksToLose = (goal: string) =>
   /\b(?:without saving|don't save|do not save)\b/.test(plain(goal)) ||
   requestHolds(
     goal,
