@@ -1130,8 +1130,10 @@ so does a person who watches the shared screen on a phone.
 - **The same place.** When the cursor already points at the target (the next
   key in the same field, or more text in it), it does not glide. It waits
   0.05 seconds, one frame of a call, for a new label, and not at all when the
-  label is the same. After the glide the real pointer of the Mac moves there
-  in 0.05 to 0.12 seconds, before a click, a scroll or a drag.
+  label is the same. After the glide the real pointer of the Mac travels
+  there too, as a hand moves it: on a slight curve, in 0.15 to 0.24 seconds
+  (0.18 to 0.22 for a usual way), so you see it go, before a click, a scroll
+  or a drag. Its events carry a mark, so the watch never takes them for yours.
 - **The ring in motion.** While the cursor is out, the colors of the ring turn
   slowly, one turn in five seconds. On its way the ring is open and light. At
   the place it closes in and is solid. At a click the ring gives way and comes

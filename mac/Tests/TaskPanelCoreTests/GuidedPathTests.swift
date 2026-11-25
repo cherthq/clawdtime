@@ -78,24 +78,28 @@ final class GuidedPathTests: XCTestCase {
     XCTAssertEqual(GuidedPath(from: .zero, to: CGPoint(x: 9, y: 9)).point(at: .nan), CGPoint(x: 9, y: 9))
   }
 
-  func testTheRealPointerFollowsAShortStraightWay() {
+  func testTheRealPointerTravelsAShortCurvedWayThatTheEyeSees() {
     let start = CGPoint(x: 100, y: 100), target = CGPoint(x: 900, y: 500)
     let length = hypot(800.0, 400.0)
-    let path = GuidedPath(from: start, to: target, duration: GuidedPath.moveDuration(length: length), arc: 0)
+    let path = GuidedPath(from: start, to: target, duration: GuidedPath.moveDuration(length: length), arc: GuidedPath.moveArc)
     let points = path.points(every: 1.0 / 120)
     XCTAssertEqual(points.last, target)
-    XCTAssertGreaterThan(points.count, 5); XCTAssertLessThan(points.count, 30)
-    var before = 0.0
+    // At 120 events a second the way has enough steps to be seen, and not so many that it drags.
+    XCTAssertGreaterThan(points.count, 18); XCTAssertLessThan(points.count, 32)
+    var before = 0.0, widest = 0.0
     for point in points {
       let now = split(point, path)
-      XCTAssertEqual(now.across, 0, accuracy: 0.000_001)
+      widest = max(widest, abs(now.across))
       XCTAssertGreaterThanOrEqual(now.along, before); XCTAssertLessThanOrEqual(now.along, length + 0.000_001)
       before = now.along
     }
-    // Short, and a little longer for a long way. A drag is slow enough for an app to follow.
-    XCTAssertEqual(GuidedPath.moveDuration(length: 0), 0.05)
-    XCTAssertEqual(GuidedPath.moveDuration(length: 100_000), 0.12)
-    XCTAssertEqual(GuidedPath.moveDuration(length: 400), 0.10, accuracy: 0.000_001)
+    // A slight bend, as a hand makes, and never a wide swing.
+    XCTAssertGreaterThan(widest, 5); XCTAssertLessThanOrEqual(widest, GuidedPath.maxBend + 0.000_001)
+    // Seen in three frames of a call at least, a little longer for a long way, and short.
+    XCTAssertEqual(GuidedPath.moveDuration(length: 0), 0.15)
+    XCTAssertEqual(GuidedPath.moveDuration(length: 100_000), 0.24)
+    XCTAssertEqual(GuidedPath.moveDuration(length: 300), 0.20, accuracy: 0.000_001)
+    XCTAssertGreaterThanOrEqual(GuidedPath.moveDuration(length: 0), 3.0 / 20)
     XCTAssertLessThan(GuidedPath.moveDuration(length: 200), GuidedPath.moveDuration(length: 600))
     XCTAssertEqual(GuidedPath.dragDuration(length: 0), 0.25); XCTAssertEqual(GuidedPath.dragDuration(length: 100_000), 0.60)
     XCTAssertEqual(GuidedPath(from: start, to: target, duration: 0).points(every: 0.01), [target])

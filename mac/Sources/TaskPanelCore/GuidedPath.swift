@@ -51,9 +51,13 @@ public struct GuidedPath: Equatable, Sendable {
     let count = max(1, Int(min(600, (duration / interval).rounded(.up))))
     return (1...count).map { $0 == count ? target : point(at: duration * Double($0) / Double(count)) }
   }
-  /// Seconds for the real pointer to cross `length` points: short, and a little longer for a long way.
-  /// The guided cursor is there already, so the eye does not follow this one.
-  public static func moveDuration(length: Double) -> Double { min(0.12, 0.05 + max(0, length) / 8000) }
+  /// Seconds for the real pointer to cross `length` points, as a hand moves it: long enough that the eye
+  /// sees the pointer of the Mac travel, in three frames of a call's picture at least, and still short. A
+  /// way of 150 to 400 points takes 0.18 to 0.22 seconds, a long way 0.24 at most.
+  public static func moveDuration(length: Double) -> Double { min(0.24, 0.15 + max(0, length) / 6000) }
+  /// The real pointer bends off the straight line by this share of its way, as a hand does: a little less
+  /// than the guided cursor, so it does not swing wide.
+  public static let moveArc = 0.06
   /// Seconds for a drag: slow enough that an app follows it.
   public static func dragDuration(length: Double) -> Double { min(0.60, 0.25 + max(0, length) / 3000) }
   /// Seconds for the guided cursor to glide `length` points. A glide is quick, and it still reads as a
