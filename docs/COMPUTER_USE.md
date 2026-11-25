@@ -1000,19 +1000,19 @@ costs money, data or trust. It does everything else with no question. One
 table in `guards.ts`, `askPolicy`, holds the rows, and every question comes
 from one of them.
 
-| Row      | Asks before                                                                                                                                                                                                                                                                                              | No question when your request                                                          |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| pay      | Buy, Pay, Place order, Subscribe, Donate, Send money, Transfer, Book, Rent, a button that is only a price, and a Confirm or a Submit while the screen shows a total                                                                                                                                      | (always asks)                                                                          |
-| loss     | Delete forever, Empty Trash, Erase, Delete account, Uninstall, Terminate, Factory reset, Revoke, Overwrite, Shut down, a log out of the Mac, a Delete, Remove or OK where the screen says that it cannot be undone, a Replace of a file that exists, and a terminal command that deletes for good (`rm`) | (always asks)                                                                          |
-| unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save, and a quit or a close while the window shows unsaved changes ("Report (Edited)")                                                                                                                                        | asks to lose the changes: "without saving", "discard", "throw away"                    |
-| send     | Send, Reply, Post, Comment, Publish, Submit, Share, Return in a messages or mail app, the submit of a message box, a terminal command that publishes (`git push`), and an address with a long part that you did not write                                                                                | asks to send, reply, post or share. A long part of an address always asks              |
-| public   | Like, Follow, Repost, Upvote                                                                                                                                                                                                                                                                             | asks to like, follow or repost                                                         |
-| account  | a change of a password, two-factor, recovery, privacy or visibility, a switch of the security and privacy settings of macOS, and a terminal command that runs as an administrator (`sudo`), changes the security of the Mac or runs code from the web                                                    | (always asks)                                                                          |
-| grant    | Allow, OK, Approve or Trust in a permission dialog of macOS, of a site or of ClawdTime, and a name that grants access ("Grant access", "Open Anyway")                                                                                                                                                    | (always asks)                                                                          |
-| terms    | Agree or Accept for terms that bind you                                                                                                                                                                                                                                                                  | (always asks). A cookie banner is no such terms                                        |
-| terminal | typing or a key in a terminal, a paste into one, and a drop onto one                                                                                                                                                                                                                                     | asks for terminal work: a command, a script, a build, a test, git. A paste asks always |
-| trash    | a drag that drops onto the Trash                                                                                                                                                                                                                                                                         | (always asks)                                                                          |
-| secret   | a drag that starts in a password field                                                                                                                                                                                                                                                                   | (always asks)                                                                          |
+| Row      | Asks before                                                                                                                                                                                                                                                                                                                                                                                                                     | No question when your request                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| pay      | Buy, Pay, Place order, Subscribe, Donate, Send money, Book, Rent, a button that is only a price, a Confirm or a Submit while the screen shows a total, a Continue where the screen says that it charges ("your card will be charged"), a Transfer of an amount, and the same names in other languages ("Jetzt kaufen", "Pagar", "Payer")                                                                                        | (always asks)                                                                                            |
+| loss     | Delete forever, Empty Trash, Erase, Delete account, Uninstall, Terminate, Factory reset, Revoke, Overwrite, Shut down, a log out of the Mac, a Delete, Remove or OK where the screen says that it cannot be undone, a Replace of a file that exists, a terminal command that deletes for good (`rm`, `find -delete`, a delete in a script, a move to `/dev/null`), and a terminal move of files that your request does not name | (always asks)                                                                                            |
+| unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save, and a quit or a close while the window shows unsaved changes ("Report (Edited)")                                                                                                                                                                                                                                                               | asks to lose the changes: "without saving", "discard", "throw away"                                      |
+| send     | Send, Reply, Reply All, Forward, Post, Comment, Publish, Submit, Share, Return in a messages or mail app, the submit of a message box, a terminal command that publishes (`git push`), and an address with a long part that you did not write                                                                                                                                                                                   | asks for a send of that kind, to the people that the screen shows. A long part of an address always asks |
+| public   | Like, Follow, Repost, Upvote                                                                                                                                                                                                                                                                                                                                                                                                    | asks to like, follow or repost                                                                           |
+| account  | a change of a password, two-factor, recovery, privacy or visibility, a switch of the security and privacy settings of macOS, and a terminal command that runs as an administrator (`sudo`), changes the security of the Mac or runs code from the web                                                                                                                                                                           | (always asks)                                                                                            |
+| grant    | Allow, OK, Approve or Trust in a permission dialog of macOS, of a site, of a sign-in that asks for access to your account, or of ClawdTime, and a name that grants access ("Grant access", "Open Anyway")                                                                                                                                                                                                                       | (always asks)                                                                                            |
+| terms    | Agree or Accept for terms that bind you                                                                                                                                                                                                                                                                                                                                                                                         | (always asks). A cookie banner with no words of binding terms is no such terms                           |
+| terminal | typing or a key in a terminal, a paste into one, and a drop onto one                                                                                                                                                                                                                                                                                                                                                            | asks for terminal work: a command, a script, a build, a test, git. A paste asks always                   |
+| trash    | a drag that drops onto the Trash                                                                                                                                                                                                                                                                                                                                                                                                | (always asks)                                                                                            |
+| secret   | a drag that starts in a password field                                                                                                                                                                                                                                                                                                                                                                                          | (always asks)                                                                                            |
 
 These need no yes: opening and quitting an app, closing a window, a tab, a
 banner, a sheet or a dialog that loses nothing, an OK or an Approve of a dialog
@@ -1027,10 +1027,16 @@ How the rows read a name:
 - **Whole words.** "Sender", "Postpone" and "Formatting" ask nothing. A word
   of a send counts at the start of a name: "Send" and "Send now" ask,
   "Resend code" and "Send to Back" do not.
-- **An ellipsis.** A name that ends with one ("Empty Trash...") only opens a
-  dialog. It asks nothing: the button of the dialog asks. The Restart, Shut
-  Down and Log Out items of the Apple menu ask: their dialog acts by itself
-  after a minute.
+- **An ellipsis.** A menu item of macOS that ends with one ("Empty
+  Trash...") only opens a dialog. It asks nothing: the button of the dialog
+  asks. The Restart, Shut Down and Log Out items of the Apple menu ask: their
+  dialog acts by itself after a minute. A web page writes its labels as it
+  likes, so on a page, and on any button, an ellipsis lifts nothing: "Place
+  order..." asks.
+- **Other languages.** The names of a payment, a delete and a send in the
+  languages that shops and apps use most ask too: "Jetzt kaufen",
+  "Zahlungspflichtig bestellen", "Comprar ahora", "Endgültig löschen",
+  "Senden".
 - **The screen around it.** A total on the screen makes a Confirm a payment.
   "You can't undo this action" makes a Delete, a Remove or an OK a loss. "Do
   you want to save" makes every button of the sheet but Save a loss of
@@ -1039,13 +1045,23 @@ How the rows read a name:
   less.
 - **Your request.** It asks for a send when one of its parts starts with a
   verb of a send: "Reply to Sam", "read it and reply". A noun is no verb
-  ("read my messages"), and a denial asks for nothing ("do not reply"). Only
-  the request itself counts, and only until you say more. After your first
-  added words such an action asks again, whatever the words say.
+  ("read my messages"), and a denial asks for nothing ("do not reply"). Words
+  that turn to ClawdTime ask for no send: "text me when it is done", "message
+  me the total", "answer the question". A verb lifts only a send of its own
+  kind: "Reply to Sam" lifts Reply and Send, not Reply All, Forward or Share,
+  which need their own verb. When the request names a person and the screen
+  shows who a message goes to ("To: Jane"), each of them must be named in the
+  request. Only the request itself counts, and only until you say more. After
+  your first added words such an action asks again, whatever the words say.
 - **A text field.** A click that only gives a text field the focus asks
   nothing.
-- **A point.** For a point with no named element, the planner's own reason is
+- **A point or an icon.** For a point with no named element, for a control
+  with no name (an icon chosen by its number, on the screen or on the page),
+  and for a large element that only holds others, the planner's own reason is
   read for the same words. It can add a question. It never removes one.
+- **A terminal line.** The worker cannot see what is typed on the line
+  already, so text that starts with the end of a command that deletes or
+  moves is read as that command too: "r", then "m -rf ~", asks.
 - **Return and Space.** They ask while a button, a menu item or the element
   with the focus could take the key and would ask, unless a text field has the
   focus. In a page Enter and Space ask while any control of the page would

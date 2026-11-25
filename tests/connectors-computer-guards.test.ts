@@ -678,19 +678,22 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
       ])
         expect(clicked("Reply", [], { goal }), goal).toBe("send");
     });
-    it("asks nothing for a name that only holds such a word, or opens a dialog first", () => {
+    it("asks nothing for a name that only holds such a word, or a menu item that opens a dialog first", () => {
       for (const name of [
         "Sender",
         "Postpone",
         "Shared",
         "Comments",
         "Replies",
-        "Share…",
+        { role: "AXMenuItem", title: "Share…" },
         "Resend code",
         "Send to Back",
         "Send Backward",
       ])
-        expect(clicked(name), name).toBeNull();
+        expect(clicked(name), JSON.stringify(name)).toBeNull();
+      // Only a menu item of macOS opens a dialog first: a button with an
+      // ellipsis can be a label of a web page, and asks.
+      expect(clicked("Share…")).toBe("send");
     });
     it("asks before a key that sends, unless the request asks to send", () => {
       const messages = observation([], {
