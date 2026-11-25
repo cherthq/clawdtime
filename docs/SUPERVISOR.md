@@ -799,13 +799,13 @@ How the code reads a message:
   component" is code. A part whose thing the code cannot place makes the whole
   message one for the language model.
 - A polite request that names its thing is a request, and it starts now:
-  "can you search running shoes?", "could you find barista courses in Delhi",
+  "can you search running shoes?", "could you find yoga studios in Austin",
   "can u look up flights to Goa". Only a question about ClawdTime itself with
   a general thing is an answer: "can you click buttons on my screen?", "can
   you use my mac?", "can you search the web?".
 - A search with no site and no app named goes to the engine as "Search the
   web for X in a new tab of Google Chrome": "search running shoes", "find
-  barista courses in Delhi", "what's the price of X", also with a typo
+  yoga studios in Austin", "what's the price of X", also with a typo
   ("srch running shoes"). With a site or an app named ("on Acme", "in
   Chrome"), the engine gets your words whole. Your own things (mail, files,
   "my ..."), the screen and code are no search of the web.
@@ -1199,8 +1199,7 @@ to a private folder, read once and removed. Nothing of it is kept.
   computer engine's stop.
 - While a screen task is not over (running, paused, waiting, stopping), the
   task goes on by itself, and every message that is not a stop is guidance
-  for it. Orders, corrections, remarks and waits ("Bro, open flipkart.com, not
-  instagram.com.", "no, the other one", "that's wrong, go back", "hold on")
+  for it. Orders, corrections, remarks and waits ("Open shop.example, not social.example.", "no, the other one", "that's wrong, go back", "hold on")
   go straight to the engine in your own words, with no offer and no question
   back. The engine reads them (see Words while a task runs in
   COMPUTER_USE.md). A question gets its answer from the state of the task, and

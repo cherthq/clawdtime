@@ -316,7 +316,7 @@ export const webSearchGoal = (query: string) =>
 /**
  * A search of the web: a search, a find or a look up of something that is
  * no thing of the person's, of their Mac or of code ("search running
- * shoes", "find barista courses in Delhi", "look up flights to Goa"), or a
+ * shoes", "find yoga studios in Austin", "look up flights to Goa"), or a
  * question about a price ("what's the price of X"). With no site and no app
  * named, the engine gets "search the web for X" in a new tab of the
  * person's browser as its goal. With one named ("on Acme", "in Chrome"),
@@ -382,7 +382,7 @@ function partOf(clause: string): Part {
   if (placed) return partOf(`${placed[2]} ${placed[1]}`);
   if (namesCodingAgent(text) || terminalWork(text)) return "code";
   if (describesSoftware.test(text) || isAStatement.test(text)) return null;
-  // A search of the web: "search running shoes", "find barista courses in Delhi".
+  // A search of the web: "search running shoes", "find yoga studios in Austin".
   if (webSearch(text) !== null) return "screen";
   const { verb, rest } = verbOf(text);
   const thing = lastWords(
@@ -505,8 +505,8 @@ const asksSomething = (text: string, polite: boolean) =>
  * no target: "can you click buttons on my screen?", "can you use my
  * browser?", "can you search the web?", "what can you do?". It asks for
  * nothing to be done. A polite request with a thing named is work: "can
- * you search running shoes?", "could you find barista courses in
- * Delhi", "are you able to book the 3pm slot?".
+ * you search running shoes?", "could you find yoga studios in
+ * Austin", "are you able to book the 3pm slot?".
  */
 const asksWhatItCan = (original: string, body: string, polite: boolean) => {
   if (

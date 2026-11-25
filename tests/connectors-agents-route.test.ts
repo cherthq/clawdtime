@@ -484,7 +484,7 @@ describe("words that hold the work back, with the engine on and free", () => {
 
 /**
  * A clear request starts now, on the Mac. The owner typed "Can you search
- * iPhone 17 Pro Max?" and got "No active job for searching iPhone 17 Pro
+ * Aero 7 headphones?" and got "No active job for searching Aero 7 Pro
  * Max yet. I can start that search in Google Chrome for you now. Should I?"
  * (26 Nov 2026). Each row: the message, and what ClawdTime does with it. A
  * goal is what the engine gets now, "own" is the engine with the person's
@@ -496,10 +496,10 @@ const search = (query: string) =>
 type Effect = { goal: string } | "own" | "job" | "answer";
 const actNow: [string, Effect][] = [
   // The owner's own examples.
-  ["Can you search iPhone 17 Pro Max?", { goal: search("iPhone 17 Pro Max") }],
+  ["Can you search Aero 7 headphones?", { goal: search("Aero 7 headphones") }],
   [
-    "could you find barista courses in Delhi",
-    { goal: search("barista courses in Delhi") },
+    "could you find yoga studios in Austin",
+    { goal: search("yoga studios in Austin") },
   ],
   ["can u look up flights to Goa", { goal: search("flights to Goa") }],
   ["search for running shoes", { goal: search("running shoes") }],
@@ -511,38 +511,38 @@ const actNow: [string, Effect][] = [
   ["check my Gmail", "own"],
   ["what's the price of AirPods Pro on Amazon", "own"],
   // Polite, casual and typo forms.
-  ["can you search iPhone 17 Pro Max", { goal: search("iPhone 17 Pro Max") }],
-  ["search iPhone 17 Pro Max?", { goal: search("iPhone 17 Pro Max") }],
-  ["pls search iphone 17 pro max", { goal: search("iphone 17 pro max") }],
-  ["cn u srch iphone 17 pro max?", { goal: search("iphone 17 pro max") }],
-  ["can you serch iPhone 17 Pro Max?", { goal: search("iPhone 17 Pro Max") }],
+  ["can you search Aero 7 headphones", { goal: search("Aero 7 headphones") }],
+  ["search Aero 7 headphones?", { goal: search("Aero 7 headphones") }],
+  ["pls search aero 7 headphones", { goal: search("aero 7 headphones") }],
+  ["cn u srch aero 7 headphones?", { goal: search("aero 7 headphones") }],
+  ["can you serch Aero 7 headphones?", { goal: search("Aero 7 headphones") }],
   ["srch running shoes", { goal: search("running shoes") }],
   [
     "cud u find me cheap flights to goa?",
     { goal: search("cheap flights to goa") },
   ],
   [
-    "hey could you please look up barista courses in Delhi?",
-    { goal: search("barista courses in Delhi") },
+    "hey could you please look up yoga studios in Austin?",
+    { goal: search("yoga studios in Austin") },
   ],
   [
-    "can you actually find barista courses in Delhi?",
-    { goal: search("barista courses in Delhi") },
+    "can you actually find yoga studios in Austin?",
+    { goal: search("yoga studios in Austin") },
   ],
   [
-    "are you able to search for barista courses in Delhi?",
-    { goal: search("barista courses in Delhi") },
+    "are you able to search for yoga studios in Austin?",
+    { goal: search("yoga studios in Austin") },
   ],
   [
-    "can you search the web for iPhone 17 Pro Max?",
-    { goal: search("iPhone 17 Pro Max") },
+    "can you search the web for Aero 7 headphones?",
+    { goal: search("Aero 7 headphones") },
   ],
-  ["search up iphone 17 pro max", { goal: search("iphone 17 pro max") }],
+  ["search up aero 7 headphones", { goal: search("aero 7 headphones") }],
   ["look for a cheap hotel in Goa", { goal: search("a cheap hotel in Goa") }],
-  ["search iPhone 17 Pro Max. Thanks", { goal: search("iPhone 17 Pro Max") }],
+  ["search Aero 7 headphones. Thanks", { goal: search("Aero 7 headphones") }],
   [
-    "what's the price of the iPhone 17 Pro Max?",
-    { goal: search("the price of iPhone 17 Pro Max") },
+    "what's the price of the Aero 7 headphones?",
+    { goal: search("the price of Aero 7 headphones") },
   ],
   [
     "how much does a standing desk cost?",
@@ -550,12 +550,12 @@ const actNow: [string, Effect][] = [
   ],
   // A site or an app named: the person's own words.
   ["whats the price of airpods on amazon", "own"],
-  ["search iPhone 17 Pro Max on Amazon", "own"],
-  ["search iPhone 17 Pro Max in Chrome", "own"],
+  ["search Aero 7 headphones on Amazon", "own"],
+  ["search Aero 7 headphones in Chrome", "own"],
   ["search Google for flights to Tokyo", "own"],
   ["google the weather in Paris", "own"],
   ["could you check my Gmail?", "own"],
-  ["find barista courses in Delhi and book one", "own"],
+  ["find yoga studios in Austin and book one", "own"],
   // Things of the person or of code: no search of the web.
   ["search my email for the invoice", "own"],
   ["find the invite from Jane", "own"],
@@ -574,19 +574,19 @@ const actNow: [string, Effect][] = [
   // Stops and holds.
   ["stop", "answer"],
   ["stop the search", "answer"],
-  ["hold on, search iPhone 17 Pro Max", "answer"],
+  ["hold on, search Aero 7 headphones", "answer"],
   ["wait, search for flights to Goa", "answer"],
-  ["search iPhone 17 Pro Max tomorrow", "answer"],
+  ["search Aero 7 headphones tomorrow", "answer"],
   ["search for running shoes later", "answer"],
-  ["don't search iPhone 17 Pro Max", "answer"],
+  ["don't search Aero 7 headphones", "answer"],
   ["never mind, look up flights to Goa", "answer"],
-  ["not now, find barista courses in Delhi", "answer"],
+  ["not now, find yoga studios in Austin", "answer"],
   ["maybe search for running shoes", "answer"],
-  ["search iPhone 17 Pro Max once I say go", "answer"],
+  ["search Aero 7 headphones once I say go", "answer"],
 ];
 /** The draft of the bug: an offer in place of the start. */
 const offerDraft =
-  "No active job for searching iPhone 17 Pro Max yet. I can start that search in Google Chrome for you now. Should I?";
+  "No active job for searching Aero 7 headphones yet. I can start that search in Google Chrome for you now. Should I?";
 /** Words that hold the work back or stop it: they never start, on any road. */
 const holds = actNow
   .slice(actNow.findIndex(([words]) => words === "stop"))
@@ -660,10 +660,10 @@ describe("a drafted offer for a clear request", () => {
     const run = scripted([draft]);
     const said = await new Supervisor(f.world, run.model).reply(
       [],
-      "Can you search iPhone 17 Pro Max?",
+      "Can you search Aero 7 headphones?",
       "chat",
     );
-    expect(f.events).toEqual([`engine: ${search("iPhone 17 Pro Max")}`]);
+    expect(f.events).toEqual([`engine: ${search("Aero 7 headphones")}`]);
     expect(said).toBe(startedText);
     expect(run.seen).toHaveLength(1);
   });
@@ -682,11 +682,11 @@ describe("a drafted offer for a clear request", () => {
     ["reply to Sam on Slack", "Which Slack account: work or personal?"],
     ["reply to Sam on Slack", "Which Sam do you mean?"],
     [
-      "search iPhone 17 Pro Max on Amazon",
+      "search Aero 7 headphones on Amazon",
       "Should I search the US store or the India store?",
     ],
     [
-      "Can you search iPhone 17 Pro Max?",
+      "Can you search Aero 7 headphones?",
       "I can search it once you sign in to Chrome. Should I?",
     ],
   ])(
@@ -732,7 +732,7 @@ describe("a drafted offer for a clear request", () => {
 
   it("says how to turn computer use on in place of the offer when it is off", async () => {
     const f = mac({ engine: "none" });
-    const words = "Can you search iPhone 17 Pro Max?";
+    const words = "Can you search Aero 7 headphones?";
     const said = await new Supervisor(
       f.world,
       scripted([offerDraft]).model,

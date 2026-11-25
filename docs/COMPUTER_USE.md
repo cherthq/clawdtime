@@ -166,7 +166,7 @@ No request opens with a fixed sentence. The code is in
   on. No computer task runs now.".
 
 What you say while a request runs is for that request, and the request goes
-on by itself. "open it in the browser", "not instagram, flipkart", "no, the
+on by itself. "open it in the browser", "not social.example, shop.example", "no, the
 other one", "hmm try the search box", "that's wrong, go back": each one steers
 the task, and the task keeps going. No magic word is needed to go on. Your
 words start no second request. The worker keeps them in order and gives them
@@ -1649,8 +1649,8 @@ After a request, it keeps what you taught in it, at most 3 notes:
 For example:
 
 ```text
-For the request "Find a phone case", the owner said: not instagram, flipkart.
-Opened flipkart.com for the request "Find a phone case". It was done.
+For the request "Find a phone case", the owner said: not social.example, shop.example.
+Opened shop.example for the request "Find a phone case". It was done.
 ```
 
 What it never keeps:
