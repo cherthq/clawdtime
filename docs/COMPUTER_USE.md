@@ -1528,6 +1528,60 @@ A look or a wait whose result never came back is not uncertain, because it
 changed nothing. The same holds for a command that the panel never fetched.
 Those end the request as `blocked`.
 
+## What it remembers
+
+Computer use reads notes from ClawdTime's [memory](SUPERVISOR.md#memory) and
+keeps notes in it. It does this only while memory is on. Memory is off until
+you turn it on. Turn it on when you need it, not by default:
+
+```sh
+clawdtime memory on
+clawdtime computer doctor   # the memory line says whether memory feeds computer use
+clawdtime memory show       # what is kept
+clawdtime memory forget ID  # removes a note for good
+```
+
+While memory is off, computer use reads nothing from it and writes nothing to
+it.
+
+Before a request:
+
+- The worker searches memory with the words of your request. It uses the
+  memory's own search, with no model.
+- Up to 5 notes that fit go to the planner, each cut to 300 characters. A note
+  of one project folder does not go.
+- The brief says that the notes are data from earlier requests. Each note is in
+  quotes on its own line. A note never overrides your request, your words, the
+  checks or a question of the program. A note that holds a secret never goes.
+- With no note, the brief is the same as before, byte for byte. The rules and
+  the functions do not change with notes, so the cached part of the prompt
+  stays the same.
+
+After a request, it keeps what you taught in it, at most 3 notes:
+
+- What you said for the request while it ran, and your answers to its
+  questions. Each note has the request as context. It is kept as a preference.
+  When there are more, the newest are kept.
+- The outcome in one line: the sites and apps that it opened, and how it ended.
+  It is kept as an episode, so it expires after 14 days.
+
+For example:
+
+```text
+For the request "Find a phone case", the owner said: not instagram, flipkart.
+Opened flipkart.com for the request "Find a phone case". It was done.
+```
+
+What it never keeps:
+
+- Words that teach nothing alone, such as "ok", "wait" or "go on".
+- A secret. The strict secret checks of computer use read each note. A note
+  that holds or names a password, a pin, a code or a key is dropped. A request
+  that holds a secret keeps nothing. Memory itself refuses a credential too.
+- Text that was typed, the text of a page, a picture or the planner's words. A
+  note is made from your words, fixed words and the names of sites and apps.
+- The outcome of a one-step switch to a desktop or an app.
+
 ## What is kept and what is not
 
 The journal is `computer/journal.json` in the state folder. The folder and the
@@ -1548,7 +1602,8 @@ file are for their owner only. It keeps the last 30 requests:
   the outcome. For a link it keeps the site, not the path.
 
 The journal never holds an image, typed text, the text of a page, a question,
-an answer or the planner's words.
+an answer or the planner's words. With memory on, memory keeps the notes of
+[what it remembers](#what-it-remembers).
 
 Beside the journal, for their owner only: `reach.json` keeps the last 50
 questions that the reach worked on, as a digest, the request id, the kind and
@@ -1563,10 +1618,10 @@ characters. It can repeat words from the screen.
 
 The language model of the provider that you chose receives, for each action,
 and no other service does: your request, what you said for it while it ran,
-the plan with the facts that it kept, the last 12 steps
-with the text that was typed, the names and values of up to 150 elements, the
-image of the screen, and the text of the page when the browser read it. The
-value of a secure field is never sent. Nothing of this is written to disk by
+the notes from memory while memory is on, the plan with the facts that it kept,
+the last 12 steps with the text that was typed, the names and values of up to
+150 elements, the image of the screen, and the text of the page when the
+browser read it. The value of a secure field is never sent. Nothing of this is written to disk by
 ClawdTime. Close what you do not want in the picture before you start a task.
 
 ## Routes
