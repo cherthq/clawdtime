@@ -1,0 +1,8 @@
+Timestamp               Ty Process[PID:TID]
+2026-11-26 10:01:58.101 Df Stonepad[4242:5fe3ad5] [com.example.stonepad:sync] Sync started for 3 notes
+2026-11-26 10:01:59.220 I  Stonepad[4242:5fe3ad5] [com.example.stonepad:sync] Uploading note 2 of 3
+2026-11-26 10:02:00.004 E  Stonepad[4242:5fe3ad5] [com.example.stonepad:sync] Upload failed: the server did not answer (timeout after 30 s)
+2026-11-26 10:02:00.010 Df Stonepad[4242:5fe3ad5] [com.example.stonepad:auth] Retrying with password=hunter22x
+2026-11-26 10:02:01.500 F  Stonepad[4242:5fe3ad6] [com.example.stonepad:store] Database is locked
+by another writer at /Users/sam/Library/Containers/com.example.stonepad/notes.db
+2026-11-26 10:02:02.000 Df Stonepad[4242:5fe3ad5] [com.example.stonepad:ui] Main thread blocked for 4200 ms

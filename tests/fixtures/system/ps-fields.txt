@@ -1,0 +1,19 @@
+    0     0     0 root              3.1  0.5  81920 22-06:03:16 Rs   kernel_task
+    1     0     0 root              0.0  0.1  14528 22-06:03:16 Ss   /sbin/launchd
+  152     1    88 _windowserver     4.2  1.1 212000 22-06:03:10 Ss   /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  410     1   501 sam               0.0  0.2  40960 22-06:02:58 Ss   /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+  671     1   501 sam               0.2  0.4  73264 22-06:02:58 S    /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+  980     1   501 sam               0.1  0.6 120000 3-02:00:00 S    /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+ 4242     1   501 sam              98.4  6.3 1258291 02:03:11 R    /Applications/Stonepad.app/Contents/MacOS/Stonepad
+ 4250  4242   501 sam               1.0  0.8 163840 02:03:09 S    /Applications/Stonepad.app/Contents/Frameworks/Stonepad Helper.app/Contents/MacOS/Stonepad Helper
+ 5100   980   501 sam               0.0  0.1  20480 01:15:00 Ss   /bin/zsh
+ 5150  5100   501 sam              12.5  1.5 307200 05:12 S+   /usr/local/bin/node
+ 5160  5150   501 sam               0.0  0.0      0 05:10 Z    (esbuild)
+ 6001     1   501 sam               0.0  2.1 440320 1-04:00:00 S    /Applications/Riverchat.app/Contents/MacOS/Riverchat
+ 7000     1   501 sam               0.0  0.3  61440 10:00 T    /usr/local/bin/syncd
+ 7100     1     0 root              0.5  0.2  30720 3-01:00:00 Ss   /usr/libexec/backupd
+ 8700  5100   501 sam               0.0  0.2  40960 00:31 S    /usr/local/bin/node
+ 8800  8700   501 sam               2.0  1.0 204800 00:30 S    /usr/local/bin/node
+ 8810  8800   501 sam               0.5  0.4  81920 00:29 S    /Users/sam/Library/Caches/ms-playwright/chromium-1200/chrome-mac/Chromium.app/Contents/MacOS/Chromium
+ 8900     1   501 sam               0.4  0.5  92160 00:40 S    /Applications/ClawdTime.app/Contents/MacOS/ClawdTimeTaskPanel
+ 9100     1   501 sam               0.0  0.4  81920 00:20 U    /Applications/Ledgerly.app/Contents/MacOS/Ledgerly

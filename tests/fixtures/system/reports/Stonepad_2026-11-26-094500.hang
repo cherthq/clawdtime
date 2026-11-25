@@ -1,0 +1,15 @@
+Date/Time:        2026-11-26 09:45:00.000 -0800
+End time:         2026-11-26 09:45:05.210 -0800
+OS Version:       macOS 26.1 (Build 25B78)
+Architecture:     arm64e
+Report Version:   60
+
+Command:          Stonepad
+Path:             /Applications/Stonepad.app/Contents/MacOS/Stonepad
+PID:              4242
+
+Event:            hang
+Duration:         5.21s
+Steps:            53 (100ms sampling interval)
+
+Process:          Stonepad [4242]

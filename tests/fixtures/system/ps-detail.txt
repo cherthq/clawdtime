@@ -1,0 +1,1 @@
+Thu Nov 26 08:00:12 2026     /Applications/Stonepad.app/Contents/MacOS/Stonepad -NSDocumentRevisionsDebugMode YES

@@ -1,0 +1,5 @@
+USER   PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+sam   4242   ??   60.0 R    46T   0:49.08   4:36.31 /Applications/Stonepad.app/Contents/MacOS/Stonepad
+      4242         20.0 S    46T   0:02.15   0:01.97
+      4242         18.4 R    31T   0:00.10   0:00.20
+      4242          0.0 S    31T   0:00.00   0:00.01
