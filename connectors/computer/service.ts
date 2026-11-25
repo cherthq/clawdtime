@@ -4,9 +4,9 @@
  * Computer use is off until the person turns it on with
  * `clawdtime computer on`. The worker is built only when no other engine does
  * the computer work in the service, the switch is on, a key for the language
- * model is in the environment of the service, and no test started the
- * service. In every other case the routes still answer, with `enabled` false
- * and the reason, so the panel always knows where it stands.
+ * model is in the environment of the service or in its key store, and no test
+ * started the service. In every other case the routes still answer, with
+ * `enabled` false and the reason, so the panel always knows where it stands.
  */
 import type {
   DesktopExecutionSnapshot,
@@ -19,8 +19,17 @@ import {
   presentationEventSchema,
   type PresentationEvent,
 } from "./presentation.js";
-import { plannerFromEnvironment } from "./planner.js";
+import { browserMethods } from "./guards.js";
+import { plannerSetup } from "./keys.js";
+import { ModelPlanner, plannerOptions } from "./planner.js";
 import { recordTiming } from "./timing.js";
+import {
+  OwnerReach,
+  ownerTextPort,
+  proactiveReachCall,
+  type ProactiveReachDeps,
+} from "./reach.js";
+import { Routines } from "./routines.js";
 import {
   handResultSchema,
   handsNextSchema,
@@ -40,8 +49,20 @@ import {
 export interface ComputerPort {
   /** `GET /desktop/hands/next`: the command that waits, and what runs. */
   next(after: number): HandsNext;
-  /** `POST /desktop/hands/result`. False when no command waits for that result. */
-  result(raw: unknown): boolean;
+  /**
+   * `GET /desktop/hands/next?wait=MS`: the same answer, held until a command
+   * waits, what runs changes, or the time passes. Absent where no worker runs.
+   */
+  waitNext?(
+    after: number,
+    ms: number,
+    signal?: AbortSignal,
+  ): Promise<HandsNext>;
+  /**
+   * `POST /desktop/hands/result`. False when no command waits for that result.
+   * `cost` is the panel's cost header, for the timing of the step.
+   */
+  result(raw: unknown, cost?: string | null): boolean;
   /** `GET /desktop/computer`. */
   status(): ComputerStatus;
   present(raw: unknown): boolean;
@@ -71,14 +92,24 @@ export function computerPort(
       hands.presentationCommand() > 0
     );
   };
+  const next = (after: number) =>
+    handsNextSchema.parse({
+      version: 1,
+      command: hands.next(after),
+      run: worker.run(),
+    });
   return {
-    next: (after) =>
-      handsNextSchema.parse({
-        version: 1,
-        command: hands.next(after),
-        run: worker.run(),
-      }),
-    result: (raw) => hands.result(raw),
+    next,
+    waitNext: async (after, ms, signal) => {
+      // What runs now. A change of it answers the held read too.
+      const seen = JSON.stringify(worker.run());
+      await hands.wait(after, ms, {
+        ...(signal ? { signal } : {}),
+        changed: () => JSON.stringify(worker.run()) !== seen,
+      });
+      return next(after);
+    },
+    result: (raw, cost) => hands.result(raw, cost),
     status: () => computerStatusSchema.parse(worker.status()),
     present: (raw) => events.accept(raw, hands.presentationCommand(), active()),
     presentation: () => ({ version: 1, event: events.latest(active()) }),
@@ -115,7 +146,7 @@ export function offComputerPort(message: string): ComputerPort {
 }
 
 export const noKeyText =
-  "Computer use is on, but the service has no key for the language model. Put CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment and start it again.";
+  "Computer use is on, but the service has no key for the language model. Put CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment, or store a key of any provider with clawdtime keys set PROVIDER, and start it again.";
 export const chatEngineText =
   "An existing chat connection does the computer work in this service.";
 export const backgroundEngineText =
@@ -133,7 +164,9 @@ export interface ComputerOptions {
   /** The state folder: the switch and the journal live in its `computer` folder. */
   root: string;
   /**
-   * The environment of the service: the key and the model of the planner.
+   * The environment of the service: the keys, the model, the effort and the
+   * speed of the planner. A key or a model in the environment wins over the
+   * one in the store of the state folder.
    * `VITEST` in it says that a test started the service: no worker is built
    * then, so no command for the hands can come out of a test.
    */
@@ -164,12 +197,23 @@ export function buildComputer(options: ComputerOptions): {
   if (options.env.VITEST) return off(testServiceText);
   const chosen = readComputerSwitch(options.root);
   if (!chosen.enabled) return off(chosen.problem ?? offText);
-  const planner = plannerFromEnvironment(options.env, {
+  // The provider, the model and the key: the environment first, then the
+  // store of the state folder. With no key and no choice the text says how to
+  // add one; every other problem says what is wrong with the setting.
+  const setup = plannerSetup(options.env, options.root);
+  if (!setup.ok)
+    return off(setup.reason === "no_key" ? noKeyText : setup.problem);
+  const planner = new ModelPlanner({
+    ...plannerOptions(setup.settings),
     browser: options.browser !== undefined,
+    // A browser function is offered only when this driver has its method.
+    browserMethods: browserMethods(options.browser),
   });
-  if (!planner) return off(noKeyText);
   const hands = new PanelHands();
   const worker = new ComputerWorker({
+    unchangedDone: true,
+    // The owner turns off the questions before what cannot be undone.
+    ...(options.env.CLAWDTIME_COMPUTER_TRUST === "on" ? { trust: true } : {}),
     hands,
     planner: options.planner ?? planner,
     journal: new ComputerJournal(options.root),
@@ -179,8 +223,13 @@ export function buildComputer(options: ComputerOptions): {
     ...(options.notify ? { notify: options.notify } : {}),
     // The time of each step goes to a file in the state folder: the service
     // runs with no terminal, so a printed line would reach nobody.
+    // What the hands spent on the step goes with it: the capture, the walk,
+    // the encode, the glide and the wait for the panel.
     ...(options.env.CLAWDTIME_COMPUTER_TIMING === "on"
-      ? { timing: (entry: StepTiming) => recordTiming(options.root, entry) }
+      ? {
+          timing: (entry: StepTiming) =>
+            recordTiming(options.root, { ...entry, ...hands.takeCost() }),
+        }
       : {}),
   });
   return { worker, port: computerPort(worker, hands) };
@@ -199,7 +248,7 @@ export type ExecutionEngine =
  * 2. The background runtime, when `background-cua.json` is there.
  * 3. The bundled runtime, when `bundled-cua.json` is there.
  * 4. The computer worker, when its switch is on, a key for the language model
- *    is in the environment, and no test started the service.
+ *    is in the environment or the key store, and no test started the service.
  *
  * The routes of the hands answer in every case. Only with the worker do they
  * ever hold a command.
@@ -261,4 +310,69 @@ export function chooseExecution<
     execution: configured ?? computer.worker ?? undefined,
     computer,
   };
+}
+
+/** What the reach and the routines need of the proactive calls of the service. */
+export interface ReachProactive {
+  coordinator: ProactiveReachDeps["coordinator"];
+  configured: () => boolean;
+  pump: () => void;
+  stop: (intentId: string) => void;
+}
+
+/**
+ * The reach and the routines of a worker. The reach is on when the worker is,
+ * unless `CLAWDTIME_COMPUTER_REACH=off`. It calls when the line is set up for
+ * proactive calls, and texts when the text settings are in the environment of
+ * the service. `CLAWDTIME_COMPUTER_REACH_SECONDS` is the time that the owner
+ * has to answer in the chat first, 45 by default.
+ */
+export function buildOwnerReach(options: {
+  worker: ComputerWorker;
+  root: string;
+  env: Record<string, string | undefined>;
+  projectRoot: string;
+  proactive?: ReachProactive | undefined;
+  /** The line is in a call now. */
+  liveCall: () => boolean;
+  notify?: (text: string) => void;
+  request?: typeof fetch;
+}): { reach: OwnerReach | null; routines: Routines } {
+  const journal = new ComputerJournal(options.root);
+  const text = ownerTextPort(options.env, options.root, options.request);
+  const routines = new Routines({
+    root: options.root,
+    worker: options.worker,
+    journal,
+    text,
+    liveCall: options.liveCall,
+    ...(options.notify ? { notify: options.notify } : {}),
+  });
+  if (options.env.CLAWDTIME_COMPUTER_REACH === "off")
+    return { reach: null, routines };
+  const seconds = Number(options.env.CLAWDTIME_COMPUTER_REACH_SECONDS);
+  const proactive = options.proactive;
+  const reach = new OwnerReach({
+    root: options.root,
+    worker: options.worker,
+    journal,
+    text,
+    ...(Number.isFinite(seconds) && seconds >= 0 && seconds <= 600
+      ? { delayMs: Math.round(seconds * 1000) }
+      : {}),
+    ...(proactive
+      ? {
+          call: proactiveReachCall({
+            coordinator: proactive.coordinator,
+            configured: proactive.configured,
+            projectRoot: options.projectRoot,
+            pump: proactive.pump,
+            stop: proactive.stop,
+            liveCall: options.liveCall,
+          }),
+        }
+      : {}),
+    ...(options.notify ? { notify: options.notify } : {}),
+  });
+  return { reach, routines };
 }

@@ -693,7 +693,9 @@ describe("a direct request for a web address in the worker", () => {
   });
 
   it("tells the planner when no app of that name opens web addresses, and opens nothing else by itself", async () => {
+    // The first give_up is told the ways it did not try. The second ends it.
     const f = setup([
+      { kind: "give_up", reason: "No browser named Fixture Browser is here." },
       { kind: "give_up", reason: "No browser named Fixture Browser is here." },
     ]);
     f.hands.answer = (command) =>
@@ -715,24 +717,32 @@ describe("a direct request for a web address in the worker", () => {
     ]);
     expect(f.worker.status()).toMatchObject({
       state: "blocked",
-      message: "I could not finish. No browser named Fixture Browser is here.",
+      message:
+        "I could not finish. No browser named Fixture Browser is here. Tell me another way to try, or do this step yourself.",
     });
   });
 
   describe("an address that the planner opens in the middle of a task", () => {
-    const board: HandCommand = {
+    const board: Extract<HandCommand, { kind: "open_url" }> = {
       kind: "open_url",
       url: "https://board.example.com/",
       browser: "Fixture Browser",
     };
+    /** The same site, with a long query that the person did not write. */
+    const carrying: Extract<HandCommand, { kind: "open_url" }> = {
+      ...board,
+      url: `https://board.example.com/?note=${"a".repeat(140)}`,
+    };
     const asks = (f: ReturnType<typeof setup>, words: string) =>
       until(() => f.worker.status().question?.includes(words) === true);
     // The app is not on this Mac, and the person says: open it in the browser.
-    const begin = async () => {
+    const begin = async (
+      address: Extract<HandCommand, { kind: "open_url" }>,
+    ) => {
       const f = setup([
         { kind: "open_app", name: "Fixture Board" },
         { kind: "ask", question: "Should I open it in the browser?" },
-        board,
+        address,
         done,
       ]);
       f.hands.answer = (command) =>
@@ -746,19 +756,10 @@ describe("a direct request for a web address in the worker", () => {
       );
       await asks(f, "Should I open it in the browser?");
       await f.worker.answer("just open it in Fixture Browser");
-      // The planner chose the address: the person did not say it.
-      await asks(f, "is not in your request");
       return f;
     };
-    it("needs the person's yes when they did not name it, and then opens with no pointer and no key", async () => {
-      const f = await begin();
-      expect(f.worker.status().question).toBe(
-        "Open board.example.com in Fixture Browser? The address board.example.com is not in your request. Say yes to allow it, or no to stop.",
-      );
-      expect(f.hands.sent).toEqual([
-        { kind: "open_app", name: "Fixture Board" },
-      ]);
-      await f.worker.answer("yes");
+    it("opens with no question an address that the planner chose, with no pointer and no key", async () => {
+      const f = await begin(board);
       await f.worker.idle();
       expect(f.hands.sent).toEqual([
         { kind: "open_app", name: "Fixture Board" },
@@ -772,8 +773,12 @@ describe("a direct request for a web address in the worker", () => {
       ]);
       expect(f.worker.status().state).toBe("completed");
     });
-    it("opens nothing after a no", async () => {
-      const f = await begin();
+    it("asks before an address with a long part that the person did not write, and opens nothing after a no", async () => {
+      const f = await begin(carrying);
+      await asks(f, "long part");
+      expect(f.worker.status().question).toBe(
+        "Open board.example.com in Fixture Browser? The address carries a long part that you did not write, which could send what the screen shows to board.example.com. Say yes or no.",
+      );
       expect((await f.worker.answer("no")).message).toBe(
         "Canceled. I did not do it: Open board.example.com in Fixture Browser.",
       );
@@ -791,8 +796,12 @@ describe("a direct request for a web address in the worker", () => {
       kind: "none",
     });
     await f.worker.idle();
-    expect(f.planner.inputs).toHaveLength(1);
+    // The first give_up is told the ways it did not try: the address is one.
+    expect(f.planner.inputs).toHaveLength(2);
     expect(f.planner.inputs[0]!.history).toEqual([]);
+    expect(f.planner.inputs[1]!.history[0]!.outcome).toContain(
+      "open_url with the address",
+    );
     expect(f.hands.sent).toEqual([]);
   });
 });

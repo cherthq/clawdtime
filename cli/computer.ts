@@ -10,11 +10,29 @@ import {
 } from "../connectors/computer/journal.js";
 import { readTimings, timingLine } from "../connectors/computer/timing.js";
 import {
+  modelChoiceFile,
+  plannerSetup,
+  readModelChoice,
+  storeModelChoice,
+} from "../connectors/computer/keys.js";
+import { looksSecret } from "../connectors/agents/memory.js";
+import {
+  chatEndpoint,
   defaultComputerModel,
   fallbackComputerModel,
-} from "../connectors/computer/planner.js";
+  modelName,
+  parseModel,
+  refusalFallback,
+  sentEffort,
+  sentFast,
+  type PlannerSettings,
+  type Selection,
+} from "../connectors/computer/providers.js";
 import type { BrowserPort } from "../connectors/computer/ports.js";
+import { browserSwitch } from "../connectors/computer/browser.js";
 import { inspectDesktopReadiness } from "../connectors/agents/desktop-readiness.js";
+import { readReach } from "../connectors/computer/reach.js";
+import { Routines } from "../connectors/computer/routines.js";
 
 export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself, one checked action at a time
   computer status   on or off, and the last request
@@ -23,9 +41,15 @@ export const computerHelp = `clawdtime computer: ClawdTime does a task on this M
   computer doctor [--json]   configured service, capabilities and missing checks
   computer clear    you looked at the result of a request with an unknown result: new work can start
   computer timing   the time of the newest steps: the look, the plan and the action of each
+  computer model [PROVIDER/MODEL] [--base-url URL]   show or choose the model of the planner.
+                    "auto" goes back to the first provider with a key. Keys: clawdtime keys
+When a question waits and you do not answer in the chat, ClawdTime calls you on
+the line, or texts you when the call does not get through. doctor says whether
+it can. Routines: clawdtime routine help.
 It is off until you turn it on. Every action is checked in code, and a click that
 cannot be undone needs your yes. See docs/COMPUTER_USE.md.`;
-const usage = "Use: clawdtime computer status|on|off|doctor|clear|timing";
+const usage =
+  "Use: clawdtime computer status|on|off|doctor|clear|timing|model [PROVIDER/MODEL] [--base-url URL]";
 
 export interface ComputerCliDependencies {
   /** The environment. It says where the state folder is and whether a key is there. */
@@ -37,6 +61,61 @@ export interface ComputerCliDependencies {
   browser?: BrowserPort;
   /** Read-only desktop readiness probe; injectable for isolated tests. */
   request?: typeof fetch;
+}
+
+/** Why the reach cannot call or text, in plain words. Only fixed codes come in. */
+const reachReason = (reason: string) => {
+  if (reason.startsWith("missing:"))
+    return `these settings are missing in the environment of the desktop service: ${reason.slice(8).split(",").join(", ")}. See SETUP_CLAWDTIME.md`;
+  const plain: Record<string, string> = {
+    outbound_setup_missing:
+      "the line is not set up for proactive calls: proactive.json of the desktop service has no outbound line",
+    not_set_up:
+      "the line is not set up for proactive calls in this desktop service",
+    no_policy:
+      "no active calling policy lets ClawdTime call you about a question in this project",
+    calling_policy_ambiguous:
+      "more than one calling policy fits this project. Keep one",
+    earlier_call_unknown:
+      "an earlier call has an unknown outcome. Reconcile it with clawdtime proactive doctor first",
+    line_in_a_call: "the line is in a call now",
+    no_line:
+      "no line is known yet. Set CHERT_LINE_ID, or text the line once while clawdtime texts run listens",
+    readiness_failed: "its check failed",
+  };
+  return plain[reason] ?? reason.replace(/_/g, " ");
+};
+/** What the reach of the running desktop service last said, and the routines. */
+function reachRows(
+  root: string,
+  env: Record<string, string | undefined>,
+  now: number,
+) {
+  const found = readReach(root);
+  const said = found?.readiness;
+  const fresh = said && now - said.at < 5 * 60_000;
+  const off = env.CLAWDTIME_COMPUTER_REACH === "off";
+  const side = (value: { ready: boolean; reason: string } | undefined) =>
+    off
+      ? "off: CLAWDTIME_COMPUTER_REACH=off"
+      : !found
+        ? "unknown: computer/reach.json cannot be read"
+        : !value || !fresh
+          ? "not reported: start the desktop service with the computer worker on. It says this within a minute"
+          : value.ready
+            ? "ready. When a question waits, ClawdTime reaches you this way"
+            : `not ready: ${reachReason(value.reason)}`;
+  let routines: string;
+  try {
+    const all = new Routines({ root }).list();
+    const paused = all.filter((routine) => routine.paused).length;
+    routines = all.length
+      ? `${all.length - paused} active, ${paused} paused. See: clawdtime routine list`
+      : "none. Add one: clawdtime routine add every morning at 9, follow up on my latest posts";
+  } catch {
+    routines = "computer/routines.json cannot be read";
+  }
+  return { calls: side(said?.calls), texts: side(said?.texts), routines };
 }
 
 const steps = (count: number) => `${count} ${count === 1 ? "step" : "steps"}`;
@@ -65,15 +144,12 @@ export async function computerCli(
   const now = dependencies.now ?? Date.now;
   const root = stateRoot({ env, home: dependencies.home ?? homedir() });
   const command = args[0] ?? "status";
+  if (command === "model") return modelCommand(args.slice(1), env, root, print);
   const json = command === "doctor" && args[1] === "--json";
   if (args.length > (json ? 2 : 1)) throw new Error(usage);
   if (command === "help" || command === "--help") return print(computerHelp);
   const journal = new ComputerJournal(root, now);
-  const keyName = env.CLAWDTIME_OPENAI_API_KEY
-    ? "CLAWDTIME_OPENAI_API_KEY"
-    : env.OPENAI_API_KEY
-      ? "OPENAI_API_KEY"
-      : null;
+  const setup = plannerSetup(env, root);
   if (command === "status") {
     const chosen = readComputerSwitch(root);
     print(
@@ -82,6 +158,14 @@ export async function computerCli(
         : (chosen.problem ??
             "Computer use is off. Turn it on: clawdtime computer on"),
     );
+    if (env[browserSwitch] === "own")
+      print(
+        "Browser: ClawdTime's own browser, with its own profile. It starts at the first browser step. Check it: clawdtime computer doctor",
+      );
+    else if (env[browserSwitch] === "on")
+      print(
+        "Browser: the browser in front, through its own scripting. Check it: clawdtime computer doctor",
+      );
     if (!journal.readable()) return print(unreadable);
     const last = journal.latest();
     return print(last ? lastLine(last) : "No request yet.");
@@ -91,10 +175,11 @@ export async function computerCli(
     print(
       "Computer use is on. Start the ClawdTime desktop service again, so that it builds the worker.",
     );
-    if (!keyName)
+    if (!setup.ok && setup.reason === "no_key")
       print(
-        "No key for the language model is in this environment. The service needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY.",
+        "No key for the language model is in this environment. The service needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY. Or store a key of any provider: clawdtime keys set PROVIDER",
       );
+    else if (!setup.ok) print(setup.problem);
     print(
       "Every action is checked in code. A click that cannot be undone, or that speaks for you, needs your yes. It never types into a password field.",
     );
@@ -181,19 +266,13 @@ export async function computerCli(
         ? "on"
         : (chosen.problem ?? "off. Turn it on: clawdtime computer on"),
     );
-    // Only the name of the variable is printed, never its value.
-    row(
-      "model key",
-      keyName
-        ? `found in ${keyName}, in this environment. The service reads its own environment when it starts.`
-        : "missing. The service needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment.",
-    );
-    row(
-      "model",
-      env.CLAWDTIME_COMPUTER_MODEL
-        ? `${env.CLAWDTIME_COMPUTER_MODEL}. CLAWDTIME_COMPUTER_MODEL chose it.`
-        : `${defaultComputerModel}. CLAWDTIME_COMPUTER_MODEL changes it. A key that may not use it falls back to ${fallbackComputerModel}.`,
-    );
+    // Only the name of a variable or of the store is printed, never a key.
+    row("model key", keyLine(setup));
+    row("model", modelLine(setup, root));
+    if (setup.ok) {
+      row("effort", effortLine(setup.settings));
+      row("speed", speedLine(setup.settings));
+    }
     const folder = computerDirectory(root);
     row(
       "state folder",
@@ -222,17 +301,24 @@ export async function computerCli(
       "in the ClawdTime panel. A task that starts says so when the panel lacks Accessibility or Screen & System Audio Recording in System Settings, Privacy & Security.",
     );
     let browser =
-      "off. The worker uses the screen for web pages. To read and operate the page itself, start the desktop service with CLAWDTIME_COMPUTER_BROWSER=on.";
+      "off. The worker uses the screen for web pages. To read and operate the page itself, start the desktop service with CLAWDTIME_COMPUTER_BROWSER=on. For ClawdTime's own browser, with its own profile, use CLAWDTIME_COMPUTER_BROWSER=own.";
+    const own = env[browserSwitch] === "own";
     if (dependencies.browser)
       try {
         const answer = await dependencies.browser.doctor();
-        browser = answer.ok
-          ? `${answer.browser ?? "a browser"} can be driven`
-          : `cannot be driven. ${answer.reason}`;
+        browser = !answer.ok
+          ? `cannot be driven. ${answer.reason}`
+          : own
+            ? `ClawdTime's own browser, ${answer.browser ?? "a browser"}, can be driven. ${answer.reason}`
+            : `${answer.browser ?? "a browser"} can be driven`;
       } catch {
         browser = "cannot be driven. It did not answer.";
       }
     row("browser", browser);
+    const reach = reachRows(root, env, now());
+    row("calls to you", reach.calls);
+    row("texts to you", reach.texts);
+    row("routines", reach.routines);
     if (json) return print(JSON.stringify({ version: 1, desktop, checks }));
     print("Computer use on this Mac");
     for (const { name, detail } of checks)
@@ -240,4 +326,126 @@ export async function computerCli(
     return;
   }
   throw new Error(usage);
+}
+
+/** Where the key of the planner comes from. It never holds the key. */
+function keyLine(setup: Selection) {
+  if (!setup.ok)
+    return setup.reason === "no_key"
+      ? "missing. The service needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment. Or store a key of any provider: clawdtime keys set PROVIDER, and see clawdtime keys list"
+      : setup.reason === "missing_key" && setup.provider
+        ? `missing for ${setup.provider.name}. Run: clawdtime keys set ${setup.provider.id}, or set ${setup.provider.keys.join(" or ")} in the environment of the service.`
+        : setup.reason === "no_model" && setup.provider
+          ? `found for ${setup.provider.name}. See the model line.`
+          : "not checked: see the model line.";
+  const { provider, keyFrom } = setup.settings;
+  if (!keyFrom)
+    return `none, for ${provider.name}: the custom service gets no key.`;
+  return keyFrom.kind === "environment"
+    ? `found in ${keyFrom.name}, in this environment, for ${provider.name}. The service reads its own environment when it starts.`
+    : `found in the key store, for ${provider.name}. The service reads it when it starts. A variable of its environment wins over it.`;
+}
+
+/** The model of the planner and what chose it. */
+function modelLine(setup: Selection, root: string) {
+  if (!setup.ok)
+    return setup.reason === "no_key"
+      ? `${defaultComputerModel}. CLAWDTIME_COMPUTER_MODEL changes it. A key that may not use it falls back to ${fallbackComputerModel}. Another provider: clawdtime computer model PROVIDER/MODEL`
+      : `none. ${setup.problem}`;
+  const { provider, model, modelFrom } = setup.settings;
+  const name = modelName(provider, model);
+  const test = `Run the planner test before you rely on a new model: npm run eval:computer:planner -- ${name}`;
+  if (modelFrom === "environment")
+    return `${name}. CLAWDTIME_COMPUTER_MODEL chose it.${provider.id === "openai" ? "" : ` ${test}`}`;
+  if (modelFrom === "store")
+    return `${name}. clawdtime computer model chose it, in ${modelChoiceFile(root)}. CLAWDTIME_COMPUTER_MODEL in the environment of the service wins over it.${provider.id === "openai" ? "" : ` ${test}`}`;
+  return provider.id === "openai"
+    ? `${defaultComputerModel}. CLAWDTIME_COMPUTER_MODEL changes it. A key that may not use it falls back to ${fallbackComputerModel}. Another provider: clawdtime computer model PROVIDER/MODEL`
+    : `${name}, the default of ${provider.name}, the first provider with a key. clawdtime computer model changes it.`;
+}
+
+function effortLine(settings: PlannerSettings) {
+  const { provider, model, effort } = settings;
+  const sent = sentEffort(provider.id, model, effort);
+  if (sent)
+    return `${sent}${effort ? ", set by CLAWDTIME_COMPUTER_EFFORT" : ", the default of the planner. CLAWDTIME_COMPUTER_EFFORT (low, medium, high) changes it"}.`;
+  if (provider.id === "openai")
+    return effort
+      ? `not sent: ${model} takes no reasoning effort.`
+      : "the default of the model. CLAWDTIME_COMPUTER_EFFORT (low, medium, high) sets reasoning_effort on the models that take it.";
+  return provider.id === "anthropic"
+    ? `not sent: ${model} takes no effort.`
+    : `not sent: ${provider.name} gets no effort setting.`;
+}
+
+function speedLine(settings: PlannerSettings) {
+  const { provider, model, speed } = settings;
+  const fallback = refusalFallback(provider.id, model)
+    ? " A refusal goes to the default fallback model of the service, in the same call."
+    : "";
+  if (sentFast(provider.id, model, speed))
+    return `fast, set by CLAWDTIME_COMPUTER_SPEED. It costs more for each token.${fallback}`;
+  return speed === "fast"
+    ? `standard: fast mode is not there for ${modelName(provider, model)}.${fallback}`
+    : `standard.${provider.id === "anthropic" ? " CLAWDTIME_COMPUTER_SPEED=fast turns on fast mode on the models that take it." : ""}${fallback}`;
+}
+
+/** `clawdtime computer model`: show the model of the planner, or choose one. */
+function modelCommand(
+  args: string[],
+  env: Record<string, string | undefined>,
+  root: string,
+  print: (line: string) => void,
+) {
+  const [value, flag, base, ...rest] = args;
+  if (rest.length || (flag !== undefined && (flag !== "--base-url" || !base)))
+    throw new Error(usage);
+  const shadow = env.CLAWDTIME_COMPUTER_MODEL?.trim()
+    ? "CLAWDTIME_COMPUTER_MODEL is set in this environment, and it wins over the stored choice."
+    : null;
+  if (value === undefined) {
+    const setup = plannerSetup(env, root);
+    print(`Model of the planner: ${modelLine(setup, root)}`);
+    if (setup.ok) print(`Key: ${keyLine(setup)}`);
+    return;
+  }
+  if (value === "auto") {
+    if (flag) throw new Error(usage);
+    storeModelChoice(root, null);
+    print(
+      "No model is chosen now: the planner takes the first provider with a key, with its default model. Start the desktop service again.",
+    );
+    if (shadow) print(shadow);
+    return;
+  }
+  const parsed = parseModel(value, looksSecret);
+  if (!parsed.ok) throw new Error(parsed.problem);
+  if (base !== undefined && parsed.provider.id !== "custom")
+    throw new Error("Only the custom provider takes --base-url.");
+  if (base !== undefined && !chatEndpoint(base))
+    throw new Error(
+      "The base address cannot be used. Give an https address, or http only to this Mac, with no name, password or query in it.",
+    );
+  // A custom service keeps the address that it had, unless a new one comes.
+  const baseUrl =
+    parsed.provider.id === "custom"
+      ? (base ?? readModelChoice(root).choice?.baseUrl)
+      : undefined;
+  storeModelChoice(root, {
+    model: value.trim(),
+    ...(baseUrl ? { baseUrl } : {}),
+  });
+  const name = modelName(parsed.provider, parsed.model);
+  print(
+    `The planner model is now ${name}. Start the ClawdTime desktop service again, so that it uses it.`,
+  );
+  if (shadow) print(shadow);
+  const setup = plannerSetup(
+    { ...env, CLAWDTIME_COMPUTER_MODEL: undefined },
+    root,
+  );
+  if (!setup.ok) print(setup.problem);
+  print(
+    `Run the planner test before you rely on a new model: npm run eval:computer:planner -- ${name}`,
+  );
 }

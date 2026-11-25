@@ -1,7 +1,8 @@
 import Foundation
 
-/// Every coding-agent session on this Mac, as the task service reports it.
-/// The board is read-only: the only action is to bring a session's terminal forward.
+/// Every coding-agent session on this Mac, as the task service reports it. The panel lists none of
+/// them. It reads them for the mascot: its bubble names a session that waits for the person, and a
+/// click on that bubble brings the session's terminal forward.
 public struct AgentBoard: Codable, Equatable {
   public enum State: String, Codable, CaseIterable {
     case needsYou = "needs_you", working, idle, unknown
@@ -106,7 +107,7 @@ public struct AgentBoard: Codable, Equatable {
         session.since.map({ $0 >= 0 }) ?? true, session.activeAt.map({ $0 >= 0 }) ?? true else { throw PanelFailure.response }
     }
   }
-  /// The service publishes on an interval. A board much older than that is not shown.
+  /// The service publishes on an interval. A snapshot much older than that is not used.
   public func isFresh(now: Double = Date().timeIntervalSince1970 * 1000) -> Bool {
     now - generatedAt <= (intervalMs ?? 3000) * 3 + 4000
   }
@@ -131,7 +132,7 @@ public struct AgentFocusResult: Codable, Equatable {
   }
 }
 
-/// Text for the board. Names come from other programs, so every string is cleaned and bounded.
+/// Text about the sessions, for the mascot's bubble. Names come from other programs, so every string is cleaned and bounded.
 public enum AgentBoardText {
   public static func clean(_ value: String, limit: Int = 80) -> String {
     let scalars = value.unicodeScalars.map { scalar -> Character in
@@ -142,14 +143,6 @@ public enum AgentBoardText {
     }
     let collapsed = String(scalars).split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
     return collapsed.count <= limit ? collapsed : String(collapsed.prefix(limit - 1)) + "…"
-  }
-  public static func summary(_ counts: AgentBoard.Counts) -> String {
-    var parts: [String] = []
-    if counts.needsYou > 0 { parts.append("\(counts.needsYou) \(counts.needsYou == 1 ? "needs" : "need") you") }
-    if counts.working > 0 { parts.append("\(counts.working) working") }
-    if counts.idle > 0 { parts.append("\(counts.idle) idle") }
-    if counts.unknown > 0 { parts.append("\(counts.unknown) unknown") }
-    return parts.isEmpty ? "No agent sessions" : parts.joined(separator: " · ")
   }
   public static func title(_ session: AgentBoard.Session) -> String {
     let name = clean(session.name ?? "")
@@ -171,28 +164,6 @@ public enum AgentBoardText {
     default: return "state not recognized"
     }
   }
-  public static func place(_ session: AgentBoard.Session) -> String {
-    // A session of a remote Mac: the Mac first, then its tmux pane there. The
-    // terminal application of that Mac says nothing useful here.
-    if let host = session.host {
-      let name = "on " + clean(host, limit: 16)
-      if session.mode == "background" { return name + " · background" }
-      guard let tmux = session.terminal.tmux else { return name }
-      return name + " · tmux \(clean(tmux.session, limit: 24)):\(tmux.window).\(tmux.pane)"
-    }
-    if session.mode == "background" { return "background" }
-    if session.terminal.remote { return "remote" }
-    let app = clean(session.terminal.app ?? "", limit: 24)
-    if let tmux = session.terminal.tmux {
-      let pane = "tmux \(clean(tmux.session, limit: 24)):\(tmux.window).\(tmux.pane)"
-      return app.isEmpty ? pane : app + " · " + pane
-    }
-    return app
-  }
-  /// "Claude Code · permission needed · Ghostty"
-  public static func subtitle(_ session: AgentBoard.Session) -> String {
-    [clean(session.agentLabel, limit: 40), detail(session.detail), place(session)].filter { !$0.isEmpty }.joined(separator: " · ")
-  }
   /// 45s, 12m, 3h 05m, 2d 04h.
   public static func elapsed(since: Double?, now: Double = Date().timeIntervalSince1970 * 1000) -> String {
     guard let since else { return "" }
@@ -204,51 +175,10 @@ public enum AgentBoardText {
     if hours < 24 { return String(format: "%dh %02dm", hours, minutes % 60) }
     return String(format: "%dd %02dh", hours / 24, hours % 24)
   }
-  public static func focusHint(_ session: AgentBoard.Session) -> String {
-    if let host = session.host {
-      let name = clean(host, limit: 16)
-      switch session.focus {
-      case "pane": return "Open its tmux pane on \(name), in a new window"
-      case "app": return "Open a shell on \(name), in a new window"
-      default: return "Nothing on \(name) to open from here"
-      }
-    }
-    switch session.focus {
-    case "pane": return "Open its tmux pane"
-    case "tab": return "Open its terminal tab"
-    case "app": return "Bring its terminal forward"
-    default: return "No terminal on this Mac to open"
-    }
-  }
-  public static func accessibility(_ session: AgentBoard.Session, now: Double = Date().timeIntervalSince1970 * 1000) -> String {
-    let time = elapsed(since: session.since, now: now)
-    return [title(session), subtitle(session), time.isEmpty ? "" : "for " + time].filter { !$0.isEmpty }.joined(separator: ", ")
-  }
-  /// The one line in the collapsed toolbar. A task that waits for the person keeps the
-  /// line; otherwise agents that wait for the person take it from the task stage.
-  public static func toolbar(stage: String, taskNeedsPerson: Bool, counts: AgentBoard.Counts?) -> (text: String, attention: Bool) {
-    guard let counts, counts.needsYou > 0, !taskNeedsPerson else { return (stage, taskNeedsPerson) }
-    return ("\(counts.needsYou) \(counts.needsYou == 1 ? "agent needs" : "agents need") you", true)
-  }
-  /// One line for the remote Macs that do not answer, so that their silence is not read as "no agents". Empty when all answer.
-  public static func hostsNote(_ board: AgentBoard) -> String {
-    let silent = (board.hosts ?? []).filter { !$0.ok }
-    guard let first = silent.first else { return "" }
-    let reason = clean(first.message, limit: 120)
-    if silent.count == 1 { return clean(first.name, limit: 16) + " does not answer" + (reason.isEmpty ? "." : ". " + reason) }
-    return silent.map { clean($0.name, limit: 16) }.joined(separator: ", ") + " do not answer. See: clawdtime hosts check NAME"
-  }
-  /// Sessions that need the person and sessions at work always show. Quiet ones are capped.
-  public static func rows(_ board: AgentBoard, quietLimit: Int = 4) -> (shown: [AgentBoard.Session], hidden: Int) {
-    let active = board.sessions.filter { $0.state == .needsYou || $0.state == .working }
-    let quiet = board.sessions.filter { $0.state != .needsYou && $0.state != .working }
-    let kept = Array(quiet.prefix(max(0, quietLimit)))
-    return (active + kept, quiet.count - kept.count)
-  }
 }
 
-/// What agents ask the person right now, as the task service reports it. The person
-/// answers here, and the agent's own hook hands the answer to the agent.
+/// What agents ask the person right now, as the task service reports it. The person answers
+/// on the mascot's bubble, and the agent's own hook hands the answer to the agent.
 public struct PendingDecisions: Codable, Equatable {
   public struct Request: Codable, Equatable {
     public let id: String
@@ -324,31 +254,5 @@ public enum DecisionText {
       let shell = ["bash", "shell", "exec", "exec_command", "local_shell"].contains(request.tool.lowercased())
       return who(request) + (shell ? " asks to run" : " asks to use " + AgentBoardText.clean(request.tool, limit: 40))
     }
-  }
-  public static func summary(_ request: PendingDecisions.Request) -> String { AgentBoardText.clean(request.summary, limit: 600) }
-  /// Why a request has no Approve here.
-  public static func terminalOnly(_ request: PendingDecisions.Request) -> String {
-    request.approvalOnlyInTerminal ? "This is only a part of the request. Approve it in its terminal, or deny it here." : ""
-  }
-  /// What the person answered before to the same request in this project.
-  public static func history(_ request: PendingDecisions.Request) -> String {
-    func times(_ count: Int) -> String { count == 1 ? "once" : "\(count) times" }
-    switch (request.allowedBefore, request.deniedBefore) {
-    case (0, 0): return ""
-    case (let allowed, 0): return "You allowed this \(times(allowed)) here."
-    case (0, let denied): return "You denied this \(times(denied)) here."
-    case (let allowed, let denied): return "Here before: allowed \(times(allowed)), denied \(times(denied))."
-    }
-  }
-  /// What the person said before that bears on this request, when memory is on.
-  public static func said(_ request: PendingDecisions.Request) -> String {
-    let text = AgentBoardText.clean(request.recalled ?? "", limit: 120)
-    return text.isEmpty ? "" : "You said: " + text
-  }
-  /// How long the answer still works from here. After that the agent's terminal is the only place.
-  public static func remaining(_ request: PendingDecisions.Request, now: Double = Date().timeIntervalSince1970 * 1000) -> String {
-    let seconds = max(0, Int((request.holdUntil - now) / 1000))
-    if seconds >= 90 { return "\((seconds + 30) / 60) min left to answer here" }
-    return "\(seconds) s left to answer here"
   }
 }

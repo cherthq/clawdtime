@@ -353,7 +353,10 @@ describe("which engine does the computer work in a desktop service", () => {
       await chosen.execution!.submit("talk_1_execution", "Save the note"),
     ).toMatchObject({ message: expect.stringMatching(/^Started\./) });
     // A stand-in for the panel: it takes each command once and posts a made-up result.
-    const seen = observation([element(1, { title: "Save" })]);
+    const before = observation([element(1, { title: "Save" })]);
+    // After the click the app shows that it saved: a done then rests on a change.
+    const after = observation([element(1, { title: "Saved" })]);
+    let seen = before;
     const served: NonNullable<HandsNext["command"]>[] = [];
     let last = 0;
     for (
@@ -386,6 +389,7 @@ describe("which engine does the computer work in a desktop service", () => {
           : {}),
       });
       expect(await posted.json()).toEqual({ ok: true });
+      if (command.command.kind === "click") seen = after;
     }
     expect(served.map((item) => item.command.kind)).toEqual([
       "observe",

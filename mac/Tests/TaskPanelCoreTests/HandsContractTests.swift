@@ -48,9 +48,12 @@ final class HandsContractTests: XCTestCase {
       (#"{"kind":"open_url","url":"https://example.com/a?b=1","browser":"Fixture Browser"}"#, .openURL(url: "https://example.com/a?b=1", browser: "Fixture Browser")),
       (#"{"kind":"quit_app","name":"TextEdit"}"#, .quitApp(name: "TextEdit")),
       (#"{"kind":"wait","ms":250}"#, .wait(ms: 250)),
+      (#"{"kind":"zoom","x":900,"y":600.5,"w":240,"h":150,"width":960,"height":600}"#,
+       .zoom(x: 900, y: 600.5, w: 240, h: 150, width: 960, height: 600)),
     ]
     XCTAssertEqual(Set(cases.map { $0.1.kind }),
-      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "switch_previous_app", "open_url", "quit_app", "wait"])
+      ["observe", "move", "click", "drag", "scroll", "type", "key", "open_app", "switch_desktop", "switch_previous_app", "open_url", "quit_app", "wait",
+       "zoom"])
     for (json, expected) in cases {
       let decoded = try command(json)
       XCTAssertEqual(decoded, expected, json)
@@ -73,6 +76,11 @@ final class HandsContractTests: XCTestCase {
       #"{"kind":"move","x":"1","y":2}"#,
       #"{"kind":"observe","image":1,"elements":true}"#,
       #"{"kind":"observe","image":true,"elements":true,"window":"all"}"#,
+      // A closer look with no size, a picture outside the limits, or a field more.
+      #"{"kind":"zoom","x":1,"y":2,"w":4,"h":150,"width":960,"height":600}"#,
+      #"{"kind":"zoom","x":1,"y":2,"w":240,"h":150,"width":4000,"height":600}"#,
+      #"{"kind":"zoom","x":1,"y":2,"w":240,"h":150,"width":960}"#,
+      #"{"kind":"zoom","x":1,"y":2,"w":240,"h":150,"width":960,"height":600,"elements":true}"#,
       #"{"kind":"click","x":1,"y":2,"button":"middle","count":1}"#,
       #"{"kind":"click","x":1,"y":2,"button":"left","count":3}"#,
       #"{"kind":"click","x":1,"y":2,"button":"left","count":0}"#,
@@ -224,6 +232,10 @@ final class HandsContractTests: XCTestCase {
       XCTAssertEqual(command.missingRight(accessibility: false, screenRecording: true), .noAccessibility, command.kind)
       XCTAssertNil(command.missingRight(accessibility: true, screenRecording: false), command.kind)
     }
+    // A closer look is a picture: it needs the screen, and no Accessibility.
+    XCTAssertEqual(HandCommand.zoom(x: 1, y: 2, w: 240, h: 150, width: 960, height: 600).missingRight(accessibility: true, screenRecording: false),
+      .noScreenRecording)
+    XCTAssertNil(HandCommand.zoom(x: 1, y: 2, w: 240, h: 150, width: 960, height: 600).missingRight(accessibility: false, screenRecording: true))
     for command in [HandCommand.openURL(url: "https://example.com"), .wait(ms: 5)] {
       XCTAssertNil(command.missingRight(accessibility: false, screenRecording: false), command.kind)
     }
@@ -274,6 +286,40 @@ final class HandsContractTests: XCTestCase {
     // A service that does not answer is asked less and less often, whatever the run was.
     XCTAssertEqual([1, 2, 3, 4, 9].map { HandsPace.delay(active: true, failures: $0) }, [1, 2, 4, 5, 5])
     XCTAssertEqual(HandsPace.delay(active: false, failures: 2), 2)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 2, elapsed: 1, held: true, ran: true), 2)
+  }
+  func testAServiceThatHoldsTheReadIsReadAgainAtOnceWithNoBusyLoop() {
+    // The read was held until a command came or the time passed: the next read goes at once.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: HandsPace.hold, held: true), 0)
+    XCTAssertEqual(HandsPace.delay(active: false, failures: 0, elapsed: 0.4, held: true), 0)
+    // A service that says that it holds and still answers at once is not read more than 50 times a second.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0, held: true), HandsPace.shortestGap)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0.005, held: true), 0.015, accuracy: 0.000_001)
+    XCTAssertGreaterThan(HandsPace.shortestGap, 0)
+    // The held read stays well under the time limit of one request of the panel, 4 seconds.
+    XCTAssertLessThanOrEqual(HandsPace.hold, 2)
+    // A service that answers at once keeps the old pace between the starts of two reads.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0.02), 0.10, accuracy: 0.000_001)
+    XCTAssertEqual(HandsPace.delay(active: false, failures: 0, elapsed: 0.05), 0.20, accuracy: 0.000_001)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 3), 0)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: .nan), 0.12)
+    // Right after a result the next command of the step usually waits already: one read at once.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0.3, ran: true), 0)
+  }
+  func testWhatACommandCostGoesAsNumbersInOneHeader() {
+    XCTAssertNil(HandsCost().headerValue)
+    var cost = HandsCost(captureMs: 93, encodeMs: 21, imageBytes: 183_422, walkMs: 412)
+    XCTAssertEqual(cost.headerValue, "capture=93;encode=21;bytes=183422;walk=412")
+    // A second look of the same command adds to the first. A part that neither had stays out.
+    cost.add(HandsCost(walkMs: 40, glideMs: 0))
+    XCTAssertEqual(cost.headerValue, "capture=93;encode=21;bytes=183422;walk=452;glide=0")
+    XCTAssertEqual(HandsCost(glideMs: 360).headerValue, "glide=360")
+    // Seconds as whole milliseconds, never below zero and never more than a day.
+    XCTAssertEqual(HandsCost.milliseconds(0.2404), 240)
+    XCTAssertEqual(HandsCost.milliseconds(-1), 0)
+    XCTAssertEqual(HandsCost.milliseconds(.nan), 0)
+    XCTAssertEqual(HandsCost.milliseconds(1e12), 86_400_000)
+    XCTAssertEqual(HandsCost(walkMs: Int.max).headerValue, "walk=86400000")
   }
   func testTheLastCheckBeforeAnEventSendsNothingAfterStopOrWhenThePersonTookOver() {
     let running = HandsNext.Run(active: true, goal: "Save the note", step: 2, state: "running")
@@ -298,5 +344,17 @@ final class HandsContractTests: XCTestCase {
                                      run: .init(active: false, goal: "", step: 0, state: "running")), .refused)
     // The service did not answer: nothing is sent.
     XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false, run: nil), .failed)
+  }
+
+  func testACloserLookShowsOnlyThePartOfTheDisplayThatIsThere() {
+    let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    XCTAssertEqual(HandsZoom.region(x: 100, y: 200, w: 240, h: 150, display: display), CGRect(x: 100, y: 200, width: 240, height: 150))
+    // Over an edge: only the part on the display.
+    XCTAssertEqual(HandsZoom.region(x: 1400, y: 900, w: 240, h: 150, display: display), CGRect(x: 1400, y: 900, width: 112, height: 82))
+    XCTAssertEqual(HandsZoom.region(x: -50, y: -20, w: 100, h: 100, display: display), CGRect(x: 0, y: 0, width: 50, height: 80))
+    // Nothing of it on the display, or a number that is no number.
+    XCTAssertNil(HandsZoom.region(x: 2000, y: 100, w: 240, h: 150, display: display))
+    XCTAssertNil(HandsZoom.region(x: .nan, y: 100, w: 240, h: 150, display: display))
+    XCTAssertNil(HandsZoom.region(x: 100, y: 100, w: .infinity, h: 150, display: display))
   }
 }

@@ -17,15 +17,19 @@ import { realRunner, type Runner } from "./focus.js";
 import { looksSecret } from "./memory.js";
 
 /**
- * Jobs: work that ClawdTime hands to a coding agent on this Mac.
+ * Jobs: code work that ClawdTime hands to a coding agent on this Mac.
  *
- * ClawdTime answers and decides. It does not build, run or browse by itself.
- * When the person asks for work that none of its own tools does, it starts a
- * new session of the person's own coding agent, in a terminal window that the
- * person can see, with the job as its first message. That session works under
- * the person's own agent settings: ClawdTime adds no permission. It appears on
- * the board as every other session does, so it can be watched, answered and
- * shown.
+ * ClawdTime does work on the screen itself, through its computer engine: an
+ * app, a web page, an account, a file in an app, a setting. A job is for code
+ * work: a repository, a build, a test, a script, a pull request, work in a
+ * terminal, or work for a coding agent that the person names (`route.ts`
+ * reads which road a message takes). Work that no tool of ClawdTime does
+ * goes to a job too. ClawdTime does not build or run code by itself. For a
+ * job it starts a new session of the person's own coding agent, in a terminal
+ * window that the person can see, with the job as its first message. That
+ * session works under the person's own agent settings: ClawdTime adds no
+ * permission. It appears on the board as every other session does, so it can
+ * be watched, answered and shown.
  *
  * The job is the person's own sentence. It is written to a file and is never
  * part of a shell command, so no spoken word can become one. It reaches the

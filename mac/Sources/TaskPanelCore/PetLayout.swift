@@ -111,7 +111,7 @@ public struct PetStatus: Equatable, Sendable {
     public let key: String
     public let title: String
     public let detail: String
-    /// The one session to bring forward on a click. Nil opens the panel.
+    /// The one session to bring forward on a click. Nil opens the chat.
     public let sessionId: String?
     /// A request that the person can allow or deny right on the bubble.
     public let decisionId: String?
@@ -160,7 +160,7 @@ public struct PetStatus: Equatable, Sendable {
         // The bubble offers Approve and Deny only for a request that it shows in full.
         decisionId: request.isQuestion || request.kind == "plan" || request.approvalOnlyInTerminal ? nil : request.id)
     } else if taskNeedsPerson {
-      bubble = Bubble(key: "task", title: "Your task needs an answer", detail: "Open the board to answer.", sessionId: nil)
+      bubble = Bubble(key: "task", title: "Your task needs an answer", detail: "Open the chat to answer.", sessionId: nil)
     } else if waiting.count == 1, let session = waiting.first {
       let time = AgentBoardText.elapsed(since: session.since, now: now)
       bubble = Bubble(key: session.id + ":" + String(Int(session.since ?? 0)), title: AgentBoardText.title(session),

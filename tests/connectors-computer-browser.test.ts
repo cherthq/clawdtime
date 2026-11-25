@@ -12,6 +12,8 @@ import {
   runCommand,
   runScript,
   supportedBrowsers,
+  switchTabScript,
+  tabsScript,
   type BrowserClock,
   type CommandOutput,
   type CommandRunner,
@@ -939,5 +941,254 @@ describe("the browser driver: the command runner of the program", () => {
     ).toBeNull();
     expect((await runCommand("/bin/sleep", ["5"], 50)).status).toBeNull();
     expect((await runCommand("/usr/bin/false", [], 5000)).status).toBe(1);
+  });
+});
+
+describe("the browser driver: hover, choose, keys, waits and tabs", () => {
+  it("sends a hover, a choice and a key each as its own call, then reads the page", async () => {
+    const steps: [(browser: BrowserPort) => Promise<unknown>, PageCall][] = [
+      [(browser) => browser.hover!(1), { do: "hover", index: 1 }],
+      [
+        (browser) => browser.select!(1, "  Large \n"),
+        { do: "select", index: 1, option: "Large" },
+      ],
+      [(browser) => browser.key!("Enter"), { do: "key", combo: "Enter" }],
+      [
+        (browser) => browser.key!("shift + tab"),
+        { do: "key", combo: "Shift+Tab" },
+      ],
+    ];
+    for (const [step, call] of steps) {
+      const { browser, sent, script } = paper([done, reading()]);
+      expect(await step(browser)).toEqual({ browser: "chrome", ...page() });
+      expect(sent().map((item) => item.args[2])).toEqual([
+        script(call),
+        script({ do: "read" }),
+        script({ do: "read" }, 2),
+      ]);
+      for (const item of sent()) expect(item.args[1]).toBe(runScript(chrome));
+    }
+  });
+
+  it("refuses a number, an option, a key, a wait or a tab that cannot be sent, before any command runs", async () => {
+    const { browser, calls } = paper([done, reading()]);
+    const number =
+      "Give the number of an element from the last reading of the page.";
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      await expect(browser.hover(bad)).rejects.toThrow(number);
+      await expect(browser.select(bad, "Large")).rejects.toThrow(number);
+    }
+    for (const option of ["", "   ", 5 as unknown as string])
+      await expect(browser.select(1, option)).rejects.toThrow(
+        "Name the option by the text that it shows.",
+      );
+    for (const combo of ["cmd+q", "a", "Delete", "", 13 as unknown as string])
+      await expect(browser.key(combo)).rejects.toThrow(/^A page takes Enter/);
+    for (const ms of [99, 10_001, 1.5, Number.NaN])
+      await expect(browser.waitFor(null, ms)).rejects.toThrow(
+        "A wait takes 100 to 10000 milliseconds.",
+      );
+    await expect(browser.waitFor("  ", 500)).rejects.toThrow(
+      "Give the words to wait for, or leave them out.",
+    );
+    for (const tab of [0, -2, 1.5, 10_000, Number.POSITIVE_INFINITY])
+      await expect(browser.switchTab(tab)).rejects.toThrow(
+        "Give the number of a tab from the last list of tabs.",
+      );
+    expect(calls).toEqual([]);
+  });
+
+  it("waits until the words show on the page, whatever their case and spaces, and says so", async () => {
+    const { browser, sent, slept } = paper([
+      reading({ text: "Loading" }),
+      reading({ text: "Loading" }),
+      reading({ text: "Your ORDER\nis placed." }),
+    ]);
+    expect(await browser.waitFor("order  is placed", 5000)).toEqual({
+      browser: "chrome",
+      ...page({ text: "Your ORDER\nis placed." }),
+      found: true,
+    });
+    expect(sent()).toHaveLength(3);
+    // It reads at once, then at the usual pace.
+    expect(slept).toEqual([250, 250]);
+    for (const item of sent()) expect(item.args[1]).toBe(runScript(chrome));
+  });
+
+  it("gives the last reading with found false when the time runs out", async () => {
+    const { browser, slept } = paper([reading({ text: "Loading" })]);
+    expect(await browser.waitFor("Placed", 600)).toEqual({
+      browser: "chrome",
+      ...page({ text: "Loading" }),
+      found: false,
+    });
+    expect(slept).toEqual([250, 250, 100]);
+  });
+
+  it("with no words, waits until the page is ready and holds still, at most the time given", async () => {
+    const settles = paper([
+      reading({}, { ready: false }),
+      reading({ text: "Half" }),
+      reading(),
+      reading(),
+    ]);
+    const settled = await settles.browser.waitFor(null, 5000);
+    expect(settled).toEqual({ browser: "chrome", ...page() });
+    expect("found" in settled).toBe(false);
+    expect(settles.sent()).toHaveLength(4);
+    const never = paper([reading({}, { ready: false })]);
+    expect(await never.browser.waitFor(null, 300)).toEqual({
+      browser: "chrome",
+      ...page(),
+    });
+    expect(never.slept).toEqual([250, 50]);
+  });
+
+  it("gives the failure of the page when no reading of the wait worked", async () => {
+    const { browser } = paper(["clawdtime:no-answer"]);
+    await expect(browser.waitFor("Placed", 300)).rejects.toThrow(
+      /cannot run a script on the page in front/,
+    );
+  });
+
+  it("lists the tabs of the front window with a script of the browser's own dictionary", () => {
+    expect(tabsScript(chrome)).toBe(`on run argv
+  try
+    tell application id "com.google.Chrome"
+      if (count of windows) is 0 then return "clawdtime:no-window"
+      set theAddresses to URL of every tab of front window
+      set theTitles to title of every tab of front window
+      set theActive to active tab index of front window
+    end tell
+    set theSeparator to character id 9
+    set theReport to ""
+    repeat with theIndex from 1 to (count of theAddresses)
+      set theAddress to item theIndex of theAddresses
+      if theAddress is missing value then set theAddress to ""
+      set theTitle to item theIndex of theTitles
+      if theTitle is missing value then set theTitle to ""
+      set theReport to theReport & theIndex & theSeparator & (theIndex = theActive) & theSeparator & theAddress & theSeparator & theTitle & linefeed
+    end repeat
+    return theReport
+  on error theMessage number theNumber
+    return "clawdtime:error:" & theNumber & ":" & theMessage
+  end try
+end run`);
+    expect(tabsScript(safari)).toContain(
+      "set theTitles to name of every tab of front window",
+    );
+    expect(tabsScript(safari)).toContain(
+      "set theActive to index of current tab of front window",
+    );
+    expect(tabsScript(safari)).toContain(
+      'if (count of documents) is 0 then return "clawdtime:no-window"',
+    );
+    expect(tabsScript(brave)).toContain('application id "com.brave.Browser"');
+  });
+
+  it("reads the list of the tabs, leaves out a line of another shape, then reads the page in front", async () => {
+    const listed = [
+      "1\tfalse\thttps://mail.example/\tInbox (3)",
+      "2\ttrue\thttps://example.test/orders\tOrders",
+      "not a tab",
+      "3\tmaybe\thttps://x.example/\tX",
+      `4\tfalse\t\t${"Long ".repeat(80)}`,
+    ].join("\n");
+    const { browser, sent, script, slept } = paper([listed, reading()]);
+    const seen = await browser.tabs();
+    expect(seen).toEqual({
+      browser: "chrome",
+      ...page(),
+      tabs: [
+        {
+          index: 1,
+          title: "Inbox (3)",
+          url: "https://mail.example/",
+          active: false,
+        },
+        {
+          index: 2,
+          title: "Orders",
+          url: "https://example.test/orders",
+          active: true,
+        },
+        {
+          index: 4,
+          title: "Long ".repeat(40).trim(),
+          url: "",
+          active: false,
+        },
+      ],
+    });
+    expect(sent()[0]).toEqual({
+      command: "/usr/bin/osascript",
+      args: ["-e", tabsScript(chrome)],
+      timeoutMs: 8000,
+    });
+    expect(sent()[1]!.args).toEqual([
+      "-e",
+      runScript(chrome),
+      script({ do: "read" }),
+    ]);
+    // A list changes nothing, so it waits for nothing.
+    expect(slept).toEqual([]);
+  });
+
+  it("says why when the tabs cannot be listed", async () => {
+    await expect(paper(["no tabs here"]).browser.tabs()).rejects.toThrow(
+      "Google Chrome gave an answer that ClawdTime could not read: read the page again.",
+    );
+    await expect(paper(["clawdtime:no-window"]).browser.tabs()).rejects.toThrow(
+      "Google Chrome has no window open",
+    );
+    await expect(
+      paper([
+        marked(-1743, "Not authorized to send Apple events to Google Chrome."),
+      ]).browser.tabs(),
+    ).rejects.toBeInstanceOf(BrowserClosed);
+  });
+
+  it("switches to a tab by its place, passed as an argument, then reads the page when it is ready", async () => {
+    const { browser, sent, script } = paper([
+      "clawdtime:switched",
+      reading({ title: "Inbox" }),
+      reading({ title: "Inbox" }),
+    ]);
+    expect((await browser.switchTab(3)).title).toBe("Inbox");
+    expect(sent()[0]).toEqual({
+      command: "/usr/bin/osascript",
+      args: ["-e", switchTabScript(chrome), "3"],
+      timeoutMs: 8000,
+    });
+    expect(sent()[1]!.args[2]).toBe(script({ do: "read" }));
+    expect(switchTabScript(chrome)).toBe(`on run argv
+  try
+    set theIndex to (item 1 of argv) as integer
+    tell application id "com.google.Chrome"
+      if (count of windows) is 0 then return "clawdtime:no-window"
+      if theIndex > (count of tabs of front window) then return "clawdtime:no-tab"
+      set active tab index of front window to theIndex
+    end tell
+    return "clawdtime:switched"
+  on error theMessage number theNumber
+    return "clawdtime:error:" & theNumber & ":" & theMessage
+  end try
+end run`);
+    expect(switchTabScript(safari)).toContain(
+      "set current tab of front window to tab theIndex of front window",
+    );
+    // The browser does not come forward: the person keeps the app that they use.
+    expect(switchTabScript(chrome)).not.toContain("activate");
+  });
+
+  it("says when the tab is gone, and when the answer cannot be read", async () => {
+    await expect(
+      paper(["clawdtime:no-tab"]).browser.switchTab(9),
+    ).rejects.toThrow(
+      "That tab is not in the front window any more: list the tabs again.",
+    );
+    await expect(paper(["what"]).browser.switchTab(1)).rejects.toThrow(
+      /could not read/,
+    );
   });
 });

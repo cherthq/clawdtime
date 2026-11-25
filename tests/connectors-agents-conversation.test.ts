@@ -1028,11 +1028,8 @@ describe("words for a session that runs are never a job", () => {
       "update the docs for the release tomorrow",
       "fix the page for the client tomorrow",
       "build the deck for the investors next week",
-      "write the post about the launch tomorrow",
       // A thing that carries its own time.
       "add a reminder tomorrow",
-      "create a meeting next week",
-      "add a calendar event tomorrow",
       "rename the tab to later",
       "change the launch date to tomorrow",
       "save the draft for later",
@@ -1045,7 +1042,6 @@ describe("words for a session that runs are never a job", () => {
       "run the check later",
       "close the modal in a moment",
       "start the animation in a moment",
-      "send the email in a bit",
       // The name of a feature, and words of the thing itself.
       "add watch later",
       "implement read later",
@@ -1111,6 +1107,24 @@ describe("words for a session that runs are never a job", () => {
       expect(said.windows, words).toHaveLength(1);
       expect(said.answer, words).toContain("Requested a new ");
     });
+
+    // Work on the screen with a time in its thing is work for now, as above.
+    // It is no job: with computer use off, the person hears what ClawdTime
+    // would do and the command that turns computer use on.
+    it.each([
+      "write the post about the launch tomorrow",
+      "create a meeting next week",
+      "add a calendar event tomorrow",
+      "send the email in a bit",
+    ])(
+      "starts no job for the screen work %j, and says how to turn computer use on",
+      async (words) => {
+        const said = await run(words, [[call("start_job")], "Okay."]);
+        expect(said.windows, words).toHaveLength(0);
+        expect(said.answer, words).toContain("clawdtime computer on");
+        expect(said.answer, words).not.toMatch(/\bI (?:cannot|can't)\b/);
+      },
+    );
   });
 
   describe("a message that only asks to be told later in other words, or for a reminder: no job, whatever the model calls", () => {
@@ -13483,7 +13497,6 @@ describe("more work on a job that still runs", () => {
     // "Those" and "these" before a noun name a thing of this sentence.
     "move these screenshots into a folder",
     "delete those old logs in my downloads",
-    "close those windows",
   ])("starts beside it for other work: %j", async (words) => {
     const made = mac();
     expect((await made.jobs.start(work)).ok).toBe(true);

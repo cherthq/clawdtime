@@ -51,32 +51,43 @@ public struct GuidedPath: Equatable, Sendable {
     let count = max(1, Int(min(600, (duration / interval).rounded(.up))))
     return (1...count).map { $0 == count ? target : point(at: duration * Double($0) / Double(count)) }
   }
-  /// Seconds for the real pointer to cross `length` points: short, and a little longer for a long way.
-  public static func moveDuration(length: Double) -> Double { min(0.18, 0.06 + max(0, length) / 6000) }
+  /// Seconds for the real pointer to cross `length` points, as a hand moves it: long enough that the eye
+  /// sees the pointer of the Mac travel, in three frames of a call's picture at least, and still short. A
+  /// way of 150 to 400 points takes 0.18 to 0.22 seconds, a long way 0.24 at most.
+  public static func moveDuration(length: Double) -> Double { min(0.24, 0.15 + max(0, length) / 6000) }
+  /// The real pointer bends off the straight line by this share of its way, as a hand does: a little less
+  /// than the guided cursor, so it does not swing wide.
+  public static let moveArc = 0.06
   /// Seconds for a drag: slow enough that an app follows it.
   public static func dragDuration(length: Double) -> Double { min(0.60, 0.25 + max(0, length) / 3000) }
-  /// Seconds for the guided cursor to glide `length` points. A glide is slow enough to follow on a
-  /// phone that shows the screen: the picture of a call has 10 frames a second, so the shortest
-  /// glide is in four of them or more. A long way takes longer than a short one, up to a limit.
-  /// The limit is low, because the screen can change between the worker's last look and the
-  /// event: the glide and the wait together stay at one second or under.
-  public static let shortestGlide = 0.45, longestGlide = 0.70
+  /// Seconds for the guided cursor to glide `length` points. A glide is quick, and it still reads as a
+  /// way: the picture of a call has 20 frames a second, so the shortest glide is in three of them. A long
+  /// way takes longer than a short one, up to a limit. A way of 150 to 400 points, the usual one between
+  /// two actions, takes 0.19 to 0.25 seconds. The limit is low, because the screen can change between the
+  /// worker's last look and the event: the glide and the wait together stay under 0.4 seconds.
+  public static let shortestGlide = 0.15, longestGlide = 0.26
   public static func glideDuration(length: Double) -> Double {
     guard length.isFinite else { return shortestGlide }
-    return min(longestGlide, shortestGlide + max(0, length) / 2400)
+    return min(longestGlide, shortestGlide + max(0, length) / 4000)
   }
-  /// Seconds that the cursor waits at the target before the click or the first key, so the eye
-  /// is there before the hand and the label can be read: three frames of a call's picture. Reduce
-  /// Motion had no glide to lead the eye, so its wait is longer. A cursor that did not move (the
-  /// next key in the field that it points at) already has the eye there: it waits only for the new
-  /// label, one or two frames.
-  public static func dwell(still: Bool, moved: Bool = true) -> Double { !moved ? 0.15 : still ? 0.40 : 0.30 }
+  /// Seconds that the cursor waits at the target before the click or the first key, so the eye is there
+  /// before the hand and the label can be read: two frames of a call's picture. Reduce Motion has no glide
+  /// to lead the eye, so its wait is a little longer, and it is still short. A cursor that did not move (the
+  /// next key in the field that it points at) already has the eye there: it waits one frame for a new label,
+  /// and not at all when the label is the same.
+  public static let arrivalWait = 0.10, stillWait = 0.12, relabelWait = 0.05
+  public static func dwell(still: Bool, moved: Bool = true, relabeled: Bool = true) -> Double {
+    if !moved { return relabeled ? relabelWait : 0 }
+    return still ? stillWait : arrivalWait
+  }
+  /// The most time that the cursor takes before an input: the longest glide and its wait.
+  public static var longestLead: Double { longestGlide + max(arrivalWait, stillWait) }
   /// A way shorter than this many points is no way: the cursor is already at the target, and it
   /// does not glide.
   public static let inPlace = 3.0
   /// Seconds that the cursor stays after a command, before it fades. A command that comes in this
   /// time takes the cursor on from where it is. It is longer than the usual time between two steps
-  /// (a look and a plan, about two seconds), so the cursor goes from one action to the next and
+  /// (a look and a plan, one to three seconds), so the cursor goes from one action to the next and
   /// does not come out of the mascot again for each one.
   public static let rest = 3.0
   /// Where the cursor leaves from. While it is on the screen it goes on from where it is, so its

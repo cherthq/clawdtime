@@ -34,7 +34,16 @@ import {
 import { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
-import { chooseExecution } from "../connectors/computer/service.js";
+import {
+  buildOwnerReach,
+  chooseExecution,
+} from "../connectors/computer/service.js";
+import {
+  isTextTurn,
+  voiceOnlyCall,
+  withOwnerWords,
+} from "../connectors/computer/reach.js";
+import { ChatLog } from "../connectors/agents/brain.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
 import { PhoneDesktop } from "../src/control/phone-desktop.js";
 import { deskTasks } from "../connectors/agents/tasks.js";
@@ -516,8 +525,9 @@ const lineRuntimeWatch = lineRuntime
 // background runtime, then the bundled runtime. With none of them, the
 // app-owned computer worker runs, when the person turned it on with
 // `clawdtime computer on` and a key for the language model is in this
-// environment. A service that a test started never has that worker, so no
-// command for the hands can come out of a test.
+// environment or in the key store of the state folder (`clawdtime keys`). A
+// service that a test started never has that worker, so no command for the
+// hands can come out of a test.
 const connectedBrowser = desktop
   ? browserFromEnvironment(process.env)
   : undefined;
@@ -535,6 +545,8 @@ const chosen = desktop
       // front through the browser's own scripting, in place of pixels. It is
       // a switch, off unless CLAWDTIME_COMPUTER_BROWSER=on: it runs a script
       // in the person's own signed-in pages, so the person turns it on.
+      // CLAWDTIME_COMPUTER_BROWSER=own drives ClawdTime's own browser, with
+      // its own profile, instead. It starts at the first browser step.
       // Without it the worker refuses the browser actions and uses the screen.
       ...(connectedBrowser ? { browser: connectedBrowser } : {}),
     })
@@ -568,10 +580,56 @@ if (proactive)
   chosen?.computer.worker?.setOwnershipGuard(
     () =>
       !proactive.viewOccupied() &&
-      !proactive.coordinator
-        .list()
-        .some((i) => ["dispatching", "connected", "unknown"].includes(i.state)),
+      !proactive.coordinator.list().some(
+        (i) =>
+          ["dispatching", "connected", "unknown"].includes(i.state) &&
+          // A call of the reach only talks: it shares no screen, so the
+          // worker keeps the screen and can take the answer said on it.
+          !voiceOnlyCall(i),
+      ),
   );
+// The reach and the routines of the computer worker. The reach calls the
+// owner on the line when a question waits too long in the chat, and texts
+// when the call does not get through. Routines hand a request of the owner
+// to the worker at its time. Both read and act only through the worker's own
+// status, answer, stop and submit.
+const lineInCall = () =>
+  !!(
+    proactive &&
+    (proactive.viewOccupied() ||
+      proactive.coordinator
+        .list()
+        .some((i) => ["dispatching", "connected", "unknown"].includes(i.state)))
+  ) ||
+  (phoneDesktop?.hasOpenCall() ?? false);
+const owner = chosen?.computer.worker
+  ? buildOwnerReach({
+      worker: chosen.computer.worker,
+      root: stateRoot({ env: process.env, home: homedir() }),
+      env: process.env,
+      projectRoot,
+      proactive: proactive
+        ? {
+            coordinator: proactive.coordinator,
+            configured: proactive.deliveryConfigured,
+            pump: () => {
+              void proactive.service.pump().catch(() => {
+                /* The queue runs again on its own turn. */
+              });
+            },
+            stop: (id) => {
+              void proactive.service.stop(id).catch(() => {
+                /* The call ends at its own deadline. */
+              });
+            },
+          }
+        : undefined,
+      liveCall: lineInCall,
+      notify: (text) => agentBoard?.appendExecutionResult(text),
+    })
+  : undefined;
+if (proactive && owner?.reach)
+  proactive.attachComputer(owner.reach.proactiveSource());
 agentBoard =
   desktop && desktopSetup && flags.get("--agents") !== "false"
     ? new BoardFeed({
@@ -598,6 +656,25 @@ agentBoard =
           : {}),
       })
     : undefined;
+// The owner's words reach the routines, and a text reply reaches the
+// question of the reach, before the language model of the chat reads them.
+if (agentBoard && owner) {
+  const board = agentBoard;
+  const root = stateRoot({ env: process.env, home: homedir() });
+  const log = new ChatLog(root);
+  board.say = withOwnerWords(board.say.bind(board), {
+    reach: owner.reach ?? undefined,
+    routine: (words) => owner.routines.fromWords(words),
+    fromText: (words) => isTextTurn(root, words),
+    answered: (text, reply, via = "chat") => {
+      const at = Date.now();
+      log.append({ role: "user", text, at, via });
+      const message = { role: "assistant" as const, text: reply, at, via };
+      log.append(message);
+      return message;
+    },
+  });
+}
 agentBoard?.start();
 process.on("exit", () => agentBoard?.close());
 const app = createTaskApp(
@@ -625,6 +702,17 @@ const proactiveWatch = proactive
       });
     }, 1000)
   : undefined;
+const ownerWatch = owner
+  ? setInterval(() => {
+      void owner.reach?.tick().catch(() => {
+        /* The record of the reach stays; the next turn reads again. */
+      });
+      void owner.routines.tick().catch(() => {
+        /* A routine waits for the next turn. */
+      });
+    }, 1000)
+  : undefined;
+ownerWatch?.unref();
 const presentationWatch = presentation
   ? setInterval(() => {
       void presentation!.reconcile().catch(() => {});
@@ -660,6 +748,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     if (presentationWatch) clearInterval(presentationWatch);
     if (reviewWatch) clearInterval(reviewWatch);
     if (proactiveWatch) clearInterval(proactiveWatch);
+    if (ownerWatch) clearInterval(ownerWatch);
     proactive?.service.close();
     reviews?.close();
     if (lineRuntimeWatch) clearInterval(lineRuntimeWatch);
@@ -682,6 +771,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
             .map((intent) => proactive.service.stop(intent.id)),
         );
       }
+      // ClawdTime's own browser closes its control port with the service.
+      await connectedBrowser?.close?.().catch(() => {});
       await background?.close();
       await bundled?.close();
       await calls?.close();

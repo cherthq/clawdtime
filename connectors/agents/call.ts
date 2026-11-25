@@ -164,6 +164,16 @@ export const holdsBack = (spoken: string) => {
 };
 
 /**
+ * The strict yes for an action that waits for one: in the chat, on a call and
+ * by text. Never a bare ok, okay, sure, yeah or yep, never a question, and
+ * never a yes with a condition, a delay, a doubt or a thanks after it.
+ */
+export const explicitApprovalYes =
+  /^(?:(?:please|pls|plz)[,\s]+)?(?:yes(?:[,\s]+(?:please|pls|plz))?(?:[,\s]+(?:do\s+it|go\s+ahead(?:\s+and\s+do\s+it)?|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|proceed|confirm(?:\s+(?:it|that))?|send\s+(?:it|that)|click\s+(?:it|that)|submit\s+(?:it|that)))?|i\s+approve|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|confirm(?:\s+(?:it|that))?|go\s+ahead(?:\s+and\s+do\s+it)?|do\s+it)(?:[,\s]+(?:please|pls|plz))?[.!]*$/i;
+/** Explicit no or refusal for a waiting computer-action approval (never a question). */
+export const explicitApprovalNo =
+  /^(?:(?:please|pls|plz)[,\s]+)?(?:no|nope|nah|deny(?:\s+it)?|decline|reject|refuse|cancel|don['\u2019]?t|do\s+not)(?:[,\s]+(?:please|pls|plz))?[.!]*$|^(?:(?:no|nope|nah)[,\s]+)?(?:don['\u2019]?t|do\s+not|deny|decline|reject|refuse)\s+(?:do\s+(?:it|that)|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|send(?:\s+(?:it|that))?|click(?:\s+(?:it|that))?|submit(?:\s+(?:it|that))?|proceed|it|that)(?:[,\s]+(?:please|pls|plz))?[.!]*$/i;
+/**
  * Reads what the person said as an answer. It returns null when the words are
  * not clear: then the call or the chat asks again. Silence, noise, an
  * unrelated sentence, yes and no together, an approval with "not" in the

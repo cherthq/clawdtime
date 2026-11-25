@@ -1,8 +1,12 @@
 # Agent board
 
 The agent board shows every coding-agent session on this Mac in one place: which
-sessions wait for you, which ones work, and which ones are idle. One click, or
-one command, brings the terminal of a session to the front.
+sessions wait for you, which ones work, and which ones are idle. One command
+brings the terminal of a session to the front.
+
+The board is on the command line only: `clawdtime agents`. The desktop panel no
+longer shows it. ClawdTime is a computer use agent, and coding agents run only for
+code work, in the background. A click on the mascot opens the chat.
 
 The board itself only reads. Listing sessions and opening a terminal send
 nothing to an agent. Answering an agent, typing into a terminal and calls are
@@ -25,13 +29,12 @@ In `agents watch`, the arrow keys or `j` and `k` move, Enter brings the selected
 session forward, and `q` quits. `--all` also lists one-shot runs that have no
 person at a terminal, such as `claude -p` and `codex exec`.
 
-On screen: the [desktop companion](CODING_DEMO_DESKTOP.md) shows the same board.
-Click the mascot to open it. A click on a row brings that session forward. When a
-session waits for you, the mascot hops, its spark turns amber, and a bubble names
-the session; a click on the bubble opens that session's terminal. Start the panel
-with `--tucked true` to open it as the mascot without taking focus. Start it with
-`--agents false` to turn the board off, for example during a call qualification
-run.
+On screen: the [desktop companion](CODING_DEMO_DESKTOP.md) lists no sessions.
+When a session waits for you, the mascot hops, its spark turns amber, and a bubble
+names the session; a click on the bubble opens that session's terminal. A bubble
+about more than one session opens the chat. Start the panel with `--tucked true`
+to open it as the mascot without taking focus. Start it with `--agents false` to
+turn the reading of sessions off, for example during a call qualification run.
 
 ## States
 
@@ -129,16 +132,15 @@ give its place: `clawdtime hosts add mini TARGET --command /full/path/clawdtime`
 
 What then happens:
 
-- The board (in the panel and in `clawdtime agents`) lists that Mac's sessions
-  with "on mini". `clawdtime agents --host mini` shows that Mac only, and
+- The board (`clawdtime agents`) lists that Mac's sessions with "on mini". `clawdtime agents --host mini` shows that Mac only, and
   `--local` shows this Mac only.
 - Each remote Mac is asked every 9 seconds, with at most 6 seconds for an
   answer and never two calls at once. A Mac that does not answer never delays
   this Mac's board. Its last answer stays for 30 seconds, then its sessions
   leave the board and the board names the Mac that does not answer, with the
   reason.
-- A request of an agent on that Mac shows in the panel with the name of its
-  Mac. While the panel is open, this Mac reads that Mac's list every 4 seconds,
+- A request of an agent on that Mac shows on the mascot's bubble with the name
+  of its Mac. While the panel is open, this Mac reads that Mac's list every 4 seconds,
   which also tells the hooks there that someone attends. Your answer goes back
   as `clawdtime agents approve|deny|answer` on that Mac. A rule that you make
   with it is kept in that Mac's trove.
@@ -157,8 +159,10 @@ Limits of this part:
 - It is tested with a recorded command runner, and the quoting with a local
   shell. It has not been run against a real remote Mac yet.
 - `clawdtime agents pending`, `approve`, `deny`, `answer`, `watch` and the chat
-  with ClawdTime answer for this Mac only. Answer a remote request in the
-  panel, or run the command on that Mac over ssh.
+  with ClawdTime answer for this Mac only. Approve or deny a remote permission
+  request on the mascot's bubble, or run the command on that Mac over ssh. A
+  question or a plan of a remote agent has no answer in the panel: run the
+  command on that Mac.
 - Away mode calls you for requests of this Mac only.
 - The two Macs must agree on the time. A clock that is seconds off shows a
   request for a shorter or a longer time than it has.
@@ -178,12 +182,14 @@ A hook record is one small owner-only file for each session, under
 working directory and three process identifiers. The file name is a hash of the
 session identifier. The record is removed when the session ends.
 
-The panel reads the board from the task service on loopback, with the same
-private panel credential as the other `/desktop` routes:
+The panel reads the snapshot from the task service on loopback, with the same
+private panel credential as the other `/desktop` routes. It uses it only for the
+mascot's bubble:
 
 - `GET /desktop/agents` returns the snapshot, or 503 when none is fresh.
-- `POST /desktop/agents/focus` with `{"id": "..."}` brings that session forward.
-  An id that is not on the current board focuses nothing.
+- `POST /desktop/agents/focus` with `{"id": "..."}` brings that session forward,
+  from a click on the bubble. An id that is not on the current board focuses
+  nothing.
 
 ## How it works
 
@@ -194,7 +200,7 @@ flowchart LR
   H[Hook records] --> S
   S -->|snapshot| C[clawdtime agents]
   S -->|one JSON line each scan| F[Task service]
-  F -->|loopback, panel credential| N[Desktop panel]
+  F -->|loopback, panel credential| N[Bubble of the mascot]
 ```
 
 One scan lists processes, keeps the ones that match the agent catalog, reads

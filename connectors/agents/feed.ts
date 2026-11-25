@@ -433,12 +433,35 @@ export class BoardFeed implements AgentBoardPort {
   }
   /** Durable bridge invokes this once after it records a terminal result. */
   appendExecutionResult(text: string) {
-    this.log.append({
-      role: "assistant",
-      text,
-      at: (this.options.now ?? Date.now)(),
-      via: "chat",
-    });
+    const now = this.options.now ?? Date.now;
+    this.log.append({ role: "assistant", text, at: now(), via: "chat" });
+    this.offerNextStep(text);
+  }
+  /**
+   * After a computer task ended done, ClawdTime may offer one next step that
+   * follows from its result, as a question in the chat. It starts nothing:
+   * only the person's yes to it does. The question is said only while the
+   * report is still the newest message. Public for tests: it resolves when
+   * the offer is said or dropped.
+   */
+  offerNextStep(text: string): Promise<void> {
+    const now = this.options.now ?? Date.now;
+    return this.supervisor
+      .offerNextStep(text)
+      .then((question) => {
+        if (!question) return;
+        const last = this.log.recent(1)[0];
+        if (last?.role !== "assistant" || last.text !== text) return;
+        // The panel shows the two answers as buttons under the question.
+        this.log.append({
+          role: "assistant",
+          text: question,
+          at: now(),
+          via: "chat",
+          choices: ["Yes", "No"],
+        });
+      })
+      .catch(() => {});
   }
   /**
    * Says in the chat the answer of each job that finished, once. ClawdTime

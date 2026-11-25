@@ -40,15 +40,16 @@ Coding-demo implementation: the [native desktop panel guide](docs/CODING_DEMO_DE
 documents the runnable local task workflow, explicit Codex setup and current
 handset acceptance limits.
 
-Agent board: the desktop panel and `clawdtime agents` list every coding-agent
-session on this Mac (Claude Code, Codex, pi and more), show which ones wait for
-you, and bring a session's terminal forward. It reads state only and never sends
+Agent board: `clawdtime agents` lists every coding-agent session on this Mac
+(Claude Code, Codex, pi and more), shows which ones wait for you, and brings a
+session's terminal forward. The desktop panel lists no sessions: a click on its
+mascot opens the chat, and its bubble names a session that waits for you. It reads state only and never sends
 input to a session. `clawdtime hosts add NAME SSH_TARGET` adds the sessions of
 another Mac, such as a Mac mini, over ssh. See the
 [agent board guide](docs/AGENT_BOARD.md).
 
 Supervisor: ClawdTime can also answer an agent for you. Approve or deny a
-permission request from the panel, the mascot's bubble, a command, or a FaceTime
+permission request from the mascot's bubble, the chat, a command, or a FaceTime
 call when you are away. It keeps each decision in a trove, repeats an answer only
 where you made a rule, types into a session's terminal on request, and reports
 the agent commands you use as a slide deck. You can also talk to it: in a chat
@@ -60,7 +61,7 @@ badly or is done. See the
 
 Desktop computer tasks have an opt-in app-owned runtime that works without an
 open Codex chat. It bundles an isolated browser adapter, a local Mac adapter,
-exact-action approvals, result verification and **Stop work**. The standalone
+exact-action approvals, result verification and **Stop**. The standalone
 browser fixture and a native two-app activation/type/save/Stop flow are verified
 on the qualification Mac. This is bounded internal acceptance, not a claim that
 every application or computer is supported.

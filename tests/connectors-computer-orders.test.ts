@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { readWords, type WordKind } from "../connectors/computer/orders.js";
+import {
+  defersWork,
+  readWords,
+  readWordsAsWritten,
+  type WordKind,
+} from "../connectors/computer/orders.js";
 
 describe("readWords", () => {
   const cases: readonly [string, WordKind][] = [
@@ -430,5 +435,101 @@ describe("readWords", () => {
 
   it("does not stop on scroll down enough to see the button (rest 8)", () => {
     expect(readWords("scroll down enough to see the button")).not.toBe("stop");
+  });
+
+  it("reads every case the same as the strict reader of the words as written", () => {
+    for (const [message, expected] of cases) {
+      expect([message, readWordsAsWritten(message)]).toEqual([
+        message,
+        expected,
+      ]);
+      expect([message, readWords(message)]).toEqual([message, expected]);
+    }
+  });
+
+  it("never reads a casual form of a held case as an order or a continue, and keeps every stop a stop", () => {
+    // Ways people type the same words. None adds a polite lead, takes a mark
+    // away or changes the case of a name.
+    const variants: ((text: string) => string)[] = [
+      (text) => `${text} \u{1F64F}`,
+      (text) => text.replace(/'/g, ""),
+      (text) => text.replace(/'/g, "\u{2019}"),
+      (text) =>
+        text
+          .replace(/\byou\b/gi, "u")
+          .replace(/\band\b/g, "n")
+          .replace(/\bthanks\b/gi, "thx"),
+      (text) =>
+        text.replace(
+          /\b([b-df-hj-np-tv-z]*)([aeiou])/gi,
+          (_, lead: string, vowel: string) => `${lead}${vowel.repeat(3)}`,
+        ),
+      (text) => (/\?\s*$/.test(text) ? `${text}??` : `${text}!!!`),
+      (text) => `yo ${text}`,
+      (text) => `ok so ${text}`,
+      (text) => `hey clawdtime ${text}`,
+    ];
+    let checked = 0;
+    for (const [message, expected] of cases) {
+      if (expected === "order" || expected === "continue") continue;
+      for (const variant of variants) {
+        const words = variant(message);
+        const read = readWords(words);
+        checked++;
+        if (expected === "stop") expect([words, read]).toEqual([words, "stop"]);
+        // A variant that the strict reader itself reads as an order ("open
+        // Moms message", with no apostrophe) is no change of the casual reader.
+        else if (readWordsAsWritten(words) === "hold")
+          expect([words, read === "order" || read === "continue"]).toEqual([
+            words,
+            false,
+          ]);
+      }
+    }
+    expect(checked).toBeGreaterThan(1500);
+  });
+});
+
+describe("defersWork", () => {
+  it.each([
+    "hang on, reply to Sam",
+    "hold on and reply to Sam",
+    "pause, then reply to Sam",
+    "reply to Sam but wait for me",
+    "Reply to Sam tomorrow",
+    "reply to Sam after the meeting",
+    "Book the 3pm slot once I confirm",
+    "send the report to Sam tonight",
+    "post it next week",
+    "reply to Sam at 5pm",
+    "maybe reply to Sam",
+    "reply to Sam if he asks again",
+    "email Sam in 10 minutes",
+    "reply to Sam on Friday",
+    "reply to Sam \u23f3",
+  ])("holds back the start of %j", (words) => {
+    expect(defersWork(words)).toBe(true);
+  });
+
+  it.each([
+    "reply to Sam on Slack",
+    "book the 3pm slot",
+    "schedule a meeting with Sam tomorrow at 3",
+    "reschedule my 2pm with Jane to Friday",
+    "set an alarm for 7am",
+    "text Sam that I'm running late",
+    "check my calendar for tomorrow",
+    "open tomorrow's agenda in Calendar",
+    "pause the music on Spotify",
+    "check my email, after that reply to Sam",
+    'type "wait for me" in the message box',
+    "close the Untitled document in TextEdit without saving it, then quit TextEdit",
+  ])("does not hold back %j", (words) => {
+    expect(defersWork(words)).toBe(false);
+  });
+
+  it("reads no order less strictly than before", () => {
+    for (const words of ["click Send", "scroll down", "press return"])
+      expect(readWords(words)).toBe("order");
   });
 });

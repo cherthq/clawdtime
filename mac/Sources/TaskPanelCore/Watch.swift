@@ -67,7 +67,7 @@ public enum IncidentText {
     default: return AgentBoardText.clean(incident.text, limit: 120)
     }
   }
-  /// One short line for the board's headline.
+  /// One short line for the headline of the mascot's status.
   public static func headline(_ incident: Incidents.Incident) -> String {
     switch incident.kind {
     case "stalled": return who(incident) + " shows no sign of life"

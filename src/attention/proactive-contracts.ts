@@ -43,6 +43,16 @@ export const callSourceSchema = z.discriminatedUnion("kind", [
       verificationId: identity,
     })
     .strict(),
+  // One question of the computer worker on this Mac. `runId` is the exact
+  // request and `decisionId` the exact question, so one question never places
+  // a second call. Such a call is a spoken alert: it shares no screen.
+  z
+    .object({
+      ...sourceBase,
+      kind: z.literal("computer"),
+      decisionId: identity,
+    })
+    .strict(),
 ]);
 export type CallSource = z.infer<typeof callSourceSchema>;
 export const callScopeSchema = z

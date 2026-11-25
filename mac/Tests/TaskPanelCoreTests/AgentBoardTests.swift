@@ -40,44 +40,28 @@ final class AgentBoardTests: XCTestCase {
 
   // MARK: remote Macs
 
-  func testASessionOfARemoteMacShowsItsMacAndOpensOverThere() throws {
+  func testASessionOfARemoteMacKeepsItsMac() throws {
     let board = try fixture()
     XCTAssertEqual(board.sessions.map(\.host), [nil, nil, nil, "mini", nil, nil])
     let remote = board.sessions[3]
     XCTAssertEqual(remote.id, "mini_512-abc123")
     XCTAssertTrue(AgentBoard.identity(remote.id))
-    // The Mac comes first. The terminal application of that Mac is left out: it is not on this screen.
-    XCTAssertEqual(AgentBoardText.place(remote), "on mini · tmux agents:0.1")
-    XCTAssertEqual(AgentBoardText.subtitle(remote), "Codex · working · on mini · tmux agents:0.1")
-    XCTAssertEqual(AgentBoardText.focusHint(remote), "Open its tmux pane on mini, in a new window")
-    XCTAssertTrue(AgentBoardText.accessibility(remote, now: 1795156200000).contains("on mini"))
-    let plain = session(id: "mini_7-a", focus: "app", host: "mini")
-    XCTAssertEqual(AgentBoardText.place(plain), "on mini")
-    XCTAssertEqual(AgentBoardText.focusHint(plain), "Open a shell on mini, in a new window")
-    XCTAssertEqual(AgentBoardText.focusHint(session(id: "mini_7-a", focus: "none", host: "mini")), "Nothing on mini to open from here")
-    XCTAssertEqual(AgentBoardText.place(session(id: "mini_bg-1", mode: "background", focus: "none", host: "mini")), "on mini · background")
-    // A session of this Mac reads as before.
-    XCTAssertEqual(AgentBoardText.place(board.sessions[0]), "Terminal")
     // A remote id is the host name, an underscore and that Mac's id: up to 64 characters.
     XCTAssertTrue(AgentBoard.identity("studio-2_bg-" + String(repeating: "a", count: 24)))
     XCTAssertFalse(AgentBoard.identity("m" + String(repeating: "a", count: 64)))
     XCTAssertThrowsError(try self.board([session(host: "Not A Host")]).validate())
     XCTAssertThrowsError(try self.board([session(host: String(repeating: "m", count: 17))]).validate())
   }
-  func testARemoteMacThatDoesNotAnswerIsNamed() throws {
+  func testTheHostsOfRemoteMacsDecodeAndAreBounded() throws {
     let board = try fixture()
     XCTAssertEqual(board.hosts?.map(\.name), ["mini", "studio"])
     XCTAssertEqual(board.hosts?.map(\.ok), [true, false])
-    XCTAssertEqual(AgentBoardText.hostsNote(board), "studio does not answer. ssh could not connect. It must work with no password prompt: ssh studio true")
-    XCTAssertEqual(AgentBoardText.hostsNote(self.board([session()])), "")
     let answering = AgentBoard(version: 1, generatedAt: 1, intervalMs: 3000, counts: .init(needsYou: 0, working: 0, idle: 0, unknown: 0), sessions: [],
       hosts: [.init(name: "mini", ok: true, sessions: 0, checkedAt: 1, message: "")])
     try answering.validate()
-    XCTAssertEqual(AgentBoardText.hostsNote(answering), "")
     let two = AgentBoard(version: 1, generatedAt: 1, intervalMs: 3000, counts: .init(needsYou: 0, working: 0, idle: 0, unknown: 0), sessions: [],
       hosts: [.init(name: "mini", ok: false, sessions: 0, checkedAt: nil, message: "No answer in time."), .init(name: "studio", ok: false, sessions: 0, checkedAt: 2, message: "")])
     try two.validate()
-    XCTAssertEqual(AgentBoardText.hostsNote(two), "mini, studio do not answer. See: clawdtime hosts check NAME")
     // A host line that is not a host line is refused, and so is a book that is too long.
     XCTAssertThrowsError(try AgentBoard(version: 1, generatedAt: 1, intervalMs: 3000, counts: .init(needsYou: 0, working: 0, idle: 0, unknown: 0), sessions: [],
       hosts: [.init(name: "../x", ok: true, sessions: 0, checkedAt: 1, message: "")]).validate())
@@ -143,27 +127,7 @@ final class AgentBoardTests: XCTestCase {
     XCTAssertEqual(AgentBoardText.title(session(name: nil)), "work")
     XCTAssertEqual(AgentBoardText.title(session(name: "\u{07}\u{1B}")), "work")
   }
-  func testRowTextNamesTheAgentTheStateAndThePlace() throws {
-    let board = try fixture()
-    XCTAssertEqual(board.sessions.map(AgentBoardText.subtitle), [
-      "Claude Code · permission needed · Terminal",
-      "pi · running a tool · Ghostty · tmux main:2.1",
-      "Claude Code · working · background",
-      "Codex · working · on mini · tmux agents:0.1",
-      "Codex · done · Ghostty",
-      "Amp · no state signal · Ghostty",
-    ])
-    XCTAssertEqual(board.sessions.map(AgentBoardText.focusHint), ["Open its terminal tab", "Open its tmux pane",
-      "No terminal on this Mac to open", "Open its tmux pane on mini, in a new window", "Bring its terminal forward", "Bring its terminal forward"])
-    XCTAssertEqual(AgentBoardText.place(session(terminal: .init(tty: "ttys9", app: nil, tmux: nil, remote: true))), "remote")
-    XCTAssertEqual(AgentBoardText.accessibility(board.sessions[0], now: board.generatedAt),
-      "deploy fix, Claude Code · permission needed · Terminal, for 1m")
-    XCTAssertEqual(AgentBoardText.accessibility(board.sessions[2], now: board.generatedAt), "director, Claude Code · working · background")
-  }
-  func testSummaryAndElapsedTime() {
-    XCTAssertEqual(AgentBoardText.summary(.init(needsYou: 1, working: 3, idle: 9, unknown: 0)), "1 needs you · 3 working · 9 idle")
-    XCTAssertEqual(AgentBoardText.summary(.init(needsYou: 2, working: 0, idle: 0, unknown: 1)), "2 need you · 1 unknown")
-    XCTAssertEqual(AgentBoardText.summary(.init(needsYou: 0, working: 0, idle: 0, unknown: 0)), "No agent sessions")
+  func testElapsedTime() {
     let now = 10_000_000_000.0
     XCTAssertEqual(AgentBoardText.elapsed(since: now - 45_000, now: now), "45s")
     XCTAssertEqual(AgentBoardText.elapsed(since: now - 12 * 60_000, now: now), "12m")
@@ -171,33 +135,6 @@ final class AgentBoardTests: XCTestCase {
     XCTAssertEqual(AgentBoardText.elapsed(since: now - 3121 * 60_000, now: now), "2d 04h")
     XCTAssertEqual(AgentBoardText.elapsed(since: now + 5000, now: now), "0s")
     XCTAssertEqual(AgentBoardText.elapsed(since: nil, now: now), "")
-  }
-  func testToolbarLineGivesWayToATaskThatWaitsForThePerson() {
-    let waiting = AgentBoard.Counts(needsYou: 2, working: 1, idle: 0, unknown: 0)
-    let quiet = AgentBoard.Counts(needsYou: 0, working: 1, idle: 4, unknown: 0)
-    var line = AgentBoardText.toolbar(stage: "Ready when you are", taskNeedsPerson: false, counts: waiting)
-    XCTAssertEqual(line.text, "2 agents need you"); XCTAssertTrue(line.attention)
-    line = AgentBoardText.toolbar(stage: "Working on your task", taskNeedsPerson: false, counts: .init(needsYou: 1, working: 0, idle: 0, unknown: 0))
-    XCTAssertEqual(line.text, "1 agent needs you")
-    line = AgentBoardText.toolbar(stage: "Your input is needed", taskNeedsPerson: true, counts: waiting)
-    XCTAssertEqual(line.text, "Your input is needed"); XCTAssertTrue(line.attention)
-    line = AgentBoardText.toolbar(stage: "Working on your task", taskNeedsPerson: false, counts: quiet)
-    XCTAssertEqual(line.text, "Working on your task"); XCTAssertFalse(line.attention)
-    line = AgentBoardText.toolbar(stage: "Ready when you are", taskNeedsPerson: false, counts: nil)
-    XCTAssertEqual(line.text, "Ready when you are"); XCTAssertFalse(line.attention)
-  }
-  func testActiveSessionsAlwaysShowAndQuietOnesAreCapped() {
-    var sessions = [session(id: "1-a"), session(id: "2-a", state: .working)]
-    for index in 0..<6 { sessions.append(session(id: "1\(index)-a", state: .idle)) }
-    sessions.append(session(id: "99-a", state: .unknown))
-    let rows = AgentBoardText.rows(board(sessions))
-    XCTAssertEqual(rows.shown.map(\.id), ["1-a", "2-a", "10-a", "11-a", "12-a", "13-a"])
-    XCTAssertEqual(rows.hidden, 3)
-    let all = AgentBoardText.rows(board(Array(sessions.prefix(4))))
-    XCTAssertEqual(all.shown.count, 4); XCTAssertEqual(all.hidden, 0)
-    var busy: [AgentBoard.Session] = []
-    for index in 0..<12 { busy.append(session(id: "2\(index)-a", state: .working)) }
-    XCTAssertEqual(AgentBoardText.rows(board(busy)).shown.count, 12)
   }
   func testLaunchArgumentsAcceptOnlyAConfigPathAndTheTuckedSwitch() {
     XCTAssertEqual(PanelLaunch(arguments: ["panel", "--config", "/private/panel.json"]).map { [$0.configPath, String($0.tucked)] }, ["/private/panel.json", "false"])
@@ -209,16 +146,14 @@ final class AgentBoardTests: XCTestCase {
       XCTAssertNil(PanelLaunch(arguments: arguments), arguments.joined(separator: " "))
     }
   }
-  func testARequestThatIsShownInPartHasNoApprovalInThePanelOrTheBubble() throws {
+  func testARequestThatIsShownInPartHasNoApprovalOnTheBubble() throws {
     let json = #"{"version":1,"away":false,"callReady":false,"pending":[{"id":"0123456789abcdef","agentLabel":"Claude Code","kind":"permission","tool":"Bash","summary":"git status","options":[],"project":"app","session":null,"sessionId":null,"createdAt":1,"holdUntil":2,"allowedBefore":0,"deniedBefore":0,"canRemember":false,"answerInTerminal":true}]}"#
     let cut = try JSONDecoder().decode(PendingDecisions.self, from: Data(json.utf8))
     try cut.validate()
     XCTAssertTrue(cut.pending[0].approvalOnlyInTerminal)
-    XCTAssertEqual(DecisionText.terminalOnly(cut.pending[0]), "This is only a part of the request. Approve it in its terminal, or deny it here.")
     // An older service sends no such field: the request is whole.
     let whole = try JSONDecoder().decode(PendingDecisions.self, from: Data(json.replacingOccurrences(of: #","answerInTerminal":true"#, with: "").utf8))
     XCTAssertFalse(whole.pending[0].approvalOnlyInTerminal)
-    XCTAssertEqual(DecisionText.terminalOnly(whole.pending[0]), "")
     // The bubble has Approve and Deny for the whole request, and none for the part.
     func bubble(_ decisions: PendingDecisions) -> PetStatus.Bubble? {
       PetStatus.make(board: nil, connected: true, taskNeedsPerson: false, sharing: false, quietSeconds: 0, now: 3, decisions: decisions.pending).bubble

@@ -21,7 +21,14 @@ struct HandsDisplay {
 /// elements of the front window from the Accessibility tree. The picture lives
 /// in memory until it is posted. It is never written to a file or a log.
 @MainActor final class HandsObserver {
-  private struct Unseen: Error {}
+  private struct Picture: Sendable {
+    let base64: String, width: Int, height: Int
+    let captureMs: Int, encodeMs: Int, bytes: Int
+  }
+
+  /// What the looks of the command that runs cost, for the timing of its step. The controller sets it
+  /// back at the start of each command.
+  var spent = HandsCost()
 
   /// The app in front. ClawdTime is never its own subject.
   private var frontApp: NSRunningApplication? {
@@ -30,23 +37,28 @@ struct HandsDisplay {
   }
 
   /// What the screen shows now. The caller has checked the rights that `image` and `elements` need.
+  /// The picture and the walk of the tree run at the same time: neither waits for the other. A look
+  /// with no image takes no picture at all.
   func observe(image: Bool, elements: Bool, accessibility: Bool, pointer: CGPoint) async -> Result<Observation, HandError> {
     guard let display = HandsDisplay.main else { return .failure(.failed) }
     let map = display.map
     let app = frontApp
+    let pid = accessibility ? app?.processIdentifier : nil
+    let bounds = CGRect(x: 0, y: 0, width: map.width, height: map.height)
+    async let taken: Picture? = image ? capture(display) : nil
     var window = "", found: [ScreenElement] = []
-    if accessibility, let pid = app?.processIdentifier {
-      let bounds = CGRect(x: 0, y: 0, width: map.width, height: map.height)
+    if let pid {
+      let began = Date()
       // The tree is read off the main thread: an app that is slow to answer does not freeze the mascot.
       let read = await Task.detached(priority: .userInitiated) { HandsTree.read(pid: pid, elements: elements, screen: bounds) }.value
+      spent.add(HandsCost(walkMs: HandsCost.milliseconds(Date().timeIntervalSince(began))))
       window = read.window
       found = ElementCleaner.clean(read.elements, within: read.frame)
     }
-    var picture: (base64: String, width: Int, height: Int)?
-    if image {
-      guard let taken = try? await capture(display) else { return .failure(.failed) }
-      picture = taken
-    }
+    let picture = await taken
+    // A picture that was asked for and could not be taken fails the look.
+    if image && picture == nil { return .failure(.failed) }
+    if let picture { spent.add(HandsCost(captureMs: picture.captureMs, encodeMs: picture.encodeMs, imageBytes: picture.bytes)) }
     let seen = Observation(at: (Date().timeIntervalSince1970 * 1000).rounded(),
       screen: .init(width: map.width, height: map.height, scale: map.scale),
       cursor: .init(x: Double(pointer.x), y: Double(pointer.y)),
@@ -56,25 +68,55 @@ struct HandsDisplay {
     return .success(seen)
   }
 
-  /// One picture of the main display with ClawdTime's own windows left out, as a JPEG in base64.
-  private func capture(_ display: HandsDisplay) async throws -> (base64: String, width: Int, height: Int) {
-    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-    guard let screen = content.displays.first(where: { $0.displayID == display.id }) else { throw Unseen() }
-    // The windows also carry a sharing type that keeps them out. This filter does not depend on it.
-    let own = content.applications.filter { $0.processID == getpid() }
-    let filter = SCContentFilter(display: screen, excludingApplications: own, exceptingWindows: [])
-    let settings = SCStreamConfiguration()
-    settings.width = display.map.imageWidth; settings.height = display.map.imageHeight
-    settings.showsCursor = true; settings.capturesAudio = false
-    let frame = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: settings)
-    let bitmap = NSBitmapImageRep(cgImage: frame)
-    // Base64 makes four characters of three bytes: the contract's limit holds for this many bytes.
-    let budget = Observation.maxImageCharacters / 4 * 3
-    for quality in [0.6, 0.4, 0.25] {
-      guard let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality]) else { throw Unseen() }
-      if jpeg.count <= budget { return (jpeg.base64EncodedString(), frame.width, frame.height) }
-    }
-    throw Unseen()
+  /// A closer look: a picture of one part of the main display, `width` by `height` pixels, with ClawdTime's own
+  /// windows left out. The observation names the app in front and has no elements: they are those of the last look.
+  func closer(x: Double, y: Double, w: Double, h: Double, width: Int, height: Int, pointer: CGPoint) async -> Result<Observation, HandError> {
+    guard let display = HandsDisplay.main else { return .failure(.failed) }
+    let map = display.map
+    guard let part = HandsZoom.region(x: x, y: y, w: w, h: h, display: CGRect(x: 0, y: 0, width: map.width, height: map.height))
+      else { return .failure(.refused) }
+    // The picture keeps the shape of the part that is on the display.
+    let wide = min(Double(width), Double(height) * Double(part.width / part.height))
+    let pixels = (width: max(16, Int(wide.rounded())), height: max(16, Int((wide * Double(part.height / part.width)).rounded())))
+    guard let taken = await capture(display, part: part, pixels: pixels) else { return .failure(.failed) }
+    let app = frontApp
+    return .success(Observation(at: (Date().timeIntervalSince1970 * 1000).rounded(),
+      screen: .init(width: map.width, height: map.height, scale: map.scale),
+      cursor: .init(x: Double(pointer.x), y: Double(pointer.y)),
+      app: .init(name: ElementCleaner.line(app?.localizedName ?? "", limit: 120), bundleId: ElementCleaner.line(app?.bundleIdentifier ?? "", limit: 200),
+                 window: ""),
+      elements: [], image: taken.base64, imageWidth: taken.width, imageHeight: taken.height))
+  }
+
+  /// One picture of the main display with ClawdTime's own windows left out, as a JPEG in base64. The
+  /// display draws the picture at the size of `ScreenMap`, so no full-size picture is ever made here,
+  /// and the JPEG is written off the main thread. With `part`, only that part of the display, in points
+  /// from the top left, at `pixels`. Nil when it cannot be taken or does not fit.
+  private func capture(_ display: HandsDisplay, part: CGRect? = nil, pixels: (width: Int, height: Int)? = nil) async -> Picture? {
+    let began = Date()
+    do {
+      let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+      guard let screen = content.displays.first(where: { $0.displayID == display.id }) else { return nil }
+      // The windows also carry a sharing type that keeps them out. This filter does not depend on it.
+      let own = content.applications.filter { $0.processID == getpid() }
+      let filter = SCContentFilter(display: screen, excludingApplications: own, exceptingWindows: [])
+      let settings = SCStreamConfiguration()
+      settings.width = pixels?.width ?? display.map.imageWidth; settings.height = pixels?.height ?? display.map.imageHeight
+      // A part of the display is scaled to the asked size: without scalesToFit it stays at its own size in a
+      // corner of the picture, and the rest is empty (measured on the laptop, 23 Nov 2026).
+      if let part { settings.sourceRect = part; settings.scalesToFit = true }
+      settings.showsCursor = true; settings.capturesAudio = false
+      let frame = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: settings)
+      let captured = Date()
+      let written = await Task.detached(priority: .userInitiated) { () -> (String, Int)? in
+        guard let jpeg = ScreenPicture.encode(frame) else { return nil }
+        return (jpeg.base64EncodedString(), jpeg.count)
+      }.value
+      guard let written else { return nil }
+      return Picture(base64: written.0, width: frame.width, height: frame.height,
+        captureMs: HandsCost.milliseconds(captured.timeIntervalSince(began)),
+        encodeMs: HandsCost.milliseconds(Date().timeIntervalSince(captured)), bytes: written.1)
+    } catch { return nil }
   }
 }
 
@@ -89,10 +131,10 @@ enum HandsTree {
   }
   private static let attributes = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
     kAXPlaceholderValueAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXEnabledAttribute, kAXFocusedAttribute,
-    kAXTitleUIElementAttribute, kAXChildrenAttribute]
-  /// The walk stops at this many elements, this depth and this many seconds, whichever comes first.
-  private static let maxVisited = 3000, maxDepth = 60, maxSeconds = 1.5
+    kAXTitleUIElementAttribute, kAXChildrenAttribute, kAXVisibleChildrenAttribute, kAXVisibleRowsAttribute, kAXHeaderAttribute]
 
+  /// The window in front and, when `elements` is true, what it shows. The walk keeps the order of the
+  /// tree, leaves out every part of the window that does not show, and stops at `WalkLimits.look`.
   static func read(pid: pid_t, elements: Bool, screen: CGRect) -> Reading {
     var reading = Reading(frame: screen)
     let app = AXUIElementCreateApplication(pid)
@@ -107,27 +149,28 @@ enum HandsTree {
       if !shown.isNull, !shown.isEmpty { reading.frame = shown }
     }
     guard elements else { return reading }
-    let deadline = Date().addingTimeInterval(maxSeconds)
-    var stack: [(AXUIElement, Int)] = [(window, 0)]
-    var visited = 0
-    while let (node, depth) = stack.popLast(), visited < maxVisited, Date() < deadline {
-      visited += 1
+    let visible = reading.frame
+    let walked = AccessibilityWalk.walk(from: window, limits: .look, visible: visible, clock: { ProcessInfo.processInfo.systemUptime }) { node in
       let values = many(node, attributes)
       let role = text(values[0]) ?? "", subrole = text(values[1])
-      if let origin = point(values[6]), let size = size(values[7]), !role.isEmpty {
+      var frame: CGRect?
+      if let origin = point(values[6]), let size = size(values[7]) { frame = CGRect(origin: origin, size: size) }
+      var raw: RawElement?
+      // An element that does not show is not read further: its label is one more question to the app.
+      if let frame, !role.isEmpty, !AccessibilityWalk.offScreen(frame, visible: visible) {
         // A password field is never read: what it holds stops here.
         let secure = ElementCleaner.isSecure(role: role, subrole: subrole)
-        reading.elements.append(RawElement(role: role, subrole: subrole,
+        raw = RawElement(role: role, subrole: subrole,
           label: element(values[10]).flatMap { text(one($0, kAXTitleAttribute)) ?? text(one($0, kAXValueAttribute)) },
           title: text(values[2]), description: text(values[3]), placeholder: text(values[5]),
-          value: secure ? nil : text(values[4]), frame: CGRect(origin: origin, size: size),
-          enabled: flag(values[8]) ?? true, focused: flag(values[9]) ?? false))
+          value: secure ? nil : text(values[4]), frame: frame,
+          enabled: flag(values[8]) ?? true, focused: flag(values[9]) ?? false)
       }
-      if depth < maxDepth {
-        // The last child goes on the stack first, so the tree is read in its own order.
-        for child in list(values[11]).reversed() { stack.append((child, depth + 1)) }
-      }
+      let children = AccessibilityWalk.children(role: role, all: list(values[11]), visibleChildren: list(values[12]),
+                                                visibleRows: list(values[13]), header: element(values[14]))
+      return WalkVisit(element: raw, frame: frame, children: children)
     }
+    reading.elements = walked.elements
     return reading
   }
 

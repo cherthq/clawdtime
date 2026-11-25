@@ -282,6 +282,8 @@ final class DesignMotionTests: XCTestCase {
     XCTAssertEqual(status(waiting, sharing: true).mood, .sharing)
     let task = status(waiting, task: true)
     XCTAssertEqual(task.headline, "Your task needs an answer"); XCTAssertEqual(task.bubble?.key, "task"); XCTAssertNil(task.bubble?.sessionId)
+    // There is no board: the bubble sends the person to the chat.
+    XCTAssertEqual(task.bubble?.detail, "Open the chat to answer.")
     XCTAssertEqual(status([session("4-a", .idle)], quiet: 200).mood, .sleepy)
     XCTAssertEqual(status([session("4-a", .idle)], quiet: 700).mood, .asleep)
     XCTAssertEqual(status([session("2-a", .working)], quiet: 700).mood, .working, "it never sleeps while agents work")
@@ -308,21 +310,12 @@ final class DesignMotionTests: XCTestCase {
     }
     XCTAssertThrowsError(try PendingDecisions(version: 2, away: false, callReady: false, pending: []).validate())
   }
-  func testDecisionTextSaysWhoAsksWhatAndWhatWasAnsweredBefore() {
+  func testDecisionTextSaysWhoAsksWhat() {
     XCTAssertEqual(DecisionText.title(decision()), "deploy fix asks to run")
     XCTAssertEqual(DecisionText.title(decision(session: nil)), "Claude Code in app asks to run")
     XCTAssertEqual(DecisionText.title(decision(tool: "Edit")), "deploy fix asks to use Edit")
     XCTAssertEqual(DecisionText.title(decision(kind: "question", options: ["A"])), "deploy fix asks")
     XCTAssertEqual(DecisionText.title(decision(kind: "plan")), "deploy fix has a plan ready")
-    XCTAssertEqual(DecisionText.summary(decision(summary: "rm \u{1B}[2J -rf x")), "rm [2J -rf x")
-    XCTAssertEqual(DecisionText.history(decision()), "")
-    XCTAssertEqual(DecisionText.history(decision(allowed: 1)), "You allowed this once here.")
-    XCTAssertEqual(DecisionText.history(decision(allowed: 3)), "You allowed this 3 times here.")
-    XCTAssertEqual(DecisionText.history(decision(denied: 2)), "You denied this 2 times here.")
-    XCTAssertEqual(DecisionText.history(decision(allowed: 2, denied: 1)), "Here before: allowed 2 times, denied once.")
-    XCTAssertEqual(DecisionText.remaining(decision(), now: 1_013_000), "32 s left to answer here")
-    XCTAssertEqual(DecisionText.remaining(decision(), now: 2_000_000), "0 s left to answer here")
-    XCTAssertEqual(DecisionText.remaining(decision(hold: 1_540_000), now: 1_000_000), "9 min left to answer here")
   }
   func testARequestThatCanBeAnsweredHereComesFirst() {
     let waiting = [session("1-a", .needsYou, name: "deploy fix")]
@@ -333,8 +326,9 @@ final class DesignMotionTests: XCTestCase {
                              decisions: [decision(kind: "question", options: ["Red", "Blue"]), decision("fedcba9876543210")])
     XCTAssertEqual(two.headline, "2 requests wait for your answer")
     XCTAssertEqual(two.bubble?.title, "deploy fix asks  +1 more")
-    // A question has choices: it is answered on the board, not with two buttons on the bubble.
+    // A question has choices: it is answered in the chat, not with two buttons on the bubble.
     XCTAssertNil(two.bubble?.decisionId)
+    XCTAssertEqual(MascotClick.bubble(two.bubble!), .openChat)
   }
 
   // MARK: talking to ClawdTime
@@ -619,14 +613,12 @@ final class DesignMotionTests: XCTestCase {
     let calm = animator.step(1.0 / 60, input)
     XCTAssertEqual(calm.gait, 0); XCTAssertEqual(calm.roll, 0); XCTAssertEqual(calm.bob, 0)
   }
-  func testMemoryShowsOnARequestAndInTheChatOnlyWhenTheServiceSaysSo() throws {
+  func testMemoryOfARequestAndOfTheChatDecodesOnlyWhenTheServiceSaysSo() throws {
     func request(_ recalled: String?) -> PendingDecisions.Request {
       PendingDecisions.Request(id: "0123456789abcdef", agentLabel: "Claude Code", kind: "permission", tool: "Bash", summary: "git push origin main",
         options: [], project: "app", session: nil, sessionId: nil, createdAt: 1, holdUntil: 2, allowedBefore: 0, deniedBefore: 0, canRemember: true, recalled: recalled)
     }
-    XCTAssertEqual(DecisionText.said(request("Never force push to main.")), "You said: Never force push to main.")
-    XCTAssertEqual(DecisionText.said(request(nil)), "")
-    XCTAssertEqual(DecisionText.said(request("  \u{1B} ")), "")
+    XCTAssertNoThrow(try PendingDecisions(version: 1, away: false, callReady: false, pending: [request("Never force push to main.")]).validate())
     XCTAssertThrowsError(try PendingDecisions(version: 1, away: false, callReady: false, pending: [request(String(repeating: "x", count: 401))]).validate())
     // A service with memory off, or an older one, sends no such field.
     let json = #"{"version":1,"away":false,"callReady":false,"pending":[{"id":"0123456789abcdef","agentLabel":"Claude Code","kind":"permission","tool":"Bash","summary":"npm test","options":[],"project":"app","session":null,"sessionId":null,"createdAt":1,"holdUntil":2,"allowedBefore":0,"deniedBefore":0,"canRemember":true}]}"#

@@ -44,7 +44,7 @@ final class HandsScreenTests: XCTestCase {
     let narrow = try XCTUnwrap(ScreenMap(width: 600, height: 400, scale: 2))
     XCTAssertEqual(narrow.imageWidth, 1200); XCTAssertEqual(narrow.imageHeight, 800)
     close(narrow.point(pixel: CGPoint(x: 1200, y: 800)), CGPoint(x: 600, y: 400))
-    XCTAssertLessThanOrEqual(try XCTUnwrap(ScreenMap(width: 5120, height: 1440, scale: 2)).imageWidth, ScreenMap.maxImageWidth)
+    XCTAssertLessThanOrEqual(try XCTUnwrap(ScreenMap(width: 5120, height: 1440, scale: 2)).imageWidth, ScreenMap.maxImageSide)
   }
 
   func testOnlyAPointOnTheMainDisplayIsActedOn() throws {
@@ -64,7 +64,9 @@ final class HandsScreenTests: XCTestCase {
     // A size that no whole number holds gives a bounded picture, never a stop.
     XCTAssertEqual(ScreenMap(width: 1e300, height: 1, scale: 4)?.imageWidth, 1280)
     XCTAssertEqual(ScreenMap(width: 1e300, height: 1, scale: 4)?.imageHeight, 1)
-    XCTAssertEqual(ScreenMap(width: 1, height: 1e300, scale: 1)?.imageHeight, 20480)
+    XCTAssertEqual(ScreenMap(width: 1, height: 1e300, scale: 1)?.imageHeight, 1280)
+    XCTAssertEqual(ScreenMap(width: 1, height: 1e300, scale: 1)?.imageWidth, 1)
+    XCTAssertEqual(ScreenMap(width: 1e300, height: 1e300, scale: 1e300)?.imageWidth, 1280)
   }
 
   func raw(_ role: String, subrole: String? = nil, label: String? = nil, title: String? = nil, description: String? = nil,

@@ -41,13 +41,27 @@ import TaskPanelCore
   /// When the bar came into view.
   private var barUp: Date?
   private var typingMark = 0
+  /// The time that the guided cursor took before the inputs of this command. Nil when it did not go out.
+  private var glided: Double?
+  /// What the command that ran last cost: its looks and its glide.
+  private var cost: HandsCost {
+    var spent = observer.spent
+    if let glided { spent.add(HandsCost(glideMs: HandsCost.milliseconds(glided))) }
+    return spent
+  }
+  /// The guided cursor goes to `target`, and its time counts for this command.
+  private func travel(to target: CGPoint, label: String) async {
+    glided = (glided ?? 0) + (await guide.travel(to: target, label: label))
+  }
   private var inputRefusal: HandError?
   /// The app that the name of the last open_app stood for. It goes out with the result.
   private var resolvedApp: String?
   private let menuItems = NSHashTable<NSMenuItem>.weakObjects()
   private var rights: (accessibility: Bool, screenRecording: Bool, at: Date)?
-  /// A run begins: the app's own sheets get out of the way.
+  /// A run begins: the chat gets out of the way.
   var onRunStarted: (() -> Void)?
+  /// A run of these hands is in view, with its bar and Stop.
+  var running: Bool { live }
   /// True when these hands do the computer work of the service. The panel then keeps its chat open
   /// on a sent message: `onRunStarted` closes it when a run really starts.
   private(set) var engine = false
@@ -91,7 +105,9 @@ import TaskPanelCore
 
   // MARK: the loop
 
-  /// Starts to ask the task service for commands. It asks often while the worker runs, and seldom otherwise.
+  /// Starts to ask the task service for commands. A service that holds a read answers as soon as a command
+  /// waits, so the hands read again at once. Another service is asked often while the worker runs, and
+  /// seldom otherwise. `HandsPace` holds the rule.
   func start(client: PanelClient) {
     guard loop == nil else { return }
     self.client = client
@@ -106,7 +122,9 @@ import TaskPanelCore
       var failures = 0
       while !Task.isCancelled {
         guard let self else { return }
-        var active = false
+        var active = false, held = false, ran = false
+        // The gap between two reads counts from the start of this one.
+        let began = Date()
         do {
           // Which engine the service has changes only when the service starts again, or with the
           // switch. A read every few seconds is enough.
@@ -114,16 +132,20 @@ import TaskPanelCore
             self.engine = (try? await client.handsAreEngine()) ?? false
             self.engineRead = Date()
           }
-          let next = try await client.handsNext(after: self.ledger.last)
+          let read = try await client.handsNext(after: self.ledger.last, wait: HandsPace.hold)
+          held = read.held
+          let next = read.next
           failures = 0
           active = next.run.active || next.command != nil
           self.present(next)
           // A number that was taken before is never run again.
           if let pending = next.command, self.ledger.claim(pending.seq) {
             let result = await self.perform(pending)
+            ran = true
             // Exactly one POST for this number. A failure is not sent again: the
-            // worker reads a missing answer as an unknown outcome.
-            do { try await client.handsResult(result) }
+            // worker reads a missing answer as an unknown outcome. What the command
+            // cost goes with it, as numbers only.
+            do { try await client.handsResult(result, cost: self.cost) }
             catch { self.presentation.reset(); self.desktop.invalidate() } // No replay; disconnected history is no longer usable.
             self.showBar()
           }
@@ -133,7 +155,8 @@ import TaskPanelCore
           // A service that is gone commands nothing: the bar goes too.
           if failures >= HandsPace.failuresBeforeQuiet { self.desktop.invalidate(); self.quiet() }
         }
-        try? await Task.sleep(nanoseconds: UInt64(HandsPace.delay(active: active, failures: failures) * 1_000_000_000))
+        let pause = HandsPace.delay(active: active, failures: failures, elapsed: Date().timeIntervalSince(began), held: held, ran: ran)
+        if pause > 0 { try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000)) }
       }
     }
   }
@@ -212,6 +235,8 @@ import TaskPanelCore
 
   private func perform(_ pending: HandsNext.Pending) async -> HandResult {
     let seq = pending.seq, command = pending.command
+    // What this command costs counts from zero, also when it ends before it begins.
+    observer.spent = HandsCost(); glided = nil
     // The bar with Stop is in view for a moment before the first action of a run.
     if let since = barUp {
       let age = Date().timeIntervalSince(since)
@@ -265,6 +290,10 @@ import TaskPanelCore
     case .observe(let image, let elements):
       shield(true)
       return await desktop.observe(observer: observer, image: image, elements: elements, accessibility: accessibility, pointer: input.pointer).map { Optional($0) }
+    case .zoom(let x, let y, let w, let h, let width, let height):
+      // A picture only: no app gets input, the Accessibility tree is not read, and the look of the hands stays.
+      shield(true)
+      return await observer.closer(x: x, y: y, w: w, h: h, width: width, height: height, pointer: input.pointer).map { Optional($0) }
     case .move, .click, .drag, .scroll:
       return await point(command, label: label)
     case .type(let text):
@@ -429,13 +458,13 @@ import TaskPanelCore
         overlay: map.flip(guide.presentationBounds(at: target, label: label)), observedSurface: surface,
         observedGeneration: presentationGeneration)
     }
-    await guide.travel(to: target, label: label)
+    await travel(to: target, label: label)
   }
   /// A command with no place of its own, such as opening an app: the cursor says it where it is.
   private func say(_ label: String) async {
     guard let map = HandsDisplay.main?.map else { return }
     let screen = CGRect(x: 0, y: 0, width: map.width, height: map.height)
-    await guide.travel(to: GuidedFocus.place(focus: nil, shown: guide.place, pointer: map.flip(input.pointer), screen: screen), label: label)
+    await travel(to: GuidedFocus.place(focus: nil, shown: guide.place, pointer: map.flip(input.pointer), screen: screen), label: label)
   }
 
   /// A pointing command: the guided cursor glides to the target with the label of the command, then the real event goes.
@@ -451,7 +480,7 @@ import TaskPanelCore
       width: max(2, xs.max()! - xs.min()! + 2), height: max(2, ys.max()! - ys.min()! + 2))
     let overlay = map.flip(guide.presentationBounds(at: map.flip(places[0]), label: label))
     presentation.point(action.union(overlay))
-    await guide.travel(to: map.flip(places[0]), label: label)
+    await travel(to: map.flip(places[0]), label: label)
     if let refusal = await lastCheck() { return .failure(refusal) }
     // ClawdTime's windows are not in the picture that the worker saw. A click on
     // one of them goes through to what is behind it, which is what the worker meant.

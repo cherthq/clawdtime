@@ -1980,3 +1980,413 @@ describe("the driver and the page script together", () => {
     expect(commands.length).toBeGreaterThan(0);
   });
 });
+
+describe("the page script: hover", () => {
+  const bar = () => {
+    const file = h("button", { id: "file" }, "File").at(100, 0, 80, 30);
+    const edit = h("button", { id: "edit" }, "Edit").at(100, 200, 80, 30);
+    const nav = h("nav", { id: "bar" }, file, edit).at(100, 0, 1000, 40);
+    const page = new FakePage(nav);
+    page.read();
+    return { page, file, edit, nav };
+  };
+  it("tells what lies under the pointer that the pointer came, with no press and no click", () => {
+    const { page } = bar();
+    expect(page.run({ do: "hover", index: 1 })).toEqual({ ok: true });
+    expect(page.log).toEqual([
+      "scrollIntoView@file",
+      "pointerover@file",
+      "pointerenter@bar",
+      "pointerenter@file",
+      "mouseover@file",
+      "mouseenter@bar",
+      "mouseenter@file",
+      "pointermove@file",
+      "mousemove@file",
+    ]);
+    const entered = page.events.filter((event) => event.type.endsWith("enter"));
+    for (const event of entered) expect(event.bubbles).toBe(false);
+    for (const event of page.events)
+      expect(event.init).toMatchObject({
+        composed: true,
+        clientX: 40,
+        clientY: 115,
+        buttons: 0,
+      });
+    expect(page.activeElement).toBeNull();
+  });
+  it("tells the element that the pointer left, and only the holders that it left", () => {
+    const { page } = bar();
+    page.run({ do: "hover", index: 1 });
+    page.log.length = 0;
+    page.run({ do: "hover", index: 2 });
+    expect(page.log).toEqual([
+      "scrollIntoView@edit",
+      "pointerout@file",
+      "pointerleave@file",
+      "mouseout@file",
+      "mouseleave@file",
+      "pointerover@edit",
+      "pointerenter@edit",
+      "mouseover@edit",
+      "mouseenter@edit",
+      "pointermove@edit",
+      "mousemove@edit",
+    ]);
+    // Resting on the same element again only moves.
+    page.log.length = 0;
+    page.run({ do: "hover", index: 2 });
+    expect(page.log).toEqual([
+      "scrollIntoView@edit",
+      "pointermove@edit",
+      "mousemove@edit",
+    ]);
+  });
+  it("opens a menu that the page shows on hover, which the next reading lists", () => {
+    const { page, file } = bar();
+    const profile = h("button", { id: "profile" }, "Profile").at(140, 0);
+    profile.display = "none";
+    page.body.append(profile);
+    file.addEventListener("mouseenter", () => {
+      profile.display = "block";
+    });
+    expect(page.labels()).not.toContain("Profile");
+    page.run({ do: "hover", index: 1 });
+    expect(page.labels()).toContain("Profile");
+  });
+  it("refuses an element that is hidden now, or a number that is gone", () => {
+    const { page, file } = bar();
+    file.display = "none";
+    expect(page.run({ do: "hover", index: 1 })).toEqual({
+      ok: false,
+      error: 'Number 1, "File", is hidden now. Read the page again.',
+    });
+    expect(page.run({ do: "hover", index: 40 }).error).toMatch(
+      /not on the page any more/,
+    );
+    expect(page.log.some((line) => /over|enter|move/.test(line))).toBe(false);
+  });
+});
+
+describe("the page script: choose an option", () => {
+  it("chooses in a select by the text that the option shows, in any case, then fires input and change", () => {
+    const size = select(
+      { id: "size", "aria-label": "Size" },
+      option("Small"),
+      option("Extra  Large", { value: "xl" }),
+    );
+    const page = new FakePage(size);
+    page.read();
+    expect(page.run({ do: "select", index: 1, option: "extra large" })).toEqual(
+      { ok: true },
+    );
+    expect(size.selectedIndex).toBe(1);
+    expect(page.log).toEqual([
+      "scrollIntoView@size",
+      "focus@size",
+      "input@size",
+      "change@size",
+    ]);
+    for (const event of page.events) expect(event.bubbles).toBe(true);
+    expect(page.read().elements[0]!.value).toBe("Extra Large");
+  });
+  it("does not choose by the value that the page keeps, only by the text that it shows", () => {
+    const size = select(
+      { "aria-label": "Size" },
+      option("Large", { value: "xl" }),
+    );
+    const page = new FakePage(size);
+    page.read();
+    expect(page.run({ do: "select", index: 1, option: "xl" })).toEqual({
+      ok: false,
+      error:
+        'Number 1, "Size", has no option "xl". Use the text of an option as the page shows it.',
+    });
+    expect(page.events).toEqual([]);
+  });
+  it("refuses an option that cannot be chosen, and a select that is disabled", () => {
+    const size = select(
+      { "aria-label": "Size" },
+      option("Small"),
+      option("Large", { disabled: "" }),
+    );
+    const page = new FakePage(size);
+    page.read();
+    expect(page.run({ do: "select", index: 1, option: "Large" }).error).toBe(
+      'Number 1, "Size", has the option "Large", but it cannot be chosen now.',
+    );
+    expect(size.selectedIndex).toBe(0);
+    size.attributes.set("disabled", "");
+    expect(page.run({ do: "select", index: 1, option: "Small" }).error).toBe(
+      'Number 1, "Size", is disabled now.',
+    );
+  });
+  it("adds the option to the choice of a select that takes many", () => {
+    const tags = select(
+      { "aria-label": "Tags", multiple: "" },
+      option("Red"),
+      option("Blue"),
+    );
+    const page = new FakePage(tags);
+    page.read();
+    let picked = false;
+    Object.defineProperty(tags.options[1]!, "selected", {
+      set: (value: boolean) => {
+        picked = value;
+      },
+    });
+    expect(page.run({ do: "select", index: 1, option: "Blue" })).toEqual({
+      ok: true,
+    });
+    expect(picked).toBe(true);
+  });
+  it("presses the option of a list that the page draws, in the list that the control names", () => {
+    const opener = h(
+      "button",
+      { id: "opener", role: "combobox", "aria-controls": "sizes" },
+      "Size",
+    ).at(0);
+    const small = h("li", { id: "small", role: "option" }, "Small").at(30);
+    const large = h("li", { id: "large", role: "option" }, "Large").at(60);
+    const list = h("ul", { id: "sizes", role: "listbox" }, small, large).at(
+      30,
+      0,
+      120,
+      60,
+    );
+    const page = new FakePage(opener, list);
+    const numbers = page.read().elements;
+    const control = numbers.find((item) => item.label === "Size")!;
+    expect(control.role).toBe("combobox");
+    page.log.length = 0;
+    expect(
+      page.run({ do: "select", index: control.index, option: "LARGE" }),
+    ).toEqual({ ok: true });
+    expect(page.log.filter((line) => line.endsWith("@large"))).toEqual([
+      "scrollIntoView@large",
+      "pointerdown@large",
+      "mousedown@large",
+      "pointerup@large",
+      "mouseup@large",
+      "click@large",
+    ]);
+    expect(page.log.some((line) => line.endsWith("@small"))).toBe(false);
+  });
+  it("says to open the list first when its options are not shown", () => {
+    const opener = h(
+      "button",
+      { role: "combobox", "aria-controls": "sizes" },
+      "Size",
+    ).at(0);
+    const list = h(
+      "ul",
+      { id: "sizes", role: "listbox" },
+      h("li", { role: "option" }, "Large"),
+    );
+    list.display = "none";
+    const page = new FakePage(opener, list);
+    page.read();
+    expect(page.run({ do: "select", index: 1, option: "Large" }).error).toBe(
+      'Number 1, "Size", shows no option "Large" now. Click it to open its list, read the page, then click the option.',
+    );
+  });
+  it("refuses what is no list of choices", () => {
+    const agree = input({ type: "checkbox", "aria-label": "Agree" });
+    const page = new FakePage(agree);
+    page.read();
+    expect(page.run({ do: "select", index: 1, option: "Yes" }).error).toBe(
+      'Number 1, "Agree", is not a list of choices.',
+    );
+  });
+});
+
+describe("the page script: keys", () => {
+  const keyed = (page: FakePage) =>
+    page.events.filter((event) => event instanceof FakeKeyboardEvent);
+  it("presses Enter in a field of a form: down, press, the form is submitted, up", () => {
+    const query = input({ id: "q", "aria-label": "Search" });
+    const search = form({ id: "search" }, query);
+    const page = new FakePage(search);
+    query.focus();
+    page.log.length = 0;
+    expect(page.run({ do: "key", combo: "Enter" })).toEqual({ ok: true });
+    expect(page.log).toEqual([
+      "keydown@q",
+      "keypress@q",
+      "requestSubmit@search",
+      "submit@search",
+      "keyup@q",
+    ]);
+    for (const event of keyed(page))
+      expect(event.init).toMatchObject({
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        shiftKey: false,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+    expect(keyed(page)[1]!.init.charCode).toBe(13);
+  });
+  it("leaves the key to the page when the page stops it", () => {
+    const query = input({ id: "q", "aria-label": "Search" });
+    const search = form({ id: "search" }, query);
+    const page = new FakePage(search);
+    query.addEventListener("keydown", (event) => event.preventDefault());
+    query.focus();
+    page.log.length = 0;
+    page.run({ do: "key", combo: "Enter" });
+    expect(page.log).toEqual(["keydown@q", "keyup@q"]);
+  });
+  it("presses a focused button or link with Enter, and a button or a checkbox with Space", () => {
+    const save = h("button", { id: "save" }, "Save");
+    const next = h("a", { id: "next", href: "/next" }, "Next");
+    const agree = input({
+      id: "agree",
+      type: "checkbox",
+      "aria-label": "Agree",
+    });
+    const page = new FakePage(save, next, agree);
+    for (const [element, combo] of [
+      [save, "Enter"],
+      [next, "Enter"],
+      [save, "Space"],
+    ] as const) {
+      element.focus();
+      page.log.length = 0;
+      page.run({ do: "key", combo });
+      expect(page.log).toContain(`click@${element.called}`);
+    }
+    expect(page.followed).toEqual(["/next"]);
+    agree.focus();
+    page.run({ do: "key", combo: "Space" });
+    expect(agree.checked).toBe(true);
+    // Enter does not change a checkbox, as in a browser.
+    page.run({ do: "key", combo: "Enter" });
+    expect(agree.checked).toBe(true);
+  });
+  it("moves the focus with Tab and Shift+Tab, in page order, past what cannot take it", () => {
+    const first = input({ id: "first", "aria-label": "First" });
+    const off = input({ id: "off", "aria-label": "Off", disabled: "" });
+    const hidden = input({ id: "hidden", "aria-label": "Hidden" });
+    hidden.display = "none";
+    const skipped = h("div", { id: "skipped", tabindex: "-1" }, "Skipped");
+    const custom = h("div", { id: "custom", tabindex: "0" }, "Custom");
+    const last = input({ id: "last", "aria-label": "Last" });
+    const page = new FakePage(first, off, hidden, skipped, custom, last);
+    first.focus();
+    page.run({ do: "key", combo: "Tab" });
+    expect(page.activeElement).toBe(custom);
+    page.run({ do: "key", combo: "Tab" });
+    expect(page.activeElement).toBe(last);
+    // The keyup goes where the focus is now.
+    expect(page.log.at(-1)).toBe("keyup@last");
+    page.run({ do: "key", combo: "Tab" });
+    expect(page.activeElement).toBe(last);
+    page.run({ do: "key", combo: "Shift+Tab" });
+    expect(page.activeElement).toBe(custom);
+    expect(keyed(page).at(-1)!.init).toMatchObject({
+      key: "Tab",
+      shiftKey: true,
+    });
+  });
+  it("takes away the character before the caret with Backspace, and tells the page", () => {
+    const name = input({
+      id: "name",
+      "aria-label": "Name",
+      value: "tea\u{1f375}",
+    });
+    const page = new FakePage(name);
+    name.focus();
+    page.run({ do: "key", combo: "Backspace" });
+    // A character of two units goes whole.
+    expect(name.value).toBe("tea");
+    page.run({ do: "key", combo: "Backspace" });
+    expect(name.value).toBe("te");
+    const typed = page.events.filter((event) => event.type === "input");
+    expect(typed).toHaveLength(2);
+    expect(typed[0]).toBeInstanceOf(FakeInputEvent);
+    expect(typed[0]!.init).toMatchObject({
+      bubbles: true,
+      inputType: "deleteContentBackward",
+    });
+    name.value = "";
+    page.run({ do: "key", combo: "Backspace" });
+    expect(page.events.filter((event) => event.type === "input")).toHaveLength(
+      2,
+    );
+  });
+  it("scrolls the page with Space, the arrows, PageDown, PageUp, Home and End when nothing has the focus", () => {
+    const page = new FakePage(h("p", {}, "Long"));
+    page.height = 5000;
+    for (const combo of ["Space", "ArrowDown", "PageDown", "ArrowUp"] as const)
+      page.run({ do: "key", combo });
+    expect(page.log.filter((line) => line.startsWith("scrollBy"))).toEqual([
+      "scrollBy 510",
+      "scrollBy 40",
+      "scrollBy 510",
+      "scrollBy -40",
+    ]);
+    expect(page.scrollY).toBe(1020);
+    page.run({ do: "key", combo: "End" });
+    expect(page.scrollY).toBe(4400);
+    page.run({ do: "key", combo: "Home" });
+    expect(page.scrollY).toBe(0);
+    page.run({ do: "key", combo: "PageUp" });
+    expect(page.scrollY).toBe(0);
+    // The keys go to the body.
+    expect(page.log[0]).toBe("keydown@body");
+  });
+  it("leaves Escape and the side arrows to the page, and does not scroll from a field", () => {
+    const query = input({ id: "q", "aria-label": "Search" });
+    const page = new FakePage(query);
+    page.height = 5000;
+    query.focus();
+    page.log.length = 0;
+    for (const combo of [
+      "Escape",
+      "ArrowLeft",
+      "ArrowRight",
+      "ArrowDown",
+      "PageDown",
+      "Space",
+    ] as const)
+      page.run({ do: "key", combo });
+    expect(page.log.filter((line) => !/^key(?:down|up)@q$/.test(line))).toEqual(
+      ["keypress@q"],
+    );
+    expect(page.scrollY).toBe(0);
+  });
+  it("never presses a key while a password field has the focus", () => {
+    const secret = input({
+      id: "pw",
+      type: "password",
+      "aria-label": "Password",
+    });
+    const page = new FakePage(form({}, secret));
+    secret.focus();
+    page.log.length = 0;
+    for (const combo of ["Enter", "Backspace", "Tab"] as const)
+      expect(page.run({ do: "key", combo })).toEqual({
+        ok: false,
+        error:
+          "The focus is in a password field. The worker never presses a key there: ask the person.",
+      });
+    expect(page.log).toEqual([]);
+  });
+  it("refuses a key that it does not know, also one that the page put on every object", () => {
+    const page = new FakePage();
+    expect(page.run({ do: "key", combo: "F5" as "Enter" }).error).toBe(
+      "The page was asked for a key that it does not take.",
+    );
+    page.evaluate(
+      'Object.prototype.Launch = { key: "x", code: "x", keyCode: 1 };',
+    );
+    expect(page.run({ do: "key", combo: "Launch" as "Enter" }).error).toBe(
+      "The page was asked for a key that it does not take.",
+    );
+    expect(page.log).toEqual([]);
+  });
+});

@@ -276,6 +276,12 @@ What to know:
   starts with that word, and a text without it gets no answer.
 - One `clawdtime texts run` answers the texts on a Mac. A second one does not
   start.
+- When the desktop service runs on this Mac, a text goes to it first, as the
+  words of a call do. So a text can answer a question of the computer worker,
+  and ClawdTime can text you that question when you do not answer in the chat
+  and its call does not get through. For that, the same settings must also be
+  in the environment of the desktop service. See "When you are not at the
+  chat" in [computer use](docs/COMPUTER_USE.md).
 - One text gets one answer, also after a restart. A text that is more than ten
   minutes old when ClawdTime first sees it is not run.
 - On the free trial, ClawdTime can text you only within 24 hours of your last

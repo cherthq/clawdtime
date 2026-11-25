@@ -36,13 +36,18 @@ import {
   pageHelpers,
   pageLimits,
   pageScript,
+  parsePageKey,
   type PageCall,
 } from "./browser-script.js";
+// The own browser uses the parser of this file in its methods only, so the
+// two files may import each other.
+import { OwnBrowser } from "./own-browser.js";
 import {
   BrowserClosed,
   type BrowserElement,
   type BrowserPage,
   type BrowserPort,
+  type BrowserTab,
 } from "./ports.js";
 
 export interface CommandOutput {
@@ -336,6 +341,91 @@ ${failure}
 end run`;
 }
 
+/**
+ * Lists the tabs of the front window, one line for each: its place, whether
+ * the window shows it, its address and its title, apart by a tab character.
+ * A browser makes every run of white space in a title one space, so a title
+ * holds no tab and no line break. The lists are read in one go inside the
+ * browser, and the lines are made outside it, where "tab" is no word of the
+ * browser's dictionary.
+ */
+export function tabsScript(browser: SupportedBrowser) {
+  const [count, title, active] =
+    browser.family === "safari"
+      ? ["(count of documents)", "name", "index of current tab of front window"]
+      : ["(count of windows)", "title", "active tab index of front window"];
+  return `on run argv
+  try
+    tell ${named(browser)}
+      if ${count} is 0 then return "clawdtime:no-window"
+      set theAddresses to URL of every tab of front window
+      set theTitles to ${title} of every tab of front window
+      set theActive to ${active}
+    end tell
+    set theSeparator to character id 9
+    set theReport to ""
+    repeat with theIndex from 1 to (count of theAddresses)
+      set theAddress to item theIndex of theAddresses
+      if theAddress is missing value then set theAddress to ""
+      set theTitle to item theIndex of theTitles
+      if theTitle is missing value then set theTitle to ""
+      set theReport to theReport & theIndex & theSeparator & (theIndex = theActive) & theSeparator & theAddress & theSeparator & theTitle & linefeed
+    end repeat
+    return theReport
+${failure}
+end run`;
+}
+
+/**
+ * Brings the tab at the place of the first argument to the front of the
+ * front window. The browser itself does not come forward: the person keeps
+ * the app that they use.
+ */
+export function switchTabScript(browser: SupportedBrowser) {
+  const [count, move] =
+    browser.family === "safari"
+      ? [
+          "(count of documents)",
+          "set current tab of front window to tab theIndex of front window",
+        ]
+      : [
+          "(count of windows)",
+          "set active tab index of front window to theIndex",
+        ];
+  return `on run argv
+  try
+    set theIndex to (item 1 of argv) as integer
+    tell ${named(browser)}
+      if ${count} is 0 then return "clawdtime:no-window"
+      if theIndex > (count of tabs of front window) then return "clawdtime:no-tab"
+      ${move}
+    end tell
+    return "clawdtime:switched"
+${failure}
+end run`;
+}
+
+/** The most tabs of one window in a list. */
+const mostTabs = 100;
+/** The lines of the tabs script. A line in another shape is left out. */
+function tabsOf(printed: string, browser: SupportedBrowser): BrowserTab[] {
+  const tabs: BrowserTab[] = [];
+  for (const row of printed.split("\n")) {
+    const match = /^(\d{1,4})\t(true|false)\t([^\t]*)\t(.*)$/.exec(row);
+    if (!match) continue;
+    tabs.push({
+      index: Number(match[1]),
+      title: oneLine(match[4], pageLimits.title),
+      url: oneLine(match[3], pageLimits.link),
+      active: match[2] === "true",
+    });
+  }
+  if (!tabs.length) throw new Error(unreadable(browser));
+  return tabs.slice(0, mostTabs);
+}
+/** Text as a wait compares it: one line, in small letters. */
+const folded = (value: string) => oneLine(value, 20_000).toLowerCase();
+
 /** What the page script answers. The limits are checked again here: a page is not trusted. */
 const elementSchema = z
   .object({
@@ -369,25 +459,65 @@ const answerSchema = z.union([
     .strict(),
 ]);
 
+/** One answer of the page script, as checked. */
+export type PageAnswer = z.infer<typeof answerSchema>;
+/** The reading in an answer of the page script. */
+export type PageReading = NonNullable<
+  Extract<PageAnswer, { ok: true }>["page"]
+>;
+
+/**
+ * Reads one answer of the page script. A page is not trusted: text that is
+ * not exactly an answer that the script gives is null.
+ */
+export function parsePageAnswer(text: string): PageAnswer | null {
+  try {
+    return answerSchema.parse(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The page of one reading. A password field never carries its value: the
+ * page script never sends it, and a page that tampers with the answer
+ * cannot either.
+ */
+export function pageOfReading(
+  browser: BrowserPage["browser"],
+  reading: PageReading,
+): BrowserPage {
+  const elements = reading.elements.map((element): BrowserElement => {
+    if (!element.password) return element;
+    const { value: _secret, ...rest } = element;
+    return rest;
+  });
+  return { browser, ...reading, elements };
+}
+
 const refusal = (result: { reason: string; closed?: true }) =>
   result.closed ? new BrowserClosed(result.reason) : new Error(result.reason);
 
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-/** The name of the switch for this driver, and the one value that turns it on. */
+/** The name of the switch for the browser drivers. */
 export const browserSwitch = "CLAWDTIME_COMPUTER_BROWSER";
 
 /**
- * The driver, when the person turned it on. It runs a script in the pages of
- * the person's own browser, with their sign-ins, so it is off until the
- * environment of the desktop service says "on". Any other value is off.
+ * The driver, when the person turned one on. "on" drives the browser in
+ * front, the person's own, with their sign-ins, through its scripting door.
+ * "own" drives ClawdTime's own browser, with its own profile, which starts
+ * at the first browser step. Any other value is off. Making a driver starts
+ * nothing.
  */
 export function browserFromEnvironment(
   env: Record<string, string | undefined>,
   make: () => BrowserPort = () => new AppleEventsBrowser(),
+  makeOwn: () => BrowserPort = () => new OwnBrowser({ env }),
 ): BrowserPort | undefined {
-  return env[browserSwitch] === "on" ? make() : undefined;
+  const chosen = env[browserSwitch];
+  return chosen === "on" ? make() : chosen === "own" ? makeOwn() : undefined;
 }
 
 export class AppleEventsBrowser implements BrowserPort {
@@ -478,6 +608,97 @@ export class AppleEventsBrowser implements BrowserPort {
 
   async back(): Promise<BrowserPage> {
     return this.step({ do: "back" });
+  }
+
+  /** Moves the pointer over one element, with no click, then reads the page when it holds still. */
+  async hover(index: number): Promise<BrowserPage> {
+    return this.step({ do: "hover", index: numbered(index) });
+  }
+
+  /** Chooses one option of a list of choices by the text that it shows. */
+  async select(index: number, option: string): Promise<BrowserPage> {
+    const text = oneLine(typeof option === "string" ? option : "", 400);
+    if (!text) throw new Error("Name the option by the text that it shows.");
+    return this.step({ do: "select", index: numbered(index), option: text });
+  }
+
+  /** One key in the element of the page that has the focus. */
+  async key(combo: string): Promise<BrowserPage> {
+    const key = parsePageKey(typeof combo === "string" ? combo : "");
+    if (!key)
+      throw new Error(
+        "A page takes Enter, Escape, Tab, Shift+Tab, the arrow keys, PageUp, PageDown, Home, End, Backspace or Space.",
+      );
+    return this.step({ do: "key", combo: key });
+  }
+
+  /**
+   * Reads the page until its visible text holds the words, or until the time
+   * is up, and says which. With no words it waits until the page is ready
+   * and the same in two readings in a row. It changes nothing on the page.
+   */
+  async waitFor(text: string | null, ms: number): Promise<BrowserPage> {
+    if (!Number.isSafeInteger(ms) || ms < 100 || ms > 10_000)
+      throw new Error("A wait takes 100 to 10000 milliseconds.");
+    const wanted = text === null ? null : folded(String(text));
+    if (wanted === "")
+      throw new Error("Give the words to wait for, or leave them out.");
+    const browser = await this.chosen();
+    const from = this.clock.now();
+    let last: BrowserPage | null = null;
+    let failed: unknown = null;
+    for (;;) {
+      try {
+        const seen = await this.look(browser);
+        if (wanted !== null && folded(seen.page.text).includes(wanted))
+          return { ...seen.page, found: true };
+        const same =
+          last !== null && JSON.stringify(last) === JSON.stringify(seen.page);
+        if (wanted === null && seen.ready && same) return seen.page;
+        last = seen.page;
+      } catch (error) {
+        // What was read before a failure is not the page now.
+        last = null;
+        failed = error;
+      }
+      const left = from + ms - this.clock.now();
+      if (left <= 0) break;
+      await this.clock.sleep(Math.min(browserTiming.lookEveryMs, left));
+    }
+    if (last) return wanted === null ? last : { ...last, found: false };
+    throw failed;
+  }
+
+  /** The page of the tab in front, with the tabs of its window. */
+  async tabs(): Promise<BrowserPage> {
+    const browser = await this.chosen();
+    const result = this.outcome(
+      browser,
+      await this.command(["-e", tabsScript(browser)]),
+    );
+    if ("reason" in result) throw refusal(result);
+    const tabs = tabsOf(result.text, browser);
+    const { page } = await this.look(browser);
+    return { ...page, tabs };
+  }
+
+  /** Brings one tab of the front window to the front, by its place, then reads it when it is ready. */
+  async switchTab(tab: number): Promise<BrowserPage> {
+    if (!Number.isSafeInteger(tab) || tab < 1 || tab > 9999)
+      throw new Error("Give the number of a tab from the last list of tabs.");
+    const browser = await this.chosen();
+    const result = this.outcome(
+      browser,
+      await this.command(["-e", switchTabScript(browser), String(tab)]),
+    );
+    if ("reason" in result) throw refusal(result);
+    if (result.text === "clawdtime:no-tab")
+      throw new Error(
+        "That tab is not in the front window any more: list the tabs again.",
+      );
+    if (result.text !== "clawdtime:switched")
+      throw new Error(unreadable(browser));
+    return this.settled(browser);
   }
 
   /** One step that changes the page, then the page when it is ready again. */
@@ -571,12 +792,8 @@ export class AppleEventsBrowser implements BrowserPort {
       await this.command(["-e", runScript(browser), script]),
     );
     if ("reason" in result) throw refusal(result);
-    let answer: z.infer<typeof answerSchema>;
-    try {
-      answer = answerSchema.parse(JSON.parse(result.text));
-    } catch {
-      throw new Error(unreadable(browser));
-    }
+    const answer = parsePageAnswer(result.text);
+    if (!answer) throw new Error(unreadable(browser));
     if (!answer.ok) throw new Error(oneLine(answer.error, 300));
     if (answer.next !== undefined) this.next = Math.max(this.next, answer.next);
     return answer;
@@ -586,17 +803,7 @@ export class AppleEventsBrowser implements BrowserPort {
   private async look(browser: SupportedBrowser) {
     const answer = await this.ask(browser, { do: "read" });
     if (!answer.page) throw new Error(unreadable(browser));
-    const elements = answer.page.elements.map((element): BrowserElement => {
-      if (!element.password) return element;
-      // The page script never sends it. A page that tampers with the answer cannot either.
-      const { value: _secret, ...rest } = element;
-      return rest;
-    });
-    const page: BrowserPage = {
-      browser: browser.family,
-      ...answer.page,
-      elements,
-    };
+    const page = pageOfReading(browser.family, answer.page);
     return { ready: answer.ready === true, page };
   }
 

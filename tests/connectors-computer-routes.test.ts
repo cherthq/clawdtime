@@ -214,7 +214,7 @@ describe("the routes of computer use", () => {
 
   it("show the question that the worker asks", async () => {
     const f = fixture([click, done]);
-    await f.worker.submit("r1", "Send the mail");
+    await f.worker.submit("r1", "Finish the draft");
     // This panel shows a button that needs a yes.
     const { command } = await f.next(0);
     await f.post("/desktop/hands/result", {
@@ -229,9 +229,9 @@ describe("the routes of computer use", () => {
     expect(status).toMatchObject({
       state: "waiting_for_person",
       step: 1,
-      goal: "Send the mail",
+      goal: "Finish the draft",
     });
-    expect(status.question).toMatch(/^Click "Send"\?/);
+    expect(status.question).toMatch(/^Click "Send" in Notes\?/);
     expect(status.message).toBe(status.question);
     expect((await f.next(command!.seq)).run.state).toBe("waiting_for_person");
     f.worker.stop();

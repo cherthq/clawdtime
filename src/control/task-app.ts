@@ -35,8 +35,10 @@ import type { PhoneTurnContext } from "../phone-desktop-contracts.js";
 export interface ComputerPort {
   /** The command that waits for the hands, when its number is after `after`. */
   next(after: number): unknown;
-  /** The result of one command. False when no command waits for it. */
-  result(raw: unknown): boolean;
+  /** The same, held until a command waits or what runs changes, at most `ms`. */
+  waitNext?(after: number, ms: number, signal?: AbortSignal): Promise<unknown>;
+  /** The result of one command. False when no command waits for it. `cost` is a header of numbers only. */
+  result(raw: unknown, cost?: string | null): boolean;
   /** Whether computer use is on, what it does now and what it asks. */
   status(): unknown;
   /** Transient presentation metadata, separate from observations and action receipts. */
@@ -49,6 +51,12 @@ const handsAfterSchema = z
   .string()
   .regex(/^[0-9]{1,15}$/)
   .transform(Number);
+/** How long the panel asks the service to hold its read of the next command, in milliseconds. */
+const handsWaitSchema = z
+  .string()
+  .regex(/^[0-9]{1,4}$/)
+  .transform(Number)
+  .refine((ms) => ms <= 2000);
 
 /**
  * The agent board as the panel routes see it. The board is built in a separate
@@ -355,15 +363,28 @@ export function createTaskApp(
     if (computer) {
       // The panel's hands: the next command, and what came of it. The same
       // command is served until its result arrives.
-      app.get("/desktop/hands/next", (c) => {
+      app.get("/desktop/hands/next", async (c) => {
         desktop.authorizePanel(credential(c));
-        return c.json(
-          computer.next(handsAfterSchema.parse(c.req.query("after") ?? "0")),
-        );
+        const after = handsAfterSchema.parse(c.req.query("after") ?? "0");
+        const wait = c.req.query("wait");
+        const ms = wait === undefined ? undefined : handsWaitSchema.parse(wait);
+        // A held read: answered as soon as a command waits or what runs
+        // changes. The header tells the panel that it may read again at once.
+        if (ms !== undefined && computer.waitNext) {
+          const held = await computer.waitNext(after, ms, c.req.raw.signal);
+          c.header("X-ClawdTime-Hands-Wait", String(ms));
+          return c.json(held);
+        }
+        return c.json(computer.next(after));
       });
       app.post("/desktop/hands/result", async (c) => {
         desktop.authorizePanel(credential(c));
-        return c.json({ ok: computer.result(await c.req.json()) });
+        return c.json({
+          ok: computer.result(
+            await c.req.json(),
+            c.req.header("x-clawdtime-hands-cost"),
+          ),
+        });
       });
       app.post("/desktop/hands/presentation", async (c) => {
         desktop.authorizePanel(credential(c));

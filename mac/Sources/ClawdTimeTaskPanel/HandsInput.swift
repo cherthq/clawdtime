@@ -88,11 +88,12 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
 
   // MARK: pointer
 
-  /// Moves the pointer along a short smooth way. False when Stop cut it.
+  /// Moves the real pointer of the Mac along a short, slightly curved way, as a hand does, so that the person
+  /// sees it travel. Its events carry the mark, so the watch never reads them as the person's. False when Stop cut it.
   @discardableResult func move(to target: CGPoint) async -> Bool {
     let from = pointer
     let length = hypot(Double(target.x - from.x), Double(target.y - from.y))
-    let path = GuidedPath(from: from, to: target, duration: GuidedPath.moveDuration(length: length), arc: 0)
+    let path = GuidedPath(from: from, to: target, duration: GuidedPath.moveDuration(length: length), arc: GuidedPath.moveArc)
     for point in path.points(every: 1.0 / 120) {
       if interrupted { return false }
       mouse(.mouseMoved, at: point)

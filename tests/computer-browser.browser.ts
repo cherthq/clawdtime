@@ -27,6 +27,8 @@ import {
   probeScript,
   runScript,
   supportedBrowsers,
+  switchTabScript,
+  tabsScript,
   type CommandRunner,
   type SupportedBrowser,
 } from "../connectors/computer/browser.js";
@@ -53,6 +55,10 @@ const desk = `<!doctype html>
 <div id="custom" role="button" tabindex="0">Custom button</div> <span id="customs">0</span>
 <div style="display:none"><button>Hidden button</button></div>
 <div id="host"></div>
+<div id="account-menu"><button id="account">Account</button>
+  <div id="account-items" style="display:none"><button id="profile">Profile</button></div></div>
+<span id="sized">none</span>
+<button id="later-button">Load later</button> <p id="later"></p>
 <div style="height:3000px"></div>
 <button id="far">Far button</button> <span id="fars">0</span>
 <script>
@@ -63,6 +69,15 @@ const desk = `<!doctype html>
   document.getElementById("count").addEventListener("click", function () { bump("counter"); });
   document.getElementById("custom").addEventListener("click", function () { bump("customs"); });
   document.getElementById("far").addEventListener("click", function () { bump("fars"); });
+  document.getElementById("account").addEventListener("mouseenter", function () {
+    document.getElementById("account-items").style.display = "block";
+  });
+  document.getElementById("size").addEventListener("change", function (event) {
+    document.getElementById("sized").textContent = event.target.value;
+  });
+  document.getElementById("later-button").addEventListener("click", function () {
+    setTimeout(function () { document.getElementById("later").textContent = "Ready now"; }, 300);
+  });
   var shadow = document.getElementById("host").attachShadow({ mode: "open" });
   shadow.innerHTML = '<button id="inner">Shadow button</button>';
   shadow.getElementById("inner").addEventListener("click", function () {
@@ -175,6 +190,41 @@ function inPage(page: Page, browser: SupportedBrowser): CommandRunner {
       }
     }
     throw new Error("The driver ran a command that this check does not know.");
+  };
+}
+
+/**
+ * The commands of the driver over the tabs of one window of this check: the
+ * list of the tabs and the switch, as the browser's dictionary does them, and
+ * the page script in the tab in front.
+ */
+function inTabs(
+  tabs: Page[],
+  front: { index: number },
+  browser: SupportedBrowser,
+): CommandRunner {
+  const printed = (stdout: string) => ({ status: 0, stdout, stderr: "" });
+  const page = inPage(tabs[0]!, browser);
+  return async (command, args, timeoutMs) => {
+    const [, script, argument] = args;
+    if (script === tabsScript(browser)) {
+      const lines = await Promise.all(
+        tabs.map(
+          async (tab, at) =>
+            `${at + 1}\t${at + 1 === front.index}\t${tab.url()}\t${await tab.title()}\n`,
+        ),
+      );
+      return printed(lines.join(""));
+    }
+    if (script === switchTabScript(browser)) {
+      const wanted = Number(argument);
+      if (wanted > tabs.length) return printed("clawdtime:no-tab");
+      front.index = wanted;
+      return printed("clawdtime:switched");
+    }
+    if (script === runScript(browser))
+      return inPage(tabs[front.index - 1]!, browser)(command, args, timeoutMs);
+    return page(command, args, timeoutMs);
   };
 }
 
@@ -386,6 +436,88 @@ async function check(
       assert.equal(back.title, "Order desk");
     });
     await step(
+      "a hover reaches the page's own handler and opens its menu, with no click",
+      async () => {
+        const now = await driver.read();
+        assert.ok(!now.elements.some((item) => item.label === "Profile"));
+        const count = await inThePage<string>(
+          "document.getElementById('counter').textContent",
+        );
+        const after = await driver.hover(number(now.elements, "Account"));
+        assert.ok(
+          after.elements.some((item) => item.label === "Profile"),
+          "the menu shows",
+        );
+        assert.equal(
+          await inThePage("document.getElementById('counter').textContent"),
+          count,
+          "nothing was clicked",
+        );
+      },
+    );
+    await step(
+      "a choice by the text of its option reaches the page's own change handler",
+      async () => {
+        const now = await driver.read();
+        await driver.select(number(now.elements, "Size"), "small");
+        assert.equal(
+          await inThePage("document.getElementById('sized').textContent"),
+          "Small",
+        );
+        await assert.rejects(
+          driver.select(number(now.elements, "Size"), "Huge"),
+          /has no option "Huge"/,
+        );
+      },
+    );
+    await step(
+      "Backspace takes away the last character, and Tab moves on to the password field, where no key goes",
+      async () => {
+        const now = await driver.read();
+        await driver.type(number(now.elements, "Note"), "Leave it", false);
+        await driver.key("Backspace");
+        assert.equal(
+          await inThePage("document.getElementById('note').value"),
+          "Leave i",
+        );
+        await driver.click(number(now.elements, "Your name"));
+        await driver.key("Tab");
+        assert.equal(await inThePage("document.activeElement.id"), "secret");
+        await assert.rejects(driver.key("Enter"), /password field/);
+        await assert.rejects(driver.key("Tab"), /password field/);
+      },
+    );
+    await step(
+      "Enter in a search field submits its form, and the next page is read when it is ready",
+      async () => {
+        const now = await driver.read();
+        await driver.type(
+          number(now.elements, "Search the desk"),
+          "red kettle",
+          false,
+        );
+        const results = await driver.key("Enter");
+        assert.equal(results.title, "Results");
+        assert.match(results.text, /Results for red kettle/);
+        assert.equal((await driver.back()).title, "Order desk");
+      },
+    );
+    await step(
+      "a wait ends when the words show, and says so when they do not",
+      async () => {
+        const now = await driver.read();
+        await driver.click(number(now.elements, "Load later"));
+        const ready = await driver.waitFor("ready NOW", 3000);
+        assert.equal(ready.found, true);
+        assert.match(ready.text, /Ready now/);
+        const never = await driver.waitFor("Never on this page", 300);
+        assert.equal(never.found, false);
+        const loaded = await driver.waitFor(null, 2000);
+        assert.equal(loaded.found, undefined);
+        assert.equal(loaded.title, "Order desk");
+      },
+    );
+    await step(
       "a link leads to a new document, whose numbers are all new",
       async () => {
         const before = await driver.read();
@@ -432,6 +564,33 @@ async function check(
           console.log(`${name}: tampering with ${set}: ${outcome}`);
         },
       );
+    await step(
+      "the tabs of the window are listed, and a switch reads the tab that comes to the front",
+      async () => {
+        const context = await engine.newContext();
+        const tabs = [await context.newPage(), await context.newPage()];
+        await tabs[0]!.goto(`${origin}/`);
+        await tabs[1]!.goto(`${origin}/next`);
+        const front = { index: 1 };
+        const driven = new AppleEventsBrowser(inTabs(tabs, front, browser));
+        const listed = await driven.tabs();
+        assert.equal(listed.title, "Order desk");
+        assert.deepEqual(listed.tabs, [
+          { index: 1, title: "Order desk", url: `${origin}/`, active: true },
+          {
+            index: 2,
+            title: "Second page",
+            url: `${origin}/next`,
+            active: false,
+          },
+        ]);
+        const switched = await driven.switchTab(2);
+        assert.equal(switched.title, "Second page");
+        assert.equal(front.index, 2);
+        await assert.rejects(driven.switchTab(5), /not in the front window/);
+        await context.close();
+      },
+    );
   } finally {
     await engine.close();
   }

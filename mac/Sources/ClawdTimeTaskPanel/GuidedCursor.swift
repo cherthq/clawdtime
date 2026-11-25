@@ -101,12 +101,18 @@ import TaskPanelCore
   /// when it is there and the person had a moment to read it. While it is on
   /// the screen it goes on from where it is; else it comes out of the mascot.
   /// With Reduce Motion there is no glide: the cursor is at the target at once.
-  func travel(to target: CGPoint, label text: String) async {
+  /// It returns the seconds that it took, for the timing of the step.
+  @discardableResult func travel(to target: CGPoint, label text: String) async -> Double {
+    let began = Date()
     fade?.cancel(); fade = nil
     still = Theme.reduceMotion; pressed = false
-    let way = GuidedPath.glide(from: GuidedPath.origin(shown: place, mascot: pet.handsOrigin, pointer: NSEvent.mouseLocation), to: target, still: still)
+    let shownBefore = place
+    let way = GuidedPath.glide(from: GuidedPath.origin(shown: shownBefore, mascot: pet.handsOrigin, pointer: NSEvent.mouseLocation), to: target, still: still)
     pet.point(at: target)
-    label = GuidedLook.label(text); pillWidth = GuidedCursorView.pillWidth(for: label)
+    let said = GuidedLook.label(text)
+    // The same words at the same place: the person has read them already.
+    let relabeled = shownBefore == nil || said != label
+    label = said; pillWidth = GuidedCursorView.pillWidth(for: label)
     elapsed = 0; path = way
     view.turn(!still)
     view.fly(way.duration > 0, still: still)
@@ -124,7 +130,8 @@ import TaskPanelCore
     clock.framesPerSecond = 30
     put(target)
     view.fly(false, still: still)
-    await pause(GuidedPath.dwell(still: still, moved: way.length >= GuidedPath.inPlace))
+    await pause(GuidedPath.dwell(still: still, moved: way.length >= GuidedPath.inPlace, relabeled: relabeled))
+    return Date().timeIntervalSince(began)
   }
   /// The hands click where the cursor is. They brought the pointer of the Mac here for it.
   func pulse() {
