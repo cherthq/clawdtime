@@ -64,6 +64,7 @@ import {
   interpret,
 } from "../agents/call.js";
 import { looksSecret } from "../agents/memory.js";
+import { aimOf } from "./failed-ways.js";
 import {
   actionSchema,
   againstPage,
@@ -1956,7 +1957,13 @@ export class ComputerWorker implements DesktopExecutorPort {
     kept: string,
     kind: string = action.kind,
   ) {
-    run.history.push({ step: run.step, action, why, outcome: said });
+    run.history.push({
+      step: run.step,
+      action,
+      why,
+      outcome: said,
+      ...aimOf(action, target, run.observation),
+    });
     this.journal.step(run.id, { kind, target, outcome: kept });
   }
 

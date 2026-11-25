@@ -143,7 +143,14 @@ describe("a task", () => {
     });
     expect(planner.inputs[0]!.observation?.image).toBe("aW1hZ2U=");
     expect(planner.inputs[1]!.history).toEqual([
-      { step: 1, action: click, why: "step 1", outcome: "ok" },
+      {
+        step: 1,
+        action: click,
+        why: "step 1",
+        outcome: "ok",
+        target: "Save",
+        role: "AXButton",
+      },
     ]);
     expect(journal.get("talk_1_execution")).toMatchObject({
       goal: "Save the note",

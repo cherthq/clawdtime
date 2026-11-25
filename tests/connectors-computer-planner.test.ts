@@ -1471,3 +1471,111 @@ describe("notes from memory in the brief", () => {
     );
   });
 });
+
+describe("the element of each step in the brief", () => {
+  const turn = (history: StepRecord[]) => brief(input({ history }), false);
+
+  it("names the element, with its role when known, for the actions on one", () => {
+    const text = turn([
+      {
+        step: 1,
+        action: { kind: "click_element", element: 4 },
+        why: "open the export sheet",
+        outcome: "refused: Element 4 is disabled.",
+        target: "Export",
+        role: "AXButton",
+      },
+      {
+        step: 2,
+        action: { kind: "click_at", x: 412.4, y: 300.6 },
+        why: "the drawn tab",
+        outcome: "ok",
+        target: "Layers",
+      },
+      {
+        step: 3,
+        action: { kind: "type", text: "milk", element: 7 },
+        why: "add the item",
+        outcome: "ok",
+        target: "Search",
+        role: "AXTextField",
+      },
+      {
+        step: 4,
+        action: { kind: "browser_click", index: 3 },
+        why: "open the order",
+        outcome: "ok",
+        target: 'Order "A-12"',
+      },
+      {
+        step: 5,
+        action: { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        why: "file the report",
+        outcome: "ok",
+        target: "Report to Archive",
+      },
+    ]);
+    expect(text).toContain(
+      '1. click_element on AXButton "Export": refused: Element 4 is disabled. (open the export sheet)',
+    );
+    expect(text).toContain(
+      '2. click_at at 412,301 on "Layers": ok (the drawn tab)',
+    );
+    expect(text).toContain(
+      '3. type "milk" in AXTextField "Search": ok (add the item)',
+    );
+    // A quote of the screen cannot close the quotes of the name.
+    expect(text).toContain(
+      "4. browser_click on \"Order 'A-12'\": ok (open the order)",
+    );
+    expect(text).toContain(
+      '5. drag on "Report to Archive": ok (file the report)',
+    );
+  });
+
+  it("says no name twice where the line names the target already, and none when the step has none", () => {
+    const text = turn([
+      {
+        step: 1,
+        action: { kind: "key", combo: "cmd+s" },
+        why: "save",
+        outcome: "ok",
+        target: "cmd+s",
+      },
+      {
+        step: 2,
+        action: { kind: "open_app", name: "Notes" },
+        why: "open it",
+        outcome: "ok",
+        target: "Notes",
+      },
+      {
+        step: 3,
+        action: { kind: "click_element", element: 9 },
+        why: "the row",
+        outcome: "ok",
+      },
+    ]);
+    expect(text).toContain("1. key cmd+s: ok (save)");
+    expect(text).toContain("2. open_app Notes: ok (open it)");
+    expect(text).toContain("3. click_element: ok (the row)");
+  });
+
+  it("cuts a long name short and keeps it on one line", () => {
+    const text = turn([
+      {
+        step: 1,
+        action: { kind: "click_element", element: 2 },
+        why: "x",
+        outcome: "ok",
+        target: `Line one\nLine two ${"y".repeat(200)}`,
+        role: "AXButton",
+      },
+    ]);
+    const stepLine = text.split("\n").find((line) => line.startsWith("1. "))!;
+    expect(stepLine).toMatch(
+      /^1\. click_element on AXButton "Line one Line two y+": ok \(x\)$/,
+    );
+    expect(stepLine.match(/y/g)!.length).toBeLessThan(60);
+  });
+});

@@ -399,6 +399,14 @@ export interface StepRecord {
   why: string;
   /** ok, or the reason it did not work. */
   outcome: string;
+  /**
+   * The name of the element that the action was on, or its key, app or site,
+   * as the journal keeps it, cut short (`failed-ways.ts`). Never typed text.
+   * Absent when there is none, or when it looks like a secret.
+   */
+  target?: string;
+  /** The role of that element, when the look named it by its number. */
+  role?: string;
 }
 
 /** The replaceable part that picks the next action. */

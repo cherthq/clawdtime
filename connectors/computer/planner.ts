@@ -587,7 +587,26 @@ function elementLines(observation: Observation) {
   return { lines, more };
 }
 
-/** One past step in words. It holds no number of an element: that number is from an old observation. */
+/** The kinds whose step line names their element. The others name their key, app or site already. */
+const aimedKinds = new Set<string>([
+  "click_element",
+  "click_at",
+  "type",
+  "hover",
+  "drag",
+  "scroll",
+  "browser_click",
+  "browser_type",
+  "browser_hover",
+  "browser_select",
+  "browser_switch_tab",
+]);
+
+/**
+ * One past step in words. It holds no number of an element: that number is
+ * from an old observation. It names the element by its role and its name, as
+ * the worker kept them, so that the planner sees what it hit.
+ */
 function stepLine(record: StepRecord) {
   const action = record.action;
   const detail =
@@ -595,7 +614,7 @@ function stepLine(record: StepRecord) {
       ? ` "${line(action.text, 60)}"`
       : action.kind === "key" || action.kind === "browser_key"
         ? ` ${line(action.combo, 40)}`
-        : action.kind === "look_closer"
+        : action.kind === "look_closer" || action.kind === "click_at"
           ? ` at ${Math.round(action.x)},${Math.round(action.y)}`
           : action.kind === "open_app" || action.kind === "quit_app"
             ? ` ${line(action.name, 60)}`
@@ -614,13 +633,20 @@ function stepLine(record: StepRecord) {
                         : action.kind === "browser_wait" && action.text
                           ? ` for "${line(action.text, 60)}"`
                           : "";
+  const name = record.target ? quoted(record.target, 60) : "";
+  const aim =
+    name && aimedKinds.has(action.kind)
+      ? ` ${action.kind === "type" || action.kind === "browser_type" ? "in" : "on"} ${
+          record.role ? `${line(record.role, 40)} ` : ""
+        }"${name}"`
+      : "";
   const why = line(record.why, 120);
   // The hands say ok when the address went to the browser. That is not the page.
   const outcome =
     action.kind === "open_url" && record.outcome === "ok"
       ? "ok, the address went to the browser. The screen below shows whether the page came."
       : line(record.outcome, 300);
-  return `${record.step}. ${action.kind}${detail}: ${outcome}${why ? ` (${why})` : ""}`;
+  return `${record.step}. ${action.kind}${detail}${aim}: ${outcome}${why ? ` (${why})` : ""}`;
 }
 
 function pageLines(page: BrowserPage) {
