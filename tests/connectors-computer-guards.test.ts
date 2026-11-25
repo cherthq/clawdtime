@@ -577,6 +577,51 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
         null,
       );
     });
+    it("reads Delete and Don't Save of a save sheet as unsaved changes, also where it says that it cannot be undone", () => {
+      // A new document that was never saved: macOS names its button Delete.
+      const fresh = [
+        "Cancel",
+        "Save",
+        text("Do you want to keep this new document “Untitled”?"),
+        text(
+          "You can choose to save your changes, or delete this document immediately. You can’t undo this action.",
+        ),
+      ];
+      // A document with changes: Don't Save, and the changes "will be lost".
+      const edited = [
+        "Cancel",
+        "Save",
+        text("Do you want to save the changes made to the document “Report”?"),
+        text("Your changes will be lost if you don’t save them."),
+      ];
+      for (const [name, sheet] of [
+        ["Delete", fresh],
+        ["Don't Save", edited],
+        ["Delete", edited],
+      ] as const) {
+        expect(clicked(name, [...sheet]), name).toBe("unsaved");
+        for (const goal of [
+          "Close the TextEdit document without saving it.",
+          "Close the report and don't save it.",
+          "Close the report and discard it.",
+        ])
+          expect(clicked(name, [...sheet], { goal }), `${name}: ${goal}`).toBe(
+            null,
+          );
+        expect(
+          clicked(name, [...sheet], {
+            goal: "Close the report. Do not discard it.",
+          }),
+          name,
+        ).toBe("unsaved");
+      }
+      // Outside a save sheet, a Delete that cannot be undone is still lost for good.
+      expect(
+        clicked("Delete", ["Cancel", text("You can’t undo this action.")], {
+          goal: "Delete the draft without saving it.",
+        }),
+      ).toBe("loss");
+    });
     it("asks before a quit or a close only while the window shows unsaved changes", () => {
       const edited = {
         name: "TextEdit",

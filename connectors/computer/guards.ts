@@ -183,7 +183,7 @@ export const askPolicy = {
     reason: "What it removes is gone for good.",
   },
   unsaved: {
-    asks: "Losing changes that are not saved: Don't Save, Discard, Revert, a button of a sheet that asks to save, and a quit or a close while the window shows unsaved work.",
+    asks: "Losing changes that are not saved: Don't Save, Discard, Revert, a button of a sheet that asks to save (also its Delete for a new document that was never saved), and a quit or a close while the window shows unsaved work.",
     unless:
       "The request asks to lose the changes: without saving, discard, throw away, revert.",
     reason: "Changes that are not saved are lost.",
@@ -599,6 +599,16 @@ const nameRules: readonly NameRule[] = [
     any: "(?:delete|remove|erase|clear|empty)(?: it| them| this| these| all| everything| items?| files?)? (?:forever|permanently|immediately|for good)|permanently (?:delete|remove|erase)|empty (?:the )?(?:trash|bin|recycle bin|recently deleted)|factory reset|reset (?:all|everything|to factory|(?:all )?settings|(?:this |the )?(?:mac|device|phone|computer|iphone|ipad))|erase|uninstall|wipe|terminate|destroy|purge|revoke|overwrite|shut down|(?:delete|close|deactivate) (?:my |your |the |this )?(?:account|profile)|delete (?:my |your |the |this )?(?:repository|repo|organization|organisation|workspace|database|project|server|instance|domain|website|site|channel|team|backups?|vault|api key|key|token|branch|everything)|drop (?:table|database)|clear (?:all )?(?:browsing )?(?:history|data|website data)|format (?:the )?(?:disk|drive|volume|partition|card)|(?:endgultig|dauerhaft) (?:loschen|entfernen)|supprimer (?:definitivement|pour toujours)|(?:eliminar|borrar) (?:para siempre|permanentemente|definitivamente)|elimina (?:definitivamente|per sempre)|definitief verwijderen|papierkorb leeren|vider la corbeille|vaciar (?:la )?papelera|svuota (?:il )?cestino|prullenbak legen",
   },
   {
+    // A button of a sheet that asks to save: all but Save loses the changes.
+    // It comes before the plain Delete below: the sheet of a new document that
+    // was never saved names its button Delete and says that it cannot be
+    // undone, and what it loses is the unsaved document.
+    kind: "unsaved",
+    start: "delete|close|quit|leave|continue|ok|yes|don't keep",
+    when: (scene) => saveSheetWords.test(scene.text),
+    asked: asksToLose,
+  },
+  {
     // A plain Delete or OK, where the screen says that it cannot be undone.
     kind: "loss",
     start:
@@ -616,13 +626,6 @@ const nameRules: readonly NameRule[] = [
     start:
       "don't save|do not save|discard|revert|throw away|lose changes|close without saving|quit without saving|delete draft",
     any: "discard|revert to saved",
-    asked: asksToLose,
-  },
-  {
-    // A button of a sheet that asks to save: all but Save loses the changes.
-    kind: "unsaved",
-    start: "delete|close|quit|leave|continue|ok|yes|don't keep",
-    when: (scene) => saveSheetWords.test(scene.text),
     asked: asksToLose,
   },
   {
