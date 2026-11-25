@@ -652,6 +652,8 @@ agentBoard =
           : {}),
         tasks: deskTasks(desktop, desktopSetup.config.token),
         ...(execution ? { execution } : {}),
+        // The routines of the computer worker, for the tools of the chat agent.
+        ...(owner ? { routines: owner.routines } : {}),
         // The structured intent reader of the task service: a model reads what
         // each message is for the task, before the other rules of the chat. It
         // is a switch, off unless CLAWDTIME_SEMANTIC_TASKS=on, so that a

@@ -508,6 +508,41 @@ export interface Transport {
     request: PlannerRequest,
     signal: AbortSignal,
   ): Promise<Attempt<ModelAnswer>>;
+  /** One turn of a conversation with tools, for the chat. Absent on a transport that has none. */
+  converse?(
+    request: ConversationRequest,
+    signal: AbortSignal,
+  ): Promise<Attempt<ConversationAnswer>>;
+}
+
+// A conversation: the chat of ClawdTime speaks over the same transports. It is
+// many turns, the model chooses whether to call a function, and it may call
+// several in one answer. The planner's requests above do not change.
+
+/** One message of a conversation. Nothing in it is trusted. */
+export type ConversationMessage =
+  | { role: "user"; content: string }
+  | {
+      role: "assistant";
+      content: string;
+      calls?: readonly { id: string; name: string; arguments: string }[];
+    }
+  | { role: "tool"; callId: string; content: string };
+
+/** One request of the chat: its rules, its functions and the conversation so far. */
+export interface ConversationRequest {
+  system: string;
+  tools: readonly FunctionTool[];
+  messages: readonly ConversationMessage[];
+}
+
+/** One answer of the chat: words, calls, or both. */
+export interface ConversationAnswer {
+  text: string;
+  calls: readonly ModelCall[];
+  refused: boolean;
+  cut: boolean;
+  usage: PlannerUsage | null;
 }
 
 const count = (value: unknown) =>
@@ -732,6 +767,89 @@ export class ChatTransport implements Transport {
     request: PlannerRequest,
     signal: AbortSignal,
   ): Promise<Attempt<ModelAnswer>> {
+    return this.exchange(
+      () => this.body(request),
+      signal,
+      (parsed) => chatAnswer(parsed, this.options.provider.id, this.current),
+    );
+  }
+
+  /** The body of one turn of a conversation. The tool choice is the model's own. */
+  conversationBody(request: ConversationRequest): Record<string, unknown> {
+    const openai = this.options.provider.id === "openai";
+    const effort = this.noEffort
+      ? null
+      : sentEffort(this.options.provider.id, this.current, this.options.effort);
+    return {
+      model: this.current,
+      messages: [
+        { role: "system", content: request.system },
+        ...request.messages.map((message) =>
+          message.role === "tool"
+            ? {
+                role: "tool",
+                tool_call_id: message.callId,
+                content: message.content,
+              }
+            : message.role === "assistant" && message.calls?.length
+              ? {
+                  role: "assistant",
+                  content: message.content || null,
+                  tool_calls: message.calls.map((call) => ({
+                    id: call.id,
+                    type: "function",
+                    function: { name: call.name, arguments: call.arguments },
+                  })),
+                }
+              : { role: message.role, content: message.content },
+        ),
+      ],
+      // A request with no functions carries no list: an empty one is refused.
+      ...(request.tools.length
+        ? {
+            tools: request.tools,
+            ...(openai ? { parallel_tool_calls: true } : {}),
+          }
+        : {}),
+      ...(effort ? { reasoning_effort: effort } : {}),
+    };
+  }
+
+  /** One turn of a conversation, over the same route, key and fallbacks as the planner. */
+  async converse(
+    request: ConversationRequest,
+    signal: AbortSignal,
+  ): Promise<Attempt<ConversationAnswer>> {
+    return this.exchange(
+      () => this.conversationBody(request),
+      signal,
+      (parsed) => {
+        const { message } = firstChoice(parsed);
+        const { refused, cut, calls, usage } = chatAnswer(
+          parsed,
+          this.options.provider.id,
+          this.current,
+        );
+        return {
+          text: typeof message.content === "string" ? message.content : "",
+          refused,
+          cut,
+          calls,
+          usage,
+        };
+      },
+    );
+  }
+
+  /**
+   * One request and its answer. The body is made again for each try, so that
+   * a fallback model or a dropped effort goes out in the next one.
+   */
+  private async exchange<T>(
+    body: () => Record<string, unknown>,
+    signal: AbortSignal,
+    parse: (parsed: unknown) => T,
+  ): Promise<Attempt<T>> {
     const post = () =>
       this.options.request(this.options.endpoint, {
         method: "POST",
@@ -741,7 +859,7 @@ export class ChatTransport implements Transport {
             : {}),
           "content-type": "application/json",
         },
-        body: JSON.stringify(this.body(request)),
+        body: JSON.stringify(body()),
         signal,
       });
     let response = await post();
@@ -769,14 +887,7 @@ export class ChatTransport implements Transport {
     if (response.ok) {
       const text = await response.text();
       try {
-        return {
-          ok: true,
-          value: chatAnswer(
-            JSON.parse(text) as unknown,
-            this.options.provider.id,
-            this.current,
-          ),
-        };
+        return { ok: true, value: parse(JSON.parse(text) as unknown) };
       } catch {
         // A cut or garbled answer: the next request can pass.
         return {
@@ -1183,4 +1294,116 @@ export class MessagesTransport implements Transport {
     }
     return { ok: true, value: messagesAnswer(message, this.options.model) };
   }
+
+  /**
+   * The parameters of one turn of a conversation. Tool results go back in a
+   * user message right after the answer that called them, and messages of one
+   * role in a row join into one, as the service asks.
+   */
+  conversationParams(request: ConversationRequest): MessageParams {
+    const { model } = this.options;
+    const messages: MessageParam[] = [];
+    const add = (role: "user" | "assistant", blocks: ContentParam[]) => {
+      if (!blocks.length) return;
+      const last = messages.at(-1);
+      if (last?.role === role && Array.isArray(last.content))
+        last.content.push(...blocks);
+      else messages.push({ role, content: blocks });
+    };
+    for (const message of request.messages) {
+      if (message.role === "tool")
+        add("user", [
+          {
+            type: "tool_result",
+            tool_use_id: message.callId,
+            content: message.content,
+          },
+        ]);
+      else if (message.role === "user")
+        add("user", [{ type: "text", text: message.content || "(empty)" }]);
+      else
+        add("assistant", [
+          ...(message.content.trim()
+            ? [{ type: "text" as const, text: message.content }]
+            : []),
+          ...(message.calls ?? []).map((call) => {
+            let input: unknown = {};
+            try {
+              input = JSON.parse(call.arguments || "{}");
+            } catch {
+              input = {};
+            }
+            return {
+              type: "tool_use" as const,
+              id: call.id,
+              name: call.name,
+              input:
+                input && typeof input === "object" && !Array.isArray(input)
+                  ? (input as Record<string, unknown>)
+                  : {},
+            };
+          }),
+        ]);
+    }
+    const effort = sentEffort("anthropic", model, this.options.effort);
+    return {
+      model,
+      max_tokens: conversationMaxTokens,
+      ...(request.tools.length
+        ? {
+            tools: messagesTools(request.tools, strictModels.test(model)),
+            tool_choice: { type: "auto" as const },
+          }
+        : {}),
+      system: [
+        {
+          type: "text",
+          text: request.system,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages,
+      ...(effort ? { output_config: { effort } } : {}),
+      ...(sentFast("anthropic", model, this.options.speed)
+        ? { speed: "fast" as const }
+        : {}),
+    };
+  }
+
+  async converse(
+    request: ConversationRequest,
+    signal: AbortSignal,
+  ): Promise<Attempt<ConversationAnswer>> {
+    let message: Message;
+    try {
+      message = await this.client.beta.messages.create(
+        this.conversationParams(request),
+        { signal },
+      );
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return { ok: false, ...messagesFailure(error, this.options.now()) };
+    }
+    const { refused, cut, calls, usage } = messagesAnswer(
+      message,
+      this.options.model,
+    );
+    const blocks = Array.isArray(message.content) ? message.content : [];
+    return {
+      ok: true,
+      value: {
+        text: blocks
+          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+          .join("\n")
+          .trim(),
+        refused,
+        cut,
+        calls,
+        usage,
+      },
+    };
+  }
 }
+
+/** The largest answer of one chat turn: a few sentences or a few calls. */
+export const conversationMaxTokens = 4_096;

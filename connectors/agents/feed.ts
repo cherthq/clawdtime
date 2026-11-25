@@ -13,15 +13,23 @@ import {
   chatBusyText,
   ChatLog,
   computerTaskNow,
-  Supervisor,
   switchChat,
   type ArchivedChat,
   type ChatMessage,
   type ChatSwitch,
   type ModelClient,
   historyForTurn,
-  supervisorModel,
 } from "./brain.js";
+import {
+  ChatAgent,
+  chatBrain,
+  chatMode,
+  type ChatActivity,
+  type ChatBrain,
+} from "./chat-agent.js";
+import type { RoutinePort } from "./chat-tools.js";
+import { ComputerJournal } from "../computer/journal.js";
+import { readReach } from "../computer/reach.js";
 import type { CliFact } from "./inventory.js";
 import { SessionNews } from "./sessionnews.js";
 import {
@@ -31,7 +39,6 @@ import {
   transcribe,
   type SpeechSettings,
 } from "./speech.js";
-import { ComputerJournal } from "../computer/journal.js";
 import { answerByCall, loadCallLink, openCall, sayByCall } from "./call.js";
 import { agentLabel } from "./catalog.js";
 import { DecisionDesk, type DecisionRequest } from "./decisions.js";
@@ -103,6 +110,8 @@ export interface AgentBoardPort {
     reply: ChatMessage | null;
     audio: string | null;
   }>;
+  /** Stop: ends the turn of the chat that runs. Absent where the chat has no turn to end. */
+  stopChat?(): void;
 }
 
 /** The conversation with ClawdTime, as the chat screen shows it. */
@@ -118,6 +127,8 @@ export interface ChatView {
   memory: boolean;
   messages: ChatMessage[];
   execution?: ReturnType<DesktopExecutorPort["snapshot"]>;
+  /** With the chat agent: what it did lately in a turn, newest last. */
+  activity?: ChatActivity[];
 }
 
 /** The requests that wait for the person, as the panel shows them. */
@@ -222,6 +233,14 @@ export class BoardFeed implements AgentBoardPort {
       jobsForTasks?: boolean;
       /** The structured intent reader of the task service is on. Off unless this is true. */
       semanticTasks?: boolean;
+      /**
+       * Which chat brain answers: the chat agent or the older supervisor. The
+       * default reads CLAWDTIME_CHAT: `agent` for the agent, anything else
+       * for the supervisor.
+       */
+      chat?: "agent" | "supervisor";
+      /** The routines of the computer worker, for the chat agent's tools. */
+      routines?: RoutinePort;
     } = {},
   ) {
     this.run = phoneGuard(options.runner ?? realRunner);
@@ -243,14 +262,6 @@ export class BoardFeed implements AgentBoardPort {
       store: this.watchStore,
       exists: options.exists,
     });
-    const key =
-      process.env.CLAWDTIME_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-    const model =
-      options.model !== undefined
-        ? options.model
-        : key
-          ? supervisorModel(process.env, key)
-          : null;
     this.speech =
       options.speech !== undefined
         ? options.speech
@@ -283,8 +294,24 @@ export class BoardFeed implements AgentBoardPort {
       log: this.log,
       now: options.now ?? Date.now,
     });
-    this.supervisor = new Supervisor(
-      {
+    const env = options.chat
+      ? { ...process.env, CLAWDTIME_CHAT: options.chat }
+      : process.env;
+    this.agentMode = chatMode(env) === "agent";
+    this.supervisor = chatBrain({
+      env,
+      root: this.root,
+      model: options.model,
+      ...(options.routines ? { routines: options.routines } : {}),
+      // The chat agent reads the journal and the reach of the computer
+      // worker, never writes them: they feed its task graph.
+      journal: new ComputerJournal(this.root),
+      reach: () => readReach(this.root)?.items ?? [],
+      listener: (activity) => {
+        this.activity.push(activity);
+        if (this.activity.length > 20) this.activity.shift();
+      },
+      world: {
         now: options.now ?? Date.now,
         board: () => this.snapshot(),
         laterNews: this.sessionNews,
@@ -339,9 +366,12 @@ export class BoardFeed implements AgentBoardPort {
         incidents: () => this.incidents().incidents.map((item) => item.text),
         ...(options.semanticTasks === true ? { semanticTasks: true } : {}),
       },
-      model,
-    );
+    });
   }
+  /** The chat agent answers, not the older supervisor. */
+  private readonly agentMode: boolean;
+  /** What the chat agent did lately, for the panel. */
+  private readonly activity: ChatActivity[] = [];
   private readonly run: Runner;
   private readonly root: string;
   /** Says a finished job in the chat. Absent where the service has no jobs. */
@@ -425,7 +455,7 @@ export class BoardFeed implements AgentBoardPort {
       : { ok: false, route: "none" as const };
   }
   private readonly log: ChatLog;
-  private readonly supervisor: Supervisor;
+  private readonly supervisor: ChatBrain;
   private readonly speech: SpeechSettings | null;
   private get voiceDirectory() {
     return join(this.root, "agents", "voice");
@@ -443,6 +473,7 @@ export class BoardFeed implements AgentBoardPort {
       ...(this.options.execution
         ? { execution: this.options.execution.snapshot() }
         : {}),
+      ...(this.agentMode ? { activity: [...this.activity] } : {}),
     };
   }
   /** Turns of the chat that wait for their answer now. A chat is not changed under one. */
@@ -491,6 +522,14 @@ export class BoardFeed implements AgentBoardPort {
     if (!text || this.log.recent(1)[0]?.text === text) return;
     this.log.append({ role: "assistant", text, at, via: "chat" });
   }
+  /** Stop: the chat agent ends the turn that runs. The computer task stops through its own route. */
+  stopChat() {
+    if (this.supervisor instanceof ChatAgent) this.supervisor.abort();
+  }
+  /** The chat agent's task graph reads the real sources again. */
+  private refreshGraph() {
+    if (this.supervisor instanceof ChatAgent) this.supervisor.refresh();
+  }
   /**
    * What the computer engine says by itself: its first words, a question,
    * its result. A durable bridge invokes this once after it records a
@@ -516,7 +555,7 @@ export class BoardFeed implements AgentBoardPort {
       ...(working ? { engine: true as const } : {}),
     });
     // The request is over: a short name right after it can correct it.
-    if (!working) this.supervisor.computerEnded(now());
+    if (!working) this.supervisor.computerEnded?.(now());
   }
   /**
    * Says in the chat the answer of each job that finished, once. ClawdTime
@@ -584,7 +623,7 @@ export class BoardFeed implements AgentBoardPort {
       via,
     });
     this.answering++;
-    let answer: Awaited<ReturnType<Supervisor["answer"]>>;
+    let answer: Awaited<ReturnType<ChatBrain["answer"]>>;
     try {
       answer = await this.supervisor.answer(history, text, via, context);
     } finally {
@@ -611,7 +650,8 @@ export class BoardFeed implements AgentBoardPort {
         (message) =>
           message.role === "assistant" && message.text === answer.text,
       );
-    if (answer.text.trim() && !told) this.log.append(reply);
+    // A message that joined a turn that ran already: that turn says the answer once.
+    if (!answer.joined && answer.text.trim() && !told) this.log.append(reply);
     return reply;
   }
   /**
@@ -723,6 +763,12 @@ export class BoardFeed implements AgentBoardPort {
         }
         // A job that finished is said in the chat, with no question first.
         this.tellJobs();
+        // The chat agent's task graph follows the real sources.
+        try {
+          this.refreshGraph();
+        } catch {
+          // The next turn reads again.
+        }
         // And a session that is done, when the person asked to hear that.
         this.tellSessions();
       }, 2000);

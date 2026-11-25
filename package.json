@@ -30,6 +30,7 @@
     "test:computer:own-browser": "tsx tests/computer-own-browser.browser.ts",
     "eval:computer:planner": "tsx tests/computer-planner.eval.ts",
     "eval:computer:request": "tsx tests/computer-request.eval.ts",
+    "eval:chat": "tsx tests/chat-agent.eval.ts",
     "bench:computer:speed": "tsx scripts/computer-speed.ts",
     "cua:qualify": "npm run build && node dist/scripts/qualify-bundled-cua.js",
     "cua:package": "node scripts/package-bundled-cua.mjs",

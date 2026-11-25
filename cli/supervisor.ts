@@ -35,13 +35,12 @@ import {
   asksForNewChat,
   chatArchiveId,
   ChatLog,
-  Supervisor,
   switchChat,
   type ArchivedChat,
   type ModelClient,
   historyForTurn,
-  supervisorModel,
 } from "../connectors/agents/brain.js";
+import { chatBrain, type ChatBrain } from "../connectors/agents/chat-agent.js";
 import { focusSession } from "../connectors/agents/focus.js";
 import { rememberable } from "../connectors/agents/trove.js";
 import {
@@ -563,10 +562,12 @@ export async function supervisorCli(
         const board = () =>
           new BoardScanner(system, { includeHeadless: false }).scan();
         const titles = titleReader(system);
-        const key =
-          system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
-        const supervisor = new Supervisor(
-          {
+        // CLAWDTIME_CHAT=agent: the chat agent talks on the call; otherwise the supervisor.
+        const supervisor = chatBrain({
+          env: system.env,
+          root,
+          ...(deps.request ? { request: deps.request } : {}),
+          world: {
             now: () => system.now(),
             board,
             desk,
@@ -614,8 +615,7 @@ export async function supervisorCli(
                 question,
               ),
           },
-          key ? supervisorModel(system.env, key) : null,
-        );
+        });
         const log = new ChatLog(root);
         print("Calling you. Say goodbye to end the call.");
         const result = await converseByCall(
@@ -896,7 +896,7 @@ export async function supervisorCli(
     new ChatLog(root).history();
   const newChatHere = async (
     change: "new" | { open: string },
-    supervisor?: Supervisor,
+    supervisor?: ChatBrain,
   ) => {
     const sent = await changeDesktopChat(system, change, desktopOptions);
     if (sent.kind !== "absent")
@@ -975,10 +975,13 @@ export async function supervisorCli(
     const board = () =>
       new BoardScanner(system, { includeHeadless: false }).scan();
     const titles = titleReader(system);
-    const key =
-      system.env.CLAWDTIME_OPENAI_API_KEY || system.env.OPENAI_API_KEY;
-    const supervisor = new Supervisor(
-      {
+    // CLAWDTIME_CHAT=agent: the chat agent answers; otherwise the supervisor.
+    const supervisor = chatBrain({
+      env: system.env,
+      root,
+      ...(deps.model !== undefined ? { model: deps.model } : {}),
+      ...(deps.request ? { request: deps.request } : {}),
+      world: {
         now: () => system.now(),
         board,
         desk,
@@ -1025,12 +1028,7 @@ export async function supervisorCli(
             question,
           ),
       },
-      deps.model !== undefined
-        ? deps.model
-        : key
-          ? supervisorModel(system.env, key)
-          : null,
-    );
+    });
     const log = new ChatLog(root);
     const turn = async (words: string, via: "chat" | "voice") => {
       if (words.length > userMessageLimit) return userMessageTooLong;
@@ -1082,7 +1080,8 @@ export async function supervisorCli(
             // Without the mark the service reads the text as a chat message.
           }
           const said = await sayToDesktop(system, words, {
-            ownModel: deps.model !== undefined ? deps.model !== null : !!key,
+            // The same as before: this command has a model of its own.
+            ownModel: supervisor.ready,
             ...(deps.request ? { request: deps.request } : {}),
           });
           return said.kind === "absent" ? turn(words, "chat") : said.text;
