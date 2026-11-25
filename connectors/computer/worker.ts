@@ -125,6 +125,7 @@ import {
   type ProgressStep,
 } from "./progress.js";
 import { TaskPlan } from "./plan.js";
+import type { ComputerMemory } from "./remembered.js";
 import type {
   Action,
   BrowserPage,
@@ -530,6 +531,13 @@ export interface ComputerWorkerOptions {
   settleLimit?: number;
   /** The pause after a planner call that failed for a short time. */
   transientMs?: number;
+  /**
+   * The person's memory (`remembered.ts`). Before a request the planner gets
+   * the few notes that fit its goal, and after it what the owner taught is
+   * kept. It does nothing while memory is off. Without it the worker reads
+   * and keeps nothing there.
+   */
+  memory?: ComputerMemory;
 }
 
 type Reply =
@@ -609,6 +617,14 @@ interface Run {
   shown: string;
   /** What the person said for this request after it began, oldest first. */
   guidance: Guidance[];
+  /** Notes from memory that fit the goal, read before the request, for the planner. */
+  remembered?: string[];
+  /**
+   * The owner's own words for this request after it began, oldest first:
+   * the words that were kept for it, and the answers to its questions. What
+   * memory may keep of the request, at its end.
+   */
+  taught: string[];
   /** How many of those the planner had when it last began to choose. */
   heard: number;
   deadline: number;
@@ -1135,6 +1151,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     } catch {
       // The journal still says running. The next start reads that as uncertain.
     }
+    this.learn(run, state, reason);
     const question = run.question;
     run.question = null;
     question?.settle({ kind: "over" });
@@ -1328,12 +1345,15 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     let halt = () => {};
     const halted = new Promise<null>((resolve) => (halt = () => resolve(null)));
+    const remembered = this.recall(goal);
     const run: Run = {
       authority,
       id,
       goal,
       shown,
       guidance: [],
+      ...(remembered.length ? { remembered } : {}),
+      taught: [],
       heard: 0,
       deadline: this.now() + this.maxMs,
       step: 0,
@@ -1473,6 +1493,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         return { kept: false, why: guidanceUnwrittenText };
       }
       run.guidance.push({ id, text, shown });
+      this.taught(run, text);
       return { kept: true };
     };
 
@@ -1593,6 +1614,40 @@ export class ComputerWorker implements DesktopExecutorPort {
       looksSecretStrict(casualWords(text)) ||
       (afterSecret && looksBareSecret(text))
     );
+  }
+  /**
+   * The notes from memory that fit the goal. None without memory, while it
+   * is off, and when it cannot be read: a request never waits on it.
+   */
+  private recall(goal: string): string[] {
+    try {
+      return this.options.memory?.recall(goal) ?? [];
+    } catch {
+      return [];
+    }
+  }
+  /** Keeps the owner's words for the request. The newest 16 at most. */
+  private taught(run: Run, words: string) {
+    run.taught.push(words);
+    if (run.taught.length > 16) run.taught.shift();
+  }
+  /**
+   * At the end of a request: what the owner taught in it goes to memory,
+   * while memory is on (`remembered.ts`). A memory that fails changes
+   * nothing of the end.
+   */
+  private learn(run: Run, state: RequestState, reason: string) {
+    try {
+      this.options.memory?.learn({
+        goal: run.goal,
+        said: run.taught,
+        state,
+        reason,
+        history: run.history,
+      });
+    } catch {
+      // Memory is a help. The request ended all the same.
+    }
   }
   private remember(id: string) {
     this.words.add(id);
@@ -1768,6 +1823,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     }).then((reply) => {
       clearTimeout(timer);
       if (this.current === run && reply.kind !== "over") {
+        if (reply.kind === "text") this.taught(run, reply.text);
         run.state = "running";
         // The person took time to answer: the last look is old now.
         run.fresh = false;
@@ -2147,6 +2203,7 @@ export class ComputerWorker implements DesktopExecutorPort {
             ...(run.guidance.length
               ? { guidance: run.guidance.map((said) => said.text) }
               : {}),
+            ...(run.remembered ? { remembered: run.remembered } : {}),
             history: run.history.slice(-shownSteps),
             observation: run.observation,
             page: run.page,
@@ -3787,6 +3844,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         ...(run.guidance.length
           ? { guidance: run.guidance.map((said) => said.text) }
           : {}),
+        ...(run.remembered ? { remembered: run.remembered } : {}),
         observation: run.observation,
         page: run.page,
         ...(run.browserClosed ? { browser: false } : {}),
