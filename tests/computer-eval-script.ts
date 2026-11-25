@@ -11,9 +11,12 @@
  *
  * The next step is due once the last one went out, or the person answered.
  * When the worker held the step back (the screen changed, the checks
- * refused it), the same step comes again with the new screen. A step can
- * also say "next" to give its turn to the step after it, for a path that
- * depends on what the screen shows.
+ * refused it), the same step comes again with the new screen. A done that
+ * the plan did not take yet, because a subgoal is still open, comes again
+ * on every path, as the note of the worker asks. A step can also say "next"
+ * to give its turn to the step after it, for a path that depends on what
+ * the screen shows. A change of the plan takes no step of the journal, so a
+ * step that changes the plan says "next" once the brief shows the change.
  */
 import type { Page } from "@playwright/test";
 import type { JournalStep } from "../connectors/computer/journal.js";
@@ -40,6 +43,8 @@ export type Step = (
 
 /** The journal outcomes of a step that went out, or that the person answered. */
 const wentOut = new Set(["ok", "answered", "person_typed"]);
+/** The journal outcome of a done that the plan did not take yet (plan.ts). */
+const planOpen = "plan_open";
 
 export interface Player {
   choose: (ask: PlannerAsk) => Promise<ScriptAction>;
@@ -67,7 +72,11 @@ export function player(
       if (done.length > seen) {
         const last = done.at(-1)!;
         seen = done.length;
-        if (context.always || wentOut.has(last.outcome)) index += 1;
+        if (
+          last.outcome !== planOpen &&
+          (context.always || wentOut.has(last.outcome))
+        )
+          index += 1;
       }
       const view: ScriptView = {
         ask,
@@ -240,6 +249,12 @@ export const act = {
     kind: "click_at",
     ...point,
     closer: true,
+  }),
+  /** Keep facts in the plan, with no action. */
+  planNote: (facts: string[]): ScriptAction => ({
+    kind: "plan_update",
+    op: "note",
+    facts,
   }),
   read: (): ScriptAction => ({ kind: "browser_read" }),
   pageClick: (index: number): ScriptAction => ({

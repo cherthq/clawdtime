@@ -82,12 +82,35 @@ export function toolAnswer(name: string, args: Record<string, unknown>) {
 /** One action that a script chose, in the loose form of a function call: the kind is the name. */
 export type ScriptAction = { kind: string } & Record<string, unknown>;
 
-/** A transport that answers each call with the action that `choose` gives. No network, no model. */
+/**
+ * The outline of a scripted request: one subgoal, the goal itself. The
+ * worker asks for an outline after its first look (plan.ts).
+ */
+export function scriptedOutline(ask: PlannerAsk) {
+  const goal = /^Goal: (.*)$/m.exec(ask.brief)?.[1]?.slice(0, 200) ?? "";
+  return toolAnswer("outline", {
+    subgoals: [
+      {
+        goal: goal || "Do what the person asked.",
+        check: "The screen shows that the goal is met.",
+      },
+    ],
+    why: "The scripted plan.",
+  });
+}
+
+/**
+ * A transport that answers each call with the action that `choose` gives.
+ * The call for an outline, which offers only the outline function, gets
+ * the scripted outline and uses no step. No network, no model.
+ */
 export function scriptedModel(
   choose: (ask: PlannerAsk) => Promise<ScriptAction> | ScriptAction,
 ): typeof fetch {
   return async (_url, init) => {
-    const { kind, ...args } = await choose(readAsk(init));
+    const ask = readAsk(init);
+    if (ask.tools.has("outline")) return scriptedOutline(ask);
+    const { kind, ...args } = await choose(ask);
     return toolAnswer(kind, { ...args, why: "The scripted step." });
   };
 }

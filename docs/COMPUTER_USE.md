@@ -424,7 +424,10 @@ journal as a step with the outcome `plan_open`, with no subgoal and no fact.
 The request test has three requests of several steps: find a note by a word,
 copy its number into another note and say the number; sign in while the
 person types the password, then turn on a setting; fill a form of three pages,
-send it and say its reference. They are not measured yet.
+send it and say its reference. Each has an ideal path and two wrong paths for
+`--check`. The ideal path of the first keeps the invoice number as a fact of
+the plan, and types it from there into the other note. They are not measured
+with a model yet.
 
 ## Turn it on
 
@@ -572,9 +575,12 @@ wrong row) must not. Each planner task does the same with an ideal answer and
 wrong answers. So the check proves that each case can be done and that its
 check tells right from wrong, before any model is measured. A path that needs
 an action that this build does not offer yet is skipped, and the line says
-which. The hands of the request test take a closer look too: the request
-with the drawn stars has a path that looks closer first and clicks in the
-closer picture. Run it after every change to a test or an app:
+which. The transport of the scripted paths answers the outline of each
+request with one subgoal, the goal itself, so every request runs with a plan,
+and a done comes again after the note about an open subgoal. The hands of the
+request test take a closer look too: the request with the drawn stars has a
+path that looks closer first and clicks in the closer picture. Run it after
+every change to a test or an app:
 `npx tsx tests/computer-request.eval.ts --check --new-actions`.
 
 Results of November 22, 2026, 13 requests, 3 runs of each, `gpt-5.4`:

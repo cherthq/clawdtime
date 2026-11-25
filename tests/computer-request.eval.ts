@@ -32,11 +32,12 @@
  *
  * --check needs no model and no key. For each request it plays scripted
  * paths through the same worker, apps, hands, faults and checks, with the
- * planner's own code and a transport that answers for the model. An ideal
- * path must end with the check met, and a wrong path must not. So it proves
- * that each request can be done and that its check tells right from wrong.
- * It prints one line for each request and a total, and exits with status 1
- * when one fails.
+ * planner's own code and a transport that answers for the model. That
+ * transport answers the outline of a request with one subgoal, the goal
+ * itself. An ideal path must end with the check met, and a wrong path must
+ * not. So it proves that each request can be done and that its check tells
+ * right from wrong. It prints one line for each request and a total, and
+ * exits with status 1 when one fails.
  *
  * --new-actions adds the requests for hover, drag, scroll with an amount and
  * the new browser actions. A path that needs a kind that this build does not
@@ -87,6 +88,7 @@ import {
   pointIn,
   stateOf,
   under,
+  type ScriptView,
   type Step,
 } from "./computer-eval-script.js";
 import { apps, browserApp, sites } from "./computer-request-apps.js";
@@ -254,6 +256,77 @@ const clickInCloserOn =
   (selector: string): Step =>
   async (v) =>
     act.clickInCloser(inCloser(v, await pointIn(v, selector)));
+/** Text typed into a field by its name. */
+const typeInto =
+  (text: string, title: string): Step =>
+  (v) =>
+    act.type(text, named(v, title));
+
+/** The invoice number in the open note, as the planner reads it in the value of the editor. */
+const shownInvoice = (v: ScriptView) => {
+  const number = /Invoice number (\d+)/.exec(
+    v.screen.map((item) => item.value ?? "").join("\n"),
+  )?.[1];
+  if (!number) throw new Error("the screen shows no invoice number");
+  return number;
+};
+/** The invoice number that the plan kept as a fact, as the planner reads it in its brief. */
+const keptInvoice = (v: ScriptView) => {
+  const number = /- "Invoice number (\d+)"/.exec(v.ask.brief)?.[1];
+  if (!number) throw new Error("the plan kept no invoice number");
+  return number;
+};
+/** Keeps the invoice number of the open note in the plan. Once the brief shows it, the turn goes to the next step. */
+const keepInvoice: Step = (v) =>
+  /- "Invoice number \d+"/.test(v.ask.brief)
+    ? "next"
+    : act.planNote([`Invoice number ${shownInvoice(v)}`]);
+/** Finds the invoice note with the search, opens it and keeps its number. */
+const findInvoice: Step[] = [
+  typeInto("invoice", "Search"),
+  clickNamed("Workshop invoice"),
+  keepInvoice,
+];
+/** From the search for the invoice to the note Call list: the search now names that note. */
+const openCallList: Step[] = [
+  clickNamed("Search"),
+  () => act.key("cmd+a"),
+  () => act.type("Call list"),
+  clickNamed("Call list"),
+];
+/** The kept number as a new line at the end of the open note. */
+const addKeptNumber: Step[] = [
+  clickIn("#editor"),
+  () => act.key("return"),
+  (v) => act.type(keptInvoice(v)),
+];
+const tellInvoice: Step = (v) =>
+  act.done(
+    `Invoice number ${keptInvoice(v)} is a new line of the note Call list now.`,
+  );
+
+/** The sign-in of Ledger, with the password typed by the person. */
+const signInLedger: Step[] = [
+  typeInto("ada@example.com", "Email"),
+  askPassword,
+  clickNamed("Sign in", "AXButton"),
+];
+
+/** The three pages of the trip request, with the seat that is given. */
+const fillTrip = (seat: string): Step[] => [
+  typeInto("Ada Lovelace", "Full name"),
+  clickNamed("Next"),
+  typeInto("12 March", "Travel date"),
+  clickNamed("Next"),
+  clickNamed(seat, "AXRadioButton"),
+];
+/** Done with the reference that the screen shows, else give up. */
+const tellReference: Step = (v) => {
+  const reference = /Your reference is (TR-\d+)/.exec(v.ask.brief)?.[1];
+  return reference
+    ? act.done(`The trip request is sent. Its reference is ${reference}.`)
+    : act.giveUp("The screen shows no reference.");
+};
 
 const requests: Request[] = [
   {
@@ -876,8 +949,6 @@ const requests: Request[] = [
   {
     id: "find a note by a word, copy a number from it into another note, confirm",
     app: "invoiceNotes",
-    // The scripted paths of check mode come with the next change.
-    paths: [],
     goal: "Find the note whose name has the word invoice, copy its invoice number into the note named Call list as a new line, then tell me the number.",
     done: (state, said) => {
       const held = state as unknown as NotesState;
@@ -892,12 +963,22 @@ const requests: Request[] = [
         /30417/.test(said)
       );
     },
+    paths: [
+      ideal([...findInvoice, ...openCallList, ...addKeptNumber, tellInvoice]),
+      wrong("into the invoice note", [
+        ...findInvoice,
+        ...addKeptNumber,
+        tellInvoice,
+      ]),
+      wrong("tells the number and copies nothing", [
+        ...findInvoice,
+        tellInvoice,
+      ]),
+    ],
   },
   {
     id: "sign in, the person types the password, then change a setting",
     app: "ledger",
-    // The scripted paths of check mode come with the next change.
-    paths: [],
     goal: "Sign in to Ledger with the email ada@example.com, I type the password myself. Then turn on Weekly summary in its settings.",
     // At a question with an empty password field, the person types into it, then says yes.
     person: async (_question, page) => {
@@ -919,12 +1000,28 @@ const requests: Request[] = [
         JSON.stringify(state.changes) === JSON.stringify(["Weekly summary"])
       );
     },
+    paths: [
+      ideal([
+        ...signInLedger,
+        clickNamed("Settings", "AXButton"),
+        clickNamed("Weekly summary"),
+        doneStep("You are signed in, and Weekly summary is on."),
+      ]),
+      wrong("the switch next to it", [
+        ...signInLedger,
+        clickNamed("Settings", "AXButton"),
+        clickNamed("Paper statements"),
+        doneStep("You are signed in, and Weekly summary is on."),
+      ]),
+      wrong("done after the sign-in", [
+        ...signInLedger,
+        doneStep("You are signed in, and Weekly summary is on."),
+      ]),
+    ],
   },
   {
     id: "a form of three pages, sent, and its reference read",
     app: "trip",
-    // The scripted paths of check mode come with the next change.
-    paths: [],
     goal: "Fill in the trip request: the name Ada Lovelace on the first page, the date 12 March on the second, a window seat on the third. Then send it and tell me its reference.",
     person: yes,
     done: (state, said, final) =>
@@ -934,6 +1031,18 @@ const requests: Request[] = [
       state.seat === "Window" &&
       final === "completed" &&
       /TR-5521/.test(said),
+    paths: [
+      ideal([...fillTrip("Window"), clickNamed("Send request"), tellReference]),
+      wrong("the aisle seat", [
+        ...fillTrip("Aisle"),
+        clickNamed("Send request"),
+        tellReference,
+      ]),
+      wrong("a reference before it is sent", [
+        ...fillTrip("Window"),
+        doneStep("The trip request is sent. Its reference is TR-5521."),
+      ]),
+    ],
   },
 ];
 
