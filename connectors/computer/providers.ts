@@ -658,6 +658,8 @@ export class ChatTransport implements Transport {
   private current: string;
   /** The model to go to when OpenAI refuses the default one. Null when the person chose the model. */
   private fallback: string | null;
+  /** The service refused the effort for this model: it is not sent again. */
+  private noEffort = false;
   constructor(
     private readonly options: {
       provider: Provider;
@@ -682,11 +684,9 @@ export class ChatTransport implements Transport {
   body(request: PlannerRequest): Record<string, unknown> {
     const openai = this.options.provider.id === "openai";
     const { user } = request;
-    const effort = sentEffort(
-      this.options.provider.id,
-      this.current,
-      this.options.effort,
-    );
+    const effort = this.noEffort
+      ? null
+      : sentEffort(this.options.provider.id, this.current, this.options.effort);
     return {
       model: this.current,
       messages: [
@@ -745,6 +745,18 @@ export class ChatTransport implements Transport {
         signal,
       });
     let response = await post();
+    // Some models refuse a reasoning effort with functions (gpt-5.4 answers
+    // 400 to "low", measured 26 Nov 2026). The same request goes out once
+    // more with no effort, and the planner sends none after that.
+    if (
+      response.status === 400 &&
+      !this.noEffort &&
+      sentEffort(this.options.provider.id, this.current, this.options.effort)
+    ) {
+      response.body?.cancel().catch(() => {});
+      this.noEffort = true;
+      response = await post();
+    }
     if (
       this.fallback !== null &&
       (response.status === 403 || response.status === 404)

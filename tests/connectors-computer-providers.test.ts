@@ -299,6 +299,23 @@ describe("the providers", () => {
   });
 });
 
+describe("a reasoning effort that the model refuses", () => {
+  it("goes out once more with no effort, and no effort is sent after that", async () => {
+    const chat = service(
+      json({ error: { type: "invalid_request_error" } }, 400),
+      json(chatCall("wait", { ms: 1, why: "w" })),
+    );
+    const made = planner(chat.request, { model: "gpt-5.4", effort: "low" });
+    const first = await made.next(input());
+    expect(first).toMatchObject({ action: { kind: "wait" } });
+    await made.next(input("Groceries"));
+    expect(chat.sent).toHaveLength(3);
+    expect(chat.sent[0]!.body.reasoning_effort).toBe("low");
+    expect(chat.sent[1]!.body.reasoning_effort).toBeUndefined();
+    expect(chat.sent[2]!.body.reasoning_effort).toBeUndefined();
+  });
+});
+
 describe("the choice of the provider", () => {
   const keyed =
     (...ids: string[]) =>

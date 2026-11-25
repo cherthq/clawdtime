@@ -632,7 +632,12 @@ npm run eval:computer:request -- anthropic/claude-opus-5-5
   as `output_config.effort`, and `low` when you set none, on the models that
   take it. OpenAI gets it as `reasoning_effort` when you set one. With none,
   the request of OpenAI stays as it was measured above. Any other value stops
-  the planner, and the doctor says why.
+  the planner, and the doctor says why. An effort is no speed lever for
+  `gpt-5.4`: on the planner test of 26 Nov 2026 it was right 76 of 76 times
+  with no effort (median 1893 ms), 75 of 76 with `none` (1864 ms), and the
+  service refused `low` with the functions (400). When the service refuses
+  an effort, the same request goes out once more with none, and the planner
+  sends none after that.
 - `CLAWDTIME_COMPUTER_SPEED=fast` turns on fast mode (`speed: "fast"`) on
   `claude-opus-5-5`, `claude-fable-5-2` and `claude-mythos-5-2`. It costs more
   for each token. On any other model it does nothing, and the doctor says so.
