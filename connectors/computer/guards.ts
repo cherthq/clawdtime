@@ -1154,6 +1154,23 @@ export function parseCombo(raw: string) {
     key,
   };
 }
+/**
+ * Keys that macOS takes before the app in front: Spotlight, the menu bar, the
+ * Dock and the status menus by keyboard, Mission Control and the app windows,
+ * and the screenshot bar. They type nothing into a terminal.
+ */
+const systemKeys = new Set([
+  "cmd+space",
+  "ctrl+f2",
+  "ctrl+f3",
+  "ctrl+f8",
+  "ctrl+up",
+  "ctrl+down",
+  "cmd+shift+3",
+  "cmd+shift+4",
+  "cmd+shift+5",
+]);
+const systemKey = (combo: string) => systemKeys.has(combo);
 function keyRisk(
   parsed: NonNullable<ReturnType<typeof parseCombo>>,
   observation: Observation,
@@ -1161,7 +1178,7 @@ function keyRisk(
 ): Ask | null {
   const { key, modifiers } = parsed;
   const cmd = modifiers.has("cmd");
-  if (inTerminal(observation)) {
+  if (inTerminal(observation) && !systemKey(parsed.combo)) {
     // A paste is text that nobody checked, and a line break in it runs.
     if (cmd && key === "v") return pasteRisk;
     const terminal = terminalRisk(null, goal);

@@ -917,6 +917,28 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
 
   describe("terminal", () => {
     const shell = observation([], { app: terminalApp });
+    it("lets the keys that macOS takes before any app run while a terminal is in front", () => {
+      const at = view(shell, { goal: "Open Keynote and make a new deck" });
+      for (const combo of [
+        "cmd+space",
+        "ctrl+f2",
+        "ctrl+f3",
+        "ctrl+f8",
+        "ctrl+up",
+        "ctrl+down",
+        "cmd+shift+5",
+      ])
+        expect(run({ kind: "key", combo }, at).policy, combo).toBe(null);
+      for (const combo of [
+        "return",
+        "ctrl+c",
+        "cmd+v",
+        "tab",
+        "space",
+        "cmd+k",
+      ])
+        expect(run({ kind: "key", combo }, at).policy, combo).not.toBe(null);
+    });
     const typed = (text: string, goal?: string) =>
       run({ kind: "type", text }, view(shell, goal ? { goal } : {})).policy;
     it("asks before typing or a key in a terminal unless the request asks for terminal work", () => {
