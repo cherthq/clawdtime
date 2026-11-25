@@ -234,15 +234,30 @@ export interface BrowserElement {
   password: boolean;
 }
 
+/** One tab of the front window of the browser. */
+export interface BrowserTab {
+  /** Its place in the window, from 1. It names the tab inside one list only. */
+  index: number;
+  title: string;
+  url: string;
+  /** The tab that the window shows. */
+  active: boolean;
+}
+
 /** One reading of the front page of the browser. */
 export interface BrowserPage {
-  browser: "chrome" | "safari";
+  /** "own" is ClawdTime's own browser profile. */
+  browser: "chrome" | "safari" | "own";
   title: string;
   url: string;
   /** The visible text, at most 6000 characters. */
   text: string;
   /** At most 200 elements, in page order. */
   elements: BrowserElement[];
+  /** Set by browser_wait: whether the text was seen before the time ran out. */
+  found?: boolean;
+  /** Tabs of the front window, set by browser_tabs. */
+  tabs?: BrowserTab[];
 }
 
 /** The browser, driven through its scripting door. */
@@ -263,7 +278,25 @@ export interface BrowserPort {
   type(index: number, text: string, submit: boolean): Promise<BrowserPage>;
   scroll(direction: "down" | "up"): Promise<BrowserPage>;
   back(): Promise<BrowserPage>;
+  // New, optional. The planner offers an action only when its method exists.
+  /** Moves the pointer over one element, with no click. */
+  hover?(index: number): Promise<BrowserPage>;
+  /** Chooses one option of a list of choices by the text that it shows. */
+  select?(index: number, option: string): Promise<BrowserPage>;
+  /** One key in the element of the page that has the focus. */
+  key?(combo: string): Promise<BrowserPage>;
+  /** Waits until the visible text holds `text`, or until `ms` passes. No effect on the page. */
+  waitFor?(text: string | null, ms: number): Promise<BrowserPage>;
+  /** The page of the active tab, with `tabs` set. No effect on the page. */
+  tabs?(): Promise<BrowserPage>;
+  /** Brings one tab of the front window to the front, by its place. */
+  switchTab?(tab: number): Promise<BrowserPage>;
+  /** Releases resources at service stop. */
+  close?(): Promise<void>;
 }
+
+/** One end of a drag: an element of the last observation, or a point in the last image. */
+export type DragEnd = { element: number } | { x: number; y: number };
 
 /** What the planner may choose. Element numbers come from the last observation or page. */
 export type Action =
@@ -283,7 +316,17 @@ export type Action =
     }
   | { kind: "type"; text: string; element?: number }
   | { kind: "key"; combo: string }
-  | { kind: "scroll"; direction: "up" | "down"; element?: number }
+  /** Moves the pointer over an element or a point of the last image, with no click. Exactly one of the two. */
+  | { kind: "hover"; element?: number; x?: number; y?: number }
+  /** Presses at one end, moves to the other and lets go. */
+  | { kind: "drag"; from: DragEnd; to: DragEnd }
+  /** `amount`: whole notches, 1 to 10. Without it, 5. */
+  | {
+      kind: "scroll";
+      direction: "up" | "down";
+      element?: number;
+      amount?: number;
+    }
   /** Optional exact title disambiguates ordinary windows of the requested app. */
   | { kind: "open_app"; name: string; window?: string }
   /** An http or https address, opened with no pointer and no key. The browser by its name, only when the person named one. */
@@ -296,6 +339,17 @@ export type Action =
   | { kind: "browser_type"; index: number; text: string; submit?: boolean }
   | { kind: "browser_scroll"; direction: "up" | "down" }
   | { kind: "browser_back" }
+  | { kind: "browser_hover"; index: number }
+  /** Picks an option of a select (or a listbox) by its visible label. */
+  | { kind: "browser_select"; index: number; option: string }
+  /** One key or combo in the page: Enter, Escape, Tab, Shift+Tab, the arrow keys, PageUp, PageDown, Home, End, Backspace, Space. */
+  | { kind: "browser_key"; combo: string }
+  /** Waits until the visible text holds `text`, or until `ms` (100 to 10000) passes. No effect on the page. */
+  | { kind: "browser_wait"; text?: string; ms: number }
+  /** Lists the tabs of the front window. No effect. */
+  | { kind: "browser_tabs" }
+  /** Brings one listed tab to the front. */
+  | { kind: "browser_switch_tab"; tab: number }
   | { kind: "wait"; ms: number }
   /** The person must decide or supply something. The worker stops and asks. */
   | { kind: "ask"; question: string }
