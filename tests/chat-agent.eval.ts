@@ -34,6 +34,8 @@ import { ChatAgent } from "../connectors/agents/chat-agent.js";
 import { chatModelSetup } from "../connectors/agents/chat-model.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { Routines } from "../connectors/computer/routines.js";
+import { ProcessDesk } from "../connectors/system/act.js";
+import { SystemProbes } from "../connectors/system/probes.js";
 import {
   call,
   chatWorld,
@@ -42,6 +44,7 @@ import {
   scriptedModel,
   tempRoot,
 } from "./chat-agent-fixture.js";
+import { fakeHost } from "./connectors-system-fixture.js";
 
 type Setup = "idle" | "running" | "approval" | "question" | "job" | "done";
 type Expect = string[] | "stop" | "words";
@@ -335,6 +338,42 @@ const cases: Case[] = [
     setup: "idle",
     expect: ["routine_list"],
   },
+  // Debugging the Mac: the process level first, never the screen.
+  {
+    name: "debug: a slow Mac",
+    say: "why is my Mac so slow right now?",
+    setup: "idle",
+    expect: ["system_look"],
+    args: { what: "processes" },
+  },
+  {
+    name: "debug: a port",
+    say: "what's running on port 4173?",
+    setup: "idle",
+    expect: ["system_look"],
+    args: { what: "ports", port: 4173 },
+  },
+  {
+    name: "debug: a crash",
+    say: "why did Riverchat crash this morning?",
+    setup: "idle",
+    expect: ["system_look"],
+    args: { what: "crashes", name: "Riverchat" },
+  },
+  {
+    name: "debug: memory",
+    say: "what is eating all my memory?",
+    setup: "idle",
+    expect: ["system_look"],
+    args: { what: "memory" },
+  },
+  {
+    name: "debug: a frozen app",
+    say: "Stonepad is frozen, restart it",
+    setup: "idle",
+    expect: ["process_act", "system_look"],
+    args: { action: "restart", name: "Stonepad" },
+  },
   // Vague: words first, no action.
   {
     name: "vague: help",
@@ -460,6 +499,8 @@ async function play(
     model: watched,
     root,
     routines,
+    // A made-up Mac at the process level: no program runs, no signal goes out.
+    system: new ProcessDesk(new SystemProbes(fakeHost()), { trust: false }),
     listener: (activity) => {
       if (activity.kind === "refused" && activity.name)
         records.push({ name: activity.name, refused: activity.text ?? "" });

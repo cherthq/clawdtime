@@ -187,12 +187,13 @@ export class ProcessDesk {
   /**
    * One action of the owner's request. `owner` is their newest words and
    * when they came: a yes is read from them only for a question that came
-   * before. `background`: open an app again behind the window in front, for
-   * a computer task that runs. It never throws.
+   * before, and `used` hears when it was. `background`: open an app again
+   * behind the window in front, for a computer task that runs. It never
+   * throws.
    */
   async act(
     input: { action: unknown; pid?: unknown; name?: unknown },
-    owner: { words: string; at: number },
+    owner: { words: string; at: number; used?: () => void },
     options: { background: boolean },
   ): Promise<string> {
     const action = processActions.find((item) => item === input.action);
@@ -220,7 +221,7 @@ export class ProcessDesk {
   private async run(
     action: ProcessAction,
     target: { pid: number | null; name: string | null },
-    owner: { words: string; at: number },
+    owner: { words: string; at: number; used?: () => void },
     options: { background: boolean },
   ): Promise<string> {
     const host = this.probes.host;
@@ -276,6 +277,7 @@ export class ProcessDesk {
         return `Waiting for the owner's clear yes or no to: "${waiting.question}"`;
       // The yes is used once.
       this.asks.delete(key);
+      owner.used?.();
     }
     const done = await this.perform(action, row, options.background);
     return verdict.kind === "act" && verdict.trusted
