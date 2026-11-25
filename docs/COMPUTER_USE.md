@@ -95,8 +95,9 @@ computer.
 
 1. The worker asks the hands for a look: an image of the screen and the
    elements that the Accessibility tree names.
-2. It gives the planner the goal, the last 12 steps, the useful elements and
-   the image. The planner answers with exactly one action.
+2. It gives the planner the goal, the last 12 steps, the useful elements, the
+   image and the plan of the request. The planner answers with exactly one
+   action, or with a change of its plan.
 3. The worker checks that action in code. An action that is not valid is
    refused and not run, and the planner is told why.
 4. When the action needs your yes, the worker asks and waits.
@@ -108,7 +109,9 @@ computer.
    and the planner picks the next action.
 
 One request runs at a time. A request ends after 40 actions or 15 minutes,
-whichever comes first. The 15 minutes hold the time that it waits for you.
+whichever comes first. A request with a plan of 3 subgoals or more may take 80
+actions (see [Plans and multi-step tasks](#plans-and-multi-step-tasks)). The 15
+minutes hold the time that it waits for you.
 
 What you say while a request runs is for that request: "open it in the
 browser", "use the other tab", "just press return". It starts no second
@@ -283,6 +286,84 @@ through all the checks.
 Stop wins here too: during a wait for the screen, during a wait for the
 planner, and while a question waits. A hold pauses a wait at once. Every end
 text says what happened first, and then what you can say or do next.
+
+## Plans and multi-step tasks
+
+A task of several steps is planned first: sign in, find a thing, change it,
+confirm it, report it. The code is in `connectors/computer/plan.ts`.
+
+1. After the first look and before the first action, the worker asks the
+   planner once for an outline: 1 to 8 subgoals, in order. Each has a check:
+   what the screen shows when it is met. A task of one step gets a plan of one
+   subgoal. The outline goes through the same retries, repair and abort as
+   every other call to the model. It gets a small picture: the elements carry
+   the names.
+2. With every turn after that, the planner gets the plan: each subgoal as
+   open, done with what the screen showed, or skipped with why, and the one to
+   work on now.
+3. In place of an action the planner may call `plan_update`. It marks the
+   current subgoal done, with what on the screen shows it, or skipped, with
+   why. Or it replaces the rest of the plan, when the screen shows that the
+   plan was wrong. Nothing goes to the Mac, and it is not one of the 40
+   actions.
+4. `plan_update` can also keep up to 3 short facts that the planner found: an
+   order number, a name, a link. A fact has at most 200 characters. A fact that
+   looks like a password, a code or a key is dropped, with the same check that
+   keeps such words out of the journal (`looksSecretStrict`). The planner reads
+   the facts at its next turns. The last message adds the facts that it does
+   not hold already: "Noted on the way: ...".
+5. When the planner calls `done` while subgoals are open, the worker does not
+   end the request that one time. The planner reads a short note that names
+   the open subgoals and says "If they are already met, call done again". The
+   next `done` is taken. The note comes once in a request, and it is no second
+   look by the model: such a look refused true results in 2 of 8 runs (see The
+   request test). The note only names what the plan says.
+
+The planner's rules for the outline and for each turn with a plan say:
+
+- Plan the whole task before acting.
+- Get past something that blocks the way and that the goal does not mention:
+  a cookie banner, a what's new sheet, an update prompt that can be postponed,
+  a page that still loads. Use the least harmful way and ask nothing: Not Now,
+  Later, Close, Reject All, or wait. Every other dialog that the goal does not
+  speak about stays as it is. The checks still ask where they ask, for example
+  before a close.
+- Carry the task to its natural end: after a post, see the post; after a save
+  or a change of a setting, see the saved state.
+- When a sign-in or a code is needed, ask, and say what is needed and where.
+  The person types it on the Mac.
+
+A turn with no plan reads the rules as before, so the planner test measures
+the same rules.
+
+| Bound                                                  | Value                     |
+| ------------------------------------------------------ | ------------------------- |
+| Subgoals of an outline, or of a new rest               | 8                         |
+| Subgoals of one request in all                         | 12                        |
+| Revisions of the rest of the plan                      | 3                         |
+| `plan_update` calls in one request                     | 16                        |
+| `plan_update` calls with no action between them        | 3                         |
+| Facts from one `plan_update`                           | 3                         |
+| Facts of one request                                   | 8, of 200 characters each |
+| Actions of a request with a plan of 3 subgoals or more | 80                        |
+
+While no `plan_update` may come, the planner is not offered it. A planner that
+sends it anyway two times in a row ends the request: "The planner changed its
+plan again and again and chose no action, so I stopped."
+
+The plan never ends a request by itself. An outline that fails, that cannot be
+used or that comes after the time limit leaves the request with no plan, as
+before. Stop does not wait for the outline, and its call is aborted. After a
+hold during the outline, the worker asks for it again. A request that only
+opens one address gets no outline.
+
+Nothing of the plan is written to disk. A `done` that got the note is in the
+journal as a step with the outcome `plan_open`, with no subgoal and no fact.
+
+The request test has three requests of several steps: find a note by a word,
+copy its number into another note and say the number; sign in while the
+person types the password, then turn on a setting; fill a form of three pages,
+send it and say its reference. They are not measured yet.
 
 ## Turn it on
 
@@ -919,7 +1000,7 @@ The last message of a finished request is the planner's summary, cut to 900
 characters. It can repeat words from the screen.
 
 The language model receives, for each action: your request, what you said for
-it while it ran, the last 12 steps
+it while it ran, the plan with the facts that it kept, the last 12 steps
 with the text that was typed, the names and values of up to 150 elements, the
 image of the screen, and the text of the page when the browser read it. The
 value of a secure field is never sent. Nothing of this is written to disk by
@@ -1007,7 +1088,7 @@ sharing, independent disable control, zoom integration and acceptance gaps.
 | ------------------------------ | ------------------------------------------- |
 | Requests at one time           | 1                                           |
 | Additions to one request       | 8, of 600 characters each                   |
-| Actions for one request        | 40                                          |
+| Actions for one request        | 40, or 80 with a plan of 3 subgoals or more |
 | Time for one request           | 15 minutes                                  |
 | One command to the hands       | 20 seconds, more for a wait and a long text |
 | One request to the model       | 45 seconds                                  |
@@ -1063,6 +1144,12 @@ the real screen, draws the cursor or calls a language model.
   task and with Stop, a test's service, the switch off, no key, actors and no
   board.
 - `hands` (10), `journal` (12), `planner` (12), `cli` (9).
+- `plan` (29): the states of a plan, its bounds, the facts with secrets, the
+  plan in the brief; the outline and `plan_update` through the planner's
+  repair; and in the worker: one outline, an update that sends nothing, the
+  note before a done, a failed outline, Stop and a hold during the outline,
+  facts that never reach the journal, and 80 actions only with a plan of 3
+  subgoals or more.
 - `planner-resilience` (45): each status with and without a retry,
   Retry-After in its three forms, errors of the network, the timeout of one
   request, the budget, an abort during a wait and during a request, each kind

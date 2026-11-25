@@ -105,6 +105,7 @@ import {
   type ProgressContext,
   type ProgressStep,
 } from "./progress.js";
+import { TaskPlan } from "./plan.js";
 import type {
   Action,
   BrowserPage,
@@ -353,6 +354,9 @@ const giveUpText = (reason: string) =>
   ]
     .filter(Boolean)
     .join(" ");
+/** Plan: the planner changed its plan again and again, and chose no action. */
+const planLoopText =
+  "The planner changed its plan again and again and chose no action, so I stopped. Nothing more was sent. Ask again, perhaps in other words.";
 const faultText = `Something failed inside the worker, so I stopped. An action may have been sent. ${clearHint}`;
 const secretText =
   "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.";
@@ -478,6 +482,8 @@ export interface ComputerWorkerOptions {
   now?: () => number;
   /** The most actions that the planner may choose for one request. */
   maxSteps?: number;
+  /** The most actions for a request whose plan had 3 subgoals or more (`plan.ts`). */
+  plannedMaxSteps?: number;
   /** The most time for one request, with the time it waits for the person. */
   maxMs?: number;
   /** How long one call to the browser may take. */
@@ -641,6 +647,10 @@ interface Run {
   pauseText?: string;
   refusals: number;
   plannerFailures: number;
+  /** The plan of the request (`plan.ts`). Absent before the outline, and when the outline failed. */
+  plan?: TaskPlan;
+  /** The outline was asked for once. It is not asked again, whatever came of it. */
+  outlined?: boolean;
   question: Question | null;
   stop: boolean;
   /** The hands said that the person moved the mouse or pressed a key. */
@@ -976,6 +986,7 @@ export class ComputerWorker implements DesktopExecutorPort {
   private readonly enabled: () => boolean;
   private readonly now: () => number;
   private readonly maxSteps: number;
+  private readonly plannedMaxSteps: number;
   private readonly maxMs: number;
   private readonly browserMs: number;
   private readonly settleMs: number;
@@ -991,6 +1002,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.enabled = options.enabled ?? (() => true);
     this.now = options.now ?? Date.now;
     this.maxSteps = options.maxSteps ?? 40;
+    this.plannedMaxSteps = options.plannedMaxSteps ?? 80;
     this.maxMs = options.maxMs ?? 15 * 60_000;
     this.browserMs = options.browserMs ?? 30_000;
     this.settleMs = options.settleMs ?? settlePauseMs;
@@ -1106,7 +1118,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           run.question?.text ??
           (run.state === "stopping"
             ? stoppedText
-            : `Working on: "${clean(run.shown, 120)}". Step ${run.step} of at most ${this.maxSteps}.`),
+            : `Working on: "${clean(run.shown, 120)}". Step ${run.step} of at most ${this.stepLimit(run)}.`),
         step: run.step,
         goal: clean(run.shown, 200),
         question: run.question?.text ?? null,
@@ -1374,7 +1386,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       return atEndText;
     }
     const tryKeep = (): { kept: true } | { kept: false; why: string } => {
-      if (run.step >= this.maxSteps) {
+      if (run.step >= this.stepLimit(run)) {
         recordSeen();
         return { kept: false, why: atEndText };
       }
@@ -1924,12 +1936,12 @@ export class ComputerWorker implements DesktopExecutorPort {
           if (reply.kind !== "yes") return;
           continue;
         }
-        if (run.step >= this.maxSteps)
+        if (run.step >= this.stepLimit(run))
           return this.finish(
             run,
             "blocked",
             "step_limit",
-            `I stopped at the limit of ${this.maxSteps} steps. The task is not finished. Ask again to go on from where it is now.`,
+            `I stopped at the limit of ${this.stepLimit(run)} steps. The task is not finished. Ask again to go on from where it is now.`,
           );
         // A held row ended in a wait for the screen to settle, in place of
         // the end of the request. Only looks and pauses repeat here.
@@ -1983,6 +1995,11 @@ export class ComputerWorker implements DesktopExecutorPort {
           }
         }
         if (run.hold) continue;
+        // Plan: one outline, after the first look and before the first action.
+        if (!run.outlined) {
+          if ((await this.outline(run)) === "over") return;
+          if (run.hold || run.takeover) continue;
+        }
         if (run.focusClicks) {
           if (focusMovedToField(run.observation, run.focusClicks)) {
             if (run.stuck && run.stuck.clicked > 0) delete run.stuck;
@@ -2036,6 +2053,7 @@ export class ComputerWorker implements DesktopExecutorPort {
             page: run.page,
             ...(run.browserClosed ? { browser: false } : {}),
             signal: controller.signal,
+            ...(run.plan ? { plan: run.plan.view() } : {}),
           };
           const plan = this.planner.next(input);
           plan.catch(() => {});
@@ -2108,6 +2126,14 @@ export class ComputerWorker implements DesktopExecutorPort {
         // and the planner chooses again with them. A request takes a small
         // number of additions, so this ends.
         if (run.guidance.length !== heard) continue;
+        // Plan: a change of the plan is no action. Nothing goes to the Mac,
+        // and it takes no step. Its own bound ends a planner that loops on it.
+        if ("update" in planned) {
+          if (this.replan(run, planned.update)) continue;
+          if (++run.plannerFailures >= 2)
+            return this.finish(run, "blocked", "plan_loop", planLoopText);
+          continue;
+        }
         run.plannerFailures = 0;
         run.step++;
         const actFrom = this.now();
@@ -2122,6 +2148,8 @@ export class ComputerWorker implements DesktopExecutorPort {
           chosen,
           clean(String((planned as { why?: unknown }).why ?? ""), 200),
         );
+        // Plan: an action came, so the plan updates in a row start again.
+        run.plan?.acted();
         // The next look says what came of this step.
         if (this.current === run)
           run.pending = {
@@ -2332,14 +2360,19 @@ export class ComputerWorker implements DesktopExecutorPort {
     const refused = run.refusals;
     run.refusals = 0;
     switch (checked.verdict) {
-      case "done":
+      case "done": {
+        // Plan: subgoals that are still open are named once. The next done
+        // is taken. This is no second look at the screen.
+        const open = run.plan?.doneNote();
+        if (open) return this.note(run, action, why, "", open, "plan_open");
         this.note(run, action, why, "", "ok", "ok");
         return this.finish(
           run,
           "completed",
           "done",
-          `Done. ${clean(checked.summary, 900)}`.trim(),
+          this.withFacts(run, `Done. ${clean(checked.summary, 900)}`.trim()),
         );
+      }
       case "give_up": {
         const reason = clean(checked.reason, 900);
         // The first give_up goes back to the planner with the ways that it
@@ -2362,7 +2395,12 @@ export class ComputerWorker implements DesktopExecutorPort {
           return;
         }
         this.note(run, action, why, "", "gave up", "gave_up");
-        return this.finish(run, "blocked", "gave_up", giveUpText(reason));
+        return this.finish(
+          run,
+          "blocked",
+          "gave_up",
+          this.withFacts(run, giveUpText(reason)),
+        );
       }
       case "ask": {
         // These are the planner's words, so they carry a mark. A question that
@@ -3510,5 +3548,104 @@ export class ComputerWorker implements DesktopExecutorPort {
       "ok",
     );
     this.halted(run);
+  }
+
+  /*
+   * The plan of a request (`plan.ts`). The worker keeps it, gives it to the
+   * planner with each turn and takes its changes. Nothing of it goes to the
+   * Mac, and nothing of it goes into the journal.
+   */
+
+  /** Plan: the most actions for this request. A plan that had 3 subgoals or more allows more. */
+  private stepLimit(run: Run) {
+    return run.plan?.long
+      ? Math.max(this.maxSteps, this.plannedMaxSteps)
+      : this.maxSteps;
+  }
+
+  /**
+   * Plan: the outline, after the first look and before the first action. It
+   * never ends the request: a failure, an answer that cannot be used or no
+   * time leaves it with no plan, and it is not asked again. Stop does not
+   * wait for it, and its call is aborted. A hold wakes it, and it is asked
+   * again after the pause. The planner behind the direct opening of an
+   * address is asked, and not for a request that only opens an address.
+   */
+  private async outline(run: Run): Promise<"over" | void> {
+    const planner = this.options.planner;
+    if (!planner.outline || directAddress(run.goal)) {
+      run.outlined = true;
+      return;
+    }
+    const abort = new AbortController();
+    let late: NodeJS.Timeout | undefined;
+    let wake = () => {};
+    const woken = new Promise<"held">((resolve) => {
+      wake = () => resolve("held");
+    });
+    run.wake = wake;
+    try {
+      const made = planner.outline({
+        goal: run.goal,
+        ...(run.guidance.length
+          ? { guidance: run.guidance.map((said) => said.text) }
+          : {}),
+        observation: run.observation,
+        page: run.page,
+        ...(run.browserClosed ? { browser: false } : {}),
+        signal: abort.signal,
+      });
+      made.catch(() => {});
+      const outline = await Promise.race([
+        made,
+        run.halted,
+        woken,
+        new Promise<null>((resolve) => {
+          late = setTimeout(
+            () => resolve(null),
+            Math.max(0, run.deadline - this.now()) + 10,
+          );
+          late.unref();
+        }),
+      ]);
+      if (this.halted(run)) return "over";
+      if (outline === "held" || run.hold) return;
+      run.outlined = true;
+      const plan = outline ? TaskPlan.from(outline) : null;
+      if (plan) run.plan = plan;
+    } catch {
+      // What the planner threw can hold what was sent to it: it is not passed on.
+      if (this.halted(run)) return "over";
+      if (!run.hold) run.outlined = true;
+    } finally {
+      clearTimeout(late);
+      delete run.wake;
+      // A call that is still on its way is not needed any more.
+      abort.abort();
+    }
+  }
+
+  /**
+   * Plan: one change of the plan, in place of an action. True when the plan
+   * took it or refused it: the planner reads which at its next turn. False
+   * when the request has no plan or no change may come now. The loop counts
+   * that as a failure of the planner.
+   */
+  private replan(run: Run, update: unknown): boolean {
+    if (!run.plan) return false;
+    if (run.plan.apply(update).kind === "over") return false;
+    run.plannerFailures = 0;
+    return true;
+  }
+
+  /** Plan: the final message, with the facts that the planner kept and that the message does not hold. */
+  private withFacts(run: Run, message: string) {
+    const said = message.toLowerCase();
+    const facts = (run.plan?.facts ?? [])
+      .map((fact) => fact.replace(/[\s.;]+$/, ""))
+      .filter((fact) => fact && !said.includes(fact.toLowerCase()));
+    return facts.length
+      ? `${message} Noted on the way: ${facts.join("; ")}.`
+      : message;
   }
 }

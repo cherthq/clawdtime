@@ -1,15 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { ComputerJournal } from "../connectors/computer/journal.js";
 import {
   planLimits,
   planLines,
   TaskPlan,
+  type OutlineInput,
   type PlanUpdate,
   type PlanView,
   type Subgoal,
 } from "../connectors/computer/plan.js";
 import { OpenAIPlanner, PlannerError } from "../connectors/computer/planner.js";
-import type { Planner } from "../connectors/computer/ports.js";
-import { element, observation, until } from "./connectors-computer-fixture.js";
+import type {
+  Action,
+  Observation,
+  Planner,
+} from "../connectors/computer/ports.js";
+import { ComputerWorker } from "../connectors/computer/worker.js";
+import {
+  element,
+  FakeHands,
+  observation,
+  until,
+} from "./connectors-computer-fixture.js";
 
 const three: Subgoal[] = [
   { goal: "Open the note Workshop invoice", check: "The editor shows it" },
@@ -529,5 +544,391 @@ describe("a turn of the planner with a plan", () => {
     expect(net.sent[1]!.messages.at(-1)!.content).toMatch(
       /The arguments of plan_update do not fit its parameters: evidence/,
     );
+  });
+});
+
+const roots: string[] = [];
+afterEach(() =>
+  roots
+    .splice(0)
+    .forEach((path) => rmSync(path, { recursive: true, force: true })),
+);
+
+type NextInput = Parameters<Planner["next"]>[0];
+type Turn = Action | { update: unknown };
+/** A planner with an outline. It reads its turns from a list, and gives up after the list. */
+class PlanningPlanner implements Planner {
+  readonly inputs: NextInput[] = [];
+  readonly outlines: OutlineInput[] = [];
+  /** How many commands the hands had when the outline was asked for. */
+  commandsAtOutline: number[] = [];
+  hands?: FakeHands;
+  constructor(
+    private readonly script: Turn[],
+    private readonly made: (input: OutlineInput) => Promise<Subgoal[]>,
+  ) {}
+  async outline(input: OutlineInput) {
+    this.outlines.push(input);
+    this.commandsAtOutline.push(this.hands?.commands.length ?? -1);
+    return this.made(input);
+  }
+  async next(input: NextInput) {
+    this.inputs.push(input);
+    const turn = this.script.shift() ?? {
+      kind: "give_up",
+      reason: "The script ended.",
+    };
+    const why = `turn ${this.inputs.length}`;
+    if ("update" in turn) return { update: turn.update as PlanUpdate, why };
+    return { action: turn, why };
+  }
+}
+
+function setup(
+  script: Turn[],
+  made: (input: OutlineInput) => Promise<Subgoal[]> = async () =>
+    three.slice(0, 1),
+  options: {
+    screens?: Observation[];
+    maxSteps?: number;
+    plannedMaxSteps?: number;
+  } = {},
+) {
+  const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-plan-"));
+  roots.push(home);
+  const clock = { now: 1_000_000 };
+  const hands = new FakeHands(
+    options.screens ?? [observation([element(1, { title: "Save" })])],
+  );
+  const planner = new PlanningPlanner(script, made);
+  planner.hands = hands;
+  const said: string[] = [];
+  const journal = new ComputerJournal(home, () => clock.now);
+  const worker = new ComputerWorker({
+    hands,
+    planner,
+    journal,
+    now: () => clock.now,
+    notify: (text) => said.push(text),
+    ...(options.maxSteps ? { maxSteps: options.maxSteps } : {}),
+    ...(options.plannedMaxSteps
+      ? { plannedMaxSteps: options.plannedMaxSteps }
+      : {}),
+  });
+  return { home, hands, planner, said, journal, worker };
+}
+const click: Action = { kind: "click_element", element: 1 };
+const done: Action = { kind: "done", summary: "The note is saved." };
+const wait: Action = { kind: "wait", ms: 10 };
+/** Every file that the worker wrote, as text. */
+const written = (home: string) =>
+  readdirSync(join(home, "computer"))
+    .map((name) => readFileSync(join(home, "computer", name), "utf8"))
+    .join("\n");
+
+describe("the worker with a plan", () => {
+  it("makes the plan once, after the first look and before the first action, and gives it with every turn", async () => {
+    const { worker, hands, planner, said } = setup([click, done], async () =>
+      three.slice(0, 1),
+    );
+    await worker.submit("plan_once", "Save the note");
+    await worker.idle();
+    expect(planner.outlines).toHaveLength(1);
+    // Only the first look came before the outline.
+    expect(planner.commandsAtOutline).toEqual([1]);
+    expect(hands.commands[0]).toEqual({
+      kind: "observe",
+      image: true,
+      elements: true,
+    });
+    expect(planner.outlines[0]).toMatchObject({
+      goal: "Save the note",
+      page: null,
+    });
+    expect(planner.outlines[0]!.observation?.image).toBe("aW1hZ2U=");
+    expect(planner.outlines[0]!.signal).toBeInstanceOf(AbortSignal);
+    // The first give_up goes back to the planner once with other ways.
+    expect(planner.inputs).toHaveLength(4);
+    expect(planner.inputs[0]!.plan).toEqual({
+      subgoals: [{ ...three[0]!, state: "open" }],
+      current: 0,
+      facts: [],
+      revisionsLeft: 3,
+      updatesLeft: planLimits.updates,
+    });
+    expect(planner.inputs[1]!.plan?.current).toBe(0);
+    expect(planner.inputs[2]!.history.at(-1)?.outcome).toMatch(
+      /^not taken yet: the plan still has open subgoals: 1\. Open the note Workshop invoice\./,
+    );
+    // The one subgoal was still open at the done: it was named once, and the
+    // script then gave up, as a planner that does not call done again.
+    expect(said.at(-1)).toBe(
+      "I could not finish. The script ended. Tell me another way to try, or do this step yourself.",
+    );
+  });
+
+  it("takes plan_update with no step and nothing for the hands", async () => {
+    const { worker, hands, planner, journal, said } = setup([
+      click,
+      { update: { op: "done", evidence: "The note shows Saved" } },
+      done,
+    ]);
+    await worker.submit("plan_update", "Save the note");
+    await worker.idle();
+    expect(hands.sent).toEqual([
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+    ]);
+    // A full look, the look before the click, the click and a full look after
+    // it: no look and no command for the update.
+    expect(hands.commands.map((command) => command.kind)).toEqual([
+      "observe",
+      "observe",
+      "click",
+      "observe",
+    ]);
+    expect(planner.inputs).toHaveLength(3);
+    expect(planner.inputs[2]!.plan).toMatchObject({
+      current: null,
+      last: "Subgoal 1 is done.",
+      subgoals: [{ state: "done", note: "The note shows Saved" }],
+    });
+    // The update is no step: the history and the journal hold the click and the done only.
+    expect(planner.inputs[2]!.history.map((step) => step.step)).toEqual([1]);
+    expect(
+      journal.get("plan_update")!.steps.map((step) => [step.n, step.kind]),
+    ).toEqual([
+      [1, "click_element"],
+      [2, "done"],
+    ]);
+    expect(said.at(-1)).toBe("Done. The note is saved.");
+  });
+
+  it("names the open subgoals once at a done, and takes the second done", async () => {
+    const { worker, hands, planner, journal, said } = setup(
+      [done, done],
+      async () => three.slice(0, 2),
+    );
+    await worker.submit("plan_done", "Copy the number into Call list");
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(planner.inputs).toHaveLength(2);
+    expect(planner.inputs[1]!.history).toEqual([
+      {
+        step: 1,
+        action: done,
+        why: "turn 1",
+        outcome:
+          "not taken yet: the plan still has open subgoals: 1. Open the note Workshop invoice; 2. Copy the number into Call list. If they are already met, call done again.",
+      },
+    ]);
+    expect(said).toEqual(["Done. The note is saved."]);
+    const record = journal.get("plan_done")!;
+    expect(record).toMatchObject({ state: "completed", reason: "done" });
+    expect(record.steps.map((step) => step.outcome)).toEqual([
+      "plan_open",
+      "ok",
+    ]);
+    // The names of the subgoals are not in the journal.
+    expect(JSON.stringify(record)).not.toMatch(/Workshop/);
+  });
+
+  it("goes on with no plan when the outline fails, is empty or is no list", async () => {
+    for (const made of [
+      async () => {
+        throw new PlannerError("transient", "The language model is busy.");
+      },
+      async () => [],
+      async () => "a plan" as unknown as Subgoal[],
+    ]) {
+      const { worker, planner, said } = setup([click, done], made);
+      await worker.submit("plan_failed", "Save the note");
+      await worker.idle();
+      expect(planner.outlines).toHaveLength(1);
+      expect(planner.inputs).toHaveLength(2);
+      expect(planner.inputs.every((input) => input.plan === undefined)).toBe(
+        true,
+      );
+      expect(said).toEqual(["Done. The note is saved."]);
+    }
+  });
+
+  it("ends at once at Stop during the outline, and aborts its call", async () => {
+    let signal: AbortSignal | undefined;
+    const { worker, hands, planner, journal } = setup([click], (input) => {
+      signal = input.signal;
+      return new Promise<Subgoal[]>(() => {});
+    });
+    await worker.submit("plan_stop", "Save the note");
+    await until(() => planner.outlines.length === 1);
+    expect(signal?.aborted).toBe(false);
+    worker.stop();
+    await worker.idle();
+    expect(signal?.aborted).toBe(true);
+    expect(planner.inputs).toHaveLength(0);
+    expect(hands.sent).toEqual([]);
+    expect(journal.get("plan_stop")).toMatchObject({
+      state: "canceled",
+      reason: "stopped",
+    });
+  });
+
+  it("asks for the outline again after a hold during it", async () => {
+    let first = true;
+    const { worker, planner, said } = setup([done], (input) => {
+      if (!first) return Promise.resolve(three.slice(0, 1));
+      first = false;
+      return new Promise<Subgoal[]>((_resolve, reject) =>
+        input.signal?.addEventListener("abort", () =>
+          reject(new Error("aborted")),
+        ),
+      );
+    });
+    await worker.submit("plan_hold", "Save the note");
+    await until(() => planner.outlines.length === 1);
+    await worker.submit("plan_hold_words", "hold on a second");
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    expect(planner.outlines[0]!.signal?.aborted).toBe(true);
+    expect(planner.inputs).toHaveLength(0);
+    await worker.answer("continue");
+    await worker.idle();
+    // A new look after the pause, then the outline again, then the turns.
+    expect(planner.commandsAtOutline).toEqual([1, 2]);
+    expect(planner.outlines).toHaveLength(2);
+    expect(planner.inputs[0]!.plan?.subgoals).toHaveLength(1);
+    expect(planner.inputs[0]!.guidance).toEqual(["hold on a second"]);
+    expect(said.at(-1)).toBe(
+      "I could not finish. The script ended. Tell me another way to try, or do this step yourself.",
+    );
+  });
+
+  it("shows the facts in the final message and later turns, never a secret, and writes none of them", async () => {
+    const { home, worker, planner, said } = setup([
+      {
+        update: {
+          op: "done",
+          evidence: "The editor shows the invoice",
+          facts: ["Invoice number 30417.", "The code is 482913"],
+        },
+      },
+      done,
+    ]);
+    await worker.submit("plan_facts", "Find the invoice number");
+    await worker.idle();
+    expect(planner.inputs[1]!.plan?.facts).toEqual(["Invoice number 30417."]);
+    expect(planner.inputs[1]!.plan?.last).toMatch(
+      /A fact that looked like a secret was dropped/,
+    );
+    expect(said.at(-1)).toBe(
+      "Done. The note is saved. Noted on the way: Invoice number 30417.",
+    );
+    const files = written(home);
+    expect(files).toMatch(/plan_facts/);
+    expect(files).not.toMatch(/30417|482913|Workshop|editor shows/);
+    expect(JSON.stringify(planner.inputs)).not.toMatch(/482913/);
+  });
+
+  it("does not repeat a fact that the summary holds", async () => {
+    const { worker, said } = setup([
+      { update: { op: "done", evidence: "Seen", facts: ["Number 30417"] } },
+      { kind: "done", summary: "The number is number 30417." },
+    ]);
+    await worker.submit("plan_facts_said", "Find the number");
+    await worker.idle();
+    expect(said.at(-1)).toBe("Done. The number is number 30417.");
+  });
+
+  it("takes 80 actions only with a plan of 3 subgoals or more", async () => {
+    // Waits of different lengths: the same wait again and again is a repeat.
+    const waits = (count: number) =>
+      Array.from({ length: count }, (_, at): Action => ({
+        kind: "wait",
+        ms: 10 + at,
+      }));
+    for (const [count, limit] of [
+      [3, 4],
+      [2, 2],
+    ] as const) {
+      const { worker, said } = setup(
+        waits(10),
+        async () => three.slice(0, count),
+        { maxSteps: 2, plannedMaxSteps: 4 },
+      );
+      await worker.submit(`plan_limit_${count}`, "Save the note");
+      await worker.idle();
+      expect(said.at(-1)).toBe(
+        `I stopped at the limit of ${limit} steps. The task is not finished. Ask again to go on from where it is now.`,
+      );
+    }
+    // The bounds that a person sees while the task runs: 80 and 40.
+    for (const [count, limit] of [
+      [3, 80],
+      [2, 40],
+      [0, 40],
+    ] as const) {
+      let release = () => {};
+      let released = false;
+      const end = {
+        action: { kind: "give_up", reason: "x" },
+        why: "",
+      } as const;
+      const { worker, planner } = setup([], async () => three.slice(0, count));
+      // The first give_up goes back to the planner once: every later turn
+      // gives up at once.
+      planner.next = (input) => {
+        planner.inputs.push(input);
+        if (released) return Promise.resolve(end);
+        return new Promise((resolve) => {
+          release = () => {
+            released = true;
+            resolve(end);
+          };
+        });
+      };
+      await worker.submit(`plan_bound_${count}`, "Save the note");
+      await until(() => planner.inputs.length === 1);
+      expect(worker.status().message).toBe(
+        `Working on: "Save the note". Step 0 of at most ${limit}.`,
+      );
+      release();
+      await worker.idle();
+    }
+  }, 15_000);
+
+  it("ends a planner that loops on plan_update, with nothing sent", async () => {
+    const note = { update: { op: "note", facts: ["Same"] } };
+    const { worker, hands, planner, said, journal } = setup(
+      Array.from({ length: 10 }, () => note),
+    );
+    await worker.submit("plan_loop", "Save the note");
+    await worker.idle();
+    // Three in a row are taken, then two that may not come end the task.
+    expect(planner.inputs).toHaveLength(5);
+    expect(planner.inputs[3]!.plan?.updatesLeft).toBe(0);
+    expect(hands.sent).toEqual([]);
+    expect(said.at(-1)).toBe(
+      "The planner changed its plan again and again and chose no action, so I stopped. Nothing more was sent. Ask again, perhaps in other words.",
+    );
+    expect(journal.get("plan_loop")).toMatchObject({
+      state: "blocked",
+      reason: "plan_loop",
+      steps: [],
+    });
+  });
+
+  it("asks for no outline for a request that only opens an address, and takes no update without a plan", async () => {
+    const { worker, planner, said } = setup([
+      { update: { op: "note", facts: ["x"] } },
+      { update: { op: "note", facts: ["y"] } },
+    ]);
+    // No plan: the outline is only asked for when the planner has one.
+    planner.outline = undefined as unknown as PlanningPlanner["outline"];
+    await worker.submit("plan_none", "Save the note");
+    await worker.idle();
+    expect(planner.outlines).toHaveLength(0);
+    expect(said.at(-1)).toMatch(/changed its plan again and again/);
+    const direct = setup([done]);
+    await direct.worker.submit("plan_direct", "open example.com");
+    await direct.worker.idle();
+    expect(direct.planner.outlines).toHaveLength(0);
   });
 });
