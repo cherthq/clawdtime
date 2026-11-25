@@ -1495,6 +1495,13 @@ export class OwnBrowser implements BrowserPort {
   /** Where element N is now, after it came into view. */
   private async located(tab: Tab, index: number): Promise<Located> {
     if (!web(tab.url) && !blank(tab.url)) throw new Error(ownPage);
+    // The check before an input runs only in the private world, where the
+    // page cannot change what it reads. A browser that gave no such world
+    // gets no input: in doubt, nothing is sent.
+    if ((await this.world(tab)) === "page")
+      throw new Error(
+        "This browser gave no private world for the check before a click, so nothing was sent. Read the page again, or use the screen.",
+      );
     const text = await this.evaluate(tab, { do: "locate", index });
     const refused = parsePageAnswer(text);
     if (refused && !refused.ok) throw new Error(oneLine(refused.error, 300));

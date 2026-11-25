@@ -231,6 +231,9 @@ class PaperBrowser {
               : this.other(call);
         return { result: { type: "string", value: JSON.stringify(value) } };
       }
+      // A browser of the family names the private world of the page script.
+      case "Page.createIsolatedWorld":
+        return { executionContextId: 7 };
       default:
         return {};
     }
