@@ -3,8 +3,12 @@
  *
  * Safe by default: the task goes on only for a narrow, written shape of
  * screen order (or a plain continue phrase without a question mark). Any stop
- * word stops the task at once. Everything else holds.
+ * word stops the task at once. Everything else holds. A casual reading of the
+ * same words (typos, slang, emoji) can only make a stop or a hold more
+ * likely, or read a clear order with a typo as that same order.
  */
+import { looksSecretStrict } from "./journal.js";
+
 export type WordKind = "stop" | "continue" | "order" | "hold";
 
 const invisibleChars =
@@ -548,7 +552,8 @@ function isOrderSentence(sentenceCased: string): boolean {
 }
 
 /**
- * Classifies words that arrive while a computer task runs:
+ * The strict reader of the words exactly as they are written, with no help
+ * for casual forms or typos:
  * - "stop": any stop word anywhere in the message
  * - "continue": a standalone continue phrase (after optional fillers), no "?"
  * - "order": the last sentence matches a strict screen-order shape and no
@@ -556,8 +561,10 @@ function isOrderSentence(sentenceCased: string): boolean {
  *   or question cue (except a narrow observation report of what is or is not
  *   seen on the screen)
  * - "hold": everything else
+ *
+ * `readWords` never reads a message less safely than this one does.
  */
-export function readWords(text: string): WordKind {
+export function readWordsAsWritten(text: string): WordKind {
   const { cased, lower } = normalize(text);
   if (!lower) return "hold";
   if (stopWord.test(lower)) return "stop";
@@ -576,4 +583,757 @@ export function readWords(text: string): WordKind {
   }
   if (isOrderSentence(sentences.at(-1)!)) return "order";
   return "hold";
+}
+
+// Casual words. People type and talk to ClawdTime casually: typos, slang,
+// no punctuation, repeated letters, emoji. The reader below rewrites such a
+// message into plain words and reads it again with the strict rules above.
+// It is one way only: it can make a message stop or hold more easily, and it
+// can read a clear screen order with a typo or a casual form as that same
+// order. It never turns a stop into anything else, and it never removes a
+// word or a mark that the rules read (a negation, a hold cue, a question
+// mark). Quoted labels, web addresses and key combinations stay as written.
+// The rewritten words are for this reading only: what the person wrote is
+// what is kept, sent to the planner and checked for secrets.
+
+/** Emoji that stop: a stop sign and the stop button. */
+const stopEmoji = /[\u{1F6D1}\u23F9]/gu;
+/** Emoji that ask: they count as a question mark. */
+const questionEmoji = /[\u2753\u2754\u203D]/gu;
+/** Emoji of doubt, refusal, delay or a raised hand: the message holds. */
+const holdEmoji =
+  /[\u{1F914}\u{1F615}\u{1F928}\u{1F62C}\u{1F61F}\u{1F644}\u{1F612}\u{1F624}\u{1F621}\u{1F620}\u{1F926}\u{1F937}\u{1F633}\u{1F631}\u{1FAE4}\u{1F610}\u{1F611}\u{1F645}\u{1F44E}\u274C\u2716\u274E\u{1F6AB}\u26D4\u23F3\u231B\u23F8\u270B\u{1F91A}\u{1F590}\u{1F62E}\u{1F635}\u{1FAE3}\u{1F974}\u{1F629}\u{1F62B}\u{1F61E}\u{1F622}\u{1F62D}\u{1F92C}]/u;
+/** Emoji that only decorate a message: they are dropped. Any other emoji stays as written. */
+const decorationEmoji =
+  /[\u{1F64F}\u{1F44D}\u{1F44C}\u{1F642}\u{1F60A}\u{1F600}\u{1F601}\u{1F603}\u{1F604}\u2705\u2714\u{1F525}\u{1F4AF}\u2728\u{1F680}\u{1F449}\u{1F448}\u{1F447}\u{1F446}\u261D\u2764\u{1F499}\u{1F49A}\u{1F9E1}\u{1F49B}\u{1F49C}\u{1F64C}\u{1F44F}\u{1F4AA}\u{1F60E}\u{1F609}\u{1FAE1}\u2640\u2642\u{1F3FB}-\u{1F3FF}]/gu;
+
+/** ClawdTime named at the start or the end, as typed or as speech is written down. */
+const addressName =
+  "@?(?:clawd\\s*time|clawed\\s+time|claw\\s+time|cloud\\s+time|clawd)";
+const leadingAddress = new RegExp(
+  `^(?:(?:hey|hi|hello|yo|ok|okay)[,!\\s]+)?${addressName}(?:[,:!.]+\\s*|\\s+|$)`,
+  "i",
+);
+const trailingAddress = new RegExp(`[,\\s]+${addressName}\\s*([.!?]*)$`, "i");
+
+/** One casual word, read as these plain words. */
+const casualWord: Record<string, string> = {
+  u: "you",
+  ur: "your",
+  plis: "pls",
+  pliz: "pls",
+  plez: "pls",
+  pleez: "pls",
+  pleaz: "pls",
+  plse: "pls",
+  plss: "pls",
+  plzz: "plz",
+  thx: "thanks",
+  thnx: "thanks",
+  thanx: "thanks",
+  thnks: "thanks",
+  thks: "thanks",
+  tnx: "thanks",
+  k: "ok",
+  kk: "ok",
+  okk: "ok",
+  okie: "ok",
+  oki: "ok",
+  okey: "ok",
+  aight: "alright",
+  ight: "alright",
+  alr: "alright",
+  yea: "yeah",
+  yeh: "yeah",
+  yah: "yeah",
+  yup: "yep",
+  rn: "right now",
+  asap: "now",
+  btn: "button",
+  btns: "buttons",
+  pg: "page",
+  msg: "message",
+  msgs: "messages",
+  dwn: "down",
+  opn: "open",
+  srch: "search",
+  goto: "go to",
+  teh: "the",
+  hte: "the",
+  tht: "that",
+  // Hold cues, without the apostrophe or with a typo. They only hold more.
+  im: "i'm",
+  ill: "i'll",
+  ive: "i've",
+  lemme: "let me",
+  gimme: "give me",
+  imma: "i'm going to",
+  ima: "i'm going to",
+  wanna: "want to",
+  gonna: "going to",
+  gotta: "got to",
+  dnt: "don't",
+  dnot: "don't",
+  donot: "do not",
+  isnt: "isn't",
+  arent: "aren't",
+  wasnt: "wasn't",
+  werent: "weren't",
+  havent: "haven't",
+  hasnt: "hasn't",
+  hadnt: "hadn't",
+  aint: "ain't",
+  wiat: "wait",
+  wair: "wait",
+  waut: "wait",
+  wsit: "wait",
+  wate: "wait",
+  w8: "wait",
+  hld: "hold",
+  hlod: "hold",
+  hodl: "hold",
+  hokd: "hold",
+  hol: "hold",
+  holdon: "hold on",
+  holdup: "hold up",
+  hangon: "hang on",
+  pasue: "pause",
+  puase: "pause",
+  paus: "pause",
+  nvmd: "nevermind",
+  nvrm: "nevermind",
+  nevrmind: "nevermind",
+  nm: "nevermind",
+  jk: "nevermind",
+  idk: "i don't know",
+  idek: "i don't know",
+  dunno: "i don't know",
+  unsure: "not sure",
+  brb: "wait",
+  afk: "wait",
+  // Stop words, swapped or misspelled. "Step", "shop", "atop", "stow" and
+  // "top" are words of their own and are not here.
+  stpo: "stop",
+  sotp: "stop",
+  tsop: "stop",
+  sstop: "stop",
+  stopit: "stop it",
+  cancle: "cancel",
+  cancell: "cancel",
+  cansel: "cancel",
+  cancl: "cancel",
+  cacnel: "cancel",
+  cnacel: "cancel",
+  canecl: "cancel",
+  acncel: "cancel",
+  abrot: "abort",
+  aboart: "abort",
+  abotr: "abort",
+  aobrt: "abort",
+  baort: "abort",
+  abourt: "abort",
+  hlat: "halt",
+  ahlt: "halt",
+  hatl: "halt",
+};
+
+const stopWords = new Set(["stop", "cancel", "abort", "halt", "stahp"]);
+/** A word that the strict reader stops on by itself ("stop", "stopp", "stahp"). */
+const stopForm = /^(?:stop+|stah+p+|cancel|abort|halt)$/;
+
+/** Single words that the rules read as a hold cue. A doubled letter does not hide one ("noo", "waitt"). */
+const holdCueWords = new Set([
+  "not",
+  "no",
+  "never",
+  "wait",
+  "hold",
+  "pause",
+  "later",
+  "when",
+  "after",
+  "once",
+  "until",
+  "before",
+  "if",
+  "unless",
+  "maybe",
+  "yet",
+  "nah",
+  "nope",
+  "nevermind",
+  "nvm",
+  "forget",
+  "already",
+  "wrong",
+  "broken",
+  "mess",
+]);
+
+/** The screen verbs, screen nouns, key names and known app and browser names that a typo may stand for. */
+const typoVocabulary = [
+  "open",
+  "click",
+  "press",
+  "type",
+  "enter",
+  "select",
+  "choose",
+  "pick",
+  "scroll",
+  "drag",
+  "close",
+  "switch",
+  "search",
+  "button",
+  "buttons",
+  "link",
+  "links",
+  "page",
+  "pages",
+  "window",
+  "windows",
+  "tabs",
+  "menu",
+  "menus",
+  "field",
+  "fields",
+  "site",
+  "sites",
+  "website",
+  "websites",
+  "result",
+  "results",
+  "item",
+  "items",
+  "option",
+  "options",
+  "popup",
+  "popups",
+  "dialog",
+  "dialogs",
+  "folder",
+  "folders",
+  "note",
+  "notes",
+  "email",
+  "emails",
+  "message",
+  "messages",
+  "list",
+  "lists",
+  "icon",
+  "icons",
+  "image",
+  "images",
+  "video",
+  "videos",
+  "form",
+  "forms",
+  "dropdown",
+  "dropdowns",
+  "browser",
+  "browsers",
+  "draft",
+  "drafts",
+  "section",
+  "sections",
+  "toolbar",
+  "sidebar",
+  "checkbox",
+  "address",
+  "input",
+  "return",
+  "escape",
+  "space",
+  "spacebar",
+  "delete",
+  "backspace",
+  "down",
+  "chrome",
+  "google",
+  "safari",
+  "firefox",
+  "brave",
+  "edge",
+  "chromium",
+  "microsoft",
+  "finder",
+  "mail",
+  "terminal",
+  "iterm",
+  "textedit",
+  "photos",
+  "calendar",
+  "calculator",
+  "preview",
+  "settings",
+  "system",
+];
+const typoTargets = new Set(typoVocabulary);
+
+/**
+ * Words that the rules read for themselves (fillers, cues, ordinals, key
+ * names, labels, code words, everyday objects). A typo is never read into
+ * them or out of them.
+ */
+const ruleWords = new Set(
+  (
+    "ok okay yes yeah yep sure alright right please pls plz bro bruh dude yo now then so and well just " +
+    "hey actually thanks thank instead again more less not no never wait waiting hold holding pause paused " +
+    "pausing later when after once until before if unless maybe yet dont doesnt didnt wont cant cannot " +
+    "wouldnt shouldnt couldnt hang give sec second seconds couple nah nope nevermind mind nvm forget already " +
+    "cue wrong broken mess minute minutes moment moments few bit why how what whether should would could but " +
+    "because first third fourth fifth last next previous prev other top bottom esc tab left up home end key " +
+    "arrow cmd command ctrl control alt option shift save login log sign back done submit refresh reload " +
+    "apply retry skip dismiss start play details it that this them there here one in on with to into from at " +
+    "for the a an my your our his her their these those out off away over around through faster slower " +
+    "something anything nothing everything someone anyone everyone soon door box bag fridge gate car bed book " +
+    "bottle jar can cup drawer closet oven trunk package gift present mom dad mum mama papa mother father " +
+    "brother sister wife husband son daughter boss friend file files test tests code project projects todo " +
+    "todos repo repos branch commit function component class module codebase backend script config issue bug " +
+    "ticket fix add write change build create push merge deploy install rename remove update edit debug patch " +
+    "replace revert ship go use try hit tap stop cancel abort halt quit kill stahp see show load happen work " +
+    "bar url app apps row rows pane panel engine history screen computer mac laptop desktop machine " +
+    "device mouse keyboard cursor things stuff able possible know"
+  ).split(" "),
+);
+
+/**
+ * English words that one typo away look like a screen word but mean
+ * something else. They stay as they are: "clock" is no "click", "chose" no
+ * "choose", "filed" no "field", "lost" no "list". "Pen" and "lick" are too
+ * short or too far from a screen word already, and are here all the same.
+ */
+const typoDenyList = new Set([
+  "pen",
+  "lick",
+  "clock",
+  "cluck",
+  "chose",
+  "puck",
+  "pock",
+  "prick",
+  "drab",
+  "cloze",
+  "fork",
+  "firm",
+  "forum",
+  "lost",
+  "lust",
+  "maul",
+  "pave",
+  "pate",
+  "phage",
+  "sire",
+  "suite",
+  "spite",
+  "smite",
+  "lino",
+  "lunk",
+  "tans",
+  "widow",
+  "filed",
+  "potion",
+  "folded",
+  "browse",
+  "browsed",
+  "brace",
+  "fonder",
+  "funder",
+  "finer",
+  "spade",
+  "deplete",
+  "noted",
+  "drown",
+  "daft",
+  "burton",
+  "calculate",
+  "settling",
+  "settlings",
+  "escapee",
+]);
+
+const keyboardRows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+/** The keys next to each letter on a common keyboard. */
+const nextKeys = new Map<string, Set<string>>();
+keyboardRows.forEach((row, r) => {
+  [...row].forEach((letter, c) => {
+    const near = new Set<string>();
+    const add = (rr: number, cc: number) => {
+      const key = keyboardRows[rr]?.[cc];
+      if (key) near.add(key);
+    };
+    add(r, c - 1);
+    add(r, c + 1);
+    add(r - 1, c);
+    add(r - 1, c + 1);
+    add(r + 1, c - 1);
+    add(r + 1, c);
+    nextKeys.set(letter, near);
+  });
+});
+
+/**
+ * How many typos turn `target` into `typed`, or Infinity. A typo is one of:
+ * two neighbouring letters swapped, a letter hit with a key next to it (not
+ * the first letter), a letter left out (not the first), or one letter too
+ * many (not the first; at the end only a repeated letter, so that "opens",
+ * "typed" and "closer" stay as they are).
+ */
+export function typoCount(typed: string, target: string): number {
+  const n = typed.length;
+  const m = target.length;
+  const row = () => new Array<number>(m + 1).fill(Infinity);
+  const d: number[][] = Array.from({ length: n + 1 }, row);
+  d[0]![0] = 0;
+  for (let i = 0; i <= n; i++)
+    for (let j = 0; j <= m; j++) {
+      if (i === 0 && j === 0) continue;
+      let best = Infinity;
+      if (i > 1 && (i < n || typed[i - 1] === typed[i - 2]))
+        best = Math.min(best, d[i - 1]![j]! + 1);
+      if (j > 1) best = Math.min(best, d[i]![j - 1]! + 1);
+      if (i > 0 && j > 0) {
+        const a = typed[i - 1]!;
+        const b = target[j - 1]!;
+        if (a === b) best = Math.min(best, d[i - 1]![j - 1]!);
+        else if (i > 1 && j > 1 && nextKeys.get(b)?.has(a))
+          best = Math.min(best, d[i - 1]![j - 1]! + 1);
+      }
+      if (
+        i > 1 &&
+        j > 1 &&
+        typed[i - 1] === target[j - 2] &&
+        typed[i - 2] === target[j - 1] &&
+        typed[i - 1] !== typed[i - 2]
+      )
+        best = Math.min(best, d[i - 2]![j - 2]! + 1);
+      d[i]![j] = best;
+    }
+  return d[n]![m]!;
+}
+
+/**
+ * Words that make the rules hold or stop: words of holding, doubt, refusal
+ * or stopping, code words, everyday things and people. A word one edit away
+ * from one of them is never read as a screen word: "click it nore" may be
+ * "nope", "notr" may be "not", and "open the settings fiel" may be "file".
+ */
+const holdRivals = [
+  ...holdCueWords,
+  ...stopWords,
+  ...singleWordExclude,
+  ...(
+    "waiting holding paused pausing dont doesnt didnt wont cant cannot wouldnt shouldnt couldnt isnt " +
+    "hang give sec second seconds minute minutes moment moments couple why how what whether should " +
+    "would could but because quit kill file files test tests code project projects todo todos repo " +
+    "repos branch branches commit commits function functions component components class classes module " +
+    "modules codebase backend script scripts config configs issue issues bug bugs ticket tickets readme " +
+    "fix add write change build create push merge deploy install rename remove update edit debug patch " +
+    "replace revert ship"
+  ).split(" "),
+].filter((word) => !typoTargets.has(word));
+
+/** True when one insertion, deletion, change or swap of two neighbours turns `a` into `b`. */
+function oneEditApart(a: string, b: string): boolean {
+  if (a === b || Math.abs(a.length - b.length) > 1) return false;
+  let start = 0;
+  while (start < a.length && a[start] === b[start]) start++;
+  if (a.length === b.length) {
+    if (a.slice(start + 1) === b.slice(start + 1)) return true;
+    return (
+      a[start] === b[start + 1] &&
+      a[start + 1] === b[start] &&
+      a.slice(start + 2) === b.slice(start + 2)
+    );
+  }
+  const [long, short] = a.length > b.length ? [a, b] : [b, a];
+  return long.slice(start + 1) === short.slice(start);
+}
+
+/** What `typoTarget` found for words seen before. The answer of a word never changes. */
+const typoMemo = new Map<string, string | null>();
+
+/**
+ * The screen word that a typed word stands for, or null. Only words of 4
+ * letters or more take one typo, and words of 8 or more (typed and meant)
+ * take two. A word that the rules read, a word of the deny list, a word one
+ * edit away from a word of holding or stopping, or a word with two equally
+ * near screen words is not changed.
+ */
+export function typoTarget(word: string): string | null {
+  const typed = word.toLowerCase();
+  if (typoTargets.has(typed)) return typed;
+  const known = typoMemo.get(typed);
+  if (known !== undefined) return known;
+  if (typoMemo.size >= 4096) typoMemo.clear();
+  const found = findTypoTarget(typed);
+  typoMemo.set(typed, found);
+  return found;
+}
+
+function findTypoTarget(typed: string): string | null {
+  if (typed.length < 4 || !/^[a-z]+$/.test(typed)) return null;
+  if (ruleWords.has(typed) || typoDenyList.has(typed)) return null;
+  if (holdRivals.some((rival) => rival === typed || oneEditApart(typed, rival)))
+    return null;
+  let best: string | null = null;
+  let bestCount = Infinity;
+  let tied = false;
+  for (const target of typoVocabulary) {
+    const limit = Math.min(typed.length, target.length) >= 8 ? 2 : 1;
+    if (Math.abs(target.length - typed.length) > limit) continue;
+    const count = typoCount(typed, target);
+    if (count > limit) continue;
+    if (count < bestCount) {
+      best = target;
+      bestCount = count;
+      tied = false;
+    } else if (count === bestCount) tied = true;
+  }
+  return best !== null && !tied ? best : null;
+}
+
+/** A word that the reader knows as it is. A long "chooose" is "chose" before it is "choose". */
+const knownWord = (word: string) =>
+  stopWords.has(word) ||
+  holdCueWords.has(word) ||
+  ruleWords.has(word) ||
+  typoDenyList.has(word) ||
+  typoTargets.has(word) ||
+  word in casualWord;
+
+/**
+ * A run of three or more of the same letter becomes one or two: "pleeease",
+ * "stooop", "noooo". A known word wins; else every run becomes one letter
+ * ("Fiiixing" is "Fixing").
+ */
+function shortenRuns(word: string): string {
+  const runs = [...word.matchAll(/([a-z])\1{2,}/gi)];
+  if (runs.length === 0 || runs.length > 4) return word;
+  const forms: string[] = [];
+  for (let mask = 0; mask < 1 << runs.length; mask++) {
+    let form = "";
+    let at = 0;
+    runs.forEach((run, index) => {
+      form += word.slice(at, run.index);
+      form += run[1]!.repeat(mask & (1 << index) ? 2 : 1);
+      at = run.index! + run[0].length;
+    });
+    forms.push(form + word.slice(at));
+  }
+  const lower = (form: string) => form.toLowerCase();
+  return (
+    forms.find((form) => stopForm.test(lower(form))) ??
+    forms.find((form) => knownWord(lower(form))) ??
+    forms[0]!
+  );
+}
+
+/** Spans that stay as written: quoted labels, web addresses and key combinations. */
+function keptSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const patterns = [
+    /"[^"\n]{1,120}"/g,
+    /(?:^|\s)'[^'\n]{1,120}'(?=$|\s|[,.;!?])/g,
+    new RegExp(webAddressWithPath.source, "gi"),
+    /\b(?:cmd|command|ctrl|control|alt|option|shift|fn)(?:\s*\+\s*[a-z0-9]+)+/gi,
+  ];
+  for (const pattern of patterns)
+    for (const match of text.matchAll(pattern))
+      spans.push([match.index!, match.index! + match[0].length]);
+  return spans.sort((a, b) => a[0] - b[0]);
+}
+
+/** Applies `rewrite` to the parts of `text` outside the kept spans. */
+function outsideKept(
+  text: string,
+  rewrite: (part: string, offset: number) => string,
+): string {
+  let out = "";
+  let at = 0;
+  for (const [start, end] of keptSpans(text)) {
+    if (start < at) {
+      at = Math.max(at, end);
+      continue;
+    }
+    out += rewrite(text.slice(at, start), at) + text.slice(start, end);
+    at = end;
+  }
+  return out + rewrite(text.slice(at), at);
+}
+
+/** A word on its own: not part of a name such as worker.ts, sign-in, it's or a@b. */
+const wordToken =
+  /(?<![A-Za-z0-9'_\/@-])(?<![A-Za-z0-9]\.)[A-Za-z]+(?![A-Za-z0-9'_\/@-]|\.[A-Za-z0-9])|\bw8\b/g;
+
+/** True when the word at `index` opens a sentence. */
+function opensSentence(part: string, index: number, partOpens: boolean) {
+  const before = part.slice(0, index);
+  return partOpens && /^[\s"'(]*$/.test(before)
+    ? true
+    : /[.!?]\s+$/.test(before);
+}
+
+/**
+ * One word as the reader reads it: runs of letters shortened, a casual form
+ * spelled out, a doubled letter that hides a hold cue taken away, and a
+ * typo of a screen word corrected. A capitalized word inside a sentence is
+ * a name and stays as it is.
+ */
+function readWord(word: string, opens: boolean): string {
+  const short = shortenRuns(word);
+  const lower = short.toLowerCase();
+  const casual = casualWord[lower];
+  if (casual !== undefined) return casual;
+  if (knownWord(lower)) return short;
+  const single = lower.replace(/([a-z])\1+/g, "$1");
+  if (holdCueWords.has(single)) return single;
+  const capitalized = /^[A-Z][a-z]/.test(short);
+  if (capitalized && !opens) return short;
+  const target = typoTarget(lower);
+  if (target === null) return short;
+  return capitalized ? target[0]!.toUpperCase() + target.slice(1) : target;
+}
+
+/** Words that, after a bare "search", name no query: "search bar", "search the page". */
+const searchNoQuery =
+  /^(?:for|the|a|an|my|your|our|his|her|their|this|that|these|those|it|me|up|bar|box|field|button|results?|tab|page|engine|history|icon|again|more)\b/i;
+
+/**
+ * The message as the casual reader reads it. For reading only: it is never
+ * kept, sent or shown.
+ */
+export function casualWords(text: string): string {
+  let words = normalize(text)
+    .cased.replace(stopEmoji, " stop ")
+    .replace(questionEmoji, "?")
+    .replace(decorationEmoji, " ")
+    .replace(/[\u201a\u201b]/g, "'")
+    .replace(/[\u201e\u201f\u00ab\u00bb]/g, '"')
+    .replace(/\*+([^*\s][^*]*?)\*+/g, "$1")
+    .replace(/[!?.,;]{2,}/g, (run) =>
+      run.includes("?")
+        ? "?"
+        : run.includes("!")
+          ? "!"
+          : run.includes(".")
+            ? "."
+            : run[0]!,
+    )
+    .replace(/\s+([?!.,;])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  words = words.replace(leadingAddress, "").replace(trailingAddress, "$1");
+  words = outsideKept(words, (part, offset) => {
+    const partOpens = offset === 0;
+    let out = part
+      .replace(/(?<=\s)[nN](?=\s+[A-Za-z])/g, "and")
+      .replace(/\s&\s/g, " and ")
+      .replace(/\s\+\s/g, " and ")
+      .replace(/\b[wW]\/(?=\s|[A-Za-z])/g, "with ")
+      .replace(/\b(?:1|one)\s*(?:secs?|mins?|minutes?|moments?)\b/gi, "one sec")
+      .replace(/\b(?:a|one)\s+(?:mins?|moment)\b/gi, "one sec");
+    out = out.replace(wordToken, (word, index: number) =>
+      readWord(word, opensSentence(out, index, partOpens)),
+    );
+    return out;
+  });
+  words = words.replace(
+    /(^|[,;]\s*|\b(?:and|then)\s+|^(?:(?:ok|okay|so|now|just|pls|plz|please|yo|hey|can you|could you|would you|will you)[,\s]+)+)search\s+(?=[A-Za-z0-9"'])/gi,
+    (match: string, lead: string, index: number, all: string) =>
+      searchNoQuery.test(all.slice(index + match.length))
+        ? match
+        : `${lead}search for `,
+  );
+  return words.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The message with its stop words spelled out ("stpo", "cancle", "stooop",
+ * a stop sign) and nothing else changed. Other readers of stop words use it.
+ */
+export function spellStopWords(text: string): string {
+  return outsideKept(
+    normalize(text).cased.replace(stopEmoji, " stop "),
+    (part) =>
+      part.replace(wordToken, (word) => {
+        const lower = shortenRuns(word).toLowerCase();
+        const spelled = casualWord[lower];
+        if (
+          spelled !== undefined &&
+          /^(?:stop|cancel|abort|halt)\b/.test(spelled)
+        )
+          return spelled;
+        return stopWords.has(lower) ? lower : word;
+      }),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const abilityFiller =
+  "(?:ok|okay|so|hey|yo|hi|hello|um+|uh+|well|and|but|also|quick\\s+question|just\\s+wondering|actually|wait|bro|dude)";
+const abilityLead =
+  "(?:(?:can|could|would|will)\\s+you(?:\\s+(?:even|actually|really|also|ever|now))?|you\\s+can|are\\s+you\\s+(?:able|allowed)\\s+to|(?:do|did)\\s+you\\s+know\\s+how\\s+to|is\\s+it\\s+possible\\s+(?:for\\s+you\\s+)?to|do\\s+you\\s+have\\s+(?:the\\s+)?(?:ability|access)\\s+to)";
+const abilityVerb =
+  "(?:click|tap|press|open|use|type|scroll|control|operate|see|read|look\\s+at|move|drag|select|run|access|navigate|browse|do|work\\s+(?:on|in|with)|touch|handle|take\\s+over|drive|interact\\s+with)";
+const genericDevice =
+  "(?:(?:my|the|this|your|a)\\s+(?:screen|computer|mac|laptop|desktop|machine|device)|(?:a\\s+)?browsers?|the\\s+(?:mouse|keyboard|cursor))";
+const genericThing = `(?:buttons|links|apps|applications|programs|windows|tabs|menus|websites|sites|web\\s*pages|pages|things|stuff|anything|everything|something|icons|fields|forms|keys|${genericDevice})`;
+const genericTail = `(?:\\s+(?:on|in|with|of|from|across|using|around)\\s+${genericDevice}|\\s+for\\s+me|\\s+(?:by\\s+)?yourself|\\s+like\\s+(?:a\\s+)?(?:person|human|me)|\\s+at\\s+all|\\s+too|\\s+here|\\s+there)*`;
+const abilityQuestion = new RegExp(
+  `^(?:${abilityFiller}[,\\s]+)*${abilityLead}\\s+${abilityVerb}(?:\\s+(?:on|in|with|around))?(?:\\s+${genericThing})?${genericTail}(?:[,\\s]+(?:please|pls|plz|bro|dude))?\\s*[?.!]*$`,
+);
+
+/**
+ * A question about what ClawdTime can do, in the form of a polite request
+ * whose object is generic and names no target: "Can you click buttons on my
+ * screen?", "can u use my mac?", "are you able to open apps". It is answered
+ * as a question and starts no task. "Can you click the Send button?" names a
+ * target and is a request.
+ */
+export function asksWhatItCanDo(text: string): boolean {
+  return asksAbility(text, casualWords(text));
+}
+
+function asksAbility(text: string, casual: string): boolean {
+  const plain = (words: string) =>
+    words.toLowerCase().replace(/\s+/g, " ").trim();
+  return (
+    abilityQuestion.test(plain(normalize(text).cased)) ||
+    abilityQuestion.test(plain(casual))
+  );
+}
+
+/**
+ * Classifies words that arrive while a computer task runs, as
+ * `readWordsAsWritten` does, and also reads casual forms and typos:
+ * - a stop as written stays a stop;
+ * - a stop word with a typo, a long "stooop", or a stop sign stops;
+ * - a hold cue with a typo or without its apostrophe, an emoji of doubt,
+ *   refusal or delay, and a question about what ClawdTime can do hold;
+ * - a message that holds as written is read as an order (or a continue)
+ *   only when its casual reading is one by the same strict rules and holds
+ *   no secret;
+ * - an order or a continue as written holds when its casual reading holds.
+ */
+export function readWords(text: string): WordKind {
+  const written = readWordsAsWritten(text);
+  if (written === "stop") return "stop";
+  const casual = casualWords(text);
+  const reread = casual ? readWordsAsWritten(casual) : "hold";
+  if (reread === "stop") return "stop";
+  if (holdEmoji.test(text) || asksAbility(text, casual)) return "hold";
+  if (written === "hold") {
+    // Words that look like a secret once spelled out keep their written
+    // reading: a typo never reads a secret into an order.
+    if (looksSecretStrict(casual)) return "hold";
+    // A long run of one letter that the reader could not resolve, as in a
+    // file name or a quoted label, is a word it does not know: it holds.
+    if (/([a-z])\1\1/i.test(stripUrls(casual))) return "hold";
+    return reread === "order" || reread === "continue" ? reread : "hold";
+  }
+  return reread === "hold" ? "hold" : written;
 }

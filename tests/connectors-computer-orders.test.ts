@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readWords, type WordKind } from "../connectors/computer/orders.js";
+import {
+  readWords,
+  readWordsAsWritten,
+  type WordKind,
+} from "../connectors/computer/orders.js";
 
 describe("readWords", () => {
   const cases: readonly [string, WordKind][] = [
@@ -430,5 +434,57 @@ describe("readWords", () => {
 
   it("does not stop on scroll down enough to see the button (rest 8)", () => {
     expect(readWords("scroll down enough to see the button")).not.toBe("stop");
+  });
+
+  it("reads every case the same as the strict reader of the words as written", () => {
+    for (const [message, expected] of cases) {
+      expect([message, readWordsAsWritten(message)]).toEqual([
+        message,
+        expected,
+      ]);
+      expect([message, readWords(message)]).toEqual([message, expected]);
+    }
+  });
+
+  it("never reads a casual form of a held case as an order or a continue, and keeps every stop a stop", () => {
+    // Ways people type the same words. None adds a polite lead, takes a mark
+    // away or changes the case of a name.
+    const variants: ((text: string) => string)[] = [
+      (text) => `${text} \u{1F64F}`,
+      (text) => text.replace(/'/g, ""),
+      (text) => text.replace(/'/g, "\u{2019}"),
+      (text) =>
+        text
+          .replace(/\byou\b/gi, "u")
+          .replace(/\band\b/g, "n")
+          .replace(/\bthanks\b/gi, "thx"),
+      (text) =>
+        text.replace(
+          /\b([b-df-hj-np-tv-z]*)([aeiou])/gi,
+          (_, lead: string, vowel: string) => `${lead}${vowel.repeat(3)}`,
+        ),
+      (text) => (/\?\s*$/.test(text) ? `${text}??` : `${text}!!!`),
+      (text) => `yo ${text}`,
+      (text) => `ok so ${text}`,
+      (text) => `hey clawdtime ${text}`,
+    ];
+    let checked = 0;
+    for (const [message, expected] of cases) {
+      if (expected === "order" || expected === "continue") continue;
+      for (const variant of variants) {
+        const words = variant(message);
+        const read = readWords(words);
+        checked++;
+        if (expected === "stop") expect([words, read]).toEqual([words, "stop"]);
+        // A variant that the strict reader itself reads as an order ("open
+        // Moms message", with no apostrophe) is no change of the casual reader.
+        else if (readWordsAsWritten(words) === "hold")
+          expect([words, read === "order" || read === "continue"]).toEqual([
+            words,
+            false,
+          ]);
+      }
+    }
+    expect(checked).toBeGreaterThan(1500);
   });
 });

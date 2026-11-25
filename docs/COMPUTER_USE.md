@@ -138,12 +138,13 @@ runs, and hands no words to it.
 - **Stop (`stop`).** Any stop word anywhere in the message (`stop`, `stopp`,
   `stahp`, `cancel`, `abort`, `halt`, `quit it`, `kill it`, also inside polite
   or casual forms such as "can you stop?", "pls stop", "actually stop", "i said
-  stop", or a screen phrase such as "cancel the dialog" or "stop the video")
-  stops the request at once. This holds in every state, also while the initial
-  navigation reading or the first look is in flight, at the step limit, at the
-  8-addition cap, when the record cannot be written, or when the words also
-  look like a secret. The word `enough` is not a stop word, so phrases such as
-  "scroll down enough to see the button" do not cancel the task.
+  stop", or a screen phrase such as "cancel the dialog" or "stop the video",
+  and also with a typo: see Casual words and typos) stops the request at once.
+  This holds in every state, also while the initial navigation reading or the
+  first look is in flight, at the step limit, at the 8-addition cap, when the
+  record cannot be written, or when the words also look like a secret. The
+  word `enough` is not a stop word, so phrases such as "scroll down enough to
+  see the button" do not cancel the task.
 - **Continue (`continue`).** A standalone continue phrase (`continue`, `go
 on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
   optional fillers, with no question mark and nothing else ("continue?",
@@ -195,6 +196,58 @@ seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
   step limit, at the 8-addition cap, when the record cannot be written, or
   when the words hold a secret, the pause still happens and the reply states
   truthfully that the words were not kept.
+- **Casual words and typos.** `readWords` reads the words as written first
+  (`readWordsAsWritten`). Then it reads a casual form of the same words with
+  the same rules:
+  - Marks and emoji: smart quotes become plain quotes. A run of three or more
+    of one letter becomes one or two ("pleeease", "stooop", "noooo"). A run of
+    marks becomes one mark, and a run with a question mark stays a question
+    mark ("open chrome?!" is a question). A star around a word goes. Emoji
+    that only decorate (such as folded hands, thumbs up, a check mark) go. A
+    question emoji counts as a question mark.
+  - Casual forms: `u`, `ur`, `n`, `&`, `+`, `w/`, `plis` and its kin, `thx`,
+    `k`, `kk`, `okie`, `aight`, `yup`, `rn`, `asap`, `btn`, `msg`, `pg`,
+    `dwn`, `opn`, `goto`, `teh`, and "ClawdTime" named at the start or the end
+    ("hey clawdtime open chrome"). A bare "search cats" reads as "search for
+    cats". `yo`, `ok so`, `pls` and `plz` were fillers already.
+  - Typos: the screen verbs, the screen nouns, the key names and the known app
+    and browser names take one typo in a word of 4 letters or more, and two in
+    a word of 8 or more (typed and meant). A typo is two neighbouring letters
+    swapped, a letter hit with a neighbouring key, a letter left out, or one
+    letter too many. It is never at the first letter, and one letter too many
+    at the end is only a repeated letter, so "opens", "typed" and "clicked"
+    are never read as the verb. "opne chrome", "clik the blue button", "slect
+    the last link", "scroll dwon" and "hit retrun" are orders. A word that the
+    rules read, a capitalized name inside a sentence, a word with two equally
+    near screen words, and a short deny list of English words ("clock",
+    "chose", "filed", "lost", "fork", "widow", "potion" and others) stay as
+    they are.
+  - Stops: a stop word swapped or misspelled stops (`stpo`, `sotp`, `cancle`,
+    `cancell`, `abrot`, `aboart`, `hlat`), and so do a long `stooop` and the
+    stop sign or stop button emoji. Ordinary words near a stop word ("step",
+    "shop", "atop", "stow", "top", "stoop") do not: "click the shop button" is
+    an order.
+  - Holds: a hold cue with a typo or without its apostrophe holds (`dnt`,
+    `wiat`, `wair`, `hld on`, `hol up`, `nvmd`, `idk`, `dunno`, `im`,
+    `lemme`, `gimme`, `brb`, `1 sec`, `jk`, `isnt`), and so does a cue with a
+    doubled letter (`noo`, `waitt`, `nahh`) and an emoji of doubt, refusal or
+    delay (a thinking face, an eye roll, a cross, a raised hand, an hourglass).
+  - A question about what ClawdTime can do, with a generic object and no
+    target ("Can you click buttons on my screen?", "can u use my mac?", "are
+    you able to open apps"), holds. "Can you click the Send button?" is an
+    order.
+
+  The casual reading works one way only. It can make words stop or hold more
+  easily, and it can read a clear screen order with a typo or a casual form as
+  that same order (or a plain continue phrase as a continue). It never turns a
+  stop into anything else, and it never removes a negation, a hold cue or a
+  question mark, so words with doubt, delay, negation, a question, a refusal
+  or a remark still hold. An order as written holds when its casual reading
+  holds ("click the button wiat"). Words that look like a secret once spelled
+  out keep their written reading. Quoted labels, web addresses and key
+  combinations stay as written. The casual form is for the reading only: what
+  you wrote is what is kept, sent to the planner and checked for secrets.
+
 - **Startup.** While the planner's initial navigation reading or the first
   look at the screen is in flight (before step 1 and with no command in
   flight), a stop ends the task at once, and anything else sets the hold so
