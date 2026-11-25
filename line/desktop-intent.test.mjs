@@ -7,6 +7,7 @@ import {
 } from "./desktop-intent.mjs";
 import { makeCallerTools } from "./caller-tools.mjs";
 import { bindCallEnd } from "./call-end.mjs";
+import { syncCallView } from "./agent.mjs";
 import { RoomEvent } from "@livekit/rtc-node";
 const { test } = process.env.VITEST
   ? await import("vitest")
@@ -1100,4 +1101,90 @@ test("the codes of a request of several items hold no words, and the call end re
     r.session.listenerCount(voice.AgentSessionEventTypes.SpeechCreated),
     0,
   );
+});
+
+test("syncCallView prefers /desktop/view over CLI fallback and uses clearManual instead of overview latch", async () => {
+  const actions = [];
+  const logs = [];
+  const video = {
+    manual(view) {
+      actions.push(["manual", view]);
+    },
+    clearManual() {
+      actions.push(["clearManual"]);
+    },
+  };
+  let fallbackCalls = 0;
+
+  // Uses /desktop/view directly when available, skipping CLI readView fallback.
+  const firstAt = await syncCallView({
+    callStarted: 1000,
+    viewAt: 0,
+    readDesktop: async () => ({
+      view: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 },
+      at: 1500,
+    }),
+    readFallback: async () => {
+      fallbackCalls++;
+      return null;
+    },
+    video,
+    log: (name, detail) => logs.push([name, detail]),
+  });
+  assert.equal(firstAt, 1500);
+  assert.equal(fallbackCalls, 0);
+  assert.deepEqual(actions, [["manual", { x: 0.1, y: 0.2, w: 0.5, h: 0.6 }]]);
+  assert.deepEqual(logs, [["view", { window: true }]]);
+
+  // Same timestamp is ignored.
+  const sameAt = await syncCallView({
+    callStarted: 1000,
+    viewAt: firstAt,
+    readDesktop: async () => ({ view: null, at: 1500 }),
+    readFallback: async () => null,
+    video,
+  });
+  assert.equal(sameAt, 1500);
+  assert.equal(actions.length, 1);
+
+  // Falls back to CLI readView when /desktop/view returns null; clearing calls clearManual.
+  const clearedAt = await syncCallView({
+    callStarted: 1000,
+    viewAt: firstAt,
+    readDesktop: async () => null,
+    readFallback: async () => {
+      fallbackCalls++;
+      return { view: null, at: 2000 };
+    },
+    video,
+    log: (name, detail) => logs.push([name, detail]),
+  });
+  assert.equal(clearedAt, 2000);
+  assert.equal(fallbackCalls, 1);
+  assert.deepEqual(actions.at(-1), ["clearManual"]);
+  assert.deepEqual(logs.at(-1), ["view", { window: false }]);
+
+  // Stale view from before the call or an ended call changes nothing.
+  assert.equal(
+    await syncCallView({
+      callStarted: 3000,
+      viewAt: 0,
+      readDesktop: async () => ({ view: null, at: 2500 }),
+      readFallback: async () => null,
+      video,
+    }),
+    0,
+  );
+  assert.equal(
+    await syncCallView({
+      callStarted: 1000,
+      viewAt: 0,
+      ended: () => true,
+      readDesktop: async () => ({ view: null, at: 2500 }),
+      readFallback: async () => null,
+      video,
+    }),
+    0,
+  );
+  assert.equal(actions.length, 2);
 });

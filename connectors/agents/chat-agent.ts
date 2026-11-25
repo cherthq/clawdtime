@@ -107,6 +107,7 @@ While a computer task runs: words that add to it or correct it ("no, the Pro Max
 When a computer task or an agent asks the owner a question, give their answer with answer_question. Code checks a yes or no against the owner's own words.
 Code (a repository, a bug, a test, a build, a script, a pull request, a server) goes to start_job, never to the computer. A question about a job is read with job_status.
 A schedule ("every morning at 9, ...") goes to routine_add. When the owner states a fact about themselves to keep, and the memory tools are offered, keep it with remember.
+When the owner asks to zoom in on an open application window or coding session on a call, or to show the whole screen again, and call_view is offered, call call_view.
 Status: for any question about what runs, what you did or what came out ("what are you working on?", "what was the last thing?", "did it work?"), call tasks or computer_status first and answer only from what they return; never invent a result, a price or a page.
 A "no" to a question that a task asks is an answer: give it with answer_question, not computer_stop. Use computer_stop only when the owner asks to stop.
 A note from memory that answers the owner is still read with memory_search before you rely on it.
@@ -232,6 +233,9 @@ export class ChatAgent implements ChatBrain {
       jobs: world.jobs,
       desk: world.desk,
       routines: this.options.routines,
+      board: world.board,
+      titles: world.titles,
+      callView: world.callView,
       graph: this.graph,
       refresh: () => this.refresh(),
     };

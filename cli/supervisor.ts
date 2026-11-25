@@ -591,14 +591,14 @@ export async function supervisorCli(
               ),
             jobs: jobsFor(system, root, runner),
             openApp: (name, url) => openApp(system, name, url, runner),
-            callView: (session) =>
+            callView: (target) =>
               showOnCall(
                 {
                   store: new ViewStore(root, () => system.now()),
                   run: runner,
                   titles: (item) => tabTitles(item, titles(item)),
                 },
-                session,
+                target,
               ),
             browse: (action, options) =>
               browse(system, runner, action, options),
@@ -1005,14 +1005,14 @@ export async function supervisorCli(
           ),
         jobs: jobsFor(system, root, runner),
         openApp: (name, url) => openApp(system, name, url, runner),
-        callView: (session) =>
+        callView: (target) =>
           showOnCall(
             {
               store: new ViewStore(root, () => system.now()),
               run: runner,
               titles: (item) => tabTitles(item, titles(item)),
             },
-            session,
+            target,
           ),
         browse: (action, options) => browse(system, runner, action, options),
         look: (question) =>

@@ -16,6 +16,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import {
   presentationService,
+  requestView,
   startPresentation,
   validPresentationEvent,
 } from "./presentation-source.mjs";
@@ -296,4 +297,135 @@ test("private discovery and real loopback polling refuse mismatches, redirects a
     source.stop();
   }
   assert.equal(remoteRequests, 0);
+});
+
+test("poller preserves hold on clean completion and retires immediately on retired: true including mid-hold", async () => {
+  let now = 10000;
+  let snapshot = { version: 1, event: event(now) };
+  const received = [];
+  const source = startPresentation({
+    since: 9000,
+    now: () => now,
+    onEvent: (value, options) => received.push({ value, options }),
+    automatic: false,
+    discover: () => ({
+      origin: "http://127.0.0.1:1234",
+      token: "fixture",
+      instanceId: "fixture",
+    }),
+    request: async (url) =>
+      reply(url.endsWith("/state") ? { instanceId: "fixture" } : snapshot),
+  });
+  await source.check();
+  assert.equal(received.length, 1);
+  assert.equal(received[0].value.sequence, 1);
+
+  // Clean completion / expiry: event becomes null without retired: true.
+  snapshot = { version: 1, event: null };
+  await source.check();
+  assert.deepEqual(received.at(-1), { value: null, options: undefined });
+
+  // Repeated clean null does not re-emit.
+  await source.check();
+  assert.equal(received.length, 2);
+
+  // Mid-hold Stop or takeover after clean expiry: retired: true emits immediate retire once.
+  snapshot = { version: 1, event: null, retired: true };
+  await source.check();
+  assert.deepEqual(received.at(-1), {
+    value: null,
+    options: { immediate: true },
+  });
+
+  // Repeated retired: true does not spam onEvent once activeHold is cleared.
+  await source.check();
+  assert.equal(received.length, 3);
+
+  // Active event followed directly by retired: true emits immediate retire.
+  now += 200;
+  snapshot = { version: 1, event: { ...event(now), sequence: 2 } };
+  await source.check();
+  assert.equal(received.at(-1).value.sequence, 2);
+  snapshot = { version: 1, event: null, retired: true };
+  await source.check();
+  assert.deepEqual(received.at(-1), {
+    value: null,
+    options: { immediate: true },
+  });
+
+  // Malformed retired field or retired: true with an event fails closed immediately.
+  now += 200;
+  snapshot = { version: 1, event: { ...event(now), sequence: 3 } };
+  await source.check();
+  assert.equal(received.at(-1).value.sequence, 3);
+  snapshot = { version: 1, event: null, retired: "yes" };
+  await source.check();
+  assert.deepEqual(received.at(-1), {
+    value: null,
+    options: { immediate: true },
+  });
+
+  now += 200;
+  snapshot = { version: 1, event: { ...event(now), sequence: 4 } };
+  await source.check();
+  snapshot = {
+    version: 1,
+    event: { ...event(now), sequence: 5 },
+    retired: true,
+  };
+  await source.check();
+  assert.deepEqual(received.at(-1), {
+    value: null,
+    options: { immediate: true },
+  });
+
+  // Stop during activeHold after clean expiry emits immediate retire.
+  now += 200;
+  snapshot = { version: 1, event: { ...event(now), sequence: 6 } };
+  await source.check();
+  snapshot = { version: 1, event: null };
+  await source.check();
+  assert.deepEqual(received.at(-1), { value: null, options: undefined });
+  source.stop();
+  assert.deepEqual(received.at(-1), {
+    value: null,
+    options: { immediate: true },
+  });
+});
+
+test("requestView authenticates against /desktop/state and validates /desktop/view replies", async () => {
+  let stateBody = { instanceId: "fixture" };
+  let viewBody = { view: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 }, at: 12345 };
+  const calls = [];
+  const discover = () => ({
+    origin: "http://127.0.0.1:4321",
+    token: "panel-secret",
+    instanceId: "fixture",
+  });
+  const request = async (url, options) => {
+    calls.push({ url, options });
+    return reply(url.endsWith("/state") ? stateBody : viewBody);
+  };
+  assert.deepEqual(await requestView({ discover, request }), {
+    view: { x: 0.1, y: 0.2, w: 0.5, h: 0.6 },
+    at: 12345,
+  });
+  assert.equal(calls[0].options.headers.authorization, "Bearer panel-secret");
+  assert.equal(calls[1].url, "http://127.0.0.1:4321/desktop/view");
+
+  viewBody = { view: null, at: 12346 };
+  assert.deepEqual(await requestView({ discover, request }), {
+    view: null,
+    at: 12346,
+  });
+
+  // Malformed view bounds or mismatched instanceId fail closed to null.
+  viewBody = { view: { x: 0.9, y: 0, w: 0.5, h: 0.5 }, at: 12347 };
+  assert.equal(await requestView({ discover, request }), null);
+
+  viewBody = { view: null, at: 12348 };
+  stateBody = { instanceId: "other" };
+  assert.equal(await requestView({ discover, request }), null);
+
+  assert.equal(await requestView({ discover: () => null, request }), null);
 });

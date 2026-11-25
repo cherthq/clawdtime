@@ -100,6 +100,7 @@ import {
 import { sessionNewsStart } from "./sessionnews.js";
 import { pickSession, type SessionPick } from "./topics.js";
 import type { AgentSession, BoardSnapshot } from "./types.js";
+import type { CallViewTarget } from "./view.js";
 import { windowActions, type WindowAction } from "./windows.js";
 
 /**
@@ -1478,12 +1479,10 @@ export interface SupervisorWorld {
     options: { browser?: string; tab?: number },
   ) => Promise<{ ok: boolean; said: string }>;
   /**
-   * What the video of a call shows: the window of one session only, or with
-   * null the whole screen again.
+   * What the video of a call shows: the window of one session or open
+   * application only, or with null the whole screen again.
    */
-  callView?: (
-    session: AgentSession | null,
-  ) => Promise<{ ok: boolean; said: string }>;
+  callView?: (target: CallViewTarget) => Promise<{ ok: boolean; said: string }>;
   /**
    * A picture of the main screen, read by a vision model for one question.
    * The picture leaves this Mac, so it is taken only on the person's own ask.
@@ -2479,16 +2478,21 @@ const bothBrief = `When one message asks for code work and for screen work ("fix
 const offBrief = `Computer use is off on this Mac. For a task in an app, on a web page or in an account that none of your tools does, say in one sentence what you would do on the screen, and that the person turns computer use on with the command clawdtime computer on. Never answer that you cannot do it.`;
 
 /** Added to the instructions only where the view of a call can change. */
-const viewBrief = `On a call the person sees this Mac's screen as a small video. When they ask to zoom in on a session or a window, or to see only one of them, call call_view with that session: the video then shows only its window. When they ask for the whole screen again, or to zoom out, call call_view with target "screen". To make a window itself larger or its text bigger, use session_window.`;
+const viewBrief = `On a call the person sees this Mac's screen as a small video. When they ask to zoom in on an open application window, call call_view with target "app" and its name. When they ask to zoom in on a coding session, call call_view with target "session" and that session: the video then shows only its window. When they ask for the whole screen again, or to zoom out, call call_view with target "screen". To make a window itself larger or its text bigger, use session_window.`;
 
 const viewTool: ToolSpec = {
   name: "call_view",
   description:
-    "Choose what the video of the call shows: only the window of one session (zoom in on it), or the whole screen again (zoom out).",
+    "Choose what the video of the call shows: only the window of one open application or coding session (zoom in on it), or the whole screen again (zoom out).",
   parameters: {
     type: "object",
     properties: {
-      target: { type: "string", enum: ["session", "screen"] },
+      target: { type: "string", enum: ["app", "session", "screen"] },
+      app: {
+        type: "string",
+        description:
+          "For target app: the open application's name, such as Stonepad or Safari.",
+      },
       session: {
         type: "string",
         description:
@@ -10497,8 +10501,18 @@ export class Supervisor {
         const before = turn.done.get("view");
         if (before !== undefined) return before;
         let said: string;
-        if (String(args.target ?? "") === "screen") {
+        const kind = String(args.target ?? "");
+        if (kind === "screen") {
           said = (await show(null)).said;
+        } else if (kind === "app") {
+          const app = typeof args.app === "string" ? clean(args.app, 80) : "";
+          if (!app)
+            return "Tell me which open app window you want to zoom in on.";
+          try {
+            said = (await show({ app })).said;
+          } catch {
+            said = "The view of the call did not change.";
+          }
         } else {
           const pick = this.pick(String(args.session ?? ""), spoken);
           if (pick.kind !== "one") return this.unclear(pick);

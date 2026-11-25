@@ -1119,3 +1119,143 @@ describe("holes that a review found", () => {
       expect(sent).not.toContain(secret);
   });
 });
+
+describe("the chat agent wires call_view for apps, sessions, and screen", () => {
+  const sampleSession = {
+    id: "13",
+    pid: 113,
+    agent: "claude-code" as const,
+    agentLabel: "Claude Code",
+    agentVersion: null,
+    name: "work-13",
+    project: "work",
+    cwd: "/work/app",
+    mode: "interactive" as const,
+    state: "working" as const,
+    detail: "turn_running" as const,
+    since: now - 90_000,
+    source: "registry" as const,
+    startedAt: now - 600_000,
+    spawnedBy: null,
+    terminal: {
+      tty: "ttys013",
+      app: "Terminal",
+      appPath: "/System/Applications/Utilities/Terminal.app",
+      tmux: null,
+      remote: false,
+    },
+    focus: "tab" as const,
+  };
+
+  it("exposes call_view as an effect tool and routes app, session, and screen targets without silent app retry", async () => {
+    expect(effectTools.has("call_view")).toBe(true);
+    const root = tempRoot();
+    const shown: unknown[] = [];
+    const world = {
+      ...chatWorld(root, { now: () => now }),
+      board: () => ({
+        version: 1 as const,
+        generatedAt: now,
+        intervalMs: 3000,
+        counts: { needs_you: 0, working: 1, idle: 0, unknown: 0 },
+        sessions: [sampleSession],
+      }),
+      titles: () => ["work-13", "Riverchat build"],
+      callView: async (target: unknown) => {
+        shown.push(target);
+        return {
+          ok: true,
+          said:
+            target === null
+              ? "The call shows the whole screen again."
+              : "The call view updated.",
+        };
+      },
+    };
+    const model = scriptedModel([
+      { calls: [call("call_view", { target: "app", app: "Stonepad" })] },
+      { text: "Showing Stonepad." },
+      {
+        calls: [
+          call("call_view", { target: "session", session: "Riverchat build" }),
+        ],
+      },
+      { text: "Showing work-13." },
+      {
+        calls: [
+          call("call_view", {
+            target: "session",
+            session: "the session about notes",
+          }),
+        ],
+      },
+      { text: "No matching coding session." },
+      { calls: [call("call_view", { target: "screen" })] },
+      { text: "Showing the whole screen." },
+    ]);
+    const agent = new ChatAgent({ world, model, root });
+
+    expect((await agent.answer([], "Zoom in on Stonepad", "call")).text).toBe(
+      "Showing Stonepad.",
+    );
+    expect(toolNames(model.requests[0]!)).toContain("call_view");
+    expect(shown[0]).toEqual({ app: "Stonepad" });
+
+    expect(
+      (await agent.answer([], "Zoom in on the Riverchat build session", "call"))
+        .text,
+    ).toBe("Showing work-13.");
+    expect(shown[1]).toEqual(sampleSession);
+
+    // Failed session lookup must NOT silently retry as an app!
+    expect(
+      (await agent.answer([], "Zoom in on the session about notes", "call"))
+        .text,
+    ).toBe("No matching coding session.");
+    expect(shown).toHaveLength(2);
+
+    expect(
+      (await agent.answer([], "Show the whole screen again", "call")).text,
+    ).toBe("Showing the whole screen.");
+    expect(shown[2]).toBeNull();
+  });
+
+  it("blocks call_view on stop turns and ended calls, and exposes call_view through BoardFeed", async () => {
+    const root = tempRoot();
+    const shown: unknown[] = [];
+    const world = {
+      ...chatWorld(root, { now: () => now }),
+      callView: async (target: unknown) => {
+        shown.push(target);
+        return { ok: true, said: "Updated." };
+      },
+    };
+    const model = scriptedModel([
+      { calls: [call("call_view", { target: "app", app: "Stonepad" })] },
+      { text: "Stopped." },
+    ]);
+    const agent = new ChatAgent({ world, model, root });
+    await agent.answer([], "stop", "call");
+    expect(shown).toEqual([]);
+
+    // BoardFeed in agent mode with a project exposes call_view to the model.
+    const offeredInFeed: string[][] = [];
+    const feedModel: ModelClient = {
+      async complete(input) {
+        offeredInFeed.push(input.tools.map((tool) => tool.name));
+        return { text: "Okay.", toolCalls: [] };
+      },
+    };
+    const feed = new BoardFeed({
+      root: tempRoot(),
+      project: "/tmp/demo-project",
+      chat: "agent",
+      model: feedModel,
+      now: () => now,
+      runner: async () => ({ status: 0, stdout: "none\n" }),
+    });
+    await feed.say("Zoom in on Stonepad", "call");
+    expect(offeredInFeed[0]).toContain("call_view");
+    feed.close();
+  });
+});

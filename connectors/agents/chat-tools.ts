@@ -27,6 +27,9 @@ import type { DecisionDesk, DecisionRequest } from "./decisions.js";
 import { jobAgents, type JobAgent, type JobPort } from "./jobs.js";
 import { factKinds, looksSecret, terms, type FactKind } from "./memory.js";
 import { phoneIsLive } from "./phone-turn.js";
+import { title } from "./render.js";
+import { pickSession } from "./topics.js";
+import type { AgentSession } from "./types.js";
 import { clean } from "../computer/guards.js";
 import { looksSecretStrict } from "../computer/journal.js";
 import { readMidTask } from "../computer/orders.js";
@@ -55,6 +58,9 @@ export interface ChatToolWorld {
   jobs?: JobPort | undefined;
   desk: DecisionDesk;
   routines?: RoutinePort | undefined;
+  board?: SupervisorWorld["board"] | undefined;
+  titles?: SupervisorWorld["titles"] | undefined;
+  callView?: SupervisorWorld["callView"] | undefined;
   graph: TaskGraph;
   /** Feeds the graph from the real sources. */
   refresh(): void;
@@ -149,6 +155,7 @@ export const effectTools = new Set([
   "routine_add",
   "routine_pause",
   "routine_remove",
+  "call_view",
 ]);
 
 /**
@@ -852,6 +859,96 @@ export function chatTools(
         },
       },
     );
+  }
+  if (world.callView) {
+    const callView = world.callView;
+    tools.push({
+      name: "call_view",
+      description:
+        "Choose what the video of a call shows: zoom in on one open application window (target 'app' with app name), zoom in on one coding session's terminal window (target 'session' with session name or topic), or show the whole screen again (target 'screen').",
+      parameters: schema(
+        {
+          target: { type: "string", enum: ["app", "session", "screen"] },
+          app: text(
+            "For target app: the open application's name, such as Stonepad or Safari.",
+          ),
+          session: text(
+            "For target session: the coding session's name, or a few words about its job.",
+          ),
+        },
+        ["target"],
+      ),
+      effect: true,
+      async run(args) {
+        const target = word(args, "target", 20);
+        if (target === "screen") {
+          try {
+            return (await callView(null)).said;
+          } catch {
+            return "The view of the call did not change.";
+          }
+        }
+        if (target === "app") {
+          const app = word(args, "app", 80);
+          if (!app)
+            return "Tell me which open app window you want to zoom in on.";
+          try {
+            return (await callView({ app })).said;
+          } catch {
+            return "The view of the call did not change.";
+          }
+        }
+        if (target === "session") {
+          const query = word(args, "session", 200);
+          const sessions = world.board?.()?.sessions ?? [];
+          if (!sessions.length)
+            return "There are no active coding sessions on the board to show.";
+          const titles = (session: AgentSession) => {
+            try {
+              return world.titles?.(session) ?? [title(session)];
+            } catch {
+              return [title(session)];
+            }
+          };
+          const byOwner = pickSession(turn.owner, sessions, titles);
+          const byQuery = query
+            ? pickSession(query, sessions, titles)
+            : ({ kind: "none" } as const);
+          let pick = byOwner;
+          if (byOwner.kind === "one") {
+            if (
+              byQuery.kind === "one" &&
+              byQuery.session !== byOwner.session &&
+              byQuery.session.focus !== "none"
+            ) {
+              pick = {
+                kind: "many",
+                sessions: [byOwner.session, byQuery.session],
+              };
+            }
+          } else if (byQuery.kind === "one") {
+            if (
+              byOwner.kind === "none" ||
+              byOwner.sessions.includes(byQuery.session)
+            ) {
+              pick = byQuery;
+            }
+          } else if (byOwner.kind === "none" && byQuery.kind === "many") {
+            pick = byQuery;
+          }
+          if (pick.kind === "none")
+            return "I could not find a coding session that matches that.";
+          if (pick.kind === "many")
+            return `More than one coding session matches: ${pick.sessions.map((item) => title(item)).join(", ")}. Tell me which one to show.`;
+          try {
+            return (await callView(pick.session)).said;
+          } catch {
+            return "The view of the call did not change.";
+          }
+        }
+        return "Invalid call view target. Use app, session, or screen.";
+      },
+    });
   }
   return tools;
 }

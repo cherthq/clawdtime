@@ -143,10 +143,14 @@ export function makeCamera({
     else aim(next, at);
   };
   return {
-    event(event) {
+    event(event, options = {}) {
       const at = now();
       if (!event) {
-        retire(at);
+        if (options?.immediate || !holdUntil || at >= holdUntil) retire(at);
+        else {
+          expires = 0;
+          pending = null;
+        }
         return false;
       }
       if (
@@ -210,7 +214,11 @@ export function makeCamera({
     },
     crop(frame = null) {
       const at = now();
-      if (expires && at >= expires) retire(at);
+      if (expires && at >= expires) {
+        expires = 0;
+        pending = null;
+        if (!holdUntil || at >= holdUntil) retire(at);
+      }
       if (
         surface &&
         frame &&
@@ -225,8 +233,7 @@ export function makeCamera({
         aim(pending, at);
         pending = null;
       } else if (holdUntil && at >= holdUntil) {
-        pending = null;
-        aim(OVERVIEW, at);
+        retire(at);
       }
       return value(at);
     },
@@ -254,6 +261,11 @@ export function makeCamera({
       manual = cleanView(view);
       pending = null;
       aim(manual ?? OVERVIEW, now());
+    },
+    clearManual() {
+      const at = now();
+      manual = null;
+      retire(at);
     },
     // Sharing stopped or a frame was late. Targets of automatic zoom are stale
     // then. The view that the person chose is not: it is there again with the
