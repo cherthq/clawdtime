@@ -1379,23 +1379,31 @@ weekday" or a day by name, with "at" and an hour, as in "at 9", "at 8:30 am",
 
 The desktop service runs the routines, with the worker on.
 
-The chat of the panel stays open when you send a message. The panel closes its
-chat and its board only when a run really starts, so that they are not in the
-way of the hands. It reads which engine the service has from
+The chat of the panel stays open when you send a message. A click on the mascot
+opens it. The panel closes the chat only when a run really starts, so that it is
+not in the way of the hands. It reads which engine the service has from
 `GET /desktop/computer`, every few seconds.
+
+The panel shows no status of a run and no running message. A small window beside
+the mascot shows only while a question of the worker waits for you (`waiting` is
+`approval` or `question`, or the engine holds an action for a yes): the question,
+**Approve** and **No**. **Approve** and **No** send "yes" and "no" through the chat,
+the same gate as typed words, once for each question. The window hides at once when
+nothing waits. A pause because you took over the Mac is no question: the bar says
+"Waiting for you".
 
 ## Stop
 
-Four ways: say `stop` in the chat, by voice or on a call, press **Stop** on the
-bar at the top of the screen (or hold Escape), press **Stop work** in the
-panel, or run `clawdtime computer off`. The buttons use the existing route
-`POST /desktop/execution/stop`. That route belongs to the engine that the
-service picked: the worker has it only when it is the engine.
+Three ways: say `stop` in the chat, by voice or on a call, press **Stop** on the
+bar at the top of the screen (or hold Escape), or run `clawdtime computer off`.
+The button uses the existing route `POST /desktop/execution/stop`. That route
+belongs to the engine that the service picked: the worker has it only when it is
+the engine.
 
-While the worker runs, the panel shows two things with a Stop button: the bar
-of the hands at the top of the screen, and the small window for native
-computer work beside the mascot, which the panel shows for every engine in the
-mode `native`. Both stop the same request.
+During every run the panel shows one thing with a Stop button: the bar at the top
+of the screen, "ClawdTime is using this Mac". The panel's own hands show it while
+the worker runs. For another engine the panel shows the same bar while that engine
+reports work that can stop, and until a Stop of yours is confirmed.
 
 Stop is checked before and after every action. The answer is always the same:
 
@@ -1771,6 +1779,13 @@ of the picture for common screens, the JPEG, the walk that leaves out what
 does not show and stops at its limits, the order of the elements that are
 kept, the pace of the held read, and the cost header.
 
+7 pure tests of the panel's windows in `MascotClickTests.swift` and
+`ExecutionAskTests.swift`: a click on the mascot opens the chat and never a board,
+a bubble opens its one session or else the chat, the question window shows only
+while a question waits, the reason to wait decodes, one question takes one
+answer, Approve and No work only when the answer can go, and the bar with Stop
+stays up during every run.
+
 Not tested, and so not proven:
 
 - The hands in the panel. Nothing here shows that a click lands where the
@@ -1885,7 +1900,8 @@ Not tested, and so not proven:
 - `clawdtime chat TEXT` sends the panel credential with its first read, before
   the service has shown that it is the one that wrote the files. A process of
   the same user that takes the port after a crash would get it.
-- While the worker runs the panel shows two windows with a Stop button.
+- The window with a question of the worker has no field for a free answer. For a
+  question that needs more than a yes or a no, open the chat and type the answer.
 - The planner reports each retry to an `onAttempt` callback, but the service
   records none of them yet. A retry is not shown to you.
 - The cursor is the only window of ClawdTime in a screen share during a run.

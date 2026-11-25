@@ -15,8 +15,10 @@ The one exception is a standing rule, and only you can make one.
 ## Answer an agent without its terminal
 
 An agent that needs permission, asks a question, or has a plan to approve puts a
-request on the desk. You answer it in the panel, on the mascot's bubble, in
-`agents watch`, with a command, or on a call. The agent's own hook hands your
+request on the desk. You answer it on the mascot's bubble, in the chat, in
+`agents watch`, with a command, or on a call. The panel lists no sessions and no
+requests: its bubble shows the first request, with Approve and Deny for a
+permission request that it shows in full. The agent's own hook hands your
 answer to the agent. Nothing is typed into its terminal.
 
 ```sh
@@ -72,8 +74,7 @@ what, what you answered, and through which channel. The trove then:
 
 - shows what you answered before to the same kind of request in the same
   project ("You allowed this 3 times here");
-- repeats an answer only where you made a rule (`--always`, or **Always in this
-  project** in the panel). A rule allows one request pattern for one agent in one
+- repeats an answer only where you made a rule (`--always`). A rule allows one request pattern for one agent in one
   project. It never crosses projects, and it never denies;
 - keeps the critical decisions you write down.
 
@@ -103,8 +104,7 @@ A rule never covers more than the command that you saw:
   only a file inside the rule's project folder, also when a link leads out of
   it. A request for a file outside the folder cannot be remembered.
 
-The panel offers **Always in this project** only where a rule can be made, and
-`approve ID --always` says so when it cannot.
+`approve ID --always` says so when a rule cannot be made. The panel makes no rule.
 
 An answer given in the terminal is not in the trove, because ClawdTime does not
 see which answer it was.
@@ -152,8 +152,7 @@ How it works:
   anything.
 - "Forget ..." removes a fact only when you ask for it yourself.
 - A waiting request shows what you said before about it ("You said: Never force
-  push to main."): in the panel, in `clawdtime agents pending`, and in the
-  question on a call.
+  push to main."): in `clawdtime agents pending` and in the question on a call.
 
 Memory is a set of plain files on this Mac. It has no service of its own. With
 an OpenAI key, the step that keeps facts after an answer sends your message to

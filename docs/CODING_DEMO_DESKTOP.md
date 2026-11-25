@@ -7,15 +7,16 @@ delivery uncertainty and explicit acceptance. See
 [long-running tasks and review](TASK_REVIEW_LIFECYCLE.md). Building this branch
 does not upgrade an installed service or reconcile an interrupted run.
 
-The native floating panel uses the existing independent task service. It can
-submit a coding job, show worker and independent-check progress, answer a product
-decision, request a scoped revision, accept a verified result, and separately
-cancel a task. Worker-supplied answer choices fill the composer; **Send answer**
-is still required. Closing or quitting the panel leaves the service running.
+The native floating panel uses the existing independent task service. ClawdTime is
+a computer use agent: a click on the mascot opens the chat, where you give it
+work. Coding agents run only for code work, in the background. The panel has no
+task section and no board: it shows no coding job, no progress and no checks, and
+nothing in it says that ClawdTime is doing a task. The task routes of the service
+are unchanged. Closing or quitting the panel leaves the service running.
 
 ## Desktop appearance
 
-The companion is one mascot on the desktop and one board that opens out of it. It
+The companion is one mascot on the desktop and the chat that opens out of it. It
 follows the Chert design system: cream paper in light mode and warm charcoal in
 dark mode, Fraunces for the headline, Instrument Sans for the interface and
 JetBrains Mono for times and paths. The three typefaces ship inside the app
@@ -69,69 +70,59 @@ The body has weight, in every style:
 - Loose parts act the motion out: a ring trails and tips, a flake waves,
   antennas fold back, and the eyes of a plain stone lean into its way.
 
-- Click the mascot: it jumps, and the board opens out of it. Click again or
-  click anywhere else to close the board.
+- Click the mascot: it jumps, and the chat opens out of it. Click again or
+  click anywhere else to close the chat.
 - Point at the mascot: two buttons appear. **Close** hides it; it stays in the
   menu bar. **Side** tucks it against the nearer screen edge, where it keeps
   watching. A drag that ends against the left or right edge also tucks it.
 - A tucked mascot comes out further when something waits for the person. Click
   it to bring it back.
-- When an agent or the task waits for the person and the board is closed, the
+- When an agent or the task waits for the person and the chat is closed, the
   mascot hops and a bubble says what waits. A click on the bubble opens that
-  session's terminal, or the board when more than one thing waits.
+  session's terminal, or the chat when it is not about one session.
 - Drag or throw the mascot anywhere. Where it comes to rest is kept between
   starts.
-
-The board's headline says the most urgent thing in words, for example "1 agent
-needs you" or "All quiet". A task that waits for an answer comes before the
-agents. The task field is one line at rest and opens when the person clicks it.
 
 A small bar hangs under the mascot. At rest it holds two buttons: **Chat** opens
 the chat screen beside the mascot, and **Talk** starts a spoken conversation. In
 a conversation the bar opens with a spring into a microphone switch, the level
 of the voice as moving bars, a speaker switch and an end button. While you talk
 with the chat closed, the mascot's bubble shows what it heard and what it
-answered. The board and the chat share the place beside the mascot, so one is
-open at a time. See [Talk to ClawdTime](SUPERVISOR.md#talk-to-clawdtime).
+answered. See [Talk to ClawdTime](SUPERVISOR.md#talk-to-clawdtime).
 
-**Stop sharing** and **Stop call** join that bar, sit as a bar at the top of
-the board, and are items in every menu, whenever either can be stopped. A tucked
+**Stop sharing** and **Stop call** join that bar and are items in every menu,
+whenever either can be stopped. A tucked
 mascot comes out when a Stop control appears. They reflect the actual service
 permissions. Closing or tucking does not stop sharing or a call, and nothing here
 starts sharing. There is no new sharing toggle or permission change.
 
 Motion uses springs: a press sinks in 90 ms and releases with a slight overshoot,
-and the board is 95 percent open within 220 ms. macOS Reduce Motion removes
+and the chat is 95 percent open within 220 ms. macOS Reduce Motion removes
 drift, hops, scaling, the sheen and all of the body's physics: the mascot then
 goes exactly where the hand puts it, and states change at once.
 
 The app is an accessory: it has no Dock icon and never takes focus when it
-starts or when the board opens. The board becomes the key window only when the
-person clicks into a text field. Explicit Quit is in the menus and leaves the
+starts. The chat becomes the key window when the person opens it to write, or
+clicks into its field. Explicit Quit is in the menus and leaves the
 task service running. This does not install a login item or a background daemon.
 
-Task input, choices, revisions, checks, acceptance and separate cancellation use
-the same service and durable receipts as before. Changing the appearance, moving,
-tucking or closing the mascot does not submit an action, cancel work or grant
-screen access.
+Changing the appearance, moving, tucking or closing the mascot does not submit an
+action, cancel work or grant screen access.
 
 The user authorized step-e implementation while deferring remaining step-d
 handset rehearsals. This is a local implementation checkpoint, not a completed
 phone-acceptance gate. No call, line handoff, deployment, capture or permission
 grant occurs when launching the standalone panel.
 
-## Agent board
+## Agent sessions
 
-The panel lists every coding-agent session on this Mac above the task area:
-Claude Code, Codex, pi and other command-line agents, with the ones that wait for
-you first. A click on a row brings that session's terminal to the front. The
-board only reads state. It sends nothing to a session, and it is separate from
-the task, its receipts and the Stop controls. When a session waits for you, the
-mascot's spark turns amber and its bubble names the session.
+The panel lists no coding-agent sessions. `clawdtime agents` lists them on the
+command line. When a session waits for you, the mascot's spark turns amber and its
+bubble names the session; a click on that bubble brings its terminal forward.
 
-The task service keeps the board in a separate scanner process and serves it on
-`GET /desktop/agents` to the private panel credential. `--agents false` turns
-the board off. `--tucked true` opens the panel as the mascot without taking
+The task service keeps the sessions in a separate scanner process and serves them
+on `GET /desktop/agents` to the private panel credential, for the bubble only.
+`--agents false` turns that reading off. `--tucked true` opens the panel as the mascot without taking
 focus. See the [agent board guide](AGENT_BOARD.md).
 
 ## Build and open
@@ -221,9 +212,10 @@ idle shutdown preserves desktop/task identity and checks the same configuration.
 ## Stop during a separately authorized handset attempt
 
 The standalone local fixture has no phone binding, so **Stop sharing** and
-**Stop call** are disabled. **Cancel task** is separate and asks for confirmation.
-Cancellation remains requested until the worker's actual terminal outcome is
-known; it does not claim an uncertain execution has stopped.
+**Stop call** are disabled. The panel has no **Cancel task** any more. A
+cancellation that the service has taken remains requested until the worker's
+actual terminal outcome is known; it does not claim an uncertain execution has
+stopped.
 
 For a separately authorized call, the existing handset operator may opt into
 `"desktopPanel": true` in its private configuration. It creates

@@ -511,15 +511,15 @@ and session loss revoke local work too; wake/unlock does not resume it.
 All routes require the existing private helper bearer; requests never arm the
 helper or prompt for macOS permissions:
 
-| Route                                          | Result                                                                                                                                                                                                                                                              |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Route                                          | Result                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `GET /local/v1/status`                         | `deviceId`, `localEnabled`, `armed`, `available`, `screenPermission`, `controlPermission`, `policyRevision`, optional `activeSessionId`, `unresolvedActions`, `nativeCaptureDrain: true`, `captureActive`. `localEnabled` means configured; `activeSessionId` is the route lease ID. |
-| `POST /local/v1/sessions`                      | Reserve a new exact local lease.                                                                                                                                                                                                                                    |
-| `POST /local/v1/sessions/:id/renew`            | Change only expiration, at most 30 seconds from the helper clock.                                                                                                                                                                                                   |
-| `GET /local/v1/sessions/:id/frame`             | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`.                                                                                                                                                             |
-| `POST /local/v1/sessions/:id/actions`          | Reserve and submit one bounded action; return its durable receipt.                                                                                                                                                                                                  |
-| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry.                                                                                                                                                                                                    |
-| `POST /local/v1/sessions/:id/stop`             | Idempotently stop that previously reserved lease; never stop a different current owner.                                                                                                                                                                             |
+| `POST /local/v1/sessions`                      | Reserve a new exact local lease.                                                                                                                                                                                                                                                     |
+| `POST /local/v1/sessions/:id/renew`            | Change only expiration, at most 30 seconds from the helper clock.                                                                                                                                                                                                                    |
+| `GET /local/v1/sessions/:id/frame`             | Fresh transient JPEG and existing `X-Frame-*` headers, plus opaque `X-Focus-Identity` digest or `none`.                                                                                                                                                                              |
+| `POST /local/v1/sessions/:id/actions`          | Reserve and submit one bounded action; return its durable receipt.                                                                                                                                                                                                                   |
+| `GET /local/v1/sessions/:id/actions/:actionId` | Reconcile without repeating input, including after lease expiry.                                                                                                                                                                                                                     |
+| `POST /local/v1/sessions/:id/stop`             | Idempotently stop that previously reserved lease; never stop a different current owner.                                                                                                                                                                                              |
 
 A lease is `{id,deviceId,sessionId,taskId,executorId,executorEpoch,policyRevision,
 displayId,expiresAt}`. Expiration is ISO 8601; responses use the helper's existing
@@ -553,16 +553,22 @@ dispatch to unknown. A submitted receipt means events were posted, not UI
 success. Only a subsequent fresh frame records observation availability; unknown
 outcomes remain blocking and are never replayed under another action ID.
 
-The chat panel optionally displays an exact pending action with **Approve action**
-and **Deny action**. Both send one decision for that action ID; an unconfirmed
-response is reconciled by reads, not replayed. **Stop work** remains a separate
-control while approval or chat/voice requests are pending. Its wording describes
-a cooperative stop: an action already underway may finish.
+A small non-key, non-main window beside the mascot shows only while a question
+waits for the person: an exact pending action, or an approval or question of the
+worker. It holds the question, **Approve** and **No**, and nothing else of the
+work: no status line and no running message. For a pending action both send one
+decision for that action ID. For a question of the worker they send "yes" or "no"
+through the chat, once for each question. An unconfirmed response is reconciled by
+reads, not replayed. It never activates or restores another application.
+
+**Stop** is on the bar at the top of the screen during every run: the hands show it
+for the worker, and the panel shows the same bar for any other engine while that
+engine reports work that can stop. It stays a separate control while an answer or
+chat/voice requests are pending, and describes a cooperative stop: an action
+already underway may finish.
 
 For a service reporting `execution.mode: "native"`, submitting chat/voice work
-withdraws only ClawdTime's editable chat/board windows before dispatch. A separate
-non-key, non-main native panel shows work status, exact pending action decisions,
-and Stop. It never activates or restores another application. Browser mode and
+withdraws only ClawdTime's editable chat window before dispatch. Browser mode and
 older services keep their existing editor behavior. Reopening an editor or any
 other genuine focus change still invalidates the native target proof; the helper
 never substitutes the former target. This UI handoff requires packaged physical

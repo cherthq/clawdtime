@@ -360,12 +360,29 @@ blocking input; separate historical counts are available from helper status.
 ## Independent task desktop panel
 
 `ClawdTimeTaskPanel` is a separate AppKit executable. It does not load the companion,
-capture helper, browser view, provider credentials, or desktop-input machinery.
-Its floating window shows the explicitly selected project, task entry, authoritative
-progress and checks, a decision/revision editor, and result acceptance. Genuine
-worker-supplied choices (two or three, when present) fill the answer editor; selecting
-a choice never submits it. Free text and an explicit **Send answer** remain available.
-Simulation is labeled and queued work is never shown as completed.
+capture helper, browser view or provider credentials.
+
+ClawdTime is a computer use agent. The panel is one mascot on the desktop and the
+chat that opens out of it:
+
+- A click on the mascot opens the chat. There you give ClawdTime work. Coding agents
+  run only for code work, in the background.
+- The panel lists no coding-agent sessions. There is no board, no menu item and no
+  shortcut for one. `clawdtime agents` still lists them on the command line.
+- A bubble about one session that waits for you opens that session's terminal. Every
+  other bubble opens the chat.
+- The panel shows no task section and no status of the work. Nothing says that
+  ClawdTime is doing a task. You see the work on the screen itself.
+- A small window shows beside the mascot only while a question of the worker waits
+  for you: the question, **Approve** and **No**. It hides at once when nothing waits.
+  For an action that the engine holds, the answer goes to that action's id. For a
+  question of the worker, **Approve** and **No** send "yes" and "no" through the
+  chat, as typed words would. Each question takes one answer. The panel never sends
+  an answer twice.
+- During every run the bar at the top of the screen says "ClawdTime is using this
+  Mac" and holds **Stop**. Holding Escape stops too. The panel's own hands show the
+  bar for the worker. For another engine the panel shows the same bar while that
+  engine reports work that can stop.
 
 Build and validate locally:
 
@@ -399,17 +416,19 @@ Task actions remain gated until a new state read after mutation completion; a st
 read already in flight cannot reopen stale affordances.
 
 **Stop sharing** and **Stop call** remain separate, visible controls for the exact
-configured existing call. Their request lanes remain independent of pending task
-operations and task-session expiry. **Cancel task** has a separate confirmation and
-only requests coding cancellation. Closing the window or quitting the panel sends
-none of these actions: the detached service and worker continue. Reopen with the
-menu, Dock, or the same launcher command. A held owner-only panel lock permits an
+configured existing call: on the bar under the mascot and in every menu. Their
+request lanes remain independent of task-session expiry. Closing the chat or quitting
+the panel sends none of these actions: the detached service and worker continue.
+Reopen with the menu, Dock, or the same launcher command. A held owner-only panel lock permits an
 exact same-config invocation to send only a UI reopen notification; a different
 config is refused, and a live lock is never stolen. Process exit releases the lock.
 
-Swift tests cover private storage, no-replay receipts, stale action gating, option
-selection, independent Stop controls, exact receipt binding, and real loopback HTTP
-redirect/POST refusal behavior. They do not establish physical handset acceptance.
+Swift tests cover private storage, no-replay receipts, stale action gating,
+independent Stop controls, exact receipt binding, real loopback HTTP redirect/POST
+refusal behavior, the click on the mascot (the chat, never a board), the bubble that
+opens the chat, the rule that the question window shows only while a question waits,
+one answer for each question, and the Stop bar during every run. They do not
+establish physical handset acceptance.
 
 ## Cua Driver qualification pin (November 21, 2026)
 

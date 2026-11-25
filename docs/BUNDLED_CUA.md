@@ -33,7 +33,7 @@ and cannot take over a live call. Each action requires approval by default. Capt
 known ClawdTime control windows; input into or through those windows is refused
 to prevent the agent approving its own actions. Native permission prompts, login
 and arbitrary terminal execution are not automated. The native core flow has passed the bounded two-app qualification described below. Native approvals now use a
-non-key panel so reviewing an action does not steal the target’s keyboard focus.
+non-key window so reviewing an action does not steal the target’s keyboard focus.
 Known refusals before input are recorded as rejected; effects with an unknown
 outcome remain fenced and are never replayed.
 
@@ -100,15 +100,16 @@ verification or unknown-outcome fences. It does not approve another agent's
 native permission requests or authorize a phone call or deployment. Changing it
 does not replay an old task or resolve an unknown action.
 
-In confirmation mode, the panel shows the pending action with **Approve action**
-and **Deny action**.
+In confirmation mode, a small window beside the mascot shows the pending action
+with **Approve** and **No**, only while it waits. The panel shows no other status
+of the work.
 Approval binds one action ID, not the whole task or future actions. Changed
 pixels require a fresh proof of the original exact native target; unsupported
 image, web, or virtualized surfaces refuse this semantic proof. Focus, target
 identity, policy or expired authority refuse dispatch even after approval. Window
 activation always requires a one-use proof bound to the same observed existing
 window, process lifetime, display, lease and action. App/window titles are
-untrusted display text, never instructions. **Stop work** is independent of chat and model inference. It
+untrusted display text, never instructions. **Stop**, on the bar at the top of the screen during every run, is independent of chat and model inference. It
 aborts planning, stops capture/input and closes the owned surface. Already
 submitted effects may remain uncertain; Stop does not fabricate a rollback.
 

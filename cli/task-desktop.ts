@@ -206,7 +206,7 @@ export async function desktopCli(
   const print = dependencies.print ?? console.log;
   if (!args.length || args[0] === "--help") {
     print(
-      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. The panel also lists every coding-agent session on this Mac; --agents false turns that board off. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
+      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. A click on the mascot opens the chat. The panel lists no coding-agent sessions; its bubble names one that waits for you, and --agents false turns that reading off. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
     );
     return;
   }

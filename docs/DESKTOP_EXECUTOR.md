@@ -52,7 +52,7 @@ idle service restart, not a silent session upgrade.
    `{ "summary": "concise result", "observed": true }` as JSON on stdin, never
    as a process argument. Other finish states are blocked, canceled and uncertain.
    Do not retain screenshots, audio or raw page content in result summaries.
-5. The pinned **Stop work** button uses the panel credential, independently of
+5. **Stop** on the bar at the top of the screen uses the panel credential, independently of
    the executor credential and of pending chat/voice replies. Stop is cooperative:
    an already-submitted native action may finish. Stop prevents the next action,
    never fabricates physical interruption, and keeps unresolved input fenced.
