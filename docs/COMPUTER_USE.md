@@ -284,9 +284,9 @@ seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
   request that is stopping takes none. Words that were read as a one-step
   move to another desktop or to the app before are a request of their own,
   and wait as before.
-- Only the request itself can say that a close was asked for, and only until
-  you say more. After the first addition a close asks again, whatever the
-  addition says.
+- Only the request itself can say that a send, terminal work or the loss of
+  unsaved changes was asked for, and only until you say more. After the first
+  addition such an action asks again, whatever the addition says.
 
 ## When the task does not move on
 
@@ -326,8 +326,9 @@ through all the checks.
   words, or say no to stop." Your answer goes to the planner, as the answer
   to a question of the planner does. A plain no or a stop word ends the
   request. After two such questions the next circle ends the request. One
-  and the same action again and again stays with "No third time" and the
-  repeat rule below.
+  and the same action again and again asks nothing: after three tries that
+  changed nothing the planner reads that in its last step, and the same
+  action once more ends the request.
 - **A give_up.** The first give_up of a request goes back to the planner
   with the ways that it did not try, and the planner chooses again. A
   give_up about you, an account, a permission, a password, a secret, money
@@ -670,7 +671,7 @@ worker does each one from its start to its end, with its checks, its questions
 and a real language model. Only the hands are replaced: they look at a small
 app in a headless browser and click and type there, in place of the Mac. The
 apps work: a row opens a note, text goes into the editor, a search filters, a
-delete asks first, a switch turns, a dialog closes, a form signs in. A check of
+delete that cannot be undone asks first, a switch turns, a dialog closes, a form signs in. A check of
 what the app holds at the end says whether the request was done, so a "Done"
 that the app does not confirm counts as a failure. The person of the test
 answers the worker's questions, and types the password into the field when the
@@ -730,7 +731,8 @@ What the test found, and what changed with it:
   only for a plain close control: "Close", "Close tab". "Close account" asks
   whatever the request says. What can be lost with a close keeps its question:
   "Don't Save", "Delete", "Terminate". A request that says not to close asks
-  as before.
+  as before. Since November 25 a close asks only while the window shows
+  unsaved changes: see "The guards".
 - Text was typed with no text field in focus, went nowhere, and the request
   ended as done. The planner now reads "sent, but no text field had the focus"
   as the outcome of such a step, and looks for the text.
@@ -949,6 +951,86 @@ A capture on the laptop showed the difference.
 The planner's output is an untrusted single-action plan. These rules are code
 in `guards.ts` and `worker.ts`. None of them depends on the prompt.
 
+### When the worker asks for your yes
+
+A question can reach you while you are away, by a FaceTime call or by a
+message. So the worker asks only before an action that cannot be undone and
+costs money, data or trust. It does everything else with no question. One
+table in `guards.ts`, `askPolicy`, holds the rows, and every question comes
+from one of them.
+
+| Row      | Asks before                                                                                                                                                                                                                                                                                              | No question when your request                                                          |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| pay      | Buy, Pay, Place order, Subscribe, Donate, Send money, Transfer, Book, Rent, a button that is only a price, and a Confirm or a Submit while the screen shows a total                                                                                                                                      | (always asks)                                                                          |
+| loss     | Delete forever, Empty Trash, Erase, Delete account, Uninstall, Terminate, Factory reset, Revoke, Overwrite, Shut down, a log out of the Mac, a Delete, Remove or OK where the screen says that it cannot be undone, a Replace of a file that exists, and a terminal command that deletes for good (`rm`) | (always asks)                                                                          |
+| unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save, and a quit or a close while the window shows unsaved changes ("Report (Edited)")                                                                                                                                        | asks to lose the changes: "without saving", "discard", "throw away"                    |
+| send     | Send, Reply, Post, Comment, Publish, Submit, Share, Return in a messages or mail app, the submit of a message box, a terminal command that publishes (`git push`), and an address with a long part that you did not write                                                                                | asks to send, reply, post or share. A long part of an address always asks              |
+| public   | Like, Follow, Repost, Upvote                                                                                                                                                                                                                                                                             | asks to like, follow or repost                                                         |
+| account  | a change of a password, two-factor, recovery, privacy or visibility, a switch of the security and privacy settings of macOS, and a terminal command that runs as an administrator (`sudo`), changes the security of the Mac or runs code from the web                                                    | (always asks)                                                                          |
+| grant    | Allow, OK, Approve or Trust in a permission dialog of macOS, of a site or of ClawdTime, and a name that grants access ("Grant access", "Open Anyway")                                                                                                                                                    | (always asks)                                                                          |
+| terms    | Agree or Accept for terms that bind you                                                                                                                                                                                                                                                                  | (always asks). A cookie banner is no such terms                                        |
+| terminal | typing or a key in a terminal, a paste into one, and a drop onto one                                                                                                                                                                                                                                     | asks for terminal work: a command, a script, a build, a test, git. A paste asks always |
+| trash    | a drag that drops onto the Trash                                                                                                                                                                                                                                                                         | (always asks)                                                                          |
+| secret   | a drag that starts in a password field                                                                                                                                                                                                                                                                   | (always asks)                                                                          |
+
+These need no yes: opening and quitting an app, closing a window, a tab, a
+banner, a sheet or a dialog that loses nothing, an OK or an Approve of a dialog
+whose effect is in no row, a cookie banner (the planner picks the choice that
+shares the least), a download, a move, a drag that does not end on the Trash,
+a cart and the pages of a checkout up to its last step, a plain Delete that
+can be undone (Move to Trash), a log out of a site, a switch of a desktop or a
+tab, a scroll, a hover, a link, and any site that the task needs.
+
+How the rows read a name:
+
+- **Whole words.** "Sender", "Postpone" and "Formatting" ask nothing. A word
+  of a send counts at the start of a name: "Send" and "Send now" ask,
+  "Resend code" and "Send to Back" do not.
+- **An ellipsis.** A name that ends with one ("Empty Trash...") only opens a
+  dialog. It asks nothing: the button of the dialog asks. The Restart, Shut
+  Down and Log Out items of the Apple menu ask: their dialog acts by itself
+  after a minute.
+- **The screen around it.** A total on the screen makes a Confirm a payment.
+  "You can't undo this action" makes a Delete, a Remove or an OK a loss. "Do
+  you want to save" makes every button of the sheet but Save a loss of
+  changes. A permission request ("would like to access your contacts") makes
+  Allow and OK a yes in your place. "Don't Allow" asks nothing: it shares
+  less.
+- **Your request.** It asks for a send when one of its parts starts with a
+  verb of a send: "Reply to Sam", "read it and reply". A noun is no verb
+  ("read my messages"), and a denial asks for nothing ("do not reply"). Only
+  the request itself counts, and only until you say more. After your first
+  added words such an action asks again, whatever the words say.
+- **A text field.** A click that only gives a text field the focus asks
+  nothing.
+- **A point.** For a point with no named element, the planner's own reason is
+  read for the same words. It can add a question. It never removes one.
+- **Return and Space.** They ask while a button, a menu item or the element
+  with the focus could take the key and would ask, unless a text field has the
+  focus. In a page Enter and Space ask while any control of the page would
+  ask.
+- **Keys.** Command with Shift and Q logs you out of the Mac and asks. So do
+  Command with Option and Delete, and Command with Shift and Delete, in
+  Finder: they delete at once and empty the Trash. Command with Q and Command
+  with W ask only while the window shows unsaved changes. Command with Control
+  and Q only locks the screen, and asks nothing. The power key and the media
+  keys are never sent.
+- **The same action again.** It asks nothing. The row of tries that changed
+  nothing and the progress guard answer a loop (see "When the task does not
+  move on").
+
+Each question is short enough for a phone call. It says what the action does,
+where, and what it costs or loses, and it ends with "Say yes or no.":
+
+> Click "Place order" on shop.example? It spends your money: 48 dollars for 2
+> items. Say yes or no.
+
+The cost is the total that the screen or the page shows, else the price on the
+button. A question of the screen names the app in front ("in Finder"), a
+question of a page names its site. A no ends the request.
+
+### The other rules
+
 - **Valid actions only.** An action has one of the kinds of the contract and
   valid arguments. The number of an element must be in the last observation, and
   the number of a page element in the last reading of the page. A point must be
@@ -962,56 +1044,31 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
   landed after the click that gives a field the focus. It stops and asks you to
   type it yourself. Text for a password field of a web page is refused the same
   way.
-- **Your yes before what cannot be undone.** A click needs your yes when the
-  name of its target holds one of these words as a whole word: send, delete,
-  remove, erase, pay, buy, order, submit, post, publish, share, transfer,
-  confirm, sign out, log out, empty trash, reset, format, purchase, check out,
-  donate, discard, trash, uninstall, wipe, shut down, restart, log off, quit,
-  replace, overwrite, revert, don't save. The same holds for a name that gives
-  a yes in your place: approve, allow, accept, authorize, grant, agree, permit,
-  trust. A click that only gives a text field the focus is not asked about. For a point with no named element under it, the
-  planner's own reason is read for these words.
-- **Your yes in a terminal.** Typing and every key need your yes while a
-  terminal app is in front, or while a terminal inside another app has the
-  focus.
-- **Your yes for a quit.** The planner quits an app by its name (`quit_app`),
-  and the worker always asks first. The hands then ask the app to quit the
-  polite way, as its own Quit does: no key goes out and nothing is forced. An
-  app that asks about work that is not saved stays open, and the planner reads
-  that and looks. It works for an app with no window too, where no key can be
-  sent: after its last document closed, an app could not be quit before.
-- **Your yes for keys.** A key combination that quits, logs out or locks
-  (Command with Q in any form, and the force-quit keys). Command with Delete.
-  Command or Control with Return. Return in a messages or mail app. The send
-  keys of the mail app. Return or Space while a button, a menu item or a
-  focused element with one of the words above could take it, unless a text
-  field has the focus. The power key and the media keys are never sent.
+- **A quit.** The planner quits an app by its name (`quit_app`). The hands ask
+  the app to quit the polite way, as its own Quit does: no key goes out and
+  nothing is forced. An app that asks about work that is not saved stays open,
+  and the planner reads that and looks. It works for an app with no window
+  too, where no key can be sent. The worker asks first only while the app is
+  in front and shows unsaved changes.
+- **A submit in the browser.** Enter in a field submits its form. It asks when
+  a control of the page would ask ("Place order"), or when the field is a
+  message box and your request does not ask to send. A search asks nothing.
 - **Keys that edit text go to text.** Select all (Command+A), cut, paste and
   delete a word (Option+Delete) are held back when the look just before them
   names elements and none of them is a text field with the focus. The planner
   reads "No text field has the focus. Click into the text first." It counts
   as a refusal. A look that names no element cannot say where the focus is,
   and the key goes as before.
-- **Your yes before a form is submitted** in the browser, unless the field is a
-  search field.
 - **You take over.** When the hands report that you moved the mouse or pressed
   a key, the worker pauses and asks: continue or stop.
-- **No third time.** The same action with the same arguments is not sent a
-  third time in a row. The worker asks first. A scroll, a wait, a reading of
-  the page and a list of its tabs do not count, because repeating them is
-  normal.
 - **Done is checked.** `done` counts only after an observation that came after
   the last action.
 - **Links.** Only http and https links are opened, with no login in the link.
-  An address opens with no question only when your own request holds its site
-  as you wrote it ("example.com", "https://example.com/board",
-  "localhost:3000"), with the same port, with plain http only when you wrote
-  http (or for a server of this Mac), and with no long path or query that you
-  did not write: such a part could carry what the screen shows to the site. A
-  word alone names no site ("open my notes" does not allow a site called
-  open), and neither does a file name, a mail address or a word in another
-  script. For every other address you say yes first, and the question names
-  the site. After you said more during a task, every address asks.
+  An address that the task needs opens with no question, also when your
+  request does not name its site: a shop, a feed, a page to read. Only an
+  address with a long path or query (more than 120 characters) that you did
+  not write asks first: such a part could carry what the screen shows to the
+  site. After you said more during a task, such an address always asks.
 - **Opening an address.** A request that only opens one address ("open
   example.com", also with the name of a browser after it) opens it as its
   first step, with no model, no pointer and no key, in the browser that you
@@ -1020,9 +1077,9 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
   that files have too ("MANIFEST.in") goes to the planner unless a browser is
   named. The sent address is not the page: the worker looks at the screen
   again before it says done.
-- **The browser.** It must be one that you named, by a word of its name
-  (one word of its full name is enough); else you are asked. The hands look for it only
-  among the apps in the usual app folders that open web addresses.
+- **The browser.** The planner names a browser only when you named one. The
+  hands look for it only among the apps in the usual app folders that open web
+  addresses.
 - **Typed text is one line.** A line break or a tab in typed text is refused.
   Return and Tab are keys of their own, so the key rules see them.
 - **A hover.** It sends no click and no key, so it needs no yes. It may rest on
@@ -1031,22 +1088,23 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
 - **A drag.** Each end is checked as a click: the element must be in the last
   observation, enabled and on the screen, and a point must be inside the last
   image. The two ends must be at least 4 points apart. The worker asks first
-  when either end has a name that a click asks about ("Trash", "Delete"), when
-  the drag ends on a terminal app or a terminal is in front, and when it starts
-  in a password field. It never drops onto a password field: what is dropped
-  there is typed there. For an end with no named element, the planner's own
-  reason is read for the words above. The look just before the drag finds both
-  ends again. When either one moved or is gone, nothing is sent.
+  when the drag ends on the Trash or on a terminal app, when a terminal is in
+  front, when it starts in a password field, and when either end has a name
+  that a click asks about ("Delete forever"). It never drops onto a password
+  field: what is dropped there is typed there. For an end with no named
+  element, the planner's own reason is read for the same words. The look just
+  before the drag finds both ends again. When either one moved or is gone,
+  nothing is sent.
 - **A choice in the page.** It follows the rule of a click: an option whose text
-  holds one of the words above asks ("Delete selected"). The element must be a
-  list of choices that is not disabled. Just before the choice the page is read
-  again and the same list is found again.
+  asks ("Delete permanently") asks. The element must be a list of choices that
+  is not disabled. Just before the choice the page is read again and the same
+  list is found again.
 - **A key in the page.** Enter and Space can press what has the focus, and a
   reading does not say what has the focus. So either key asks while any
-  control of the page that is not a field has a name that a click asks about
-  ("Pay now", "Send"). The page script never presses a key while a password
-  field has the focus. Just before the key the page is read again and the
-  checks run again: when the page changed what the key can press, no key goes.
+  control of the page that is not a field would ask on a click ("Pay now",
+  "Send"). The page script never presses a key while a password field has the
+  focus. Just before the key the page is read again and the checks run again:
+  when the page changed what the key can press, no key goes.
 - **A wait and a list of the tabs.** They change nothing. They need no yes,
   they count as no repeat, and a wait or a list with no answer makes nothing
   uncertain.
@@ -1682,8 +1740,15 @@ Not tested, and so not proven:
 
 ## Known gaps
 
-- The checks read names. A dialog whose button says only "OK" is not asked
-  about, whatever the dialog says. Names in other languages are not known.
+- The checks read names and the words on the screen. An OK asks only when its
+  dialog says that it cannot be undone, asks to save, or asks for a
+  permission in words that the checks know. Names and words in other
+  languages are not known.
+- The request is read for its verbs. A send that it asks for in other words
+  ("let Sam know") still asks.
+- A terminal command is read one typed line at a time. A command that comes
+  in pieces, or from the history of the shell, is judged by the pieces that
+  were typed.
 - A point with no named element under it is judged by the planner's own words
   only.
 - The terminal rule knows a list of terminal apps. Another app that runs typed
