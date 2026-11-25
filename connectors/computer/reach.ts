@@ -61,6 +61,7 @@ import {
   type TextSettings,
 } from "../agents/texts.js";
 import { secureRead, secureWrite } from "../shared/state.js";
+import { storedTextValues } from "../shared/owner.js";
 import {
   computerDirectory,
   looksSecretStrict,
@@ -988,12 +989,21 @@ export function ownerTextPort(
 ): ReachTextPort {
   const settled = ():
     { settings: TextSettings; line: string } | { reason: string } => {
-    const found = textSettings(env);
+    const found = textSettings(env, root);
     if ("missing" in found)
       return { reason: `missing:${found.missing.join(",")}` };
-    const line = ownerTextLine(root, found.settings);
+    // Once `clawdtime connect` keeps the owner's number, the owner's answer to
+    // "May ClawdTime call and text this number?" decides, and a text goes only
+    // to that number. Without it, the number of the environment is used as before.
+    const stored = storedTextValues(root);
+    if (stored.phone && stored.consent !== "yes")
+      return { reason: "no_consent" };
+    const settings = stored.phone
+      ? { ...found.settings, owner: stored.phone }
+      : found.settings;
+    const line = ownerTextLine(root, settings);
     if (!line) return { reason: "no_line" };
-    return { settings: found.settings, line };
+    return { settings, line };
   };
   return {
     readiness() {
