@@ -379,6 +379,8 @@ const sound = page(
    });
    document.addEventListener("mouseup", function () { dragging = null; });
    window.state = function () { return { volume: levels["Output volume"], alert: levels["Alert volume"] }; };`,
+);
+
 /*
  * Apps for requests of several steps, where a plan helps: find, copy and
  * confirm; sign in, then change a setting; a form of three pages.
