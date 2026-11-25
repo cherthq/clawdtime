@@ -14,6 +14,7 @@ import {
   fallbackComputerModel,
 } from "../connectors/computer/planner.js";
 import type { BrowserPort } from "../connectors/computer/ports.js";
+import { browserSwitch } from "../connectors/computer/browser.js";
 import { inspectDesktopReadiness } from "../connectors/agents/desktop-readiness.js";
 
 export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself, one checked action at a time
@@ -82,6 +83,14 @@ export async function computerCli(
         : (chosen.problem ??
             "Computer use is off. Turn it on: clawdtime computer on"),
     );
+    if (env[browserSwitch] === "own")
+      print(
+        "Browser: ClawdTime's own browser, with its own profile. It starts at the first browser step. Check it: clawdtime computer doctor",
+      );
+    else if (env[browserSwitch] === "on")
+      print(
+        "Browser: the browser in front, through its own scripting. Check it: clawdtime computer doctor",
+      );
     if (!journal.readable()) return print(unreadable);
     const last = journal.latest();
     return print(last ? lastLine(last) : "No request yet.");
@@ -222,13 +231,16 @@ export async function computerCli(
       "in the ClawdTime panel. A task that starts says so when the panel lacks Accessibility or Screen & System Audio Recording in System Settings, Privacy & Security.",
     );
     let browser =
-      "off. The worker uses the screen for web pages. To read and operate the page itself, start the desktop service with CLAWDTIME_COMPUTER_BROWSER=on.";
+      "off. The worker uses the screen for web pages. To read and operate the page itself, start the desktop service with CLAWDTIME_COMPUTER_BROWSER=on. For ClawdTime's own browser, with its own profile, use CLAWDTIME_COMPUTER_BROWSER=own.";
+    const own = env[browserSwitch] === "own";
     if (dependencies.browser)
       try {
         const answer = await dependencies.browser.doctor();
-        browser = answer.ok
-          ? `${answer.browser ?? "a browser"} can be driven`
-          : `cannot be driven. ${answer.reason}`;
+        browser = !answer.ok
+          ? `cannot be driven. ${answer.reason}`
+          : own
+            ? `ClawdTime's own browser, ${answer.browser ?? "a browser"}, can be driven. ${answer.reason}`
+            : `${answer.browser ?? "a browser"} can be driven`;
       } catch {
         browser = "cannot be driven. It did not answer.";
       }

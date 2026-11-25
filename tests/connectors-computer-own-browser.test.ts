@@ -13,7 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BrowserClock } from "../connectors/computer/browser.js";
+import { computerCli } from "../cli/computer.js";
+import {
+  AppleEventsBrowser,
+  browserFromEnvironment,
+  browserSwitch,
+  type BrowserClock,
+} from "../connectors/computer/browser.js";
 import {
   DevToolsConnection,
   browserEndpoint,
@@ -28,6 +34,7 @@ import {
   type BrowserLauncher,
 } from "../connectors/computer/own-browser.js";
 import type { BrowserPort } from "../connectors/computer/ports.js";
+import { FakeBrowser } from "./connectors-computer-fixture.js";
 
 /**
  * No test here starts a program or opens a connection. The browser is on
@@ -1098,5 +1105,84 @@ describe("ClawdTime's own browser: doctor and close", () => {
     paper.closesOnBrowserClose = false;
     await browser.close();
     expect(paper.killed).toEqual([paper.pid]);
+  });
+});
+
+describe("ClawdTime's own browser: its switch and the command line", () => {
+  it("is chosen by CLAWDTIME_COMPUTER_BROWSER=own, and making it starts nothing", () => {
+    const apple = {} as BrowserPort;
+    const own = {} as BrowserPort;
+    const made: string[] = [];
+    const choose = (value: string | undefined) =>
+      browserFromEnvironment(
+        { [browserSwitch]: value },
+        () => (made.push("on"), apple),
+        () => (made.push("own"), own),
+      );
+    expect(choose("own")).toBe(own);
+    expect(choose("on")).toBe(apple);
+    for (const value of [undefined, "", "OWN", " own", "off", "yes"])
+      expect(choose(value)).toBeUndefined();
+    expect(made).toEqual(["own", "on"]);
+    const root = folder();
+    const real = browserFromEnvironment({
+      [browserSwitch]: "own",
+      CLAWDTIME_CONFIG_HOME: root,
+    });
+    expect(real).toBeInstanceOf(OwnBrowser);
+    expect((real as OwnBrowser).profile).toBe(
+      join(root, "computer", "browser-profile"),
+    );
+    expect(existsSync(join(root, "computer"))).toBe(false);
+    expect(browserFromEnvironment({ [browserSwitch]: "on" })).toBeInstanceOf(
+      AppleEventsBrowser,
+    );
+  });
+
+  it("names the browser in status and doctor", async () => {
+    const root = folder();
+    const lines: string[] = [];
+    const run = async (
+      args: string[],
+      env: Record<string, string>,
+      browser?: BrowserPort,
+    ) => {
+      lines.length = 0;
+      await computerCli(args, {
+        env: { CLAWDTIME_CONFIG_HOME: root, ...env },
+        home: "/nowhere",
+        print: (line) => lines.push(line),
+        ...(browser ? { browser } : {}),
+      });
+      return lines.join("\n");
+    };
+    expect(await run(["status"], { [browserSwitch]: "own" })).toMatch(
+      /^Browser: ClawdTime's own browser, with its own profile\. It starts at the first browser step\./m,
+    );
+    expect(await run(["status"], { [browserSwitch]: "on" })).toMatch(
+      /^Browser: the browser in front, through its own scripting\./m,
+    );
+    expect(await run(["status"], {})).not.toMatch(/Browser:/);
+    expect(await run(["doctor"], {})).toMatch(
+      /browser +off\..*CLAWDTIME_COMPUTER_BROWSER=own\./,
+    );
+    const fake = new FakeBrowser();
+    fake.doctor = async () => ({
+      ok: true,
+      browser: "Google Chrome",
+      reason: "It starts at the first browser step.",
+    });
+    expect(await run(["doctor"], { [browserSwitch]: "own" }, fake)).toMatch(
+      /browser +ClawdTime's own browser, Google Chrome, can be driven\. It starts at the first browser step\./,
+    );
+    fake.doctor = async () => ({
+      ok: false,
+      browser: null,
+      reason: "No browser for ClawdTime's own browser was found.",
+    });
+    expect(await run(["doctor"], { [browserSwitch]: "own" }, fake)).toMatch(
+      /browser +cannot be driven\. No browser for ClawdTime's own browser was found\./,
+    );
+    expect(fake.calls).toEqual([]);
   });
 });

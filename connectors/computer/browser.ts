@@ -39,6 +39,9 @@ import {
   parsePageKey,
   type PageCall,
 } from "./browser-script.js";
+// The own browser uses the parser of this file in its methods only, so the
+// two files may import each other.
+import { OwnBrowser } from "./own-browser.js";
 import {
   BrowserClosed,
   type BrowserElement,
@@ -498,19 +501,23 @@ const refusal = (result: { reason: string; closed?: true }) =>
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-/** The name of the switch for this driver, and the one value that turns it on. */
+/** The name of the switch for the browser drivers. */
 export const browserSwitch = "CLAWDTIME_COMPUTER_BROWSER";
 
 /**
- * The driver, when the person turned it on. It runs a script in the pages of
- * the person's own browser, with their sign-ins, so it is off until the
- * environment of the desktop service says "on". Any other value is off.
+ * The driver, when the person turned one on. "on" drives the browser in
+ * front, the person's own, with their sign-ins, through its scripting door.
+ * "own" drives ClawdTime's own browser, with its own profile, which starts
+ * at the first browser step. Any other value is off. Making a driver starts
+ * nothing.
  */
 export function browserFromEnvironment(
   env: Record<string, string | undefined>,
   make: () => BrowserPort = () => new AppleEventsBrowser(),
+  makeOwn: () => BrowserPort = () => new OwnBrowser({ env }),
 ): BrowserPort | undefined {
-  return env[browserSwitch] === "on" ? make() : undefined;
+  const chosen = env[browserSwitch];
+  return chosen === "on" ? make() : chosen === "own" ? makeOwn() : undefined;
 }
 
 export class AppleEventsBrowser implements BrowserPort {

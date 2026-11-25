@@ -535,6 +535,8 @@ const chosen = desktop
       // front through the browser's own scripting, in place of pixels. It is
       // a switch, off unless CLAWDTIME_COMPUTER_BROWSER=on: it runs a script
       // in the person's own signed-in pages, so the person turns it on.
+      // CLAWDTIME_COMPUTER_BROWSER=own drives ClawdTime's own browser, with
+      // its own profile, instead. It starts at the first browser step.
       // Without it the worker refuses the browser actions and uses the screen.
       ...(connectedBrowser ? { browser: connectedBrowser } : {}),
     })
@@ -682,6 +684,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
             .map((intent) => proactive.service.stop(intent.id)),
         );
       }
+      // ClawdTime's own browser closes its control port with the service.
+      await connectedBrowser?.close?.().catch(() => {});
       await background?.close();
       await bundled?.close();
       await calls?.close();
