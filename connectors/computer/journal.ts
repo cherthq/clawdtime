@@ -142,10 +142,14 @@ const plainStateTail =
   "(?:(?:already|filled|expired|wrong|correct|required|empty|needed|not|missing|blank|invalid|valid|hidden|autofilled|the\\s+same|different|unchanged|unknown|pending|active|inactive|in\\s+\\S+|on\\s+(?:my|the|your|a|this|that)\\s+\\S+)(?![A-Za-z0-9_-])|set(?!\\s+to\\s+\\S)(?![A-Za-z0-9_-])|saved(?!\\s+as\\s+\\S)(?![A-Za-z0-9_-]))";
 const nonSecretBareWord =
   "(?:is|was|are|were|be|been|has|have|had|will|would|can|could|should|may|might|must|do|does|did|in|into|on|onto|for|to|of|at|by|from|with|without|about|and|or|but|if|when|as|that|this|these|those|then|than|here|there|now|yet|still|already|not|no|never|please|pls|again|first|next|yourself|myself|the|your|mine|field|fields|box|boxes|input|inputs|bar|settings|setting|manager|reset|change|screen|page|tab|button|link|window|dialog|popup|prompt|form|section|entry|label|icon|check|error|message|text|area|row|item|option|menu|list|step|login|sign|account|autofill|saved|filled|expired|wrong|correct|required|empty|set|needed|missing|blank|hidden|invalid|valid|generator|recovery|lock|locked|unlock|policy|policies|rule|rules|strength|hint|hints|hash|hashed|key|keys|store|vault|sync|value|values|number|numbers|code|codes|card|cards|type|name|header|headers|body|cookie|cookies|file|files|folder|path|scope|scopes|refresh|revoke|rotate|same|different)(?![A-Za-z0-9_-])";
+/** A word between a secret noun and its value: "pin number is", "pin code: 4821". */
+const secretQualifier = String.raw`(?:\s+(?:number|no\.?|num|code|digits|word|phrase))?`;
+/** Words that stand for no value of their own after a verb of typing: "type my pin in the pin field". */
+const notAValue = String.raw`(?:(?:my|the|your|a|an|it|its|this|that|these|those|them|his|her|our|their|one|in|into|on|out|something|anything|nothing|everything|some|any|text|word|words|name|names|email|e-mail|username|user|login|code|value|here|there|now|again|me|you|yours|mine|same|cursor|mouse|pointer|caret|focus|tab|space|key|keys|keyboard|autofill|manager)|${secretNoun}s?)(?![A-Za-z0-9_-])`;
 const strictSecretShapes = [
   // Sentence and contraction forms: secret noun (optionally "for <target>") followed by is/was/'s (optionally "set to"/"saved as") and a non-state value.
   new RegExp(
-    String.raw`\b${secretNoun}(?:\s+for\s+(?:[A-Za-z0-9._-]+\s+){0,3}[A-Za-z0-9._-]+)?(?:\s+(?:is|was)(?:\s+(?:set\s+to|saved\s+as))?|'s(?:\s+(?:set\s+to|saved\s+as))?)\s+(?!${plainStateTail})\S+`,
+    String.raw`\b${secretNoun}${secretQualifier}(?:\s+for\s+(?:[A-Za-z0-9._-]+\s+){0,3}[A-Za-z0-9._-]+)?(?:\s+(?:is|was)(?:\s+(?:set\s+to|saved\s+as))?|'s(?:\s+(?:set\s+to|saved\s+as))?)\s+(?!${plainStateTail})\S+`,
     "i",
   ),
   // Key-value forms with : or = (full-width colon/equals fold via NFKC).
@@ -156,23 +160,135 @@ const strictSecretShapes = [
     "i",
   ),
   // A 4 to 8 digit code (with or without spaces/hyphens) after pin, code, otp, passcode, or 2fa, or 3 to 4 digits after cvv/cvc.
-  /(?<!\b(?:zip|postal|area|country|error|status|http|exit|promo|coupon|discount|referral|invite|gift|voucher)\s+)\b(?:pin|code|otp|passcode|2fa)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d(?:[ -]?\d){3,7}\b/i,
+  new RegExp(
+    String.raw`(?<!\b(?:zip|postal|area|country|error|status|http|exit|promo|coupon|discount|referral|invite|gift|voucher)\s+)\b(?:pin|code|otp|passcode|2fa)\b${secretQualifier}(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d(?:[ -]?\d){3,7}\b`,
+    "i",
+  ),
   /\b(?:cvv|cvc)\b(?:\s+(?:is|was)|'s)?\s*[:=#-]?\s*\d{3,4}\b/i,
   // Value before secret noun: "type 4821 as the pin", "enter hunter2 as the password".
   new RegExp(
     String.raw`\b(?:type|enter|use|put)\s+(?:\d(?:[ -]?\d){2,7}|"[^"\n]+"|'[^'\n]+'|\S{3,})\s+as\s+(?:the\s+|my\s+)?(?:code|otp|${secretNoun})\b`,
     "i",
   ),
+  // A value typed into a secret field: "type hunter22 in the password field", "enter 4821 in the pin box", "use hunter22 for the password".
+  new RegExp(
+    String.raw`\b(?:type|enter|input|put|paste|write|key|fill|use)(?:\s+in)?\s+(?:(?:the|my)\s+)?(?!${notAValue})(?:"[^"\n]+"|'[^'\n]+'|\S+)\s+(?:in|into|inside|on|for|as|at|to)\s+(?:(?:the|my|your|a|an|this|that)\s+)?(?:[A-Za-z0-9'_-]+\s+){0,2}?${secretNoun}s?\b`,
+    "i",
+  ),
+  // A secret field filled with a value: "fill the password field with hunter22".
+  new RegExp(
+    String.raw`\bfill\s+(?:in\s+|out\s+)?(?:(?:the|my|your|a|an)\s+)?(?:[A-Za-z0-9'_-]+\s+){0,2}?${secretNoun}s?(?:\s+(?:field|box|input|slot|entry))?\s+with\s+(?:(?:the|my)\s+)?(?!${notAValue})\S+`,
+    "i",
+  ),
   // Payment card numbers: 13 to 19 digits with optional spaces or hyphens (excluding order/ISBN/tracking/invoice/shipment references).
   /(?<!\b(?:order|isbn|tracking|invoice|shipment)\s+)(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/i,
 ];
+/**
+ * Long secret nouns that people misspell ("pasword", "passwrod", "paswrd",
+ * "credental"), and the English words near them that stay as they are.
+ */
+const misspeltSecretNouns = [
+  "password",
+  "passcode",
+  "passphrase",
+  "credential",
+  "secret",
+];
+const nearSecretNouns = new Set([
+  "passport",
+  "passports",
+  "paraphrase",
+  "paraphrases",
+  "cadential",
+  "secrete",
+  "secreted",
+  "secretes",
+]);
+
+/** How many edits (an insertion, a deletion, a change, a swap of two neighbours) turn `a` into `b`. */
+function editCount(a: string, b: string): number {
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) =>
+    Array.from({ length: b.length + 1 }, (_, j) =>
+      i === 0 ? j : j === 0 ? i : 0,
+    ),
+  );
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) {
+      d[i]![j] = Math.min(
+        d[i - 1]![j]! + 1,
+        d[i]![j - 1]! + 1,
+        d[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+        d[i]![j] = Math.min(d[i]![j]!, d[i - 2]![j - 2]! + 1);
+    }
+  return d[a.length]![b.length]!;
+}
+
+/**
+ * The words with a misspelt secret noun spelled out: "my pasword is" reads
+ * "my password is", and "pass code" reads "passcode". A noun of 8 letters or
+ * more takes two edits, a shorter one takes one. The first letter is kept.
+ */
+export function spellSecretNouns(text: string): string {
+  return text
+    .replace(/\bpass\s+(word|code|phrase)(s?)\b/gi, "pass$1$2")
+    .replace(/\b[A-Za-z]{5,14}\b/g, (word) => {
+      const lower = word.toLowerCase();
+      if (nearSecretNouns.has(lower)) return word;
+      for (const noun of misspeltSecretNouns) {
+        const base =
+          lower.endsWith("s") && lower.length > noun.length
+            ? lower.slice(0, -1)
+            : lower;
+        if (base === noun || base[0] !== noun[0]) continue;
+        const limit = noun.length >= 8 ? 2 : 1;
+        if (Math.abs(base.length - noun.length) > limit) continue;
+        if (editCount(base, noun) <= limit) return noun;
+      }
+      return word;
+    });
+}
+
+/** A secret named as a thing: a secret noun, also misspelt ("the pin field", "my pasword"). */
+const namedSecret = new RegExp(
+  String.raw`\b${secretNoun}s?\b|\b(?:otp|one[- ]time\s+(?:code|password)|verification\s+code|security\s+code)\b`,
+  "i",
+);
+
+/** True when the words name a secret or a field for one: "type my pin in the pin field". */
+export function namesSecret(text: string): boolean {
+  const plain = text.normalize("NFKC").replace(invisibleSecretChars, "");
+  return namedSecret.test(plain) || namedSecret.test(spellSecretNouns(plain));
+}
+
+/**
+ * True when the words are one short value on their own that is a secret
+ * right after words that name one: a number of 3 to 12 digits ("4821",
+ * "48 21"), or one word of 4 or more with a letter and a digit or a symbol
+ * ("hunter22", "p@ss").
+ */
+export function looksBareSecret(text: string): boolean {
+  const value = text
+    .normalize("NFKC")
+    .replace(invisibleSecretChars, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["'\u2018\u201c]+|["'\u2019\u201d.!,;]+$/g, "");
+  return (
+    /^\d(?:[ -]?\d){2,11}$/.test(value) ||
+    /^(?=\S*[A-Za-z])(?=\S*[\d!@#$%^&*_+=~])[^\s?]{4,64}$/.test(value)
+  );
+}
+
 /**
  * Strict credential check for computer-use guidance and journal records.
  * Normalizes NFKC, strips format and invisible joiner characters (\p{Cf},
  * U+034F, etc.) to "", tests a newline-joined variant for wrapped tokens,
  * separates one- or two-sided invisible characters around is/was/:/=, and
  * checks contractions, bare/quoted secret values, spaced PIN/OTP/CVV/SSN codes,
- * value-before-noun forms, and payment card numbers while ignoring plain state
+ * value-before-noun forms, a value typed into a secret field, misspelt secret
+ * nouns, and payment card numbers while ignoring plain state
  * remarks ("is already filled", "is the same", "is on my phone").
  */
 export function looksSecretStrict(text: string): boolean {
@@ -197,7 +313,8 @@ export function looksSecretStrict(text: string): boolean {
     clean(stripped, stripped.length),
     clean(opSpaced, opSpaced.length),
   ];
-  return variants.some(
+  // A misspelt secret noun hides no secret: "my pasword is hunter22".
+  return [...variants, ...variants.map(spellSecretNouns)].some(
     (value) =>
       looksSecret(value) ||
       strictSecretShapes.some((shape) => shape.test(value)),

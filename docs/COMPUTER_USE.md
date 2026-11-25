@@ -291,9 +291,17 @@ Monday`, `next week`, `at 5`, `5pm`, `17:30`, `Dec 5`) anywhere in any
   as `"type 4821 as the pin"`, quoted or bare values after secret nouns,
   spaced PIN digits, full-width digits or colon after NFKC normalization,
   one- or two-sided invisible format or combining joiner characters around
-  `is`/`was`/`:`/`=`, tokens split across indented line breaks, and 13 to 19
-  digit payment card numbers) are refused: they are written nowhere and never
-  sent to the planner. When a running task refuses an order that holds a
+  `is`/`was`/`:`/`=`, tokens split across indented line breaks, a word
+  between the noun and its value as in "my pin number is 4821", a value typed
+  into a secret field as in "type hunter22 in the password field" or "fill
+  the pin with 4821", a misspelled secret noun as in "my pasword is
+  hunter22", and 13 to 19 digit payment card numbers) are refused: they are
+  written nowhere and never sent to the planner. A secret split over two
+  messages is refused too: right after words that name a secret or a field
+  for one ("type my pin in the pin field"), or a question of the planner that
+  does, a short value on its own (a number of 3 to 12 digits, or one word
+  with a letter and a digit or a symbol, such as "4821" or "hunter22") is a
+  secret. When a running task refuses an order that holds a
   secret, it also pauses (`hold`) so the person can type the secret on the Mac
   and tell it to go on. Plain state or location remarks ("the password is
   already filled", "the password is the same", "the password is on my phone",

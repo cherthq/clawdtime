@@ -6,7 +6,9 @@ import { Supervisor, type ModelClient } from "../connectors/agents/brain.js";
 import { DecisionDesk } from "../connectors/agents/decisions.js";
 import {
   ComputerJournal,
+  looksBareSecret,
   looksSecretStrict,
+  namesSecret,
 } from "../connectors/computer/journal.js";
 import {
   asksWhatItCanDo,
@@ -1134,5 +1136,70 @@ describe("natural words: lookalike letters and typos of stops and holds", () => 
     "opne chrome",
   ])("still reads %j as an order", (words) => {
     expect(readWords(words)).toBe("order");
+  });
+});
+
+describe("natural words: secrets in words while a task runs", () => {
+  it.each([
+    "put the cursor in the pin box",
+    "click the passport photo upload button",
+    "type my pin in the pin field",
+    "the pin number is wrong",
+    "enter your email in the password field",
+    "click the paraphrase button",
+  ])("finds no secret in %j", (text) => {
+    expect(looksSecretStrict(text)).toBe(false);
+  });
+
+  it.each([
+    "fill the password field with hunter22",
+    "type in hunter22 in the password box",
+    "my pin code is 4821",
+    "my passwrod is hunter22",
+    "the pass word is hunter22",
+  ])("finds a secret in %j", (text) => {
+    expect(looksSecretStrict(text)).toBe(true);
+  });
+
+  it("knows words that name a secret, and a short value on its own", () => {
+    expect(namesSecret("type my pin in the pin field")).toBe(true);
+    expect(namesSecret("type my pasword in the box")).toBe(true);
+    expect(namesSecret("click the save button")).toBe(false);
+    expect(["4821", "48 21", "hunter22", "p@ss"].map(looksBareSecret)).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(
+      ["ok", "thanks", "why?", "2", "continue"].map(looksBareSecret),
+    ).toEqual([false, false, false, false, false]);
+  });
+
+  it("never sends the planner a short value that answers its question about a PIN", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-natural-words-pin-"));
+    roots.push(home);
+    const planner = new ScriptedPlanner([
+      { kind: "ask", question: "What is the PIN of the card?" },
+      { kind: "done", summary: "Paid." },
+    ]);
+    const hands = new FakeHands([observation([element(1, { title: "Pay" })])]);
+    const journal = new ComputerJournal(home, () => 1_000_000);
+    const worker = new ComputerWorker({
+      hands,
+      planner,
+      journal,
+      now: () => 1_000_000,
+      notify: () => {},
+    });
+    await worker.submit("r1", "Pay the bill");
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    expect((await worker.answer("4821")).message).toMatch(
+      /^I do not take a password or a key in the chat\./,
+    );
+    expect(worker.snapshot().state).toBe("waiting_for_person");
+    expect(JSON.stringify(planner.inputs)).not.toContain("4821");
+    worker.stop();
+    await worker.idle();
   });
 });

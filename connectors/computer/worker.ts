@@ -85,7 +85,9 @@ import {
 import { textKeyHold } from "./text-keys.js";
 import {
   guidanceLimit,
+  looksBareSecret,
   looksSecretStrict,
+  namesSecret,
   type ComputerJournal,
   type JournalRequest,
   type RequestState,
@@ -687,6 +689,11 @@ interface Run {
   takeover: boolean;
   /** The person said words that forbid or ask to hold: pause before any further input. */
   hold: boolean;
+  /**
+   * The person's last words for this request (or the request itself) named a
+   * secret or a field for one: a short value that comes next is a secret.
+   */
+  secretNamed?: boolean;
   /** True while an effect command is awaiting the hands or the browser. */
   inFlight: boolean;
   /** Wakes an in-flight planner call when `hold` is requested. */
@@ -1416,17 +1423,14 @@ export class ComputerWorker implements DesktopExecutorPort {
       }
       return atEndText;
     }
+    const secret = this.holdsSecret(run, words);
     const tryKeep = (): { kept: true } | { kept: false; why: string } => {
       if (run.step >= this.stepLimit(run)) {
         recordSeen();
         return { kept: false, why: atEndText };
       }
       // A credential goes neither to the planner nor into the record.
-      if (
-        looksSecretStrict(words) ||
-        looksSecretStrict(text) ||
-        looksSecretStrict(casualWords(text))
-      ) {
+      if (secret) {
         recordSeen();
         return { kept: false, why: secretText };
       }
@@ -1498,12 +1502,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         return resumedText;
       }
       recordSeen();
-      if (
-        looksSecretStrict(words) ||
-        looksSecretStrict(text) ||
-        looksSecretStrict(casualWords(text))
-      )
-        return `${secretText} ${stillPausedText(question.pause)}`;
+      if (secret) return `${secretText} ${stillPausedText(question.pause)}`;
       return stillPausedText(question.pause);
     }
 
@@ -1553,6 +1552,24 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.wake?.();
     const kept = tryKeep();
     return kept.kept ? heldText : heldNotKeptText(kept.why);
+  }
+  /**
+   * True when the person's words for a request hold a secret: a credential
+   * in the words themselves (also misspelt, also in their casual reading),
+   * or a short value on its own right after words that named a secret or a
+   * field for one ("type my pin in the pin field", then "4821"). Remembers
+   * whether these words name one.
+   */
+  private holdsSecret(run: Run, words: string): boolean {
+    const text = clean(words, 2000);
+    const afterSecret = run.secretNamed ?? namesSecret(run.goal);
+    run.secretNamed = namesSecret(text);
+    return (
+      looksSecretStrict(words) ||
+      looksSecretStrict(text) ||
+      looksSecretStrict(casualWords(text)) ||
+      (afterSecret && looksBareSecret(text))
+    );
   }
   private remember(id: string) {
     this.words.add(id);
@@ -1655,8 +1672,15 @@ export class ComputerWorker implements DesktopExecutorPort {
           return { message };
         }
       }
-      // The answer goes to the planner. A credential never does.
-      if (looksSecret(text)) return { message: secretText };
+      // The answer goes to the planner. A credential never does, nor a short
+      // value that answers a question about a secret field.
+      const asked = namesSecret(question.text);
+      if (
+        looksSecret(text) ||
+        this.holdsSecret(run, text) ||
+        (asked && looksBareSecret(words))
+      )
+        return { message: secretText };
       run.question = null;
       question.settle({ kind: "text", text: words });
       return { message: "Thank you. I go on." };
