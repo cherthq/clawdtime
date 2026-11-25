@@ -7,10 +7,16 @@ import {
   defaultComputerModel,
   directOpening,
   fallbackComputerModel,
-  OpenAIPlanner,
+  OpenAIPlanner as BaseOpenAIPlanner,
   PlannerError,
   plannerFromEnvironment,
 } from "../connectors/computer/planner.js";
+/** These tests exercise the chat completions wire format explicitly. */
+class OpenAIPlanner extends BaseOpenAIPlanner {
+  constructor(options: ConstructorParameters<typeof BaseOpenAIPlanner>[0]) {
+    super({ api: "chat", ...options });
+  }
+}
 import type { Action, StepRecord } from "../connectors/computer/ports.js";
 import {
   element,
@@ -717,7 +723,7 @@ describe("the planner on the chat completions API", () => {
       { request },
     )!;
     const plain = plannerFromEnvironment(
-      { OPENAI_API_KEY: "general" },
+      { OPENAI_API_KEY: "general", CLAWDTIME_OPENAI_API: "chat" },
       { request },
     )!;
     return Promise.all([both.next(input()), plain.next(input())]).then(() => {
@@ -1306,7 +1312,7 @@ describe("the newer actions in the planner", () => {
   it("is built from the environment with the methods of the driver", async () => {
     const { sent, request } = fakeFetch();
     await plannerFromEnvironment(
-      { OPENAI_API_KEY: "k" },
+      { OPENAI_API_KEY: "k", CLAWDTIME_OPENAI_API: "chat" },
       { request, browser: true, browserMethods: ["waitFor"] },
     )!.next(input());
     expect(

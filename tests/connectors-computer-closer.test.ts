@@ -209,7 +209,10 @@ describe("the planner with a closer look", () => {
         { status: 200 },
       );
     };
-    return { sent, planner: new OpenAIPlanner({ key: "k", request }) };
+    return {
+      sent,
+      planner: new OpenAIPlanner({ key: "k", api: "chat", request }),
+    };
   };
   const input = (withCloser: boolean) => ({
     goal: "Give the review three stars",

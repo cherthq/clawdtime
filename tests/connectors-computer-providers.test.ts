@@ -8,9 +8,11 @@ import {
 } from "../connectors/computer/planner.js";
 import {
   ChatTransport,
+  ResponsesTransport,
   chatEndpoint,
   defaultAnthropicModel,
   defaultComputerModel,
+  fallbackComputerModel,
   messagesTools,
   openaiApiSetting,
   openaiWire,
@@ -18,6 +20,8 @@ import {
   plannerVariables,
   providerById,
   providers,
+  reasoningModels,
+  responsesModels,
   selectPlanner,
   strictLimits,
   strictSchema,
@@ -189,7 +193,7 @@ describe("the providers", () => {
       openai: [
         ["CLAWDTIME_OPENAI_API_KEY", "OPENAI_API_KEY"],
         "https://api.openai.com/v1/chat/completions",
-        "gpt-5.4",
+        "gpt-6.2-astra",
       ],
       anthropic: [
         ["CLAWDTIME_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
@@ -308,7 +312,11 @@ describe("a reasoning effort that the model refuses", () => {
       json({ error: { type: "invalid_request_error" } }, 400),
       json(chatCall("wait", { ms: 1, why: "w" })),
     );
-    const made = planner(chat.request, { model: "gpt-5.4", effort: "low" });
+    const made = planner(chat.request, {
+      model: "gpt-5.4",
+      effort: "low",
+      api: "chat",
+    });
     const first = await made.next(input());
     expect(first).toMatchObject({ action: { kind: "wait" } });
     await made.next(input("Groceries"));
@@ -408,6 +416,8 @@ describe("the choice of the provider", () => {
       "high",
       "fast",
     ]);
+    const xhigh = choose(["openai"], null, { effort: " XHigh " });
+    expect(xhigh.ok && xhigh.settings.effort).toBe("xhigh");
     const plain = choose(["anthropic"]);
     expect(plain.ok && [plain.settings.effort, plain.settings.speed]).toEqual([
       null,
@@ -486,9 +496,13 @@ describe("the chat completions providers", () => {
   );
 
   it("sends reasoning_effort to OpenAI only when it is set, and only to a model that takes it", async () => {
-    const effort = async (model: string | undefined, set?: "low" | "high") => {
+    const effort = async (
+      model: string | undefined,
+      set?: "low" | "high" | "xhigh",
+    ) => {
       const net = service(json(chatCall("wait", { ms: 1, why: "w" })));
       await planner(net.request, {
+        api: "chat",
         ...(model ? { model } : {}),
         ...(set ? { effort: set } : {}),
       }).next(input());
@@ -497,9 +511,12 @@ describe("the chat completions providers", () => {
     expect(await effort(undefined)).toBeUndefined();
     expect(await effort(undefined, "low")).toBe("low");
     expect(await effort("gpt-5.4", "high")).toBe("high");
+    expect(await effort("gpt-6.2-astra", "xhigh")).toBe("xhigh");
     expect(await effort("o4-mini", "low")).toBe("low");
     expect(await effort("gpt-4.1", "low")).toBeUndefined();
     expect(await effort("gpt-5-chat-latest", "low")).toBeUndefined();
+    expect(await effort("gpt-6-chat", "low")).toBeUndefined();
+    expect(await effort("gpt-6.2-chat-latest", "low")).toBeUndefined();
     // Another provider gets none: each names it in its own way.
     const net = service(json(chatCall("wait", { ms: 1, why: "w" })));
     await planner(net.request, {
@@ -596,7 +613,9 @@ describe("the chat completions providers", () => {
       }),
       json(chatCall("wait", { ms: 1, why: "w" })),
     );
-    expect((await planner(net.request).next(input())).action).toEqual({
+    expect(
+      (await planner(net.request, { api: "chat" }).next(input())).action,
+    ).toEqual({
       kind: "wait",
       ms: 1,
     });
@@ -622,6 +641,7 @@ describe("the chat completions providers", () => {
       ),
     );
     await planner(net.request, {
+      api: "chat",
       onUsage: (usage) => seen.push(usage),
     }).next(input());
     expect(seen).toEqual([
@@ -638,7 +658,7 @@ describe("the chat completions providers", () => {
 
   it("keeps the rules and the functions the same bytes from step to step, before the turn", async () => {
     const net = service(json(chatCall("wait", { ms: 1, why: "w" })));
-    const model = planner(net.request);
+    const model = planner(net.request, { api: "chat" });
     await model.next(input("Shopping"));
     await model.next(input("Groceries"));
     const [a, b] = net.sent.map((item) => item.body);
@@ -1127,7 +1147,7 @@ describe("the merged planner features through every provider", () => {
 
   it("a plan adds its rules and plan_update, byte-stable while it does not change, for OpenAI and Anthropic", async () => {
     const chat = service(json(chatCall("wait", { ms: 1, why: "w" })));
-    const openai = planner(chat.request);
+    const openai = planner(chat.request, { api: "chat" });
     await openai.next({ ...input("Shopping"), plan });
     await openai.next({ ...input("Groceries"), plan });
     const [a, b] = chat.sent.map((item) => item.body);
@@ -1171,7 +1191,7 @@ describe("the merged planner features through every provider", () => {
     const subgoals = [{ goal: "Open the note", check: "The editor shows it" }];
     const chat = service(json(chatCall("outline", { subgoals, why: "One" })));
     expect(
-      await planner(chat.request).outline({
+      await planner(chat.request, { api: "chat" }).outline({
         goal,
         observation: observation(),
         page: null,
@@ -1399,6 +1419,7 @@ describe("the Responses route of OpenAI", () => {
         cachedTokens: 3072,
         cacheWriteTokens: null,
         outputTokens: 48,
+        reasoningTokens: 30,
       },
     ]);
   });
@@ -1710,25 +1731,102 @@ describe("the Responses route of OpenAI", () => {
     expect(chat.sent[0]!.url).toBe(
       "https://api.openai.com/v1/chat/completions",
     );
-    // And the default model to Responses, with its fallback there too.
+    // And the default model to Responses, with its fallback to gpt-5.4 there too.
+    expect(defaultComputerModel).toBe("gpt-6.2-astra");
+    expect(fallbackComputerModel).toBe("gpt-5.4");
     const fallback = service(
       json({ error: { code: "model_not_found" } }, 404),
       wait(),
     );
     const built = plannerFromEnvironment(
-      { OPENAI_API_KEY: key, CLAWDTIME_OPENAI_API: "responses" },
+      { OPENAI_API_KEY: key },
       { request: fallback.request },
     )!;
     await built.next(input());
     expect(fallback.sent.map((item) => [item.url, item.body.model])).toEqual([
-      ["https://api.openai.com/v1/responses", defaultComputerModel],
-      ["https://api.openai.com/v1/responses", "gpt-4.1"],
+      ["https://api.openai.com/v1/responses", "gpt-6.2-astra"],
+      ["https://api.openai.com/v1/responses", "gpt-5.4"],
     ]);
-    expect(built.model).toBe("gpt-4.1");
-    // gpt-5.4 reasons and gets the effort; gpt-4.1 does not.
+    expect(built.model).toBe("gpt-5.4");
+    // gpt-6.2-astra gets the default low effort; fallback gpt-5.4 gets no forced effort when the user set none.
     expect(fallback.sent[0]!.body.reasoning).toEqual({ effort: "low" });
     expect(fallback.sent[1]!.body).not.toHaveProperty("reasoning");
     expect(fallback.sent[1]!.body).not.toHaveProperty("include");
+  });
+
+  it("routes gpt-5.4 with an explicit effort to /v1/responses, and never treats *chat* models as reasoning", async () => {
+    const openai = providerById("openai")!;
+    expect(reasoningModels.test("gpt-6-chat")).toBe(false);
+    expect(reasoningModels.test("gpt-6.2-chat-latest")).toBe(false);
+    expect(responsesModels.test("gpt-6-chat")).toBe(false);
+    expect(responsesModels.test("gpt-6.2-chat-latest")).toBe(false);
+    expect(reasoningModels.test("gpt-6.2-astra")).toBe(true);
+    expect(reasoningModels.test("gpt-10-pro")).toBe(true);
+    expect(responsesModels.test("gpt-10-pro")).toBe(true);
+
+    // gpt-5.4 with effort routes to /v1/responses; with no effort or "none", stays on chat.
+    expect(openaiWire(openai, "gpt-5.4", null, "low")).toBe("responses");
+    expect(openaiWire(openai, "gpt-5.4", null, "xhigh")).toBe("responses");
+    expect(openaiWire(openai, "gpt-5.4", null, "none")).toBe("chat");
+    expect(openaiWire(openai, "gpt-5.4", null, null)).toBe("chat");
+    expect(openaiWire(openai, "gpt-5.4", "chat", "low")).toBe("chat");
+    expect(openaiWire(openai, "gpt-6-chat", null, "low")).toBe("chat");
+    expect(openaiWire(openai, "gpt-4.1", null, "low")).toBe("chat");
+
+    const net = service(wait());
+    await planner(net.request, { model: "gpt-5.4", effort: "low" }).next(
+      input(),
+    );
+    expect(net.sent[0]!.url).toBe("https://api.openai.com/v1/responses");
+    expect(net.sent[0]!.body.model).toBe("gpt-5.4");
+    expect(net.sent[0]!.body.reasoning).toEqual({ effort: "low" });
+  });
+
+  it("retries without effort on 400 after fallback (e.g. xhigh refused by gpt-5.4) and omits tool_choice when tools is empty", async () => {
+    const net = service(
+      json({ error: { code: "model_not_found" } }, 404),
+      json(
+        {
+          error: {
+            type: "invalid_request_error",
+            param: "reasoning.effort",
+          },
+        },
+        400,
+      ),
+      wait(),
+    );
+    const built = plannerFromEnvironment(
+      { OPENAI_API_KEY: key, CLAWDTIME_COMPUTER_EFFORT: "xhigh" },
+      { request: net.request },
+    )!;
+    expect((await built.next(input())).action).toEqual({ kind: "wait", ms: 1 });
+    expect(
+      net.sent.map((item) => [item.body.model, item.body.reasoning]),
+    ).toEqual([
+      ["gpt-6.2-astra", { effort: "xhigh" }],
+      ["gpt-5.4", { effort: "xhigh" }],
+      ["gpt-5.4", undefined],
+    ]);
+    expect(net.sent[2]!.body).not.toHaveProperty("include");
+
+    // When tools is empty, omit tools, tool_choice, and parallel_tool_calls completely.
+    const transport = new ResponsesTransport({
+      key,
+      model: "gpt-6.2-astra",
+      fallback: "gpt-5.4",
+      effort: null,
+      request: fetch,
+      now: () => 0,
+    });
+    const noToolsBody = transport.body({
+      system: "Rules.",
+      tools: [],
+      user: "Hello",
+    });
+    expect(noToolsBody).not.toHaveProperty("tools");
+    expect(noToolsBody).not.toHaveProperty("tool_choice");
+    expect(noToolsBody).not.toHaveProperty("parallel_tool_calls");
   });
 
   it("leaves the chat completions request of gpt-5.4 byte for byte as it was", async () => {

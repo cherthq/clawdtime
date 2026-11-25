@@ -107,6 +107,7 @@ function planner(
 ) {
   return new OpenAIPlanner({
     key,
+    api: "chat",
     request,
     now: time.now,
     sleep: time.sleep,

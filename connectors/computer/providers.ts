@@ -54,13 +54,13 @@ export type ProviderId = (typeof providerIds)[number];
  * planner test (`npm run eval:computer:planner`): run that test before this
  * line changes.
  */
-export const defaultComputerModel = "gpt-5.4";
+export const defaultComputerModel = "gpt-6.2-astra";
 /**
  * The model before it. When the service says that a key may not use the
  * default, or does not know it, the planner goes to this one, once, and stays
  * there. A model that the person chose is never replaced.
  */
-export const fallbackComputerModel = "gpt-4.1";
+export const fallbackComputerModel = "gpt-5.4";
 /** The model of the planner on Anthropic. */
 export const defaultAnthropicModel = "claude-opus-5-5";
 
@@ -172,8 +172,8 @@ export const plannerVariables: readonly string[] = [
   "CLAWDTIME_OPENAI_API",
 ];
 
-export type Effort = "low" | "medium" | "high";
-export const efforts: readonly Effort[] = ["low", "medium", "high"];
+export type Effort = "low" | "medium" | "high" | "xhigh";
+export const efforts: readonly Effort[] = ["low", "medium", "high", "xhigh"];
 /** The effort of the step planner when the person set none. */
 export const defaultEffort: Effort = "low";
 export type Speed = "standard" | "fast";
@@ -199,7 +199,8 @@ const fastModels = new Set([
   "claude-mythos-5-2",
 ]);
 /** OpenAI models that take a reasoning effort: the reasoning models, not their chat versions. */
-const reasoningModels = /^(?:gpt-[56](?![\w.-]*chat)|o[1-9])/;
+export const reasoningModels =
+  /^(?:gpt-(?:[5-9]|[1-9]\d+)(?![\w.-]*chat)|o[1-9])/;
 
 /** The two routes of OpenAI: chat completions and Responses. */
 export type OpenAIApi = "chat" | "responses";
@@ -211,7 +212,8 @@ export const responsesEndpoint = "https://api.openai.com/v1/responses";
  * completions `gpt-6.2-astra` and `gpt-6.2-sol` answer 400 to functions with
  * a reasoning effort, and refuse `none` (measured 26 Nov 2026).
  */
-const responsesModels = /^(?:gpt-6|gpt-5\.6)/;
+export const responsesModels =
+  /^(?:gpt-(?:[6-9]|[1-9]\d+)(?![\w.-]*chat)|gpt-5\.6)/;
 
 /**
  * `CLAWDTIME_OPENAI_API`: `responses` or `chat` for every model of OpenAI,
@@ -230,15 +232,21 @@ export function openaiApiSetting(
 /**
  * The transport of a request: the Messages interface of Anthropic, the
  * Responses route of OpenAI, or chat completions. OpenAI follows the setting
- * when there is one, else the name of the model.
+ * when there is one, else the name of the model, or Responses when a
+ * reasoning model is asked for an explicit reasoning effort.
  */
 export function openaiWire(
   provider: Provider,
   model: string,
   api?: OpenAIApi | null,
+  effort?: Effort | string | null,
 ): "chat" | "messages" | "responses" {
   if (provider.id !== "openai") return provider.wire;
-  return api ?? (responsesModels.test(model) ? "responses" : "chat");
+  if (api) return api;
+  if (responsesModels.test(model)) return "responses";
+  if (effort && effort !== "none" && reasoningModels.test(model))
+    return "responses";
+  return "chat";
 }
 
 /**
@@ -419,7 +427,7 @@ export function selectPlanner(input: {
   });
   if (effortText && !efforts.includes(effortText as Effort))
     return invalid(
-      "CLAWDTIME_COMPUTER_EFFORT is not low, medium or high, so the planner does not start. Fix it or remove it.",
+      "CLAWDTIME_COMPUTER_EFFORT is not low, medium, high or xhigh, so the planner does not start. Fix it or remove it.",
     );
   if (speedText && speedText !== "fast" && speedText !== "standard")
     return invalid(
@@ -557,6 +565,8 @@ export interface PlannerUsage {
   /** Tokens of the request that the service wrote to its cache (Anthropic). */
   cacheWriteTokens: number | null;
   outputTokens: number | null;
+  /** Tokens of the answer spent on reasoning, when the service reports them. */
+  reasoningTokens?: number | null;
 }
 export type UsageReport = (usage: PlannerUsage) => void;
 
@@ -954,6 +964,15 @@ export class ChatTransport implements Transport {
       this.current = this.fallback;
       this.fallback = null;
       response = await post();
+      if (
+        response.status === 400 &&
+        !this.noEffort &&
+        sentEffort(this.options.provider.id, this.current, this.options.effort)
+      ) {
+        response.body?.cancel().catch(() => {});
+        this.noEffort = true;
+        response = await post();
+      }
     }
     if (response.ok) {
       const text = await response.text();
@@ -1098,8 +1117,10 @@ export function responsesAnswer(body: unknown, model: string): ModelAnswer {
           input_tokens?: unknown;
           output_tokens?: unknown;
           input_tokens_details?: { cached_tokens?: unknown } | null;
+          output_tokens_details?: { reasoning_tokens?: unknown } | null;
         })
       : null;
+  const reasoning = count(used?.output_tokens_details?.reasoning_tokens);
   return {
     refused:
       (incomplete && reason === "content_filter") ||
@@ -1129,6 +1150,7 @@ export function responsesAnswer(body: unknown, model: string): ModelAnswer {
           cachedTokens: count(used.input_tokens_details?.cached_tokens),
           cacheWriteTokens: null,
           outputTokens: count(used.output_tokens),
+          ...(reasoning !== null ? { reasoningTokens: reasoning } : {}),
         }
       : null,
     raw: items,
@@ -1245,6 +1267,8 @@ export class ResponsesTransport implements Transport {
   private noEffort = false;
   /** The service refused a forced call: the choice is `auto` from then on. */
   private noRequired = false;
+  /** The default model fell back after 403/404: do not force a default effort on it. */
+  private fellBack = false;
   constructor(
     private readonly options: {
       key: string;
@@ -1264,19 +1288,20 @@ export class ResponsesTransport implements Transport {
   }
 
   private effort(fallback: Effort) {
-    return this.noEffort
-      ? null
-      : responsesEffort(this.current, this.options.effort, fallback);
+    if (this.noEffort) return null;
+    if (this.fellBack && !this.options.effort) return null;
+    return responsesEffort(this.current, this.options.effort, fallback);
   }
 
   /** The body of one request. The rules and the functions come before the turn. */
   body(request: PlannerRequest): Record<string, unknown> {
     const { user } = request;
     const effort = this.effort(request.defaultEffort ?? defaultEffort);
+    const hasTools = request.tools.length > 0;
     return {
       model: this.current,
       instructions: request.system,
-      tools: responsesTools(request.tools),
+      ...(hasTools ? { tools: responsesTools(request.tools) } : {}),
       input: [
         {
           role: "user",
@@ -1297,8 +1322,12 @@ export class ResponsesTransport implements Transport {
         ),
       ],
       // One action for each turn: a function call, and only one.
-      tool_choice: this.noRequired ? "auto" : "required",
-      parallel_tool_calls: request.pair === true,
+      ...(hasTools
+        ? {
+            tool_choice: this.noRequired ? "auto" : "required",
+            parallel_tool_calls: request.pair === true,
+          }
+        : {}),
       ...(effort
         ? {
             reasoning: { effort },
@@ -1397,20 +1426,30 @@ export class ResponsesTransport implements Transport {
     };
     let response = await post();
     let read: string | null = null;
-    while (response.status === 400) {
-      read = await response.text().catch(() => "");
-      const param = errorParam(read);
-      if (param === "tool_choice" && body.tool_choice === "required")
-        this.noRequired = true;
-      else if (
-        "reasoning" in body &&
-        (param === null || param.startsWith("reasoning"))
-      )
-        this.noEffort = true;
-      else break;
-      read = null;
-      response = await post();
-    }
+    const retryBadRequest = async () => {
+      while (response.status === 400) {
+        read = await response.text().catch(() => "");
+        const param = errorParam(read);
+        if (
+          param === "tool_choice" &&
+          body.tool_choice === "required" &&
+          !this.noRequired
+        )
+          this.noRequired = true;
+        else if (
+          "reasoning" in body &&
+          !this.noEffort &&
+          (param === null ||
+            param.startsWith("reasoning") ||
+            param === "effort")
+        )
+          this.noEffort = true;
+        else break;
+        read = null;
+        response = await post();
+      }
+    };
+    await retryBadRequest();
     if (
       this.fallback !== null &&
       (response.status === 403 || response.status === 404)
@@ -1418,7 +1457,9 @@ export class ResponsesTransport implements Transport {
       response.body?.cancel().catch(() => {});
       this.current = this.fallback;
       this.fallback = null;
+      this.fellBack = true;
       response = await post();
+      await retryBadRequest();
     }
     if (!response.ok) return failure(response, this.options.now(), read);
     let parsed: unknown;

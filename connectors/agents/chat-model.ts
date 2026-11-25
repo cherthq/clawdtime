@@ -2,15 +2,15 @@
  * The language model of the chat agent.
  *
  * The chat keeps its own model setting, `CLAWDTIME_SUPERVISOR_MODEL`: a bare
- * model of OpenAI as before (`gpt-4.1-mini` when it is not set), or
- * `provider/model` for any provider of the computer engine. The key comes
- * from the same places as the planner's: the environment first, then the key
- * store of the state folder. The request goes over the providers' own
- * transports (`connectors/computer/providers.ts`): the newest models of
- * OpenAI go to its Responses route, and `CLAWDTIME_OPENAI_API` can choose the
- * route for any model of OpenAI. Each has the retry layer of
- * `model-call.ts`: a request of the model changes nothing on the Mac, so it
- * is the one thing that may be asked again.
+ * model of OpenAI (`gpt-6.2-astra` when it is not set, falling back to
+ * `gpt-5.4` when a key may not use it), or `provider/model` for any provider
+ * of the computer engine. The key comes from the same places as the planner's:
+ * the environment first, then the key store of the state folder. The request
+ * goes over the providers' own transports (`connectors/computer/providers.ts`):
+ * the newest models of OpenAI go to its Responses route, and
+ * `CLAWDTIME_OPENAI_API` can choose the route for any model of OpenAI. Each
+ * has the retry layer of `model-call.ts`: a request of the model changes
+ * nothing on the Mac, so it is the one thing that may be asked again.
  *
  * No message from here holds the key, the request or the body of an answer.
  */
@@ -25,7 +25,9 @@ import {
 import {
   ChatTransport,
   chatEndpoint,
+  defaultComputerModel,
   efforts,
+  fallbackComputerModel,
   MessagesTransport,
   modelName,
   openaiApiSetting,
@@ -38,9 +40,12 @@ import {
   type Transport,
 } from "../computer/providers.js";
 import { findKey, storedKeys } from "../computer/keys.js";
-import { defaultSupervisorModel, type ModelClient } from "./brain.js";
+import type { ModelClient } from "./brain.js";
 import type { LoopCall, LoopMessage, LoopModel } from "./agent-loop.js";
 import { looksSecret } from "./memory.js";
+
+/** The OpenAI model that the chat agent uses when `CLAWDTIME_SUPERVISOR_MODEL` is not set. */
+export const defaultChatAgentModel = defaultComputerModel;
 
 /** A chat turn waits for its answer this long, with its retries. */
 export const chatRetryPolicy: RetryPolicy = {
@@ -143,8 +148,9 @@ export function chatModelSetup(
   root?: string,
   request: typeof fetch = fetch,
 ): ChatModelSetup {
-  const setting =
-    env.CLAWDTIME_SUPERVISOR_MODEL?.trim() || defaultSupervisorModel;
+  const explicit = env.CLAWDTIME_SUPERVISOR_MODEL?.trim();
+  const setting = explicit || defaultChatAgentModel;
+  const chosen = Boolean(explicit);
   const parsed = parseModel(setting, looksSecret);
   if (!parsed.ok)
     return {
@@ -176,8 +182,10 @@ export function chatModelSetup(
         "CLAWDTIME_OPENAI_API is not responses or chat. Fix it or remove it.",
     };
   const now = () => Date.now();
+  const fallback =
+    provider.id === "openai" && !chosen ? fallbackComputerModel : null;
   let transport: Transport;
-  const wire = openaiWire(provider, model, api);
+  const wire = openaiWire(provider, model, api, effort);
   if (wire === "messages")
     transport = new MessagesTransport({
       key: found!.key,
@@ -190,11 +198,12 @@ export function chatModelSetup(
     });
   else if (wire === "responses")
     // The newest models of OpenAI, or CLAWDTIME_OPENAI_API=responses. With no
-    // effort set, a turn of the chat gets `medium`.
+    // effort set, a turn of the chat gets `medium` (and falls back cleanly to
+    // `gpt-5.4` when the model was not explicitly chosen).
     transport = new ResponsesTransport({
       key: found!.key,
       model,
-      fallback: null,
+      fallback,
       effort,
       request,
       now,
@@ -215,8 +224,7 @@ export function chatModelSetup(
       endpoint,
       key: found?.key ?? "",
       model,
-      // The chat's model is the person's choice or the chat's own default: no fallback.
-      fallback: null,
+      fallback,
       effort,
       request,
       now,
