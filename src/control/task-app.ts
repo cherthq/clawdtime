@@ -37,8 +37,8 @@ export interface ComputerPort {
   next(after: number): unknown;
   /** The same, held until a command waits or what runs changes, at most `ms`. */
   waitNext?(after: number, ms: number, signal?: AbortSignal): Promise<unknown>;
-  /** The result of one command. False when no command waits for it. */
-  result(raw: unknown): boolean;
+  /** The result of one command. False when no command waits for it. `cost` is a header of numbers only. */
+  result(raw: unknown, cost?: string | null): boolean;
   /** Whether computer use is on, what it does now and what it asks. */
   status(): unknown;
   /** Transient presentation metadata, separate from observations and action receipts. */
@@ -379,7 +379,12 @@ export function createTaskApp(
       });
       app.post("/desktop/hands/result", async (c) => {
         desktop.authorizePanel(credential(c));
-        return c.json({ ok: computer.result(await c.req.json()) });
+        return c.json({
+          ok: computer.result(
+            await c.req.json(),
+            c.req.header("x-clawdtime-hands-cost"),
+          ),
+        });
       });
       app.post("/desktop/hands/presentation", async (c) => {
         desktop.authorizePanel(credential(c));

@@ -23,8 +23,9 @@ public final class PanelClient {
   private func request(path: String, body: Data? = nil, patient: Bool = false) async throws -> Data {
     try await exchange(path: path, body: body, patient: patient).data
   }
-  /// One request, with the headers of the answer.
-  private func exchange(path: String, body: Data? = nil, patient: Bool = false) async throws -> (data: Data, response: HTTPURLResponse) {
+  /// One request, with the headers of the answer. `headers` are added to the request.
+  private func exchange(path: String, body: Data? = nil, patient: Bool = false,
+                        headers: [String: String] = [:]) async throws -> (data: Data, response: HTTPURLResponse) {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
       path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/execution/decision" || path == "/desktop/voice" || path == "/desktop/memory" ||
@@ -40,6 +41,7 @@ public final class PanelClient {
     // An answer from the language model, or speech, takes longer than a task read.
     if patient { request.timeoutInterval = 90 }
     if let body { request.httpBody = body; request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+    for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
     do {
       let (bytes, raw) = try await session.bytes(for: request)
       guard let response = raw as? HTTPURLResponse, (200...299).contains(response.statusCode),
@@ -161,10 +163,12 @@ public final class PanelClient {
   }
   /// Computer use: the result of one command. Exactly one POST: a failure is never
   /// sent again, and the worker reads a missing answer as an unknown outcome.
-  public func handsResult(_ result: HandResult) async throws {
+  /// `cost` goes in a header of its own: numbers only, and a service that does not know it reads the result as before.
+  public func handsResult(_ result: HandResult, cost: HandsCost? = nil) async throws {
     try result.validate()
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    _ = try await request(path: "/desktop/hands/result", body: try encoder.encode(result))
+    let headers = cost?.headerValue.map { [HandsCost.header: $0] } ?? [:]
+    _ = try await exchange(path: "/desktop/hands/result", body: try encoder.encode(result), headers: headers)
   }
   /// A transient outgoing-video hint; never a command, receipt or UI outcome.
   public func handsPresentation(_ event: CallPresentationEvent) async throws {

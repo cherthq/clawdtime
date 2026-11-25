@@ -86,3 +86,41 @@ public enum HandsPace {
   /// After this many reads with no answer, the bar goes: nothing can command the hands.
   public static let failuresBeforeQuiet = 3
 }
+
+/// What one command cost the hands, for the timing of a step: whole milliseconds and bytes, nothing of
+/// the screen. Nil is a part that the command did not have. The panel sends it with the result, in a
+/// header that a service which does not know it leaves alone.
+public struct HandsCost: Equatable, Sendable {
+  /// Taking the picture, and writing it as a JPEG with its base64.
+  public var captureMs: Int?, encodeMs: Int?
+  /// The bytes of the JPEG.
+  public var imageBytes: Int?
+  /// The walk of the Accessibility tree.
+  public var walkMs: Int?
+  /// The guided cursor on its way and its wait at the target, before an input.
+  public var glideMs: Int?
+  public init(captureMs: Int? = nil, encodeMs: Int? = nil, imageBytes: Int? = nil, walkMs: Int? = nil, glideMs: Int? = nil) {
+    self.captureMs = captureMs; self.encodeMs = encodeMs; self.imageBytes = imageBytes; self.walkMs = walkMs; self.glideMs = glideMs
+  }
+  /// The name of the header.
+  public static let header = "X-ClawdTime-Hands-Cost"
+  /// Whole milliseconds of `seconds`, never below zero and never more than a day.
+  public static func milliseconds(_ seconds: Double) -> Int {
+    guard seconds.isFinite else { return 0 }
+    return Int(min(86_400_000, max(0, (seconds * 1000).rounded())))
+  }
+  /// Adds the parts of another look or glide of the same command.
+  public mutating func add(_ other: HandsCost) {
+    func bounded(_ value: Int?) -> Int { max(0, min(86_400_000, value ?? 0)) }
+    func sum(_ a: Int?, _ b: Int?) -> Int? { a == nil && b == nil ? nil : min(86_400_000, bounded(a) + bounded(b)) }
+    captureMs = sum(captureMs, other.captureMs); encodeMs = sum(encodeMs, other.encodeMs)
+    imageBytes = sum(imageBytes, other.imageBytes); walkMs = sum(walkMs, other.walkMs); glideMs = sum(glideMs, other.glideMs)
+  }
+  /// The value of the header, for example `capture=93;encode=21;bytes=183422;walk=412`. Nil when the
+  /// command had none of the parts.
+  public var headerValue: String? {
+    let parts: [(String, Int?)] = [("capture", captureMs), ("encode", encodeMs), ("bytes", imageBytes), ("walk", walkMs), ("glide", glideMs)]
+    let shown = parts.compactMap { name, value in value.map { "\(name)=\(max(0, min(86_400_000, $0)))" } }
+    return shown.isEmpty ? nil : shown.joined(separator: ";")
+  }
+}

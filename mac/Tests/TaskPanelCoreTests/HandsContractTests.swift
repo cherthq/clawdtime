@@ -306,6 +306,21 @@ final class HandsContractTests: XCTestCase {
     // Right after a result the next command of the step usually waits already: one read at once.
     XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0.3, ran: true), 0)
   }
+  func testWhatACommandCostGoesAsNumbersInOneHeader() {
+    XCTAssertNil(HandsCost().headerValue)
+    var cost = HandsCost(captureMs: 93, encodeMs: 21, imageBytes: 183_422, walkMs: 412)
+    XCTAssertEqual(cost.headerValue, "capture=93;encode=21;bytes=183422;walk=412")
+    // A second look of the same command adds to the first. A part that neither had stays out.
+    cost.add(HandsCost(walkMs: 40, glideMs: 0))
+    XCTAssertEqual(cost.headerValue, "capture=93;encode=21;bytes=183422;walk=452;glide=0")
+    XCTAssertEqual(HandsCost(glideMs: 360).headerValue, "glide=360")
+    // Seconds as whole milliseconds, never below zero and never more than a day.
+    XCTAssertEqual(HandsCost.milliseconds(0.2404), 240)
+    XCTAssertEqual(HandsCost.milliseconds(-1), 0)
+    XCTAssertEqual(HandsCost.milliseconds(.nan), 0)
+    XCTAssertEqual(HandsCost.milliseconds(1e12), 86_400_000)
+    XCTAssertEqual(HandsCost(walkMs: Int.max).headerValue, "walk=86400000")
+  }
   func testTheLastCheckBeforeAnEventSendsNothingAfterStopOrWhenThePersonTookOver() {
     let running = HandsNext.Run(active: true, goal: "Save the note", step: 2, state: "running")
     // The request runs, nobody stopped it and the person did nothing: the event may go.

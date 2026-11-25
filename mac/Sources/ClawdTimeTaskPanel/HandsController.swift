@@ -41,6 +41,18 @@ import TaskPanelCore
   /// When the bar came into view.
   private var barUp: Date?
   private var typingMark = 0
+  /// The time that the guided cursor took before the inputs of this command. Nil when it did not go out.
+  private var glided: Double?
+  /// What the command that ran last cost: its looks and its glide.
+  private var cost: HandsCost {
+    var spent = observer.spent
+    if let glided { spent.add(HandsCost(glideMs: HandsCost.milliseconds(glided))) }
+    return spent
+  }
+  /// The guided cursor goes to `target`, and its time counts for this command.
+  private func travel(to target: CGPoint, label: String) async {
+    glided = (glided ?? 0) + (await guide.travel(to: target, label: label))
+  }
   private var inputRefusal: HandError?
   /// The app that the name of the last open_app stood for. It goes out with the result.
   private var resolvedApp: String?
@@ -129,8 +141,9 @@ import TaskPanelCore
             let result = await self.perform(pending)
             ran = true
             // Exactly one POST for this number. A failure is not sent again: the
-            // worker reads a missing answer as an unknown outcome.
-            do { try await client.handsResult(result) }
+            // worker reads a missing answer as an unknown outcome. What the command
+            // cost goes with it, as numbers only.
+            do { try await client.handsResult(result, cost: self.cost) }
             catch { self.presentation.reset(); self.desktop.invalidate() } // No replay; disconnected history is no longer usable.
             self.showBar()
           }
@@ -220,6 +233,8 @@ import TaskPanelCore
 
   private func perform(_ pending: HandsNext.Pending) async -> HandResult {
     let seq = pending.seq, command = pending.command
+    // What this command costs counts from zero, also when it ends before it begins.
+    observer.spent = HandsCost(); glided = nil
     // The bar with Stop is in view for a moment before the first action of a run.
     if let since = barUp {
       let age = Date().timeIntervalSince(since)
@@ -441,13 +456,13 @@ import TaskPanelCore
         overlay: map.flip(guide.presentationBounds(at: target, label: label)), observedSurface: surface,
         observedGeneration: presentationGeneration)
     }
-    await guide.travel(to: target, label: label)
+    await travel(to: target, label: label)
   }
   /// A command with no place of its own, such as opening an app: the cursor says it where it is.
   private func say(_ label: String) async {
     guard let map = HandsDisplay.main?.map else { return }
     let screen = CGRect(x: 0, y: 0, width: map.width, height: map.height)
-    await guide.travel(to: GuidedFocus.place(focus: nil, shown: guide.place, pointer: map.flip(input.pointer), screen: screen), label: label)
+    await travel(to: GuidedFocus.place(focus: nil, shown: guide.place, pointer: map.flip(input.pointer), screen: screen), label: label)
   }
 
   /// A pointing command: the guided cursor glides to the target with the label of the command, then the real event goes.
@@ -463,7 +478,7 @@ import TaskPanelCore
       width: max(2, xs.max()! - xs.min()! + 2), height: max(2, ys.max()! - ys.min()! + 2))
     let overlay = map.flip(guide.presentationBounds(at: map.flip(places[0]), label: label))
     presentation.point(action.union(overlay))
-    await guide.travel(to: map.flip(places[0]), label: label)
+    await travel(to: map.flip(places[0]), label: label)
     if let refusal = await lastCheck() { return .failure(refusal) }
     // ClawdTime's windows are not in the picture that the worker saw. A click on
     // one of them goes through to what is behind it, which is what the worker meant.

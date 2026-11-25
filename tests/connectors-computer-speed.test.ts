@@ -2,19 +2,30 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ComputerJournal } from "../connectors/computer/journal.js";
+import {
+  ComputerJournal,
+  setComputerSwitch,
+} from "../connectors/computer/journal.js";
 import {
   handsChangeCheckMs,
+  handsCostHeader,
   HandsTimeout,
   handsWaitLimitMs,
   PanelHands,
+  parseHandsCost,
   type HandsClock,
 } from "../connectors/computer/panel-hands.js";
 import { handsNextSchema } from "../connectors/computer/ports.js";
 import {
+  buildComputer,
   computerPort,
   offComputerPort,
 } from "../connectors/computer/service.js";
+import {
+  readTimings,
+  recordTiming,
+  timingLine,
+} from "../connectors/computer/timing.js";
 import { ComputerWorker } from "../connectors/computer/worker.js";
 import { createTaskApp } from "../src/control/task-app.js";
 import type { TaskDesktopService } from "../src/control/task-desktop-service.js";
@@ -97,6 +108,7 @@ describe("a held read of the next command", () => {
     });
     expect(hands.result({ seq: 1, ok: true })).toBe(true);
     expect(await running).toEqual({ seq: 1, ok: true });
+    expect(hands.takeCost()).toEqual({ pollWaitMs: 0 });
   });
 
   it("answers at once when a command waits already, and holds for a command that the panel ran", async () => {
@@ -182,6 +194,182 @@ describe("a held read of the next command", () => {
     expect(await settled(running)).toBe(false);
     clock.advance(1);
     await expect(running).rejects.toEqual(new HandsTimeout(false));
+  });
+});
+
+describe("what the hands spent on a step", () => {
+  it("counts the wait of each command from its queue to its first read", async () => {
+    const clock = new TestClock();
+    const hands = new PanelHands({ first: 1, clock });
+    const first = hands.run(click, "Click");
+    clock.advance(120);
+    hands.next(0);
+    // A second read of the same command adds nothing.
+    clock.advance(80);
+    hands.next(0);
+    hands.result({ seq: 1, ok: true });
+    await first;
+    const second = hands.run({ kind: "key", combo: "return" }, "Press return");
+    clock.advance(3);
+    hands.next(1);
+    hands.result({ seq: 2, ok: true });
+    await second;
+    expect(hands.takeCost()).toEqual({ pollWaitMs: 123 });
+    // Taken once: the next step counts from zero.
+    expect(hands.takeCost()).toEqual({});
+  });
+
+  it("takes the cost header of the panel as numbers only, and only with the result of the command", async () => {
+    expect(
+      parseHandsCost("capture=93;encode=21;bytes=183422;walk=412;glide=360"),
+    ).toEqual({
+      captureMs: 93,
+      encodeMs: 21,
+      imageBytes: 183_422,
+      walkMs: 412,
+      glideMs: 360,
+    });
+    // A part that this service does not know is left out, also a name of the language itself.
+    expect(parseHandsCost("walk=4;zoom=9;constructor=1;proto=2")).toEqual({
+      walkMs: 4,
+    });
+    for (const header of [
+      undefined,
+      null,
+      "",
+      "walk",
+      "walk=-1",
+      "walk=1.5",
+      "walk=4;;glide=2",
+      "walk=999999999",
+      "Walk=4",
+      `walk=4;${"glide=1;".repeat(40)}`,
+      "walk=4 glide=2",
+    ])
+      expect(parseHandsCost(header)).toBeNull();
+
+    const clock = new TestClock();
+    const hands = new PanelHands({ first: 1, clock });
+    const look = hands.run(
+      { kind: "observe", image: true, elements: true },
+      "Look at the screen",
+    );
+    hands.next(0);
+    // A result for another number is not taken, and nor is its cost.
+    expect(hands.result({ seq: 9, ok: true }, "capture=500")).toBe(false);
+    expect(hands.result({ seq: 1, ok: true }, "capture=90;walk=300")).toBe(
+      true,
+    );
+    await look;
+    const act = hands.run(click, "Click");
+    hands.next(1);
+    // A header that is not one changes nothing in the result.
+    expect(hands.result({ seq: 2, ok: true }, "glide=a lot")).toBe(true);
+    await act;
+    const key = hands.run({ kind: "key", combo: "return" }, "Press return");
+    hands.next(2);
+    hands.result({ seq: 3, ok: true }, "walk=40;glide=0");
+    await key;
+    expect(hands.takeCost()).toEqual({
+      captureMs: 90,
+      walkMs: 340,
+      glideMs: 0,
+      pollWaitMs: 0,
+    });
+    expect(handsCostHeader).toBe("x-clawdtime-hands-cost");
+  });
+
+  it("is kept in the timing record and printed with the step", () => {
+    const root = mkdtempSync(join(tmpdir(), "clawdtime-computer-speed-"));
+    roots.push(root);
+    recordTiming(
+      root,
+      {
+        step: 3,
+        kind: "click_element",
+        lookMs: 410,
+        planMs: 1800,
+        actMs: 520,
+        captureMs: 91.4,
+        encodeMs: 18,
+        imageBytes: 162_000,
+        walkMs: 287,
+        glideMs: 352,
+        pollWaitMs: -3,
+      },
+      () => Date.UTC(2026, 10, 25, 9),
+    );
+    const [kept] = readTimings(root);
+    expect(kept).toEqual({
+      at: Date.UTC(2026, 10, 25, 9),
+      step: 3,
+      kind: "click_element",
+      lookMs: 410,
+      planMs: 1800,
+      actMs: 520,
+      captureMs: 91,
+      encodeMs: 18,
+      imageBytes: 162_000,
+      walkMs: 287,
+      glideMs: 352,
+      pollWaitMs: 0,
+    });
+    expect(timingLine(kept!)).toBe(
+      "2026-11-25T09:00:00.000Z step 3 click_element: look 410 ms, plan 1800 ms, act 520 ms (hands: capture 91 ms, encode 18 ms, image 158 KB, walk 287 ms, glide 352 ms, poll wait 0 ms)",
+    );
+    // A part that the step did not have is not in the record.
+    recordTiming(
+      root,
+      {
+        step: 4,
+        kind: "type",
+        lookMs: 0,
+        planMs: 900,
+        actMs: 80,
+        glideMs: 0,
+        walkMs: Number.NaN,
+      },
+      () => Date.UTC(2026, 10, 25, 9, 1),
+    );
+    expect(timingLine(readTimings(root)[1]!)).toBe(
+      "2026-11-25T09:01:00.000Z step 4 type: look 0 ms, plan 900 ms, act 80 ms (hands: glide 0 ms)",
+    );
+  });
+
+  it("goes from the hands of the service into the record of each step", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clawdtime-computer-speed-"));
+    roots.push(root);
+    setComputerSwitch(root, true);
+    const built = buildComputer({
+      root,
+      env: { CLAWDTIME_OPENAI_API_KEY: "k", CLAWDTIME_COMPUTER_TIMING: "on" },
+    });
+    const inside = built.worker as unknown as {
+      hands: PanelHands;
+      timing: (entry: unknown) => void;
+    };
+    const looked = inside.hands.run(
+      { kind: "observe", image: true, elements: true },
+      "Look at the screen",
+    );
+    const served = built.port.next(0).command!;
+    expect(
+      built.port.result({ seq: served.seq, ok: true }, "capture=88;walk=120"),
+    ).toBe(true);
+    await looked;
+    inside.timing({
+      step: 1,
+      kind: "click_element",
+      lookMs: 230,
+      planMs: 0,
+      actMs: 400,
+    });
+    const [kept] = readTimings(root);
+    expect(kept).toMatchObject({ step: 1, captureMs: 88, walkMs: 120 });
+    expect(kept!.pollWaitMs).toBeGreaterThanOrEqual(0);
+    // Taken with that step: the next step starts from zero.
+    inside.timing({ step: 2, kind: "done", lookMs: 0, planMs: 0, actMs: 0 });
+    expect(readTimings(root)[1]).not.toHaveProperty("captureMs");
   });
 });
 

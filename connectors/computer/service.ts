@@ -57,8 +57,11 @@ export interface ComputerPort {
     ms: number,
     signal?: AbortSignal,
   ): Promise<HandsNext>;
-  /** `POST /desktop/hands/result`. False when no command waits for that result. */
-  result(raw: unknown): boolean;
+  /**
+   * `POST /desktop/hands/result`. False when no command waits for that result.
+   * `cost` is the panel's cost header, for the timing of the step.
+   */
+  result(raw: unknown, cost?: string | null): boolean;
   /** `GET /desktop/computer`. */
   status(): ComputerStatus;
   present(raw: unknown): boolean;
@@ -105,7 +108,7 @@ export function computerPort(
       });
       return next(after);
     },
-    result: (raw) => hands.result(raw),
+    result: (raw, cost) => hands.result(raw, cost),
     status: () => computerStatusSchema.parse(worker.status()),
     present: (raw) => events.accept(raw, hands.presentationCommand(), active()),
     presentation: () => ({ version: 1, event: events.latest(active()) }),
@@ -208,8 +211,13 @@ export function buildComputer(options: ComputerOptions): {
     ...(options.notify ? { notify: options.notify } : {}),
     // The time of each step goes to a file in the state folder: the service
     // runs with no terminal, so a printed line would reach nobody.
+    // What the hands spent on the step goes with it: the capture, the walk,
+    // the encode, the glide and the wait for the panel.
     ...(options.env.CLAWDTIME_COMPUTER_TIMING === "on"
-      ? { timing: (entry: StepTiming) => recordTiming(options.root, entry) }
+      ? {
+          timing: (entry: StepTiming) =>
+            recordTiming(options.root, { ...entry, ...hands.takeCost() }),
+        }
       : {}),
   });
   return { worker, port: computerPort(worker, hands) };

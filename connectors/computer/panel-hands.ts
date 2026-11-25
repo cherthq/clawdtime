@@ -56,6 +56,27 @@ export const systemHandsClock: HandsClock = {
   cancel: (timer) => clearTimeout(timer as NodeJS.Timeout),
 };
 
+/**
+ * What the commands of one step cost the hands: whole milliseconds and bytes,
+ * never anything of the screen. A part is present only when a command had it.
+ */
+export interface HandsCost {
+  /** Taking the picture of the screen. */
+  captureMs?: number;
+  /** Writing the picture as a JPEG, with its base64. */
+  encodeMs?: number;
+  /** The bytes of the JPEG. */
+  imageBytes?: number;
+  /** The walk of the Accessibility tree. */
+  walkMs?: number;
+  /** The guided cursor on its way to the place of an input, and its wait there. */
+  glideMs?: number;
+  /** The time that commands waited before the panel read them. */
+  pollWaitMs?: number;
+}
+
+/** The header in which the panel says what one command cost. */
+export const handsCostHeader = "x-clawdtime-hands-cost";
 /** The header with which the service says that it held a read. */
 export const handsHeldHeader = "x-clawdtime-hands-wait";
 /** The longest time that one read of the panel is held. */
@@ -63,12 +84,42 @@ export const handsWaitLimitMs = 2000;
 /** How often a held read looks whether what runs changed. */
 export const handsChangeCheckMs = 100;
 
+const costParts = new Map<string, keyof HandsCost>([
+  ["capture", "captureMs"],
+  ["encode", "encodeMs"],
+  ["bytes", "imageBytes"],
+  ["walk", "walkMs"],
+  ["glide", "glideMs"],
+]);
+const costLimit = 86_400_000;
+
+/**
+ * The parts of the cost header, for example `capture=93;walk=412`. Null for a
+ * header that is not one: the result itself is taken all the same.
+ */
+export function parseHandsCost(raw: string | null | undefined) {
+  if (!raw || raw.length > 200) return null;
+  const cost: HandsCost = {};
+  for (const part of raw.split(";")) {
+    const match = /^([a-z]{1,12})=([0-9]{1,9})$/.exec(part.trim());
+    if (!match) return null;
+    const field = costParts.get(match[1]!);
+    const value = Number(match[2]);
+    if (value > costLimit) return null;
+    // A part that this service does not know is left out.
+    if (field) cost[field] = value;
+  }
+  return cost;
+}
+
 interface Waiting {
   seq: number;
   command: HandCommand;
   label: string;
   /** The panel has read this command at least once. */
   served: boolean;
+  /** When the command was queued, on the clock of the hands. */
+  queued: number;
   resolve: (result: HandResult) => void;
   reject: (error: Error) => void;
   timer: unknown;
@@ -82,6 +133,7 @@ export class PanelHands implements Hands {
   private readonly clock: HandsClock;
   /** Held reads of the panel, woken when a command is queued. */
   private readonly sleepers = new Set<() => void>();
+  private spent: HandsCost = {};
   constructor(
     options: {
       /** How long one command may take, from the moment it is queued. */
@@ -129,6 +181,7 @@ export class PanelHands implements Hands {
         command: valid.data,
         label: label.slice(0, 120),
         served: false,
+        queued: this.clock.now(),
         resolve,
         reject,
         timer,
@@ -192,6 +245,11 @@ export class PanelHands implements Hands {
   next(after: number): HandsNext["command"] {
     const waiting = this.waiting;
     if (!waiting || waiting.seq <= after) return null;
+    // The first read of a command ends its wait for the panel.
+    if (!waiting.served)
+      this.spend({
+        pollWaitMs: Math.max(0, this.clock.now() - waiting.queued),
+      });
     waiting.served = true;
     this.presentedCommand = waiting.seq;
     return {
@@ -204,14 +262,18 @@ export class PanelHands implements Hands {
   /**
    * Takes what the panel posts. False when no command waits for that number:
    * a result that comes after the time limit changes nothing. It throws when
-   * the body does not have the shape of a result.
+   * the body does not have the shape of a result. `cost` is the cost header
+   * of the panel: numbers only, for the timing of the step. A header that is
+   * not one changes nothing.
    */
-  result(raw: unknown): boolean {
+  result(raw: unknown, cost?: string | null): boolean {
     const result = handResultSchema.parse(raw);
     const waiting = this.waiting;
     if (!waiting || waiting.seq !== result.seq) return false;
     this.waiting = undefined;
     this.clock.cancel(waiting.timer);
+    const spent = parseHandsCost(cost);
+    if (spent) this.spend(spent);
     if (!result.ok || result.interrupted) this.presentedCommand = 0;
     waiting.resolve(result);
     return true;
@@ -239,5 +301,26 @@ export class PanelHands implements Hands {
   /** Presentation only: the last command actually fetched by the panel, never an input grant. */
   presentationCommand(): number {
     return this.presentedCommand;
+  }
+
+  /**
+   * What the commands since the last call cost, and a new count from zero.
+   * The worker's timing takes it once for each step.
+   */
+  takeCost(): HandsCost {
+    const spent = this.spent;
+    this.spent = {};
+    return spent;
+  }
+
+  private spend(cost: HandsCost) {
+    for (const [field, value] of Object.entries(cost) as [
+      keyof HandsCost,
+      number,
+    ][])
+      this.spent[field] = Math.min(
+        costLimit,
+        Math.round((this.spent[field] ?? 0) + value),
+      );
   }
 }

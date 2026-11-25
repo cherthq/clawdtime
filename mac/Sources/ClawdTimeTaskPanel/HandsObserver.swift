@@ -23,7 +23,12 @@ struct HandsDisplay {
 @MainActor final class HandsObserver {
   private struct Picture: Sendable {
     let base64: String, width: Int, height: Int
+    let captureMs: Int, encodeMs: Int, bytes: Int
   }
+
+  /// What the looks of the command that runs cost, for the timing of its step. The controller sets it
+  /// back at the start of each command.
+  var spent = HandsCost()
 
   /// The app in front. ClawdTime is never its own subject.
   private var frontApp: NSRunningApplication? {
@@ -43,14 +48,17 @@ struct HandsDisplay {
     async let taken: Picture? = image ? capture(display) : nil
     var window = "", found: [ScreenElement] = []
     if let pid {
+      let began = Date()
       // The tree is read off the main thread: an app that is slow to answer does not freeze the mascot.
       let read = await Task.detached(priority: .userInitiated) { HandsTree.read(pid: pid, elements: elements, screen: bounds) }.value
+      spent.add(HandsCost(walkMs: HandsCost.milliseconds(Date().timeIntervalSince(began))))
       window = read.window
       found = ElementCleaner.clean(read.elements, within: read.frame)
     }
     let picture = await taken
     // A picture that was asked for and could not be taken fails the look.
     if image && picture == nil { return .failure(.failed) }
+    if let picture { spent.add(HandsCost(captureMs: picture.captureMs, encodeMs: picture.encodeMs, imageBytes: picture.bytes)) }
     let seen = Observation(at: (Date().timeIntervalSince1970 * 1000).rounded(),
       screen: .init(width: map.width, height: map.height, scale: map.scale),
       cursor: .init(x: Double(pointer.x), y: Double(pointer.y)),
@@ -85,6 +93,7 @@ struct HandsDisplay {
   /// and the JPEG is written off the main thread. With `part`, only that part of the display, in points
   /// from the top left, at `pixels`. Nil when it cannot be taken or does not fit.
   private func capture(_ display: HandsDisplay, part: CGRect? = nil, pixels: (width: Int, height: Int)? = nil) async -> Picture? {
+    let began = Date()
     do {
       let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
       guard let screen = content.displays.first(where: { $0.displayID == display.id }) else { return nil }
@@ -98,11 +107,15 @@ struct HandsDisplay {
       if let part { settings.sourceRect = part; settings.scalesToFit = true }
       settings.showsCursor = true; settings.capturesAudio = false
       let frame = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: settings)
-      let written = await Task.detached(priority: .userInitiated) { () -> String? in
-        ScreenPicture.encode(frame)?.base64EncodedString()
+      let captured = Date()
+      let written = await Task.detached(priority: .userInitiated) { () -> (String, Int)? in
+        guard let jpeg = ScreenPicture.encode(frame) else { return nil }
+        return (jpeg.base64EncodedString(), jpeg.count)
       }.value
       guard let written else { return nil }
-      return Picture(base64: written, width: frame.width, height: frame.height)
+      return Picture(base64: written.0, width: frame.width, height: frame.height,
+        captureMs: HandsCost.milliseconds(captured.timeIntervalSince(began)),
+        encodeMs: HandsCost.milliseconds(Date().timeIntervalSince(captured)), bytes: written.1)
     } catch { return nil }
   }
 }
