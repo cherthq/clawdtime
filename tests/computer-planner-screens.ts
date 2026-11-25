@@ -5,7 +5,9 @@
  * Accessibility tree of a real app would name carries data-role and
  * data-title, and data-key names it for the checks. A control with an empty
  * data-title has no name, as many custom controls have: only the picture
- * shows what it is. Every name here is invented.
+ * shows what it is. A screen with a `url` is a web page in a browser: the
+ * test reads it with the page script of the product, and data-key names its
+ * elements for the checks there too. Every name here is invented.
  */
 const base = `
   * { box-sizing: border-box; }
@@ -211,10 +213,118 @@ const board = page(
     </div></div></div>`,
 );
 
+// A menu bar inside the window. Its Export menu opens only while the pointer rests on it.
+const reports = (open: boolean) =>
+  page(
+    "Reports",
+    `.menubar { height: 36px; display: flex; align-items: center; gap: 4px; padding: 0 10px; border-bottom: 1px solid #ddd; background: #f7f7f7; position: relative; }
+     .menu { position: relative; } .menubar span.name { display: inline-block; padding: 6px 12px; border-radius: 5px; } .menu.open span.name { background: #dbe8ff; }
+     .items { position: absolute; left: 0; top: 30px; width: 180px; background: #fff; border: 1px solid #c8c8c8; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.2); padding: 5px; z-index: 3; }
+     .item { padding: 7px 12px; border-radius: 5px; } .hint { margin-left: auto; color: #777; } .doc { flex: 1; padding: 30px 50px; font-size: 15px; line-height: 1.7; }`,
+    `<div class="window"><div class="titlebar">${lights}<div class="title">Reports</div></div>
+     <div class="menubar"><span class="name" data-role="AXMenuBarItem" data-title="File" data-key="menu-file">File</span><span class="name" data-role="AXMenuBarItem" data-title="Edit" data-key="menu-edit">Edit</span>
+       <div class="menu${open ? " open" : ""}"><span class="name" data-role="AXMenuBarItem" data-title="Export" data-key="menu-export">Export</span>
+       ${
+         open
+           ? `<div class="items"><div class="item" data-role="AXMenuItem" data-title="PDF" data-key="menu-pdf">PDF</div><div class="item" data-role="AXMenuItem" data-title="CSV" data-key="menu-csv">CSV</div><div class="item" data-role="AXMenuItem" data-title="Plain text" data-key="menu-text">Plain text</div></div>`
+           : ""
+       }</div>
+       <span class="hint" data-role="AXStaticText" data-title="Point at a menu to open it.">Point at a menu to open it.</span></div>
+     <div class="content"><div class="doc" data-role="AXTextArea" data-title="" data-value="Quarterly report. Sales rose in the north.">Quarterly report. Sales rose in the north.</div></div></div>`,
+  );
+
+// A board of cards in columns. A card moves by a drag onto another column.
+const card = (title: string, key: string) =>
+  `<div class="card" data-role="AXGroup" data-title="${title}" data-key="card-${key}">${title}</div>`;
+const tasks = page(
+  "Tasks",
+  `.board { flex: 1; display: flex; gap: 16px; padding: 18px; background: #f3f4f6; }
+   .column { flex: 1; background: #e9ebef; border-radius: 10px; padding: 10px; } .column h4 { margin: 4px 6px 12px; }
+   .card { background: #fff; border-radius: 8px; padding: 12px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.15); font-weight: 600; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Tasks</div></div><div class="content"><div class="board">
+     <div class="column" data-role="AXList" data-title="To do" data-key="col-todo"><h4>To do</h4>${card("Write the invoice", "invoice")}${card("Call the printer", "printer")}</div>
+     <div class="column" data-role="AXList" data-title="Doing" data-key="col-doing"><h4>Doing</h4>${card("Plan the launch", "launch")}</div>
+     <div class="column" data-role="AXList" data-title="Done" data-key="col-done"><h4>Done</h4>${card("Book the venue", "venue")}</div>
+   </div></div></div>`,
+);
+
+// Two sliders. The knob is drawn: only the picture shows where it is.
+const slider = (label: string, key: string, value: number) =>
+  `<div class="row"><span class="name">${label}</span><div class="slider" data-role="AXSlider" data-title="${label}" data-value="${value}" data-key="${key}">
+     <div class="track"></div><div class="fill" style="width:${value}%"></div><div class="knob" data-key="${key}-knob" style="left:${value}%"></div></div><span class="number">${value}%</span></div>`;
+const sound = page(
+  "Sound",
+  `.pane { flex: 1; padding: 24px 40px; } .row { display: flex; align-items: center; gap: 24px; padding: 20px 0; border-bottom: 1px solid #e3e3e3; font-size: 14px; }
+   .row .name { width: 160px; } .slider { position: relative; width: 320px; height: 22px; }
+   .track { position: absolute; left: 0; right: 0; top: 9px; height: 4px; border-radius: 2px; background: #d1d1d6; }
+   .fill { position: absolute; left: 0; top: 9px; height: 4px; border-radius: 2px; background: #0a7aff; }
+   .knob { position: absolute; top: 0; width: 22px; height: 22px; margin-left: -11px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+   .number { width: 50px; color: #555; } .hint { color: #777; margin-top: 18px; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Sound</div></div><div class="content"><div class="pane">
+     <h2 data-role="AXStaticText" data-title="Sound">Sound</h2>
+     ${slider("Output volume", "volume", 20)}${slider("Alert volume", "alert", 50)}
+     <p class="hint" data-role="AXStaticText" data-title="Drag a knob to change a level.">Drag a knob to change a level.</p>
+   </div></div></div>`,
+);
+
+/** A web page, as a browser shows it. data-key names an element for the checks. */
+const web = (title: string, style: string, body: string) =>
+  `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>
+  body { margin: 0; font: 15px -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1d1d1f; background: #fff; }
+  main { max-width: 720px; margin: 40px auto; padding: 0 20px; } input, select, button { font: inherit; padding: 6px 10px; } ${style}
+  </style></head><body>${body}</body></html>`;
+const checkout = web(
+  "Checkout - Shop",
+  "",
+  `<main><h1>Checkout</h1><form>
+     <p><label for="name">Name</label><br><input id="name" value="Ada Brook" data-key="name"></p>
+     <p><label for="country">Country</label><br><select id="country" data-key="country"><option value="">Choose a country</option><option>Spain</option><option>Portugal</option><option>France</option><option>Italy</option></select></p>
+     <p><button type="submit" data-key="save">Save</button></p></form></main>`,
+);
+// The search went out a moment ago, and the result is not there yet.
+const searching = web(
+  "Flights - Travel",
+  "",
+  `<main><h1>Find a flight</h1><form role="search"><input type="search" aria-label="Where to" value="Lisbon" data-key="where"> <button type="submit" data-key="search">Search</button></form>
+     <p>Searching for flights to Lisbon...</p></main>`,
+);
+const inbox = web(
+  "Inbox - Mailbox",
+  "",
+  `<main><h1>Inbox</h1><p>Welcome to your inbox. You have 3 new messages.</p>
+     <ul><li><a href="#" data-key="mail-1">Lunch on Friday?</a></li><li><a href="#" data-key="mail-2">Your order has shipped</a></li><li><a href="#" data-key="mail-3">Team notes</a></li></ul></main>`,
+);
+// The menu of Account opens only while the pointer rests on it.
+const shopMenu = web(
+  "Deals - Shop",
+  `nav { display: flex; gap: 18px; padding: 14px 24px; border-bottom: 1px solid #ddd; align-items: center; }
+   .account { position: relative; margin-left: auto; } .drop { display: none; position: absolute; right: 0; top: 36px; background: #fff; border: 1px solid #ccc; padding: 8px; }
+   .account:hover .drop { display: block; } .drop a { display: block; padding: 6px 12px; }`,
+  `<nav><a href="/" data-key="home">Home</a><a href="/deals" data-key="deals">Deals</a>
+     <div class="account"><button aria-haspopup="true" data-key="account">Account</button>
+       <div class="drop"><a href="/orders" data-key="orders">Orders</a><a href="/settings" data-key="settings">Settings</a><a href="/sign-out" data-key="signout">Sign out</a></div></div></nav>
+   <main><h1>Deals of the week</h1><p>Point at Account to see your orders and settings.</p></main>`,
+);
+const slides = web(
+  "Spring review - Slides",
+  `.slide { margin: 60px auto; width: 640px; height: 360px; border: 1px solid #ccc; border-radius: 10px; padding: 40px; }`,
+  `<main><div class="slide"><h1>Spring review</h1><p>Slide 1 of 5</p></div>
+     <p>Use the arrow keys to move between slides.</p><a href="/help" data-key="help">Help</a></main>`,
+);
+
 export interface Screen {
   app: { name: string; bundleId: string; window: string };
   html: string;
+  /** A web page: its address. The page is read with the page script of the product. */
+  url?: string;
+  /** The tabs of the window, as the contract's browser_tabs gives them. Typed loosely until ports.ts has them. */
+  tabs?: { index: number; title: string; url: string; active: boolean }[];
 }
+const browserApp = (window: string) => ({
+  name: "Google Chrome",
+  bundleId: "com.google.Chrome",
+  window,
+});
 /** A browser window on a new tab: an address bar, a search box of the start page and a few tiles. */
 const newTab = page(
   "New Tab",
@@ -360,5 +470,71 @@ export const screens: Record<string, Screen> = {
       window: "Sign in to Ledger",
     },
     html: login(true),
+  },
+  // For the new kinds of action.
+  menuClosed: {
+    app: { name: "Reports", bundleId: "com.example.reports", window: "Report" },
+    html: reports(false),
+  },
+  menuOpen: {
+    app: { name: "Reports", bundleId: "com.example.reports", window: "Report" },
+    html: reports(true),
+  },
+  tasks: {
+    app: { name: "Tasks", bundleId: "com.example.tasks", window: "Tasks" },
+    html: tasks,
+  },
+  sound: {
+    app: {
+      name: "Settings",
+      bundleId: "com.example.settings",
+      window: "Sound",
+    },
+    html: sound,
+  },
+  checkout: {
+    app: browserApp("Checkout - Shop"),
+    html: checkout,
+    url: "https://shop.example/checkout",
+  },
+  searching: {
+    app: browserApp("Flights - Travel"),
+    html: searching,
+    url: "https://travel.example/",
+  },
+  inbox: {
+    app: browserApp("Inbox - Mailbox"),
+    html: inbox,
+    url: "https://mail.example/",
+    tabs: [
+      {
+        index: 1,
+        title: "Inbox - Mailbox",
+        url: "https://mail.example/",
+        active: true,
+      },
+      {
+        index: 2,
+        title: "Quarterly plan - Docs",
+        url: "https://docs.example/plan",
+        active: false,
+      },
+      {
+        index: 3,
+        title: "Flights - Travel",
+        url: "https://travel.example/",
+        active: false,
+      },
+    ],
+  },
+  shopMenu: {
+    app: browserApp("Deals - Shop"),
+    html: shopMenu,
+    url: "https://shop.example/deals",
+  },
+  slides: {
+    app: browserApp("Spring review - Slides"),
+    html: slides,
+    url: "https://slides.example/spring",
   },
 };
