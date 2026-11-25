@@ -20,6 +20,7 @@ import { z } from "zod";
 import { desktopConfigurationFingerprint } from "../src/control/task-desktop-config.js";
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import { validateVerificationPlan } from "../src/control/task-verification.js";
+import { plannerVariables } from "../connectors/computer/providers.js";
 
 const fingerprint = z.string().regex(/^[a-f0-9]{64}$/);
 const identity = z.string().min(1).max(200);
@@ -157,6 +158,9 @@ function childEnvironment(panel = false): NodeJS.ProcessEnv {
           // window on the person's screen.
           "VITEST",
         ].includes(key) ||
+        // The keys, the model, the effort and the speed of the planner of
+        // computer use, for every provider that it can use.
+        plannerVariables.includes(key) ||
         (panel &&
           [
             "CLAWDTIME_SPACE_LEFT_SHORTCUT",
