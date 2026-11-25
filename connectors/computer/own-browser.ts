@@ -24,7 +24,8 @@
  *
  * No blind retry. A read may start the browser again when it ended. An input
  * never starts it, and an input whose answer did not come back is never sent
- * again: its result is not known.
+ * again: its result is not known, and the driver throws
+ * `BrowserInputUnknown`, which makes the request uncertain.
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -59,6 +60,7 @@ import {
 import {
   DevToolsClosed,
   DevToolsConnection,
+  DevToolsTimeout,
   browserEndpoint,
   dialWebSocket,
   readActivePort,
@@ -71,6 +73,13 @@ import {
   type BrowserPort,
   type BrowserTab,
 } from "./ports.js";
+
+/**
+ * An input went out and its answer never came: the connection closed, or the
+ * browser did not answer in time. It may have happened. The worker makes the
+ * request uncertain and never sends it again.
+ */
+export class BrowserInputUnknown extends Error {}
 
 /** A program that started. */
 export interface LaunchedBrowser {
@@ -1249,10 +1258,16 @@ export class OwnBrowser implements BrowserPort {
     }
   }
 
-  /** The error to tell, when the connection closed during a step. */
+  /**
+   * The error to tell, when the connection closed during a step. Once an
+   * input went out, its result is not known.
+   */
   private lost(step: Step, error: unknown) {
+    if (error instanceof BrowserInputUnknown) return error;
     if (!(error instanceof DevToolsClosed)) return error;
-    return new Error(step.sent ? lostInput : endedNothingSent);
+    return step.sent
+      ? new BrowserInputUnknown(lostInput)
+      : new Error(endedNothingSent);
   }
 
   private command<T = Record<string, unknown>>(
@@ -1294,6 +1309,13 @@ export class OwnBrowser implements BrowserPort {
         this.command<T>(tab, method, params, ownTiming.inputMs),
         dialog,
       ]);
+    } catch (error) {
+      // The command went out and no answer came: it may have happened.
+      if (error instanceof DevToolsTimeout)
+        throw new BrowserInputUnknown(
+          `${me} did not answer an input in time. Its result is not known, and it is not sent again. Read the page to see what happened.`,
+        );
+      throw error;
     } finally {
       stop();
     }

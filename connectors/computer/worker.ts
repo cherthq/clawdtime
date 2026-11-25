@@ -110,6 +110,7 @@ import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import { directAddress, webAddress } from "./navigation.js";
 import { directOpening } from "./planner.js";
 import { supportedBrowsers } from "./browser.js";
+import { BrowserInputUnknown } from "./own-browser.js";
 import {
   giveUpNote,
   otherWays,
@@ -3600,8 +3601,11 @@ export class ComputerWorker implements DesktopExecutorPort {
       }
     } catch (error) {
       run.page = null;
-      // Silence after an action is not proof that it did not happen.
-      if (error instanceof BrowserSilent && effect) {
+      // Silence after an action is not proof that it did not happen. Nor is
+      // a driver that lost the answer of an input that went out.
+      const unknown =
+        error instanceof BrowserSilent || error instanceof BrowserInputUnknown;
+      if (unknown && effect) {
         this.note(
           run,
           action,
@@ -3623,7 +3627,13 @@ export class ComputerWorker implements DesktopExecutorPort {
         action,
         why,
         first.target,
-        this.browserFailure(run, error, "did not run"),
+        this.browserFailure(
+          run,
+          error,
+          error instanceof BrowserInputUnknown
+            ? "no result came back"
+            : "did not run",
+        ),
         "failed",
       );
       // The browser can fail after the click or the link went out. So this

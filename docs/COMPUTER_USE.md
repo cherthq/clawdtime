@@ -82,7 +82,8 @@ and no Automation right of macOS.
   it started, or, after a restart of the service, the process that holds the
   profile. It refuses any other program.
 - A read may start the browser again after it closed. An input never does, and
-  an input whose answer did not come back is never sent again.
+  an input whose answer did not come back is never sent again: the request
+  becomes uncertain.
 - It never types into a password field and never reads one.
 
 `clawdtime computer doctor`, run with the same variable, says whether a
