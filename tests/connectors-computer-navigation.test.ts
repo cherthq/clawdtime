@@ -693,7 +693,9 @@ describe("a direct request for a web address in the worker", () => {
   });
 
   it("tells the planner when no app of that name opens web addresses, and opens nothing else by itself", async () => {
+    // The first give_up is told the ways it did not try. The second ends it.
     const f = setup([
+      { kind: "give_up", reason: "No browser named Fixture Browser is here." },
       { kind: "give_up", reason: "No browser named Fixture Browser is here." },
     ]);
     f.hands.answer = (command) =>
@@ -715,7 +717,8 @@ describe("a direct request for a web address in the worker", () => {
     ]);
     expect(f.worker.status()).toMatchObject({
       state: "blocked",
-      message: "I could not finish. No browser named Fixture Browser is here.",
+      message:
+        "I could not finish. No browser named Fixture Browser is here. Tell me another way to try, or do this step yourself.",
     });
   });
 
@@ -791,8 +794,12 @@ describe("a direct request for a web address in the worker", () => {
       kind: "none",
     });
     await f.worker.idle();
-    expect(f.planner.inputs).toHaveLength(1);
+    // The first give_up is told the ways it did not try: the address is one.
+    expect(f.planner.inputs).toHaveLength(2);
     expect(f.planner.inputs[0]!.history).toEqual([]);
+    expect(f.planner.inputs[1]!.history[0]!.outcome).toContain(
+      "open_url with the address",
+    );
     expect(f.hands.sent).toEqual([]);
   });
 });

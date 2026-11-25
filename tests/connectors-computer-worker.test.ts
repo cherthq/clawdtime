@@ -20,6 +20,7 @@ import {
   ComputerWorker,
   computerStatusSchema,
   stoppedText,
+  type StepTiming,
 } from "../connectors/computer/worker.js";
 import {
   element,
@@ -53,6 +54,10 @@ function setup(
     browserMs?: number;
     home?: string;
     enabled?: () => boolean;
+    settleMs?: number;
+    settleLimit?: number;
+    transientMs?: number;
+    timing?: (entry: StepTiming) => void;
   } = {},
 ) {
   const home =
@@ -74,6 +79,14 @@ function setup(
     ...(options.maxMs ? { maxMs: options.maxMs } : {}),
     ...(options.browserMs ? { browserMs: options.browserMs } : {}),
     ...(options.enabled ? { enabled: options.enabled } : {}),
+    // The pauses of a wait for the screen to settle and after a short
+    // failure of the planner: short here, so that a test takes no time.
+    settleMs: options.settleMs ?? 1,
+    transientMs: options.transientMs ?? 1,
+    ...(options.settleLimit !== undefined
+      ? { settleLimit: options.settleLimit }
+      : {}),
+    ...(options.timing ? { timing: options.timing } : {}),
   });
   const waiting = () =>
     until(() => worker.snapshot().state === "waiting_for_person");
@@ -549,7 +562,7 @@ describe("the person's yes", () => {
     await waiting();
     clock.now += 15 * 60_000;
     expect((await worker.answer("yes")).message).toBe(
-      "I stopped at the time limit of 15 minutes. The task is not finished.",
+      "I stopped at the time limit of 15 minutes. The task is not finished. Ask again to go on from where it is now.",
     );
     await worker.idle();
     expect(hands.sent).toEqual([]);
@@ -795,7 +808,7 @@ describe("a yes after which the action was not sent", () => {
     await worker.idle();
     expect(said).toHaveLength(3);
     expect(said[2]).toBe(
-      "I cannot act on this window right now: the screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.",
+      "The screen kept changing under me, also after I waited for the screen to settle, so nothing was sent. Close any open menu or list in front, then ask again.",
     );
     expect(worker.snapshot().state).toBe("blocked");
     expect(hands.sent).toEqual([]);
@@ -1691,7 +1704,7 @@ describe("what the person says while a task runs", () => {
     await waiting();
     clock.now += 15 * 60_000;
     expect((await worker.submit("r2", "Use the other tab")).message).toBe(
-      "I stopped at the time limit of 15 minutes. The task is not finished.",
+      "I stopped at the time limit of 15 minutes. The task is not finished. Ask again to go on from where it is now.",
     );
     await worker.idle();
     expect(hands.sent).toEqual([]);
@@ -1701,7 +1714,7 @@ describe("what the person says while a task runs", () => {
     expect(journal.get("r2")).toBeNull();
     // The same message a second time is no new task either.
     expect((await worker.submit("r2", "Use the other tab")).message).toBe(
-      "I stopped at the time limit of 15 minutes. The task is not finished.",
+      "I stopped at the time limit of 15 minutes. The task is not finished. Ask again to go on from where it is now.",
     );
     expect(journal.get("r2")).toBeNull();
     expect(hands.commands).toHaveLength(1);
@@ -3126,11 +3139,14 @@ describe("an action that is not sent, or that moves nothing", () => {
   const retired =
     "The desktop or display changed. Old coordinates were retired; nothing was sent.";
   const screenChangingEnd =
-    "I cannot act on this window right now: the screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.";
+    "The screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.";
+  /** The same, when the worker waited for the screen to settle and it never did. */
+  const screenChangingWaitedEnd =
+    "The screen kept changing under me, also after I waited for the screen to settle, so nothing was sent. Close any open menu or list in front, then ask again.";
   const frontChangingEnd =
-    "I cannot act on this window right now: another app or window kept coming to the front, so nothing was sent. Bring the window you want to the front, then ask again.";
+    "Another app or window kept coming to the front, so nothing was sent. Bring the window you want to the front, then ask again.";
   const pageUnreadEnd =
-    "I cannot act on this page right now: the browser page could not be read before I acted, so nothing was sent. Check the browser window and ask again.";
+    "The browser page could not be read before I acted, so nothing was sent. Check the browser window, then ask again.";
   const told = (times: number) =>
     `This action did not work ${times} times in a row: it was not sent, or the screen did not change after it. Choose another way. If you choose the same action again now, the task ends.`;
   /** What was tried, what the screen shows, and what the person can do. */
@@ -3154,7 +3170,7 @@ describe("an action that is not sent, or that moves nothing", () => {
   const covered =
     "A list or a card of the app lies over that place, so nothing was sent. Use the keyboard there (Down, Return, Escape), or press Escape to close it.";
   const coveredEnd =
-    "I cannot act on that place right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.";
+    "A list or a card of the app kept lying over the place I wanted to use, so nothing was sent. Press Escape to close it, then ask again.";
   const coveredHands = (hands: FakeHands) => {
     hands.answer = (command) =>
       command.kind === "click" || command.kind === "drag"
@@ -3183,7 +3199,7 @@ describe("an action that is not sent, or that moves nothing", () => {
   it("ends after three clicks in a row under a list or a card, with what the person can do", async () => {
     const { worker, said, journal, hands } = setup(
       again({ kind: "click_element", element: 1 }, 10),
-      { screens: [bar()] },
+      { settleLimit: 0, screens: [bar()] },
     );
     coveredHands(hands);
     await worker.submit("r1", "Click the address bar");
@@ -3208,7 +3224,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     );
     const { worker, said, hands, journal } = setup(
       again({ kind: "type", element: 1, text: "phone" }, 10),
-      { screens: [field] },
+      { settleLimit: 0, screens: [field] },
     );
     coveredHands(hands);
     await worker.submit("r1", "Type phone into the search box");
@@ -3363,9 +3379,9 @@ describe("an action that is not sent, or that moves nothing", () => {
     expect(planner.inputs[2]!.history[1]!.outcome).toBe(`not sent: ${retired}`);
     expect(worker.snapshot()).toMatchObject({
       state: "blocked",
-      message: screenChangingEnd,
+      message: screenChangingWaitedEnd,
     });
-    expect(said).toEqual([screenChangingEnd]);
+    expect(said).toEqual([screenChangingWaitedEnd]);
     expect(said.join(" ")).not.toMatch(/\bdone\b/i);
     expect(hands.sent).toEqual([]);
     expect(journal.get("r1")).toMatchObject({
@@ -3425,7 +3441,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     await alternating.worker.idle();
     expect(alternating.planner.inputs).toHaveLength(3);
     expect(alternating.hands.sent).toEqual([]);
-    expect(alternating.said).toEqual([screenChangingEnd]);
+    expect(alternating.said).toEqual([screenChangingWaitedEnd]);
     expect(alternating.said.join(" ")).not.toMatch(/\bdone\b/i);
     expect(alternating.journal.get("r1")).toMatchObject({
       state: "blocked",
@@ -3457,7 +3473,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     await mixed.worker.idle();
     expect(mixed.planner.inputs).toHaveLength(4);
     expect(mixed.said).toEqual([
-      "I cannot act on this window right now: the screen kept changing under me, so nothing more was sent. Close any open menu or list in front, then ask again.",
+      "The screen kept changing under me, also after I waited for the screen to settle, so nothing more was sent. Close any open menu or list in front, then ask again.",
     ]);
     expect(mixed.journal.get("r2")).toMatchObject({
       state: "blocked",
@@ -3485,9 +3501,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     // Three in a row where another window kept coming to the front.
     const stealing = setup(
       [enter, { kind: "key", combo: "cmd+l" }, enter, done],
-      {
-        screens: [bar(1)],
-      },
+      { settleLimit: 0, screens: [bar(1)] },
     );
     stealing.hands.answer = (command) =>
       command.kind === "observe"
@@ -3506,7 +3520,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     let preLooks = 0;
     const varied = setup(
       [enter, { kind: "key", combo: "cmd+l" }, enter, done],
-      { screens: [bar(1)] },
+      { settleLimit: 0, screens: [bar(1)] },
     );
     varied.hands.answer = (command) => {
       if (command.kind !== "observe") return undefined;
@@ -3787,7 +3801,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     };
     const { worker, planner, journal, said } = setup(
       [reading, press, reading, press, reading, press, reading, press, done],
-      { browser },
+      { settleLimit: 0, browser },
     );
     await worker.submit("r1", "Go to the next page");
     await worker.idle();
@@ -3808,13 +3822,10 @@ describe("an action that is not sent, or that moves nothing", () => {
   });
 
   it("ends after three tries that the panel did not run, and does not count refused tries as sent repeats", async () => {
-    const { worker, hands, planner, journal, said } = setup([
-      click,
-      click,
-      click,
-      click,
-      done,
-    ]);
+    const { worker, hands, planner, journal, said } = setup(
+      [click, click, click, click, done],
+      { settleLimit: 0 },
+    );
     hands.answer = (command) =>
       command.kind === "click"
         ? { ok: false, error: "stale_observation" }
@@ -3830,7 +3841,7 @@ describe("an action that is not sent, or that moves nothing", () => {
 
     // Two panel refusals followed by a real click do not trigger the "already did this twice" question.
     let refused = 2;
-    const recovered = setup([click, click, click, done]);
+    const recovered = setup([click, click, click, done], { settleLimit: 0 });
     recovered.hands.answer = (command) =>
       command.kind === "click" && refused-- > 0
         ? { ok: false, error: "stale_observation" }
@@ -4149,7 +4160,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(said).toEqual([
-      "I cannot act on this window right now: the screen kept changing under me, so nothing more was sent. Close any open menu or list in front, then ask again.",
+      "The screen kept changing under me, also after I waited for the screen to settle, so nothing more was sent. Close any open menu or list in front, then ask again.",
     ]);
   });
 
@@ -4274,6 +4285,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       { surfaceEpoch: 1 },
     );
     const merged = setup([click, enter, click, enter, done], {
+      settleLimit: 0,
       screens: [base],
       maxSteps: 12,
     });
@@ -4296,7 +4308,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(merged.said).toEqual([
-      "I cannot act on this window right now: what I tried to use kept moving or disappearing before I could act, so nothing was sent. Wait until the window settles, then ask again.",
+      "What I tried to use kept moving or disappearing before I could act, so nothing was sent. Wait until the window settles, then ask again.",
     ]);
 
     // Part B: alternating retiredReason and targetGoneReason with alternating actions ends at 5.
@@ -4315,7 +4327,7 @@ describe("an action that is not sent, or that moves nothing", () => {
         { kind: "click_element", element: 2 },
         done,
       ],
-      { screens: [twoButtons(1)], maxSteps: 12 },
+      { settleLimit: 0, screens: [twoButtons(1)], maxSteps: 12 },
     );
     let preB = 0;
     alt.hands.answer = (command) => {
@@ -4333,20 +4345,20 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(alt.said).toEqual([
-      "I cannot act on this window right now: 5 of my last actions were held back and the window did not move on, so nothing was sent. Wait until the window settles, then ask again.",
+      "5 of my last actions were held back and the window did not move on, so nothing was sent. Wait until the window settles, then ask again.",
     ]);
   });
 
   it("does not let no-op inputs reset heldRow, and compares open_app sameFront without the picture", async () => {
     const moreScreenChangingEnd =
-      "I cannot act on this window right now: the screen kept changing under me, so nothing more was sent. Close any open menu or list in front, then ask again.";
+      "The screen kept changing under me, so nothing more was sent. Close any open menu or list in front, then ask again.";
     const screen = (surfaceEpoch = 1, image = "aW1hZ2U=") =>
       observation([element(1, { title: "Save" })], { surfaceEpoch, image });
 
     // (a) Two holds + key "escape" with unchanged screen + 1 hold -> ends at step 4.
     const esc = setup(
       [click, click, { kind: "key", combo: "escape" }, click, done],
-      { screens: [screen(1)], maxSteps: 12 },
+      { settleLimit: 0, screens: [screen(1)], maxSteps: 12 },
     );
     let preEsc = 0;
     esc.hands.answer = (command) => {
@@ -4369,7 +4381,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     // (b) Two holds + scroll with unchanged screen + 1 hold -> ends at step 4.
     const scroller = setup(
       [click, click, { kind: "scroll", direction: "down" }, click, done],
-      { screens: [screen(1)], maxSteps: 12 },
+      { settleLimit: 0, screens: [screen(1)], maxSteps: 12 },
     );
     let preScroll = 0;
     scroller.hands.answer = (command) => {
@@ -4393,7 +4405,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     // (c) Two holds + open_app("Notes") with identical app/window/elements and a 1-byte image change + 1 hold -> ends at step 4.
     const reopen = setup(
       [click, click, { kind: "open_app", name: "Notes" }, click, done],
-      { screens: [screen(1, "aW1hZ2U=")], maxSteps: 12 },
+      { settleLimit: 0, screens: [screen(1, "aW1hZ2U=")], maxSteps: 12 },
     );
     reopen.hands.answer = (command) => {
       if (command.kind === "open_app")
@@ -4445,7 +4457,7 @@ describe("an action that is not sent, or that moves nothing", () => {
         { kind: "browser_click", index: 1 },
         done,
       ],
-      { browser, screens: [screen(1)], maxSteps: 12 },
+      { settleLimit: 0, browser, screens: [screen(1)], maxSteps: 12 },
     );
     await pageLoop.worker.submit("r4", "Next");
     await pageLoop.worker.idle();
@@ -4454,14 +4466,14 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(pageLoop.said).toEqual([
-      "I cannot act on this page right now: the page kept changing before I could act, so nothing more was sent. Wait until the page finishes loading or settles, then ask again.",
+      "The page kept changing before I could act, so nothing more was sent. Wait until the page finishes loading or settles, then ask again.",
     ]);
 
     // (e) A real screen change after two holds still resets heldRow cleanly.
     const changedScreen = screen(1, "Y2hhbmdlZA==");
     const realMove = setup(
       [click, click, { kind: "key", combo: "escape" }, click, click, done],
-      { screens: [screen(1)], maxSteps: 12 },
+      { settleLimit: 0, screens: [screen(1)], maxSteps: 12 },
     );
     let moved = false;
     let preReal = 0;
@@ -4618,7 +4630,7 @@ describe("an action that is not sent, or that moves nothing", () => {
         click,
         done,
       ],
-      { screens: [notes(1)], maxSteps: 12 },
+      { settleLimit: 0, screens: [notes(1)], maxSteps: 12 },
     );
     let preLooks = 0;
     hands.answer = (command) => {
@@ -4638,7 +4650,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(said).toEqual([
-      "I cannot act on this window right now: 5 of my last actions were held back and the window did not move on, so nothing more was sent. Wait until the window settles, then ask again.",
+      "5 of my last actions were held back and the window did not move on, so nothing more was sent. Wait until the window settles, then ask again.",
     ]);
   });
 
@@ -4657,7 +4669,7 @@ describe("an action that is not sent, or that moves nothing", () => {
         click,
         done,
       ],
-      { browser, screens: [screen(1)], maxSteps: 10 },
+      { settleLimit: 0, browser, screens: [screen(1)], maxSteps: 10 },
     );
     hands.answer = (command) => {
       if (command.kind !== "observe") return undefined;
@@ -4672,7 +4684,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(said).toEqual([
-      "I cannot act on this window right now: the screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.",
+      "The screen kept changing under me, so nothing was sent. Close any open menu or list in front, then ask again.",
     ]);
   });
 
@@ -4789,6 +4801,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     });
     const scroll: Action = { kind: "scroll", direction: "down", element: 1 };
     const { worker, said, journal, hands } = setup(again(scroll, 6), {
+      settleLimit: 0,
       screens: [listScreen],
     });
     hands.answer = (command) =>
@@ -4802,7 +4815,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       reason: "repeated_hold",
     });
     expect(said).toEqual([
-      "I cannot act on that place right now: a list or a card of the app kept lying over that place, so nothing was sent. Press Escape to close it, then ask again.",
+      "A list or a card of the app kept lying over the place I wanted to use, so nothing was sent. Press Escape to close it, then ask again.",
     ]);
     expect(said[0]).not.toContain("click");
   });
@@ -5197,7 +5210,8 @@ describe("what the planner may not do", () => {
     expect(planner.inputs).toHaveLength(3);
     expect(worker.snapshot()).toMatchObject({
       state: "blocked",
-      message: "I stopped at the limit of 3 steps. The task is not finished.",
+      message:
+        "I stopped at the limit of 3 steps. The task is not finished. Ask again to go on from where it is now.",
     });
     expect(journal.get("r1")).toMatchObject({
       state: "blocked",
@@ -5231,7 +5245,7 @@ describe("what the planner may not do", () => {
     expect(time.worker.snapshot()).toMatchObject({
       state: "blocked",
       message:
-        "I stopped at the time limit of 15 minutes. The task is not finished.",
+        "I stopped at the time limit of 15 minutes. The task is not finished. Ask again to go on from where it is now.",
     });
   });
 
@@ -5339,17 +5353,19 @@ describe("questions and endings of the planner", () => {
     expect(worker.snapshot().state).toBe("completed");
   });
 
-  it("ends as blocked when the planner gives up", async () => {
-    const { worker, said } = setup([
-      { kind: "give_up", reason: "There is no such app." },
-    ]);
+  it("ends as blocked when the planner gives up a second time", async () => {
+    const giveUp: Action = { kind: "give_up", reason: "There is no such app." };
+    const { worker, said, planner } = setup([giveUp, giveUp]);
     await worker.submit("r1", "Open it");
     await worker.idle();
+    const ended =
+      "I could not finish. There is no such app. Tell me another way to try, or do this step yourself.";
+    expect(planner.inputs).toHaveLength(2);
     expect(worker.snapshot()).toMatchObject({
       state: "blocked",
-      message: "I could not finish. There is no such app.",
+      message: ended,
     });
-    expect(said).toEqual(["I could not finish. There is no such app."]);
+    expect(said).toEqual([ended]);
   });
 });
 
@@ -6110,7 +6126,7 @@ describe("stackfix round 1 blockers and rests", () => {
         { kind: "browser_click", index: 1 },
         done,
       ],
-      { browser, screens: [notes(1)], maxSteps: 12 },
+      { settleLimit: 0, browser, screens: [notes(1)], maxSteps: 12 },
     );
     let preLooks = 0;
     hands.answer = (command) => {
@@ -6129,7 +6145,7 @@ describe("stackfix round 1 blockers and rests", () => {
       reason: "repeated_hold",
     });
     expect(said).toEqual([
-      "I cannot act right now: 5 of my last actions were held back and nothing moved on, so nothing was sent. Wait until things settle, then ask again.",
+      "5 of my last actions were held back and nothing moved on, so nothing was sent. Wait until things settle, then ask again.",
     ]);
   });
 
@@ -6199,5 +6215,446 @@ describe("stackfix round 1 blockers and rests", () => {
       reason: "stopped",
     });
     expect(caseB.said).toEqual([]);
+  });
+});
+
+describe("a task that does not move on", () => {
+  const two = observation([
+    element(1, { title: "Open" }),
+    element(2, { title: "Back" }),
+  ]);
+  const open: Action = { kind: "click_element", element: 1 };
+  const back: Action = { kind: "click_element", element: 2 };
+  const swing = [open, back, open, back];
+  const swingQuestion =
+    "I keep going back and forth, and the screen shows nothing new. What should I try next? Say it in a few words, or say no to stop.";
+  const lastOutcome = (input: { history: { outcome: string }[] }) =>
+    input.history.at(-1)!.outcome;
+
+  it("tells the planner twice that it swings, then asks the person, and goes on with the answer", async () => {
+    const entries: StepTiming[] = [];
+    const { worker, planner, said, hands, journal, waiting } = setup(
+      [...swing, ...swing, ...swing, done],
+      { screens: [two], timing: (entry) => entries.push(entry) },
+    );
+    await worker.submit("r1", "Find the setting");
+    await waiting();
+    // Twelve clicks went out, each once: none is sent again on its own.
+    expect(hands.sent).toHaveLength(12);
+    expect(lastOutcome(planner.inputs[4]!)).toMatch(
+      /^ok You went back and forth between the same 2 actions, and the screen showed nothing new\. Do not repeat them\. Try another way: keys: Tab, Return, Escape, a menu shortcut; scroll; a search field; open_app/,
+    );
+    expect(lastOutcome(planner.inputs[8]!)).toMatch(/^ok You went back/);
+    expect(planner.inputs).toHaveLength(12);
+    expect(worker.snapshot()).toMatchObject({
+      state: "waiting_for_person",
+      waiting: "question",
+      message: swingQuestion,
+    });
+    expect(said).toEqual([swingQuestion]);
+    expect((await worker.answer("use the search field")).message).toBe(
+      "Thank you. I go on.",
+    );
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(planner.inputs).toHaveLength(13);
+    expect(planner.inputs[12]!.history.at(-1)).toMatchObject({
+      action: { kind: "ask", question: swingQuestion },
+      outcome: "the person answered: use the search field",
+    });
+    // The journal keeps no question and no answer.
+    const text = readFileSync(journal.file, "utf8");
+    expect(text).not.toContain("use the search field");
+    expect(text).not.toContain("back and forth");
+    expect(
+      journal.get("r1")!.steps.filter((step) => step.kind === "ask"),
+    ).toEqual([expect.objectContaining({ target: "", outcome: "answered" })]);
+    // The timing record says what the worker did to get moving.
+    expect(entries.flatMap((entry) => entry.recovery ?? [])).toEqual([
+      "nudge_swing",
+      "nudge_swing",
+      "ask_swing",
+    ]);
+  });
+
+  it("ends cleanly when the person says no to the question", async () => {
+    const { worker, hands, journal, waiting } = setup(
+      [...swing, ...swing, ...swing, done],
+      { screens: [two] },
+    );
+    await worker.submit("r1", "Find the setting");
+    await waiting();
+    expect((await worker.answer("no")).message).toBe(
+      "Canceled. The task is not finished.",
+    );
+    await worker.idle();
+    expect(hands.sent).toHaveLength(12);
+    expect(worker.snapshot()).toMatchObject({
+      state: "canceled",
+      message: "Canceled. The task is not finished.",
+    });
+    expect(journal.get("r1")).toMatchObject({
+      state: "canceled",
+      reason: "refused_by_person",
+    });
+  });
+
+  it("ends after two notes and two questions, with what the person can do", async () => {
+    const { worker, hands, said, journal, waiting } = setup(
+      [...swing, ...swing, ...swing, ...swing, ...swing, done],
+      { screens: [two] },
+    );
+    await worker.submit("r1", "Find the setting");
+    await waiting();
+    await worker.answer("try the menu");
+    await until(() => hands.sent.length === 16);
+    await waiting();
+    await worker.answer("try the menu");
+    await worker.idle();
+    const end =
+      "My last actions did not move the task on, also after I tried other ways and asked you, so I stopped. The task is not finished. Ask again in other words, or do the next step yourself.";
+    expect(hands.sent).toHaveLength(20);
+    expect(said).toEqual([swingQuestion, swingQuestion, end]);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "no_progress",
+    });
+  });
+
+  it("tells the planner when inputs of several kinds change nothing on the screen", async () => {
+    const { worker, planner } = setup(
+      [
+        open,
+        { kind: "key", combo: "tab" },
+        back,
+        { kind: "key", combo: "down" },
+        done,
+      ],
+      { screens: [two] },
+    );
+    await worker.submit("r1", "Find the setting");
+    await worker.idle();
+    expect(lastOutcome(planner.inputs[4]!)).toMatch(
+      /^ok Your last 4 actions did not change the screen\. Do not repeat them\. Try another way: scroll; a search field; open_app/,
+    );
+  });
+
+  it("says nothing while the screen changes with each step", async () => {
+    // Each look of the planner shows another row: the clicks move on.
+    const rows = (index: number) =>
+      observation([
+        element(1, { title: "Open" }),
+        element(2, { title: "Back" }),
+        element(3, { title: `Row ${index}` }),
+      ]);
+    const { worker, planner, hands } = setup([...swing, ...swing, done], {
+      screens: [two],
+    });
+    let looks = 0;
+    hands.answer = (command) =>
+      command.kind === "observe"
+        ? { observation: rows(command.image ? ++looks : looks) }
+        : undefined;
+    await worker.submit("r1", "Go through the rows");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.sent).toHaveLength(8);
+    for (const input of planner.inputs)
+      for (const step of input.history) expect(step.outcome).toBe("ok");
+  });
+});
+
+describe("a screen that does not hold still", () => {
+  const empty = observation([]);
+  const settleLabel = "Wait for the screen to settle";
+  const waitedEnd =
+    "What I tried to use kept moving or disappearing before I could act, also after I waited for the window to settle, so nothing was sent. Wait until the window settles, then ask again.";
+  /** The look just before each click sees no target. The looks of a wait for the screen to settle see `settling`. */
+  const gone = (
+    hands: FakeHands,
+    settling: () => Observation,
+    targetAfter = Infinity,
+  ) => {
+    let before = 0;
+    hands.answer = (command, index) => {
+      if (command.kind !== "observe" || command.image) return undefined;
+      if (hands.labels[index] === settleLabel)
+        return { observation: settling() };
+      before++;
+      return { observation: before <= targetAfter ? empty : save };
+    };
+  };
+  const settleLooks = (hands: FakeHands) =>
+    hands.labels.filter((label) => label === settleLabel).length;
+
+  it("waits with no input until the screen settles, then the input goes out once", async () => {
+    const { worker, hands, planner, journal } = setup([
+      click,
+      click,
+      click,
+      click,
+      done,
+    ]);
+    gone(hands, () => save, 3);
+    await worker.submit("r1", "Save the note");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.sent).toEqual([
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+    ]);
+    // Two looks in a row showed the same: it settled.
+    expect(settleLooks(hands)).toBe(2);
+    expect(lastOutcomeOf(planner.inputs[3]!)).toBe(
+      "not sent: The screen changed: the target is no longer there. Nothing was sent. Then the worker waited with no input until the screen was still. Choose again from the new look: the target may be in another place now.",
+    );
+    expect(journal.get("r1")!.steps.map((step) => step.outcome)).toEqual([
+      "not_sent",
+      "not_sent",
+      "not_sent",
+      "ok",
+      "ok",
+    ]);
+  });
+
+  it("ends after the bound with a plain text when the screen never settles, and sends nothing", async () => {
+    let shift = 0;
+    const { worker, hands, planner, said, journal } = setup(
+      Array.from({ length: 10 }, () => click),
+    );
+    gone(hands, () =>
+      observation([element(1, { title: "Save", x: 100 + (shift++ % 2) * 50 })]),
+    );
+    await worker.submit("r1", "Save the note");
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(planner.inputs).toHaveLength(3);
+    expect(settleLooks(hands)).toBe(8);
+    expect(said).toEqual([waitedEnd]);
+    expect(waitedEnd).not.toMatch(/^I cannot/);
+    expect(journal.get("r1")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+  });
+
+  it("waits twice at most in one request, and then ends", async () => {
+    const { worker, hands, planner, said } = setup(
+      Array.from({ length: 12 }, () => click),
+    );
+    gone(hands, () => save);
+    await worker.submit("r1", "Save the note");
+    await worker.idle();
+    expect(hands.sent).toEqual([]);
+    expect(planner.inputs).toHaveLength(9);
+    expect(settleLooks(hands)).toBe(4);
+    expect(said).toEqual([waitedEnd]);
+  });
+
+  it("stops at once during a wait for the screen to settle", async () => {
+    const { worker, hands, journal } = setup(
+      Array.from({ length: 10 }, () => click),
+      { settleMs: 60_000 },
+    );
+    gone(hands, () => save);
+    await worker.submit("r1", "Save the note");
+    await until(() => settleLooks(hands) === 1);
+    await new Promise((done) => setTimeout(done, 5));
+    worker.stop();
+    await worker.idle();
+    expect(worker.snapshot()).toMatchObject({
+      state: "canceled",
+      message: stoppedText,
+    });
+    expect(journal.get("r1")).toMatchObject({ reason: "stopped" });
+    expect(settleLooks(hands)).toBe(1);
+    expect(hands.sent).toEqual([]);
+  });
+});
+
+/** The outcome of the last step that the planner read. */
+const lastOutcomeOf = (input: { history: { outcome: string }[] }) =>
+  input.history.at(-1)!.outcome;
+
+describe("trouble of the planner", () => {
+  const trouble = (kind: string, retryAfterMs?: number) => () => {
+    throw Object.assign(new Error("The service failed."), {
+      trouble: kind,
+      ...(retryAfterMs ? { retryAfterMs } : {}),
+    });
+  };
+
+  it("waits after a short failure and goes on, also twice in a row", async () => {
+    const entries: StepTiming[] = [];
+    const { worker, hands, planner } = setup(
+      [trouble("transient"), trouble("transient"), click, done],
+      { timing: (entry) => entries.push(entry) },
+    );
+    await worker.submit("r1", "Save the note");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(planner.inputs).toHaveLength(4);
+    expect(hands.sent).toHaveLength(1);
+    expect(entries[0]!.recovery).toEqual(["transient", "transient"]);
+  });
+
+  it("waits three times at most, and then two failures in a row end it", async () => {
+    const { worker, hands, planner, journal } = setup(
+      Array.from({ length: 6 }, () => trouble("transient")),
+    );
+    await worker.submit("r1", "Save the note");
+    await worker.idle();
+    expect(planner.inputs).toHaveLength(5);
+    expect(hands.sent).toEqual([]);
+    expect(worker.snapshot().message).toBe(
+      "The planner did not answer after several tries, so I stopped. Nothing more was sent. Ask again in a moment.",
+    );
+    expect(journal.get("r1")).toMatchObject({ reason: "planner_failed" });
+  });
+
+  it("ends at once when no quota is left, or when the key does not work", async () => {
+    const quota = setup([trouble("quota"), click, done]);
+    await quota.worker.submit("r1", "Save the note");
+    await quota.worker.idle();
+    expect(quota.planner.inputs).toHaveLength(1);
+    expect(quota.hands.sent).toEqual([]);
+    expect(quota.worker.snapshot()).toMatchObject({
+      state: "blocked",
+      message:
+        "The language model account has no quota left, so I stopped. Nothing more was sent. Add credit or raise the limit of the key, then ask again.",
+    });
+    expect(quota.journal.get("r1")).toMatchObject({ reason: "planner_quota" });
+
+    const auth = setup([trouble("auth"), click, done]);
+    await auth.worker.submit("r1", "Save the note");
+    await auth.worker.idle();
+    expect(auth.planner.inputs).toHaveLength(1);
+    expect(auth.worker.snapshot().message).toBe(
+      "The language model did not accept the key, so I stopped. Nothing more was sent. Check CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY of the desktop service, then ask again.",
+    );
+    expect(auth.journal.get("r1")).toMatchObject({ reason: "planner_auth" });
+  });
+
+  it("ends after two malformed answers in a row, as before, and says so", async () => {
+    const { worker, planner } = setup([
+      trouble("malformed"),
+      trouble("malformed"),
+      click,
+    ]);
+    await worker.submit("r1", "Save the note");
+    await worker.idle();
+    expect(planner.inputs).toHaveLength(2);
+    expect(worker.snapshot().message).toBe(
+      "The planner gave no usable action twice in a row, so I stopped. Nothing more was sent. Ask again, perhaps in other words.",
+    );
+  });
+
+  it("stops at once during the wait after a short failure, and holds at once too", async () => {
+    const stopped = setup([trouble("transient"), click], {
+      transientMs: 60_000,
+    });
+    await stopped.worker.submit("r1", "Save the note");
+    await until(() => stopped.planner.inputs.length === 1);
+    await new Promise((done) => setTimeout(done, 5));
+    stopped.worker.stop();
+    await stopped.worker.idle();
+    expect(stopped.worker.snapshot().state).toBe("canceled");
+    expect(stopped.planner.inputs).toHaveLength(1);
+    expect(stopped.hands.sent).toEqual([]);
+
+    const held = setup([trouble("transient"), click, done], {
+      transientMs: 60_000,
+    });
+    await held.worker.submit("r1", "Save the note");
+    await until(() => held.planner.inputs.length === 1);
+    await new Promise((done) => setTimeout(done, 5));
+    await held.worker.submit("w1", "wait a moment");
+    await held.waiting();
+    expect(held.worker.snapshot().message).toBe(
+      "I am paused at your word. Say continue to go on, or stop.",
+    );
+    await held.worker.answer("continue");
+    await held.worker.idle();
+    expect(held.worker.snapshot().state).toBe("completed");
+    expect(held.hands.sent).toHaveLength(1);
+  });
+
+  it("aborts the signal of the planner call at Stop", async () => {
+    let signal: AbortSignal | undefined;
+    const { worker } = setup([
+      (input) => {
+        signal = (input as { signal?: AbortSignal }).signal;
+        return new Promise<Action>(() => {});
+      },
+    ]);
+    await worker.submit("r1", "Think long");
+    await until(() => signal !== undefined);
+    expect(signal!.aborted).toBe(false);
+    worker.stop();
+    expect(signal!.aborted).toBe(true);
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("canceled");
+  });
+
+  it("gives the reading of the request a signal too, and aborts it at Stop", async () => {
+    let signal: AbortSignal | undefined;
+    const { worker, planner } = setup([done]);
+    Object.assign(planner, {
+      navigation: (_goal: string, options?: { signal?: AbortSignal }) => {
+        signal = options?.signal;
+        return new Promise(() => {});
+      },
+    });
+    await worker.submit("r1", "Open my notes");
+    await until(() => signal !== undefined);
+    expect(signal!.aborted).toBe(false);
+    worker.stop();
+    expect(signal!.aborted).toBe(true);
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("canceled");
+  });
+});
+
+describe("a first give_up", () => {
+  it("goes back to the planner with the ways it did not try", async () => {
+    const chrome = observation([element(1, { title: "Next" })], {
+      app: {
+        name: "Google Chrome",
+        bundleId: "com.google.Chrome",
+        window: "Shop",
+      },
+    });
+    const { worker, planner, journal } = setup(
+      [{ kind: "give_up", reason: "The button does nothing." }, done],
+      { screens: [chrome], browser: new FakeBrowser() },
+    );
+    await worker.submit("r1", "Find the price");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(planner.inputs[1]!.history[0]).toMatchObject({
+      action: { kind: "give_up" },
+      outcome:
+        "not ended: Do not give up yet. Try another way first: browser_read and the page elements; keys: Tab, Return, Escape, a menu shortcut; scroll; a search field; open_app for the right app or window. Give up only when none of them can work.",
+    });
+    expect(journal.get("r1")!.steps[0]).toMatchObject({
+      kind: "give_up",
+      outcome: "nudged",
+    });
+  });
+
+  it("ends at once when only the person can change what stands in the way", async () => {
+    for (const reason of [
+      "The site asks for your password.",
+      "Only the person can decide which plan to buy.",
+      "The app needs the Accessibility permission.",
+    ]) {
+      const { worker, planner } = setup([{ kind: "give_up", reason }, done]);
+      await worker.submit("r1", "Sign me up");
+      await worker.idle();
+      expect(planner.inputs).toHaveLength(1);
+      expect(worker.snapshot()).toMatchObject({
+        state: "blocked",
+        message: `I could not finish. ${reason} Tell me another way to try, or do this step yourself.`,
+      });
+    }
   });
 });

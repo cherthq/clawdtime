@@ -112,6 +112,42 @@ describe("the time of each step, kept in the state folder", () => {
     );
   });
 
+  it("keeps what the worker did to get moving and how long it waited, and prints it", () => {
+    const root = home();
+    recordTiming(
+      root,
+      {
+        ...step(5),
+        recovery: ["transient", "settled", "nudge_swing"],
+        waitMs: 3400.4,
+      },
+      () => Date.UTC(2026, 10, 22, 9),
+    );
+    // An entry that ends a request before its first step has step 0.
+    recordTiming(
+      root,
+      {
+        step: 0,
+        kind: "end",
+        lookMs: 0,
+        planMs: 0,
+        actMs: 0,
+        recovery: ["transient"],
+        waitMs: 3000,
+      },
+      () => Date.UTC(2026, 10, 22, 9, 1),
+    );
+    const [kept, ended] = readTimings(root);
+    expect(kept).toMatchObject({
+      recovery: ["transient", "settled", "nudge_swing"],
+      waitMs: 3400,
+    });
+    expect(timingLine(kept!)).toBe(
+      "2026-11-22T09:00:00.000Z step 5 click_element: look 310 ms, plan 1840 ms, act 420 ms. To get moving: transient, settled, nudge_swing, waited 3400 ms",
+    );
+    expect(ended).toMatchObject({ step: 0, kind: "end" });
+  });
+
   it("prints one step as a line for a person", () => {
     expect(timingLine({ at: Date.UTC(2026, 10, 22, 9), ...step(3) })).toBe(
       "2026-11-22T09:00:00.000Z step 3 click_element: look 310 ms, plan 1840 ms, act 420 ms",

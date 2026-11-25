@@ -23,13 +23,18 @@ const duration = z.number().int().min(0).max(86_400_000);
 const timedStepSchema = z
   .object({
     at: z.number().int().positive(),
-    step: z.number().int().positive(),
+    /** Zero only for an entry that ends a request before its first step. */
+    step: z.number().int().nonnegative(),
     kind: z.string().max(40),
     lookMs: duration,
     planMs: duration,
     actMs: duration,
     /** Why the worker held the step back: one of its own fixed sentences. */
     held: z.string().max(200).optional(),
+    /** What the worker did to get the request moving: its own fixed words, such as nudge_swing, settled, transient. */
+    recovery: z.array(z.string().max(40)).max(8).optional(),
+    /** How long it waited for the screen to settle and for the planner. */
+    waitMs: duration.optional(),
   })
   .strict();
 export type TimedStep = z.infer<typeof timedStepSchema>;
@@ -70,6 +75,14 @@ export function recordTiming(
       planMs: whole(entry.planMs),
       actMs: whole(entry.actMs),
       ...(entry.held ? { held: entry.held.slice(0, 200) } : {}),
+      ...(entry.recovery?.length
+        ? {
+            recovery: entry.recovery
+              .slice(0, 8)
+              .map((word) => word.slice(0, 40)),
+          }
+        : {}),
+      ...(entry.waitMs ? { waitMs: whole(entry.waitMs) } : {}),
     });
     secureWrite(timingFile(root), {
       steps: [...readTimings(root).slice(-(keptTimings - 1)), step],
@@ -81,4 +94,4 @@ export function recordTiming(
 
 /** One step as a line for a person. */
 export const timingLine = (step: TimedStep) =>
-  `${new Date(step.at).toISOString()} step ${step.step} ${step.kind}: look ${step.lookMs} ms, plan ${step.planMs} ms, act ${step.actMs} ms${step.held ? `. Not sent: ${step.held}` : ""}`;
+  `${new Date(step.at).toISOString()} step ${step.step} ${step.kind}: look ${step.lookMs} ms, plan ${step.planMs} ms, act ${step.actMs} ms${step.held ? `. Not sent: ${step.held}` : ""}${step.recovery?.length ? `. To get moving: ${step.recovery.join(", ")}` : ""}${step.waitMs ? `, waited ${step.waitMs} ms` : ""}`;

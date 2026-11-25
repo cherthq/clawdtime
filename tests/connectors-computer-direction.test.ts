@@ -340,7 +340,9 @@ describe("explicit directional navigation", () => {
   it("lets the planner tell the person why the app cannot be opened, and does not lock", async () => {
     const f = setup({ kind: "app", name: "Notesy", window: "Shopping" });
     f.planner = Object.assign(
+      // The first give_up is told the ways it did not try. The second ends it.
       new ScriptedPlanner([
+        { kind: "give_up", reason: "No app with the name Notesy is here." },
         { kind: "give_up", reason: "No app with the name Notesy is here." },
       ]),
       { navigation: f.planner.navigation },
@@ -359,7 +361,8 @@ describe("explicit directional navigation", () => {
     ]);
     expect(worker.status()).toMatchObject({
       state: "blocked",
-      message: "I could not finish. No app with the name Notesy is here.",
+      message:
+        "I could not finish. No app with the name Notesy is here. Tell me another way to try, or do this step yourself.",
     });
     expect(f.journal.unresolved()).toBeNull();
     expect((await worker.submit("two", "Open Notes")).message).toMatch(
