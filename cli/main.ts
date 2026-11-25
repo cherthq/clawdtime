@@ -45,6 +45,7 @@ import { phoneCli } from "./phone.js";
 import { computerCli } from "./computer.js";
 import { routineCli } from "./routine.js";
 import { keysCli } from "./keys.js";
+import { connectCli } from "./connect.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
 
 function options(args: string[]) {
@@ -66,6 +67,12 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "hosts") return agentsCli(["--hosts", ...args.slice(1)]);
   if (command === "routine") return routineCli(args.slice(1));
   if (command === "keys") return keysCli(args.slice(1));
+  // Without --agent, connect is the guided setup of the Chert line. With it,
+  // it is the pairing of a coding agent, as before.
+  if (command === "connect" && !args.includes("--agent")) {
+    process.exitCode = await connectCli(args.slice(1));
+    return;
+  }
   if (command === "computer") {
     // The doctor asks the browser driver only when the person turned it on.
     const browser = browserFromEnvironment(process.env);
@@ -88,7 +95,7 @@ export async function main(args = process.argv.slice(2)) {
     return agentsCli(["--supervisor", command, ...args.slice(1)]);
   if (command === "help" || command === "--help") {
     console.log(
-      "ClawdTime internal build (no npm publication implied)\nproactive doctor | intents | policy | enroll | revoke | stop (protected calling policy and exact source watches; see proactive help)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH]\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nagents [--json] | watch | focus | pending | approve | deny | answer | send | away | doctor | hooks (every coding-agent session on this Mac, and answers to them; see agents help)\ntrove | clis | report | browser (what ClawdTime remembers, the agent commands and their use, a slide deck, browser tabs)\nhosts add | list | check | remove (other Macs that this Mac supervises over ssh; see hosts help)\ncomputer status | on | off | doctor | clear | model (ClawdTime does a task on this Mac by itself, one checked action at a time; off until you turn it on; see computer help)\nkeys list | set PROVIDER | remove PROVIDER (keys of the language model providers that computer use can plan with; never printed; see keys help)\nroutine add | list | pause | resume | remove (a request that the computer worker gets at a time of day; see routine help)\nKeep pairing files private; never pass a credential in command arguments.",
+      "ClawdTime internal build (no npm publication implied)\nconnect [--check] [--yes] [--phone NUMBER] [--consent yes|no] [--api-key-env NAME] (connect ClawdTime to Chert and get a phone line, step by step; see connect --help)\nproactive doctor | intents | policy | enroll | revoke | stop (protected calling policy and exact source watches; see proactive help)\nsetup --agent AGENT --project PATH --setup-link-file PRIVATE_FILE --origin HTTPS_ORIGIN --allow-view true --allow-control true|false (or --existing true)\n  Companion: --pilot-installed true for explicit local pilot trust, or --manifest LOCAL_FILE --trusted-team-id INDEPENDENT_TEAM_ID; optional --app PATH --directory PATH --relay-url WSS_ORIGIN --gateway-python PATH --check-only true\nsetup-session --agent AGENT --project PATH --run-id CURRENT_CHAT_ID (foreground JSONL, no new coding client)\nsetup-retry --agent AGENT --project PATH --run-id EXISTING_RUN_ID --previous-test-id ID --authorize-new-invitation true (lead-audited expired invitation only, keeps original bridge alive)\nconnect --agent codex|claude-code [--project PATH] [--pairing-file PATH] (pair a coding agent)\ndoctor --agent AGENT [--project PATH] [--require-live true]\nacceptance-plan --agent AGENT --project DISPOSABLE_PATH --case-id ID --output PRIVATE_PATH\nrun --agent AGENT [--project PATH] [--run-id ID] -- [native client arguments]\ndisconnect --agent AGENT [--project PATH]\nuninstall --agent AGENT [--project PATH] (requires prior disconnect)\nagents [--json] | watch | focus | pending | approve | deny | answer | send | away | doctor | hooks (every coding-agent session on this Mac, and answers to them; see agents help)\ntrove | clis | report | browser (what ClawdTime remembers, the agent commands and their use, a slide deck, browser tabs)\nhosts add | list | check | remove (other Macs that this Mac supervises over ssh; see hosts help)\ncomputer status | on | off | doctor | clear | model (ClawdTime does a task on this Mac by itself, one checked action at a time; off until you turn it on; see computer help)\nkeys list | set PROVIDER | remove PROVIDER (keys of the language model providers that computer use can plan with; never printed; see keys help)\nroutine add | list | pause | resume | remove (a request that the computer worker gets at a time of day; see routine help)\nKeep pairing files private; never pass a credential in command arguments.",
     );
     return;
   }

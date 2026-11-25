@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { JobFacts } from "./jobs.js";
+import { storedTextValues } from "../shared/owner.js";
 
 /**
  * ClawdTime over text messages. The person texts the Chert line of their
@@ -53,14 +54,33 @@ export interface TextSettings {
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The settings from the environment, or the names of what is missing or wrong. */
+/**
+ * The settings from the environment, or the names of what is missing or wrong.
+ * With the state folder, what `clawdtime connect` stored there fills what the
+ * environment does not have: the owner's number, and the project API key
+ * together with its own project. A variable of the environment wins.
+ */
 export function textSettings(
   env: Record<string, string | undefined>,
+  root?: string,
 ): { settings: TextSettings } | { missing: string[] } {
   const missing: string[] = [];
-  const key = env.CHERT_API_KEY?.trim() ?? "";
-  const project = env.CHERT_PROJECT_ID?.trim() ?? "";
-  const owner = (env.CLAWDTIME_OWNER_PHONE ?? "").replace(/[\s().-]/g, "");
+  const stored = root ? storedTextValues(root) : {};
+  const envKey = env.CHERT_API_KEY?.trim() ?? "";
+  const envProject = env.CHERT_PROJECT_ID?.trim() ?? "";
+  // A stored key is used only with its own project, never with another one.
+  const pair =
+    !envKey &&
+    stored.key &&
+    (!envProject || envProject === stored.key.projectId)
+      ? stored.key
+      : null;
+  const key = envKey || pair?.apiKey || "";
+  const project = envProject || pair?.projectId || "";
+  const owner =
+    (env.CLAWDTIME_OWNER_PHONE ?? "").replace(/[\s().-]/g, "") ||
+    stored.phone ||
+    "";
   const line = env.CHERT_LINE_ID?.trim() || null;
   const word = env.CLAWDTIME_TEXT_WORD?.trim().toLowerCase() || null;
   const base = (

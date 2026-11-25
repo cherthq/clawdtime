@@ -18,6 +18,115 @@ You can also text the same number and get the answers as text messages.
 This page takes you from nothing to the first call. Each step is one you do
 yourself.
 
+## Connect to Chert in one command
+
+Install the chert command and ClawdTime, then run `clawdtime connect` in a
+terminal:
+
+```sh
+npm install -g @trychert/facetime@beta
+git clone https://github.com/cherthq/clawdtime.git ~/clawdtime
+cd ~/clawdtime && npm ci && npm run build && npm link
+(cd line && npm install)
+clawdtime connect
+```
+
+It goes through ten steps. Each step looks first and skips what is done. It
+prints one line for each step, and two for step 10: done, or what is missing
+and the command that does it.
+
+1. The chert command is installed.
+2. This Mac is signed in. If not, `chert login` runs in your terminal.
+3. The project: the one that `line/.env.local` names, or else the one of the
+   sign-in.
+4. The project has a line that is ready. If not, `chert onboard` runs in your
+   terminal and gets you one.
+5. The line agent in `line/` is set up, as in section 3.
+6. Your own number.
+7. Your answer: may ClawdTime call and text you.
+8. The project API key, for texts.
+9. The outbound line that ClawdTime calls you on.
+10. What `clawdtime computer doctor` says for "calls to you" and "texts to
+    you".
+
+What it asks you:
+
+- The Video framing of your line: fit (the default) or fill. It is on the
+  line's page in the Chert dashboard.
+- Whether to use Chert's LiveKit, when `line/.env.local` has no LiveKit keys.
+  Then `chert livekit` writes them.
+- Your own mobile number, with the country code, as +1 415 555 0100.
+- "May ClawdTime call and text this number when it needs you?" Only a typed
+  `yes` allows it. Any other answer is a no.
+- The project API key, in a prompt that does not show it. Make the key with
+  read and write access on https://app.trychert.com/developer. It is shown
+  once.
+
+It never asks for the OpenAI key. Put it in `line/.env.local` yourself, as
+`OPENAI_API_KEY`.
+
+What it writes, and where:
+
+| File                                              | What it holds                                                                                                        |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `line/.env.local`                                 | Made from `.env.example`. `AGENT_NAME`, the project, the framing, LiveKit keys                                       |
+| `~/.local/share/clawdtime/owner.json`             | Your number and your answer                                                                                          |
+| `~/.local/share/clawdtime/chert-key.json`         | The project API key and its project                                                                                  |
+| `~/.local/share/clawdtime/desktop/proactive.json` | The outbound line, once it is ready                                                                                  |
+| `~/.local/share/clawdtime/desktop/outbound/`      | A copy of the calling policy, and the configuration of the outbound line. `native.json` holds the key and the number |
+
+Each file is for you only (mode 600), in a folder for you only (mode 700).
+`line/.env.local` is mode 600 in the `line/` folder. A file that other users
+can read, a link, or a file with a second name is never changed: the step says
+so and what to run. `CLAWDTIME_CONFIG_HOME` and `CLAWDTIME_DESKTOP_STATE` move
+these folders, as they move the rest of ClawdTime's state. The text channel
+reads your number and the key from these files when its environment does not
+have them. A variable of the environment wins. When the computer worker needs
+you, it texts only the number that you allowed in step 7.
+
+Run it again at any time. It goes on where it stopped:
+
+```sh
+clawdtime connect                 # the next step that is not done
+clawdtime connect --check         # only report: nothing is changed or started
+clawdtime connect --phone +14155550100 --consent yes --api-key-env MY_KEY
+clawdtime connect --consent no    # ClawdTime stops calling and texting you
+```
+
+`--yes` takes every default that needs no secret. It never answers the question
+about calls and texts for you. The exit code is 0 when all is ready, 3 when
+your line is ready and some optional steps are still to do, and 1 when a needed
+step is missing.
+
+What to know:
+
+- The calling policy lets ClawdTime call you about a question of the computer
+  worker in the project of the desktop service, and nothing else. It lasts 30
+  days. Run `clawdtime connect` again to renew it. Say "stop calling" on a call
+  to take it back.
+- Step 7 sends the calling policy to the desktop service through
+  `clawdtime proactive policy`, so the service must run then (section 7). The
+  service keeps the policy in its own store. Step 9 needs it to have run once.
+  When `clawdtime connect` changes `proactive.json`, it says so: start the
+  desktop service again.
+- Calls to you use the line's retention guard, which keeps the records of the
+  line when ClawdTime takes it for an outbound call. That guard works only with
+  `@trychert/facetime` 0.1.0-beta.19 and its pinned Node build. Step 9 checks
+  this, says what it found, and leaves calls off when they do not match. Texts
+  to you work without it.
+- With the outbound line in `proactive.json`, the desktop service starts only
+  while the sign-in of chert lasts (30 days), and while the node that step 9
+  found is still there. Step 2 and step 9 say when the sign-in ends: run
+  `chert login` again before then. After an update of node, run
+  `clawdtime connect` again. When the call path refuses its configuration,
+  `clawdtime connect` takes the outbound line out of `proactive.json`, so the
+  service still starts.
+- When step 9 asks you to start the line with its retention guard, give every
+  later `./host.sh` command the same `CLAWDTIME_LINE_RETENTION_CONFIG`, and do
+  not use `./host.sh schedule`.
+- Keep joining by code off on https://app.trychert.com/imessage, so that no
+  other phone joins your line.
+
 ## Let your coding agent set it up
 
 Paste this into Codex or Claude Code on the Mac. It works through this page for

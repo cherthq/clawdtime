@@ -66,8 +66,10 @@ export interface ComputerCliDependencies {
 /** Why the reach cannot call or text, in plain words. Only fixed codes come in. */
 const reachReason = (reason: string) => {
   if (reason.startsWith("missing:"))
-    return `these settings are missing in the environment of the desktop service: ${reason.slice(8).split(",").join(", ")}. See SETUP_CLAWDTIME.md`;
+    return `these settings are missing in the environment of the desktop service: ${reason.slice(8).split(",").join(", ")}. Run clawdtime connect, or see SETUP_CLAWDTIME.md`;
   const plain: Record<string, string> = {
+    no_consent:
+      "you did not allow ClawdTime to call and text your number. To allow it: clawdtime connect --consent yes",
     outbound_setup_missing:
       "the line is not set up for proactive calls: proactive.json of the desktop service has no outbound line",
     not_set_up:
