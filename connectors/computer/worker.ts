@@ -2017,11 +2017,9 @@ export class ComputerWorker implements DesktopExecutorPort {
           }
         }
         if (run.hold) continue;
-        // Plan: one outline, after the first look and before the first action.
-        if (!run.outlined) {
-          if ((await this.outline(run)) === "over") return;
-          if (run.hold || run.takeover) continue;
-        }
+        // Plan: one outline, asked for after the first look. It runs beside
+        // the first turn, so it adds no wait: the plan comes with a later turn.
+        if (!run.outlined) this.outline(run);
         if (run.focusClicks) {
           if (focusMovedToField(run.observation, run.focusClicks)) {
             if (run.stuck && run.stuck.clicked > 0) delete run.stuck;
@@ -2384,10 +2382,6 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.refusals = 0;
     switch (checked.verdict) {
       case "done": {
-        // Plan: subgoals that are still open are named once. The next done
-        // is taken. This is no second look at the screen.
-        const open = run.plan?.doneNote();
-        if (open) return this.note(run, action, why, "", open, "plan_open");
         this.note(run, action, why, "", "ok", "ok");
         return this.finish(
           run,
@@ -3654,28 +3648,32 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
 
   /**
-   * Plan: the outline, after the first look and before the first action. It
-   * never ends the request: a failure, an answer that cannot be used or no
-   * time leaves it with no plan, and it is not asked again. Stop does not
-   * wait for it, and its call is aborted. A hold wakes it, and it is asked
-   * again after the pause. The planner behind the direct opening of an
-   * address is asked, and not for a request that only opens an address.
+   * Plan: the outline, asked for once after the first look. It runs beside
+   * the turns of the planner and nothing waits for it: the plan comes with
+   * the first turn after it arrived. It never ends the request: a failure,
+   * an answer that cannot be used or no time leaves it with no plan, and it
+   * is not asked again. Stop, the end of the request and its time limit
+   * abort its call. Not for a request that only opens an address.
    */
-  private async outline(run: Run): Promise<"over" | void> {
+  private outline(run: Run) {
+    run.outlined = true;
     const planner = this.options.planner;
-    if (!planner.outline || directAddress(run.goal)) {
-      run.outlined = true;
-      return;
-    }
+    if (!planner.outline || directAddress(run.goal)) return;
     const abort = new AbortController();
-    let late: NodeJS.Timeout | undefined;
-    let wake = () => {};
-    const woken = new Promise<"held">((resolve) => {
-      wake = () => resolve("held");
-    });
-    run.wake = wake;
+    const late = setTimeout(
+      () => abort.abort(),
+      Math.max(0, run.deadline - this.now()),
+    );
+    late.unref();
+    const over = () => {
+      clearTimeout(late);
+      abort.abort();
+    };
+    void run.halted.then(over, over);
+    void this.ended?.then(over, over);
+    let made: Promise<import("./plan.js").Subgoal[]>;
     try {
-      const made = planner.outline({
+      made = planner.outline({
         goal: run.goal,
         ...(run.guidance.length
           ? { guidance: run.guidance.map((said) => said.text) }
@@ -3685,34 +3683,21 @@ export class ComputerWorker implements DesktopExecutorPort {
         ...(run.browserClosed ? { browser: false } : {}),
         signal: abort.signal,
       });
-      made.catch(() => {});
-      const outline = await Promise.race([
-        made,
-        run.halted,
-        woken,
-        new Promise<null>((resolve) => {
-          late = setTimeout(
-            () => resolve(null),
-            Math.max(0, run.deadline - this.now()) + 10,
-          );
-          late.unref();
-        }),
-      ]);
-      if (this.halted(run)) return "over";
-      if (outline === "held" || run.hold) return;
-      run.outlined = true;
-      const plan = outline ? TaskPlan.from(outline) : null;
-      if (plan) run.plan = plan;
     } catch {
-      // What the planner threw can hold what was sent to it: it is not passed on.
-      if (this.halted(run)) return "over";
-      if (!run.hold) run.outlined = true;
-    } finally {
-      clearTimeout(late);
-      delete run.wake;
-      // A call that is still on its way is not needed any more.
-      abort.abort();
+      over();
+      return;
     }
+    made.then(
+      (outline) => {
+        over();
+        // A request that ended or changed takes no plan from an old call.
+        if (this.current !== run || run.plan || run.stop) return;
+        const plan = outline ? TaskPlan.from(outline) : null;
+        if (plan) run.plan = plan;
+      },
+      // What the planner threw can hold what was sent to it: it is not passed on.
+      over,
+    );
   }
 
   /**

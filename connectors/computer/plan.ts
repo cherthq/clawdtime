@@ -159,7 +159,6 @@ export class TaskPlan {
   private updates = 0;
   private row = 0;
   private last: string | undefined;
-  private noted = false;
   private widest: number;
 
   private constructor(subgoals: Subgoal[]) {
@@ -353,25 +352,6 @@ export class TaskPlan {
         `No room for more facts: ${planLimits.facts} are kept already.`,
       );
     return { added, notes };
-  }
-
-  /**
-   * The note before a done while subgoals are open. It comes once in a
-   * request: after it a done is taken whatever the plan says. It is no
-   * second look at the screen, only the names of the open subgoals. Null
-   * when no subgoal is open, or when the note came already.
-   */
-  doneNote(): string | null {
-    if (this.noted) return null;
-    const open = this.subgoals
-      .map((item, index) => ({ item, index }))
-      .filter(({ item }) => item.state === "open");
-    if (!open.length) return null;
-    this.noted = true;
-    const names = open
-      .map(({ item, index }) => `${index + 1}. ${oneLine(item.goal, 80)}`)
-      .join("; ");
-    return `not taken yet: the plan still has open subgoals: ${names}. If they are already met, call done again.`;
   }
 }
 

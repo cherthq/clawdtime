@@ -345,12 +345,13 @@ text says what happened first, and then what you can say or do next.
 A task of several steps is planned first: sign in, find a thing, change it,
 confirm it, report it. The code is in `connectors/computer/plan.ts`.
 
-1. After the first look and before the first action, the worker asks the
-   planner once for an outline: 1 to 8 subgoals, in order. Each has a check:
-   what the screen shows when it is met. A task of one step gets a plan of one
-   subgoal. The outline goes through the same retries, repair and abort as
-   every other call to the model. It gets a small picture: the elements carry
-   the names.
+1. After the first look, the worker asks the planner once for an outline:
+   1 to 8 subgoals, in order. Each has a check: what the screen shows when it
+   is met. A task of one step gets a plan of one subgoal. The outline runs
+   beside the first turn, so nothing waits for it: the plan comes with the
+   first turn after it arrived. It goes through the same retries, repair and
+   abort as every other call to the model. It gets a small picture: the
+   elements carry the names.
 2. With every turn after that, the planner gets the plan: each subgoal as
    open, done with what the screen showed, or skipped with why, and the one to
    work on now.
@@ -365,12 +366,9 @@ confirm it, report it. The code is in `connectors/computer/plan.ts`.
    keeps such words out of the journal (`looksSecretStrict`). The planner reads
    the facts at its next turns. The last message adds the facts that it does
    not hold already: "Noted on the way: ...".
-5. When the planner calls `done` while subgoals are open, the worker does not
-   end the request that one time. The planner reads a short note that names
-   the open subgoals and says "If they are already met, call done again". The
-   next `done` is taken. The note comes once in a request, and it is no second
-   look by the model: such a look refused true results in 2 of 8 runs (see The
-   request test). The note only names what the plan says.
+5. A `done` is taken at once, also while subgoals are open. A note before
+   a done cost one more turn of the model in every request of the request
+   test, and the time of a request doubled with it, so it was removed.
 
 The planner's rules for the outline and for each turn with a plan say:
 
