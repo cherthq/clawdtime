@@ -525,8 +525,9 @@ const lineRuntimeWatch = lineRuntime
 // background runtime, then the bundled runtime. With none of them, the
 // app-owned computer worker runs, when the person turned it on with
 // `clawdtime computer on` and a key for the language model is in this
-// environment. A service that a test started never has that worker, so no
-// command for the hands can come out of a test.
+// environment or in the key store of the state folder (`clawdtime keys`). A
+// service that a test started never has that worker, so no command for the
+// hands can come out of a test.
 const connectedBrowser = desktop
   ? browserFromEnvironment(process.env)
   : undefined;

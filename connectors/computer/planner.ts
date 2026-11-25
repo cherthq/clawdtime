@@ -1,11 +1,13 @@
 /**
- * Computer use: a planner on the chat completions application programming
- * interface (API) of OpenAI.
+ * Computer use: a planner over a language model of the person's choice.
  *
  * The planner is the replaceable part. This one gives a language model the
  * goal, what the person said after it, its own last steps, the useful
  * elements of the screen and the image, and takes back exactly one function
- * call: the next action.
+ * call: the next action. The model can be one of OpenAI, of Anthropic, or of
+ * any provider that speaks the chat completions interface
+ * (`providers.ts`). The request and the reading of the answer are the same
+ * for all of them.
  *
  * What comes back is not trusted. This file only turns the function call into
  * the shape of an action. The worker checks every action in code before
@@ -42,12 +44,8 @@ import {
   callWithRetries,
   CircuitBreaker,
   defaultRetryPolicy,
-  errorCode,
   PlannerError,
   realClock,
-  retryAfterMs,
-  statusTrouble,
-  type Attempt,
   type AttemptReport,
   type Clock,
   type RetryPolicy,
@@ -61,20 +59,30 @@ import {
   type PlanView,
   type Subgoal,
 } from "./plan.js";
+import {
+  ChatTransport,
+  fallbackComputerModel,
+  MessagesTransport,
+  providerById,
+  type Effort,
+  type FunctionTool,
+  type ModelAnswer,
+  type PlannerRequest,
+  type PlannerSettings,
+  type Provider,
+  type ProviderId,
+  type Speed,
+  type Transport,
+  type UsageReport,
+} from "./providers.js";
+import { plannerSetup } from "./keys.js";
 
 export { PlannerError, type PlannerTrouble } from "./model-call.js";
-
-/**
- * The model of the planner. It is the one that did best in the planner test
- * (`npm run eval:computer:planner`): run that test before this line changes.
- */
-export const defaultComputerModel = "gpt-5.4";
-/**
- * The model before it. When the service says that a key may not use the
- * default, or does not know it, the planner goes to this one, once, and stays
- * there. A model that the person chose is never replaced.
- */
-export const fallbackComputerModel = "gpt-4.1";
+export {
+  defaultComputerModel,
+  fallbackComputerModel,
+  type PlannerUsage,
+} from "./providers.js";
 
 /**
  * Rules for the actions that came after the planner test of November 22.
@@ -687,16 +695,6 @@ export function brief(
   return parts.join("\n");
 }
 
-/** A message of an answer of the chat completions API. Nothing in it is trusted. */
-interface ChatMessage {
-  content?: unknown;
-  refusal?: unknown;
-  tool_calls?: unknown;
-}
-interface ToolCall {
-  id?: unknown;
-  function?: { name?: unknown; arguments?: unknown };
-}
 /** What one answer of the model gives. */
 type Reading =
   | { kind: "action"; action: Action; why: string }
@@ -706,40 +704,9 @@ type Reading =
       kind: "malformed";
       /** A fixed word for the error message. */
       code: string;
-      /** The messages that tell the model what was wrong. */
-      reply: Record<string, unknown>[];
+      /** The answer, and what the program tells the model about it. */
+      repair: { answer: ModelAnswer; note: string };
     };
-
-const completionsUrl = "https://api.openai.com/v1/chat/completions";
-
-/** The message and the end of the first choice of an answer. */
-function firstChoice(body: unknown): { message: ChatMessage; finish: unknown } {
-  const choices =
-    body && typeof body === "object"
-      ? (body as { choices?: unknown }).choices
-      : undefined;
-  const choice: { message?: unknown; finish_reason?: unknown } =
-    Array.isArray(choices) && choices[0] && typeof choices[0] === "object"
-      ? choices[0]
-      : {};
-  const message =
-    choice.message && typeof choice.message === "object"
-      ? (choice.message as ChatMessage)
-      : {};
-  return { message, finish: choice.finish_reason };
-}
-
-const toolCalls = (message: ChatMessage): ToolCall[] =>
-  Array.isArray(message.tool_calls)
-    ? message.tool_calls.filter(
-        (call): call is ToolCall => !!call && typeof call === "object",
-      )
-    : [];
-
-/** The model refused: a content filter ended the answer, or it wrote a refusal. */
-const refusedIn = (message: ChatMessage, finish: unknown) =>
-  finish === "content_filter" ||
-  (typeof message.refusal === "string" && message.refusal.trim() !== "");
 
 const refusal = () =>
   new PlannerError(
@@ -751,6 +718,9 @@ const unreadable = (code: string) =>
     "malformed",
     `The planner chose no action that can be read (${code}).`,
   );
+/** What the program says to the model after an answer that it cannot use. */
+const repairNote = (problem: string) =>
+  `The program could not use your last answer. ${problem} Nothing was run. Call exactly one of the offered functions, with its arguments as one JSON object.`;
 
 /** The shape of an action from one function call. The worker checks it before anything runs. */
 function toAction(
@@ -766,80 +736,29 @@ function toAction(
 }
 
 /**
- * The messages that go back to the model after an answer that cannot be
- * used: its own answer, a result for each of its tool calls (the service
- * needs one), and what was wrong.
- */
-function repairReply(
-  message: ChatMessage,
-  calls: ToolCall[],
-  problem: string,
-): Record<string, unknown>[] {
-  const tell = {
-    role: "user",
-    content: `The program could not use your last answer. ${problem} Nothing was run. Call exactly one of the offered functions, with its arguments as one JSON object.`,
-  };
-  const content =
-    typeof message.content === "string" && message.content.trim()
-      ? message.content
-      : null;
-  const echoed = calls.map((call) => ({
-    id: call.id,
-    name: call.function?.name,
-    arguments: call.function?.arguments,
-  }));
-  if (
-    echoed.length > 0 &&
-    echoed.every(
-      (call) =>
-        typeof call.id === "string" &&
-        call.id !== "" &&
-        typeof call.name === "string" &&
-        call.name !== "",
-    )
-  )
-    return [
-      {
-        role: "assistant",
-        content,
-        tool_calls: echoed.map((call) => ({
-          id: call.id,
-          type: "function",
-          function: {
-            name: call.name,
-            arguments: typeof call.arguments === "string" ? call.arguments : "",
-          },
-        })),
-      },
-      ...echoed.map((call) => ({
-        role: "tool",
-        tool_call_id: call.id,
-        content: "Not run.",
-      })),
-      tell,
-    ];
-  return [...(content !== null ? [{ role: "assistant", content }] : []), tell];
-}
-
-/**
  * One answer of the model as one action. An answer that is not exactly one
  * call of an offered function, with one JSON object of arguments that fit
- * that action, is malformed.
+ * that action, is malformed. So is an answer that stopped at its length
+ * limit: a call in it can be cut short and still look whole.
  */
 function readAnswer(
-  body: unknown,
+  answer: ModelAnswer,
   offered: ReadonlySet<string>,
   /** The closer picture of this turn: a click in it becomes a click in the first picture. */
   closer?: Closer,
 ): Reading {
-  const { message, finish } = firstChoice(body);
-  if (refusedIn(message, finish)) return { kind: "refused" };
-  const calls = toolCalls(message);
+  if (answer.refused) return { kind: "refused" };
+  const { calls } = answer;
   const malformed = (code: string, problem: string): Reading => ({
     kind: "malformed",
     code,
-    reply: repairReply(message, calls, problem),
+    repair: { answer, note: repairNote(problem) },
   });
+  if (answer.cut)
+    return malformed(
+      "cut_off",
+      "It stopped at its length limit before its end.",
+    );
   if (calls.length === 0)
     return malformed("no_tool_call", "It had no tool call.");
   if (calls.length > 1)
@@ -847,8 +766,8 @@ function readAnswer(
       "several_tool_calls",
       `It had ${calls.length} tool calls, and only one is taken, so none of them ran.`,
     );
-  const call = calls[0]!.function ?? {};
-  const name = typeof call.name === "string" ? call.name : "";
+  const call = calls[0]!;
+  const name = call.name ?? "";
   if (!name)
     return malformed("no_function_name", "Its tool call named no function.");
   if (!offered.has(name))
@@ -856,7 +775,7 @@ function readAnswer(
       "unknown_function",
       `"${quoted(name, 64)}" is not one of the offered functions.`,
     );
-  const args = typeof call.arguments === "string" ? call.arguments : "";
+  const args = call.arguments;
   let parsed: unknown;
   try {
     parsed = JSON.parse(args.trim() ? args : "{}");
@@ -898,43 +817,62 @@ function readAnswer(
   return { kind: "action", ...planned };
 }
 
-export class OpenAIPlanner implements Planner {
-  private readonly key: string;
-  private model: string;
-  /** The model to go to when the service refuses the default one. Null when the person chose the model. */
-  private fallback: string | null;
-  private readonly request: typeof fetch;
+/** The functions of the reading of a request, in the shape of the tool lists. */
+const navigationFunctions: FunctionTool[] = navigationTools.map((tool) => ({
+  type: "function",
+  function: tool,
+}));
+
+export interface PlannerOptions {
+  /** The provider of the model. OpenAI when it is left out, as before. */
+  provider?: ProviderId;
+  key: string;
+  /** The model. Left out: the default of the provider, which OpenAI may replace once. */
+  model?: string;
+  /** The chat completions route of a provider that speaks it. `custom` needs it. */
+  endpoint?: string;
+  /** The network call. Tests replace it, for every provider. */
+  request?: typeof fetch;
+  /** A browser is connected, so the browser functions are offered. */
+  browser?: boolean;
+  /** The optional methods of that browser: a function that needs another one is not offered. */
+  browserMethods?: readonly BrowserMethod[];
+  /** The time for one request to the language model. */
+  timeoutMs?: number;
+  /** The time for one whole call: every request, every wait and the repair. */
+  budgetMs?: number;
+  /** The clock of the waits. Tests replace it, so that no test waits. */
+  sleep?: Clock["sleep"];
+  now?: Clock["now"];
+  random?: Clock["random"];
+  /** Told of each request that failed, for example to count retries. */
+  onAttempt?: AttemptReport;
+  /** Told of the tokens of each answer, and of how many came from the cache. */
+  onUsage?: UsageReport;
+  /** The effort that the person set. Each provider takes it in its own way, or not at all (`sentEffort`). */
+  effort?: Effort;
+  /** Fast mode, on the models that take it (`sentFast`). */
+  speed?: Speed;
+}
+
+export class ModelPlanner implements Planner {
+  readonly provider: Provider;
+  private readonly transport: Transport;
   private readonly browser: boolean;
+  private readonly browserMethods: readonly BrowserMethod[];
   private readonly policy: RetryPolicy;
   private readonly clock: Clock;
   /** One for each planner: it counts failures across calls. */
   private readonly breaker: CircuitBreaker;
   private readonly onAttempt: AttemptReport | undefined;
-  private readonly browserMethods: readonly BrowserMethod[];
-  constructor(options: {
-    key: string;
-    model?: string;
-    /** The network call. Tests replace it. */
-    request?: typeof fetch;
-    /** A browser is connected, so the browser functions are offered. */
-    browser?: boolean;
-    /** The optional methods of that browser: a function that needs another one is not offered. */
-    browserMethods?: readonly BrowserMethod[];
-    /** The time for one request to the language model. */
-    timeoutMs?: number;
-    /** The time for one whole call: every request, every wait and the repair. */
-    budgetMs?: number;
-    /** The clock of the waits. Tests replace it, so that no test waits. */
-    sleep?: Clock["sleep"];
-    now?: Clock["now"];
-    random?: Clock["random"];
-    /** Told of each request that failed, for example to count retries. */
-    onAttempt?: AttemptReport;
-  }) {
-    this.key = options.key;
-    this.model = options.model || defaultComputerModel;
-    this.fallback = options.model ? null : fallbackComputerModel;
-    this.request = options.request ?? fetch;
+  private readonly onUsage: UsageReport | undefined;
+  constructor(options: PlannerOptions) {
+    const provider = providerById(options.provider ?? "openai");
+    if (!provider) throw new Error("The provider of the model is not known.");
+    const model = options.model || provider.defaultModel;
+    if (!model)
+      throw new Error(`${provider.name} has no default model. Choose one.`);
+    this.provider = provider;
     this.browser = options.browser === true;
     this.browserMethods = options.browserMethods ?? [];
     const attemptTimeoutMs =
@@ -953,6 +891,42 @@ export class OpenAIPlanner implements Planner {
     };
     this.breaker = new CircuitBreaker(this.policy, () => this.clock.now());
     this.onAttempt = options.onAttempt;
+    this.onUsage = options.onUsage;
+    const now = () => this.clock.now();
+    if (provider.wire === "messages")
+      this.transport = new MessagesTransport({
+        key: options.key,
+        model,
+        effort: options.effort ?? null,
+        speed: options.speed ?? null,
+        timeoutMs: attemptTimeoutMs,
+        now,
+        request: options.request,
+      });
+    else {
+      const endpoint = options.endpoint ?? provider.endpoint;
+      if (!endpoint)
+        throw new Error(`${provider.name} needs the address of its service.`);
+      this.transport = new ChatTransport({
+        provider,
+        endpoint,
+        key: options.key,
+        model,
+        // The fallback is only for the default of OpenAI, never for a chosen model.
+        fallback:
+          provider.id === "openai" && !options.model
+            ? fallbackComputerModel
+            : null,
+        effort: options.effort ?? null,
+        request: options.request ?? fetch,
+        now,
+      });
+    }
+  }
+
+  /** The model that the next request names. */
+  get model() {
+    return this.transport.model;
   }
 
   private report(attempt: number, trouble: "malformed", delay: number | null) {
@@ -964,119 +938,59 @@ export class OpenAIPlanner implements Planner {
   }
 
   /**
-   * One answer of the language model, as parsed JSON, with the retries of
-   * `callWithRetries`. Every failure is a `PlannerError`, or the caller's
-   * own abort.
+   * The one way to the language model: one request, sent with the retries of
+   * `callWithRetries`, and the one answer that came back. Every call of this
+   * planner goes through here, whatever the provider: the reading of a
+   * request, each turn and the outline. Every failure is a `PlannerError`, or
+   * the caller's own abort.
    */
-  private send(
-    body: Record<string, unknown>,
+  private async call(
+    request: PlannerRequest,
     signal: AbortSignal | undefined,
     deadline: number,
-  ): Promise<unknown> {
-    return callWithRetries((attempt) => this.attempt(body, attempt), {
-      signal,
-      deadline,
-      policy: this.policy,
-      clock: this.clock,
-      breaker: this.breaker,
-      onAttempt: this.onAttempt,
-    });
-  }
-
-  /**
-   * One request to the language model. When the service answers that this
-   * key may not use the default model (403) or that it does not know the
-   * model (404), the same request goes out once more with the model before
-   * it, and the planner stays on that one.
-   */
-  private async attempt(
-    body: Record<string, unknown>,
-    signal: AbortSignal,
-  ): Promise<Attempt<unknown>> {
-    const post = () =>
-      this.request(completionsUrl, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.key}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ model: this.model, ...body }),
+  ): Promise<ModelAnswer> {
+    const answer = await callWithRetries(
+      (attempt) => this.transport.send(request, attempt),
+      {
         signal,
-      });
-    let response = await post();
-    if (
-      this.fallback !== null &&
-      (response.status === 403 || response.status === 404)
-    ) {
-      response.body?.cancel().catch(() => {});
-      this.model = this.fallback;
-      this.fallback = null;
-      response = await post();
-    }
-    if (response.ok) {
-      const text = await response.text();
+        deadline,
+        policy: this.policy,
+        clock: this.clock,
+        breaker: this.breaker,
+        onAttempt: this.onAttempt,
+      },
+    );
+    if (answer.usage)
       try {
-        return { ok: true, value: JSON.parse(text) as unknown };
+        this.onUsage?.(answer.usage);
       } catch {
-        // A cut or garbled answer: the next request can pass.
-        return {
-          ok: false,
-          error: new PlannerError(
-            "transient",
-            "The language model sent an answer that is not JSON.",
-          ),
-        };
+        // A report that fails changes nothing.
       }
-    }
-    // The body of a failure can echo the request: only its error code is read.
-    let code: string | null = null;
-    try {
-      code = errorCode(await response.text());
-    } catch {
-      // No body: the status says enough.
-    }
-    const wait = retryAfterMs(response.headers, this.clock.now());
-    return {
-      ok: false,
-      error: new PlannerError(
-        statusTrouble(response.status, code),
-        `The language model answered ${response.status}${code ? ` (${code})` : ""}.`,
-      ),
-      ...(wait !== undefined ? { retryAfterMs: wait } : {}),
-    };
+    return answer;
   }
 
   async navigation(
     goal: string,
     signal?: AbortSignal,
   ): Promise<NavigationIntent> {
-    const body = await this.send(
-      {
-        messages: [
-          { role: "system", content: navigationRules },
-          { role: "user", content: goal },
-        ],
-        tools: navigationTools.map((tool) => ({
-          type: "function",
-          function: tool,
-        })),
-        tool_choice: "required",
-        parallel_tool_calls: false,
-      },
+    const answer = await this.call(
+      { system: navigationRules, tools: navigationFunctions, user: goal },
       signal,
       this.clock.now() + this.policy.budgetMs,
     );
-    const { message, finish } = firstChoice(body);
-    if (refusedIn(message, finish)) throw refusal();
+    if (answer.refused) throw refusal();
     // No repair here: a reading that is not one clean call ends the request,
     // and no move is guessed from a second try.
+    if (answer.cut)
+      throw new PlannerError(
+        "malformed",
+        "The reading of the request stopped at its length limit.",
+      );
     try {
       return parseNavigationCalls(
-        toolCalls(message).map(({ function: call }) => ({
-          ...(typeof call?.name === "string" ? { name: call.name } : {}),
-          ...(typeof call?.arguments === "string"
-            ? { arguments: call.arguments }
-            : {}),
+        answer.calls.map((call) => ({
+          ...(call.name !== null ? { name: call.name } : {}),
+          arguments: call.arguments,
         })),
       );
     } catch (error) {
@@ -1095,53 +1009,25 @@ export class OpenAIPlanner implements Planner {
   next(input: NextInput & { plan?: undefined }): Promise<Chosen>;
   async next(input: NextInput): Promise<Chosen | PlanChoice> {
     const browser = this.browser && input.browser !== false;
-    const text = brief(input, browser);
     const image = input.observation?.image;
     const closer = image ? input.closer : undefined;
     const chosen = await this.decide(
       {
-        messages: [
-          {
-            role: "system",
-            content:
-              rules(browser, this.browserMethods) + planSystem(input.plan),
-          },
-          {
-            role: "user",
-            content: [
-              { type: "text", text },
-              ...(image
-                ? [
-                    {
-                      type: "image_url",
-                      image_url: {
-                        url: `data:image/jpeg;base64,${image}`,
-                        detail: "high",
-                      },
-                    },
-                  ]
-                : []),
-              ...(closer
-                ? [
-                    {
-                      type: "image_url",
-                      image_url: {
-                        url: `data:image/jpeg;base64,${closer.image}`,
-                        detail: "high",
-                      },
-                    },
-                  ]
-                : []),
-            ],
-          },
-        ],
+        // The rules and the functions first: the same bytes in each step
+        // while the plan does not change, so that the service can read them
+        // from its cache. The turn comes after.
+        system: rules(browser, this.browserMethods) + planSystem(input.plan),
         tools: [
           ...toolsFor(browser, this.browserMethods),
           ...planTools(input.plan),
         ],
-        // One action for each turn: a function call, and only one.
-        tool_choice: "required",
-        parallel_tool_calls: false,
+        user: {
+          text: brief(input, browser),
+          images: [
+            ...(image ? [image] : []),
+            ...(closer ? [closer.image] : []),
+          ],
+        },
       },
       input.signal,
       closer,
@@ -1161,31 +1047,15 @@ export class OpenAIPlanner implements Planner {
     const image = input.observation?.image;
     const chosen = await this.decide(
       {
-        messages: [
-          { role: "system", content: outlineRules },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: outlineBrief(input) },
-              ...(image
-                ? [
-                    {
-                      type: "image_url",
-                      image_url: {
-                        url: `data:image/jpeg;base64,${image}`,
-                        // A plan needs the layout, not the small print: the
-                        // elements carry the names.
-                        detail: "low",
-                      },
-                    },
-                  ]
-                : []),
-            ],
-          },
-        ],
+        system: outlineRules,
         tools: [outlineTool],
-        tool_choice: "required",
-        parallel_tool_calls: false,
+        user: {
+          text: outlineBrief(input),
+          images: image ? [image] : [],
+          // A plan needs the layout, not the small print: the elements carry
+          // the names. A provider that takes a detail reads it small.
+          detail: "low",
+        },
       },
       input.signal,
     );
@@ -1199,18 +1069,15 @@ export class OpenAIPlanner implements Planner {
    * was wrong. A second such answer, or a refusal, is a failure.
    */
   private async decide(
-    body: {
-      messages: Record<string, unknown>[];
-      tools: readonly { function: { name: string } }[];
-    } & Record<string, unknown>,
+    request: PlannerRequest,
     signal: AbortSignal | undefined,
     /** The closer picture of this turn, when there is one. */
     closer?: Closer,
   ): Promise<Chosen | PlanReading["chosen"]> {
     const deadline = this.clock.now() + this.policy.budgetMs;
-    const offered = new Set(body.tools.map((tool) => tool.function.name));
+    const offered = new Set(request.tools.map((tool) => tool.function.name));
     const first = readAnswer(
-      await this.send(body, signal, deadline),
+      await this.call(request, signal, deadline),
       offered,
       closer,
     );
@@ -1225,8 +1092,8 @@ export class OpenAIPlanner implements Planner {
     }
     this.report(1, "malformed", 0);
     const second = readAnswer(
-      await this.send(
-        { ...body, messages: [...body.messages, ...first.reply] },
+      await this.call(
+        { ...request, repairs: [...(request.repairs ?? []), first.repair] },
         signal,
         deadline,
       ),
@@ -1241,6 +1108,9 @@ export class OpenAIPlanner implements Planner {
     throw unreadable(second.code);
   }
 }
+
+/** The name that the planner had when it spoke only to OpenAI. */
+export { ModelPlanner as OpenAIPlanner };
 
 /** What the direct opening of an address is for, in the record of the steps. */
 const directWhy = "The person asked to open this address.";
@@ -1298,24 +1168,66 @@ export function directOpening(planner: Planner): Planner {
   return wrapped;
 }
 
-/** The planner that the environment asks for. Null when no key is there. */
+/** The options of a planner for what the choice of the provider gave. */
+export function plannerOptions(settings: PlannerSettings): PlannerOptions {
+  return {
+    provider: settings.provider.id,
+    key: settings.key,
+    // The default model of OpenAI is left out, so that its fallback stays.
+    ...(settings.chosen || settings.provider.id !== "openai"
+      ? { model: settings.model }
+      : {}),
+    ...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
+    ...(settings.effort ? { effort: settings.effort } : {}),
+    ...(settings.speed === "fast" ? { speed: "fast" as const } : {}),
+  };
+}
+
+/**
+ * The options of a planner for one `provider/model`, or for the choice of
+ * the service when the model is null, with its key from the environment or
+ * the store. The planner tests use it. A problem throws, with its fixed text.
+ */
+export function plannerFor(
+  model: string | null,
+  env: Record<string, string | undefined>,
+  root?: string,
+): { options: PlannerOptions; name: string } {
+  const setup = plannerSetup(
+    model ? { ...env, CLAWDTIME_COMPUTER_MODEL: model } : env,
+    root,
+  );
+  if (!setup.ok) throw new Error(setup.problem);
+  const { provider, model: chosen } = setup.settings;
+  return {
+    options: plannerOptions(setup.settings),
+    name: provider.id === "openai" ? chosen : `${provider.id}/${chosen}`,
+  };
+}
+
+/**
+ * The planner that the environment asks for, and the store of the state
+ * folder when one is given. Null when none can be built: no key, or a
+ * setting that cannot be used. `plannerSetup` says why.
+ */
 export function plannerFromEnvironment(
   env: Record<string, string | undefined>,
   options: {
     request?: typeof fetch;
     browser?: boolean;
     browserMethods?: readonly BrowserMethod[];
+    root?: string;
   } = {},
 ) {
-  const key = env.CLAWDTIME_OPENAI_API_KEY || env.OPENAI_API_KEY;
-  if (!key) return null;
-  return new OpenAIPlanner({
-    key,
-    // No model here means the default, with its fallback.
-    ...(env.CLAWDTIME_COMPUTER_MODEL
-      ? { model: env.CLAWDTIME_COMPUTER_MODEL }
+  const setup = plannerSetup(env, options.root);
+  if (!setup.ok) return null;
+  return new ModelPlanner({
+    ...plannerOptions(setup.settings),
+    ...(options.request ? { request: options.request } : {}),
+    ...(options.browser !== undefined ? { browser: options.browser } : {}),
+    ...(options.browserMethods
+      ? { browserMethods: options.browserMethods }
       : {}),
-    ...options,
   });
 }
 

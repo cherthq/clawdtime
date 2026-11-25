@@ -4,9 +4,9 @@
  * Computer use is off until the person turns it on with
  * `clawdtime computer on`. The worker is built only when no other engine does
  * the computer work in the service, the switch is on, a key for the language
- * model is in the environment of the service, and no test started the
- * service. In every other case the routes still answer, with `enabled` false
- * and the reason, so the panel always knows where it stands.
+ * model is in the environment of the service or in its key store, and no test
+ * started the service. In every other case the routes still answer, with
+ * `enabled` false and the reason, so the panel always knows where it stands.
  */
 import type {
   DesktopExecutionSnapshot,
@@ -19,8 +19,9 @@ import {
   presentationEventSchema,
   type PresentationEvent,
 } from "./presentation.js";
-import { plannerFromEnvironment } from "./planner.js";
 import { browserMethods } from "./guards.js";
+import { plannerSetup } from "./keys.js";
+import { ModelPlanner, plannerOptions } from "./planner.js";
 import { recordTiming } from "./timing.js";
 import {
   OwnerReach,
@@ -145,7 +146,7 @@ export function offComputerPort(message: string): ComputerPort {
 }
 
 export const noKeyText =
-  "Computer use is on, but the service has no key for the language model. Put CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment and start it again.";
+  "Computer use is on, but the service has no key for the language model. Put CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment, or store a key of any provider with clawdtime keys set PROVIDER, and start it again.";
 export const chatEngineText =
   "An existing chat connection does the computer work in this service.";
 export const backgroundEngineText =
@@ -163,7 +164,9 @@ export interface ComputerOptions {
   /** The state folder: the switch and the journal live in its `computer` folder. */
   root: string;
   /**
-   * The environment of the service: the key and the model of the planner.
+   * The environment of the service: the keys, the model, the effort and the
+   * speed of the planner. A key or a model in the environment wins over the
+   * one in the store of the state folder.
    * `VITEST` in it says that a test started the service: no worker is built
    * then, so no command for the hands can come out of a test.
    */
@@ -194,12 +197,18 @@ export function buildComputer(options: ComputerOptions): {
   if (options.env.VITEST) return off(testServiceText);
   const chosen = readComputerSwitch(options.root);
   if (!chosen.enabled) return off(chosen.problem ?? offText);
-  const planner = plannerFromEnvironment(options.env, {
+  // The provider, the model and the key: the environment first, then the
+  // store of the state folder. With no key and no choice the text says how to
+  // add one; every other problem says what is wrong with the setting.
+  const setup = plannerSetup(options.env, options.root);
+  if (!setup.ok)
+    return off(setup.reason === "no_key" ? noKeyText : setup.problem);
+  const planner = new ModelPlanner({
+    ...plannerOptions(setup.settings),
     browser: options.browser !== undefined,
     // A browser function is offered only when this driver has its method.
     browserMethods: browserMethods(options.browser),
   });
-  if (!planner) return off(noKeyText);
   const hands = new PanelHands();
   const worker = new ComputerWorker({
     hands,
@@ -236,7 +245,7 @@ export type ExecutionEngine =
  * 2. The background runtime, when `background-cua.json` is there.
  * 3. The bundled runtime, when `bundled-cua.json` is there.
  * 4. The computer worker, when its switch is on, a key for the language model
- *    is in the environment, and no test started the service.
+ *    is in the environment or the key store, and no test started the service.
  *
  * The routes of the hands answer in every case. Only with the worker do they
  * ever hold a command.
