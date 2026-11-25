@@ -98,6 +98,8 @@ export interface AgentBoardPort {
   /** What the watcher found on the sessions. */
   incidents(): unknown;
   dismissIncident(id: string): boolean;
+  /** Stop: ends the turn of the chat that runs, where the chat has turns to end. */
+  stopChat?(): void;
 }
 const incidentDismissSchema = z
   .object({ id: z.string().regex(/^[0-9a-f]{12}$/) })
@@ -348,6 +350,8 @@ export function createTaskApp(
     if (stop)
       app.post("/desktop/execution/stop", (c) => {
         desktop.authorizePanel(credential(c));
+        // Stop also ends the turn of the chat agent that runs, when one does.
+        agents?.stopChat?.();
         return c.json({ execution: stop() });
       });
     if (executor) {

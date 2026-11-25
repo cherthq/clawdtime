@@ -1683,6 +1683,116 @@ seconds through the Chert service, and it sends the answer of each job that
 finishes as a text to your own number. An answer can hold session names and
 the text of a request. Stop the command to stop both.
 
+### The chat agent
+
+There is a second chat, built as one agent loop, beside the one described
+above. Set `CLAWDTIME_CHAT=agent` in the environment of the command that starts
+the desktop service (the launcher passes it on), of `clawdtime chat`,
+`clawdtime talk`, `clawdtime texts` or `clawdtime agents call me`. Any other
+value, or none, keeps the chat as it is.
+
+How it works:
+
+- Each message goes to the language model with the conversation, the task list
+  and the notes of memory that fit the message. The model acts at once through
+  its tools and answers in one or two short sentences. There is no list of word
+  rules in front of it: "Can you search Aero 7 headphones?" starts the search.
+- A tool call runs, its result goes back to the model, and the model goes on
+  until it answers in words, at most six rounds. Tools that only read run side
+  by side; a tool that changes something runs alone.
+- A message that you send while a turn runs joins that turn at the next safe
+  point, between rounds of tools, and the turn answers both once.
+- Stop comes first, in code. A message that is a stop (read by the same stop
+  reader as the chat above) stops the computer task before the model reads it,
+  ends the turn that runs, and nothing new starts in that turn. The Stop button
+  of the panel ends the turn that runs too.
+
+Its tools are thin adapters over the code that exists:
+
+| Tool                                                             | What it does                                                                   |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `computer_do`                                                    | Starts a task on the Mac with your goal, through the computer engine           |
+| `computer_steer`                                                 | Adds your correction to the task that runs: it goes on with it                 |
+| `computer_stop`, `computer_status`                               | Stops the task that runs; reads its state, step, question and report           |
+| `answer_question`                                                | Gives your answer to the question of the task, or to a request of an agent     |
+| `start_job`, `job_status`                                        | Hands code work to a coding agent in a new terminal session; reads its answer  |
+| `tasks`                                                          | Reads the task list, or one task in full: words, state, links, history, result |
+| `memory_search`, `remember`                                      | Reads and keeps what you tell it. They exist only while memory is on           |
+| `routine_add`, `routine_list`, `routine_pause`, `routine_remove` | Keeps, lists, pauses (or starts again) and removes a routine                   |
+
+Rules that are code, in a gate before every call, and that no answer of the
+model changes:
+
+- A yes or no to a question of the computer engine is your own newest message,
+  checked by the strict yes and no of the chat. The model's words never stand in
+  for it. A request of an agent is decided only by a message that is a plain
+  yes or no (or one of its choices), and one that is not shown whole is allowed
+  only in its terminal.
+- One message answers one question, and only a question that was there when
+  the message came. The question must be the one that waits now, whatever id
+  the model names. While two wait (a question of the task and a request of an
+  agent), none is answered here: the request is answered in the list of
+  requests or its terminal, and then a yes here answers the task.
+- The computer engine takes the words of a goal as your yes, ahead of time, to
+  steps such as send, post, buy and delete. So a goal holds such a step only
+  where you said it; a plain yes to ClawdTime's own offer of a next step
+  carries the words of that offer.
+- No argument, tool result or message that holds a password, a key or a code
+  goes to the model or to memory, also when it is split over two messages ("my
+  bank password is", then the value).
+- After a call ends, nothing more starts from it. A message of a call never
+  joins the turn of another message: it waits and takes its own.
+- Words for a task that runs are your own words, and the task goes on with
+  them. Words that stop it go to the stop, and a question about how it goes
+  gets the state: neither is handed to the task as a change.
+- The computer engine keeps its own ask policy and its checks for each action.
+
+The task list is a graph of the work, in `agents/task-graph.json` in the state
+folder, for its owner only. A node is a request of yours, a computer task, a
+coding job, a routine, a question that waits for you, or a call or text of the
+reach. Each has an id (`r` request, `c` computer task, `j` job, `s` routine, `q`
+question, `m` reach, with a number), a kind, a title in your words, a state
+(queued, running, waiting, done, failed, canceled), its times, a short history
+and links: spawned by, waits on, answers, follows up. It is fed only from the
+real sources: the snapshot and journal of the computer engine, the jobs, the
+routines, the reach and the desk. The model says that a task is done only when
+its node says done. Each request of the model gets a short view of it, at most
+1,500 characters:
+
+```text
+Active tasks:
+- c4 computer waiting 3m: "search Aero 7 headphones on apple.com" (Add to bag: Aero 7 headphones 256 GB?) [from r3; waits on q5]
+- q5 question waiting 1m: "Add to bag: Aero 7 headphones 256 GB?" (It needs the owner's yes or no.) [from c4]
+Ended lately:
+- j2 job done 12m ago: "fix the flaky checkout test" -> "Fixed the wait in the test; it passes." [from r1]
+```
+
+A new chat (`clawdtime chat new`, or "new chat" in the chat) starts an empty
+conversation; the task list stays, so the new chat still knows the work that
+runs.
+
+The model: `CLAWDTIME_SUPERVISOR_MODEL`, as for the chat above, with
+`gpt-4.1-mini` when it is not set. It can also be `provider/model` for any
+provider of computer use, such as `anthropic/claude-opus-5-5`; the key comes
+from the environment or from `clawdtime keys set PROVIDER`.
+`CLAWDTIME_SUPERVISOR_REASONING` can be `low`, `medium` or `high`. The request
+goes over the same transports as the planner of computer use.
+
+The chat eval measures the first action for 46 messages: searches, shopping, X
+and Instagram, a follow-up and a correction while a task runs, stops, questions
+about the state, answers to a waiting question, code, memory, routines and vague
+messages.
+
+```sh
+npm run eval:chat -- --check   # scripted model: no key, no network
+npm run eval:chat              # the chat's own model: costs one or two calls a message
+```
+
+Limits of the chat agent now: the panel sends one message at a time, so
+messages join a running turn from the voice, the call and the texts; the panel
+gets the progress of a turn in `activity` of `GET /desktop/chat` and does not
+show it yet; the task of the task service has no tool in it.
+
 ## Terminal use
 
 ```sh

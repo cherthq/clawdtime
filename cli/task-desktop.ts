@@ -132,6 +132,8 @@ export function childEnvironment(panel = false): NodeJS.ProcessEnv {
           "CLAWDTIME_OPENAI_API_KEY",
           "OPENAI_API_KEY",
           "CLAWDTIME_SUPERVISOR_MODEL",
+          // Which chat answers: "agent" for the chat agent, else the supervisor.
+          "CLAWDTIME_CHAT",
           // The model that reads what a message asks of the screen.
           "CLAWDTIME_READER_MODEL",
           // The structured intent reader of the task service, when it is "on".

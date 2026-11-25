@@ -644,7 +644,9 @@ const stopHoldsCodingWork = (words: string): boolean =>
  * work, and names no session, job, build, server, test run, watch, or coding
  * task.
  */
-const computerStopKind = (spoken: string): "explicit" | "general" | null =>
+export const computerStopKind = (
+  spoken: string,
+): "explicit" | "general" | null =>
   // The words as typed, then with lookalike letters of another script read
   // as Latin letters ("ѕtop іt"). Either reading that stops, stops.
   stopKindOf(spoken) ?? stopKindOf(latinLookalikes(spoken));
