@@ -852,6 +852,8 @@ const requests: Request[] = [
   {
     id: "find a note by a word, copy a number from it into another note, confirm",
     app: "invoiceNotes",
+    // The scripted paths of check mode come with the next change.
+    paths: [],
     goal: "Find the note whose name has the word invoice, copy its invoice number into the note named Call list as a new line, then tell me the number.",
     done: (state, said) => {
       const held = state as unknown as NotesState;
@@ -870,6 +872,8 @@ const requests: Request[] = [
   {
     id: "sign in, the person types the password, then change a setting",
     app: "ledger",
+    // The scripted paths of check mode come with the next change.
+    paths: [],
     goal: "Sign in to Ledger with the email ada@example.com, I type the password myself. Then turn on Weekly summary in its settings.",
     // At a question with an empty password field, the person types into it, then says yes.
     person: async (_question, page) => {
@@ -895,6 +899,8 @@ const requests: Request[] = [
   {
     id: "a form of three pages, sent, and its reference read",
     app: "trip",
+    // The scripted paths of check mode come with the next change.
+    paths: [],
     goal: "Fill in the trip request: the name Ada Lovelace on the first page, the date 12 March on the second, a window seat on the third. Then send it and tell me its reference.",
     person: yes,
     done: (state, said, final) =>
