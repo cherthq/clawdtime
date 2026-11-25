@@ -832,6 +832,13 @@ When the code takes a road by itself:
   waits for you), the code hands screen work to the engine before the
   language model. The worker gets your words whole (a search of the web gets
   its search, see above), and plans. Both roads run there too.
+- When the language model only offers work that the code places on the
+  engine's road ("I can start that search for you now. Should I?", "No active
+  job for that yet."), the code starts it with your words, through the gates
+  of the engine. A question that only you can answer stays: a choice, which
+  account, which file. With computer use off, you get the sentence that turns
+  it on. `offersInsteadOfStarting` in `connectors/agents/route.ts` reads the
+  draft.
 - Only when nothing else waits for you: no request of an agent, no question of
   a task and no computer action. Words for a session, words with the name of a
   coding agent, and a stop by itself keep their own roads.

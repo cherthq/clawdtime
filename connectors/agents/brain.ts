@@ -77,6 +77,7 @@ import { questionHoldMs } from "./jobnews.js";
 import {
   computerOffReply,
   mentionsCodingAgent,
+  offersInsteadOfStarting,
   roadOf,
   type Road,
 } from "./route.js";
@@ -12325,6 +12326,38 @@ export class Supervisor {
         });
         if (!phoneIsLive()) return phoneEnded;
         if (!reply.toolCalls.length) {
+          // The person asked for work on the screen in plain words, and the
+          // draft only offers it: "I can start that search in Google Chrome
+          // for you now. Should I?", "No active job for that yet." Work that
+          // the person asked for starts with no round of confirmation: the
+          // code starts it now, with their own words, through the gates of
+          // the engine. Only in a turn in which nothing happened yet, while
+          // no computer task is under way, and for a message that the code
+          // itself places on the road of the screen (`roadHere`).
+          const offeredRoad =
+            ran.size === 0 &&
+            turn.done.size === 0 &&
+            !turn.typedByCode &&
+            !(execution && computerTaskNotOver(execution)) &&
+            offersInsteadOfStarting(reply.text)
+              ? this.roadHere(turn, words, {
+                  taskNeedsWord,
+                  stopsSomething: stopTarget !== null,
+                })
+              : null;
+          if (offeredRoad?.kind === "both") {
+            const said = await this.bothRoads(turn, offeredRoad);
+            if (said !== null) return said;
+          } else if (offeredRoad?.kind === "engine") {
+            if (this.computerIsOff()) return this.computerOff(words);
+            const free = this.ownEngineFree();
+            return this.delegate(
+              turn,
+              spoken,
+              free,
+              free ? { kind: "none" } : undefined,
+            );
+          }
           // After the note about work that was only offered: this answer
           // started nothing and tried no start. "Okay, I'm on it." would
           // say that work is under way. The first draft, the offer, was

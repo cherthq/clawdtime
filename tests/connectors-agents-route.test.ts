@@ -14,6 +14,7 @@ import { BoardFeed } from "../connectors/agents/feed.js";
 import type { JobPort } from "../connectors/agents/jobs.js";
 import {
   computerOffReply,
+  offersInsteadOfStarting,
   roadOf,
   type Road,
 } from "../connectors/agents/route.js";
@@ -636,6 +637,130 @@ describe("a clear request starts now, on the Mac", () => {
         reads: false,
         goal: (effect as { goal: string }).goal,
       });
+    },
+  );
+});
+
+describe("a drafted offer for a clear request", () => {
+  /** An engine that is not ClawdTime's own worker: the model is asked first. */
+  const other = () => mac({ snapshot: { mode: "browser" } });
+
+  it.each([
+    offerDraft,
+    "Want me to look up flights to Goa?",
+    "I can do that. Should I go ahead?",
+    "No active job for that yet.",
+    "Would you like me to search for it in Chrome?",
+    "Just say the word and I'll search it.",
+    "I can search that for you now.",
+    "Sure, I can start that search. Want me to?",
+  ])("starts the work in place of the draft %j", async (draft) => {
+    const f = other();
+    const run = scripted([draft]);
+    const said = await new Supervisor(f.world, run.model).reply(
+      [],
+      "Can you search iPhone 17 Pro Max?",
+      "chat",
+    );
+    expect(f.events).toEqual([`engine: ${search("iPhone 17 Pro Max")}`]);
+    expect(said).toBe(startedText);
+    expect(run.seen).toHaveLength(1);
+  });
+
+  it("starts the person's own words where a site is named", async () => {
+    const f = other();
+    const said = await new Supervisor(
+      f.world,
+      scripted(["Want me to check it now?"]).model,
+    ).reply([], "check my Gmail", "chat");
+    expect(f.events).toEqual(["engine: check my Gmail"]);
+    expect(said).toBe(startedText);
+  });
+
+  it.each([
+    ["reply to Sam on Slack", "Which Slack account: work or personal?"],
+    ["reply to Sam on Slack", "Which Sam do you mean?"],
+    [
+      "search iPhone 17 Pro Max on Amazon",
+      "Should I search the US store or the India store?",
+    ],
+    [
+      "Can you search iPhone 17 Pro Max?",
+      "I can search it once you sign in to Chrome. Should I?",
+    ],
+  ])(
+    "keeps a question that only the person can answer, for %j",
+    async (words, draft) => {
+      const f = other();
+      const said = await new Supervisor(f.world, scripted([draft]).model).reply(
+        [],
+        words,
+        "chat",
+      );
+      expect(f.events).toEqual([]);
+      expect(said).toBe(draft);
+    },
+  );
+
+  it.each(holds)(
+    "starts nothing for %j, whatever the draft offers",
+    async (words) => {
+      const f = other();
+      await new Supervisor(
+        f.world,
+        scripted([offerDraft, offerDraft]).model,
+      ).reply([], words, "chat");
+      expect(f.events).toEqual([]);
+    },
+  );
+
+  it("starts nothing for a question about what it can do", async () => {
+    for (const words of [
+      "can you search the web?",
+      "can you use my mac?",
+      "can you click buttons on my screen?",
+    ]) {
+      const f = other();
+      await new Supervisor(
+        f.world,
+        scripted([offerDraft, offerDraft]).model,
+      ).reply([], words, "chat");
+      expect([words, f.events]).toEqual([words, []]);
+    }
+  });
+
+  it("says how to turn computer use on in place of the offer when it is off", async () => {
+    const f = mac({ engine: "none" });
+    const words = "Can you search iPhone 17 Pro Max?";
+    const said = await new Supervisor(
+      f.world,
+      scripted([offerDraft]).model,
+    ).reply([], words, "chat");
+    expect(f.events).toEqual([]);
+    expect(said).toBe(computerOffReply(words, true));
+  });
+
+  it.each([
+    [offerDraft, true],
+    ["Want me to look up flights to Goa?", true],
+    ["Should I go ahead?", true],
+    ["Do you want me to start it now?", true],
+    ["I could open Chrome and search it.", true],
+    ["Nothing is running for that yet.", true],
+    ["Say yes and I'll start.", true],
+    ["Which account should I use?", false],
+    ["Should I use the work or the personal account?", false],
+    ["Do you want the Pro or the Pro Max?", false],
+    [
+      "Started. I look at the screen and take one checked action at a time.",
+      false,
+    ],
+    ["Two sessions work.", false],
+    ["I can't see the screen from here.", false],
+  ])(
+    "reads the draft %j as an offer in place of the start: %s",
+    (draft, offers) => {
+      expect(offersInsteadOfStarting(draft)).toBe(offers);
     },
   );
 });

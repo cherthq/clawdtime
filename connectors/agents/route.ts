@@ -633,6 +633,35 @@ export function roadOf(text: string): Road {
   return { kind: "engine", reads };
 }
 
+/** Words of an offer to do the work, in place of doing it. */
+const offerWords =
+  /\b(?:should|shall)\s+i\b[^.!?]*\?|\b(?:want|wanna)\s+me\s+to\b|\b(?:do|would)\s+you\s+(?:want|like)\s+me\s+to\b|\bi\s+(?:can|could)\s+(?:(?:just|now|also|go\s+ahead\s+and)\s+)*(?:start|do|run|kick\s+off|begin|search|look|find|open|check|get|pull|google|browse|go\s+ahead)\b|\b(?:just\s+)?say\s+(?:yes|go|the\s+word)\b|\bready\s+when\s+you\s+are\b|\b(?:confirm|proceed|go\s+ahead)\s*\?|\bno\s+(?:active|running)\s+(?:job|task|search|computer\s+task)\b|\bnothing\s+(?:is\s+)?(?:running|started|active|under\s+way)\s+for\s+(?:that|it|this)\b/i;
+/** A question that only the person can answer: a choice, which one, or a thing of theirs. */
+const forThePerson =
+  /\bor\b|^(?:which|what|where|who|whom|whose|when|how)\b|\b(?:which|what)\s+(?:one|account|file|folder|site|browser|app|version|size|color|colour|date|day|time)\b/i;
+/** A thing that only the person has or knows: an account, a file, a password, a sign in. */
+const onlyTheyHave =
+  /\b(?:accounts?|files?|folders?|passwords?|passcodes?|sign(?:ed)?\s+in|log(?:ged)?\s+in|two[-\s]factor|verification\s+code)\b/i;
+
+/**
+ * ClawdTime's draft only offers the work in place of starting it: "I can
+ * start that search in Google Chrome for you now. Should I?", "No active
+ * job for that yet.", "Want me to look up flights to Goa?". A question that
+ * only the person can answer is no such offer: a choice ("this shop or that one?"),
+ * which one ("Which account?"), or a thing that only they have (an account,
+ * a file, a password). Pure: it reads only the words of the draft.
+ */
+export function offersInsteadOfStarting(draft: string): boolean {
+  const text = draft.replace(/\s+/g, " ").trim();
+  if (!text || text.length > 600) return false;
+  const questions = text
+    .split(/(?<=[.?!])\s+/)
+    .filter((sentence) => /\?\s*$/.test(sentence));
+  if (questions.some((question) => forThePerson.test(question))) return false;
+  if (onlyTheyHave.test(text)) return false;
+  return offerWords.test(text);
+}
+
 /** "my" becomes "your", so that ClawdTime can say the person's work back to them. */
 export const toThem = (text: string) =>
   text
