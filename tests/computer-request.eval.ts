@@ -17,13 +17,22 @@
  * a real Mac and a real service give.
  *
  *   npm run eval:computer:request -- gpt-5.4
+ *   npm run eval:computer:request -- gpt-5.4 --repeat 3 --split held --out b.json
+ *   npx tsx tests/computer-request.eval.ts --compare a.json b.json
  *   npx tsx tests/computer-request.eval.ts --check
  *   npx tsx tests/computer-request.eval.ts --check --new-actions
  *
  * Each argument is provider/model, or a bare model of OpenAI, with "@effort"
- * for a reasoning effort (`gpt-6.2-astra@low`). With none it
- * uses the model that the service would use. REPEATS (default 1) is how often each request runs; ONLY names a
- * part of a request's name; OUT names a file for every result.
+ * for a reasoning effort (`gpt-6.2-astra@low`). With none it uses the model
+ * that the service would use. `--repeat N` (default 1, or REPEATS) is how
+ * often each request runs. It prints, for each request, the runs that were
+ * done out of N with a 95 percent interval and the median and 90th
+ * percentile seconds, and the requests that were done in some runs and not
+ * in all. `--split dev|held|all` (default all) takes the dev requests, the
+ * held requests (`held: true`, a fixed quarter) or all. `--out FILE.json`
+ * (or OUT) writes the result of each request and every run; `--compare
+ * A.json B.json` prints what changed from A to B and runs nothing. ONLY
+ * names a part of a request's name.
  *
  * With a model it needs a key for the language model in the environment or
  * the key store, and the Chromium of Playwright. It costs real model calls: about two for each
@@ -38,16 +47,18 @@
  * itself. An ideal path must end with the check met, and a wrong path must
  * not. So it proves that each request can be done and that its check tells
  * right from wrong. It prints one line for each request and a total, and
- * exits with status 1 when one fails.
+ * exits with status 1 when one fails. It takes `--repeat`, `--split` and
+ * `--out` too, with no network: a request whose paths do not give the same
+ * verdict in every run fails.
  *
  * --new-actions adds the requests for hover, drag, scroll with an amount and
  * the new browser actions. A path that needs a kind that this build does not
  * offer is skipped, with a line that says so.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Page } from "@playwright/test";
+import { chromium, type Browser, type Page } from "@playwright/test";
 import { browserMethods } from "../connectors/computer/guards.js";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
@@ -95,15 +106,23 @@ import {
   type ScriptView,
   type Step,
 } from "./computer-eval-script.js";
+import {
+  compareFiles,
+  evalFlags,
+  printResults,
+  repeatsOf,
+  results as toResults,
+  writeResults,
+  type CaseRun,
+} from "./computer-eval-report.js";
+import { inSplit } from "./computer-eval-stats.js";
 import { apps, browserApp, sites } from "./computer-request-apps.js";
 
-const words = process.argv.slice(2);
-const flags = new Set(words.filter((word) => word.startsWith("--")));
-for (const flag of flags)
-  if (flag !== "--check" && flag !== "--new-actions")
-    throw new Error(`Unknown flag ${flag}. Use --check and --new-actions.`);
-const checking = flags.has("--check");
-const withNew = flags.has("--new-actions");
+const flags = evalFlags(process.argv.slice(2));
+const checking = flags.check;
+const comparing = flags.compare;
+const withNew = flags.newActions;
+const outFile = flags.out ?? process.env.OUT;
 // The check mode never reads a key: it calls no model. With a model, the key
 // comes from the environment or the key store, as the service takes it.
 const keyFor = (model: string | null) =>
@@ -150,6 +169,14 @@ interface Faults {
 }
 interface Request {
   id: string;
+  /**
+   * A held request: judge a change on it, never design one on it. The held
+   * requests are a quarter of the requests without --new-actions and a
+   * quarter of those with it, chosen once by the split hash of their names
+   * (pickHeld in computer-eval-stats.ts). A new request is held when
+   * heldByHash says so.
+   */
+  held?: true;
   /** The app on the screen. */
   app?: keyof typeof apps;
   /** Or a browser with these tabs, the first one in front unless `active` says another. */
@@ -335,6 +362,7 @@ const tellReference: Step = (v) => {
 const requests: Request[] = [
   {
     id: "open a note and read it",
+    held: true,
     app: "notes",
     goal: "Open the note named Budget 2027 and tell me what it says.",
     done: budgetRead,
@@ -424,6 +452,7 @@ const requests: Request[] = [
   },
   {
     id: "delete a note, the person says yes",
+    held: true,
     app: "notes",
     goal: "Delete the note named Recipes.",
     person: yes,
@@ -526,6 +555,7 @@ const requests: Request[] = [
   },
   {
     id: "sign in, the person types the password",
+    held: true,
     app: "login",
     goal: "Sign in with the email ada@example.com. I type the password myself.",
     person: typesPassword,
@@ -546,6 +576,7 @@ const requests: Request[] = [
   },
   {
     id: "drawn stars",
+    held: true,
     app: "board",
     goal: "Rate this board with four stars.",
     done: (state) => state.stars === 4,
@@ -704,6 +735,7 @@ const requests: Request[] = [
   },
   {
     id: "a click that the app does not take",
+    held: true,
     app: "settings",
     goal: "Turn off notifications.",
     faults: { hands: { deaf: { times: 1 } } },
@@ -749,6 +781,7 @@ const requests: Request[] = [
   },
   {
     id: "a card dragged to another column",
+    held: true,
     app: "tasks",
     goal: "Move the card Write the invoice to the Done column.",
     newActions: true,
@@ -793,6 +826,7 @@ const requests: Request[] = [
   },
   {
     id: "a slider dragged to a value",
+    held: true,
     app: "sound",
     goal: "Set the output volume to 80 percent.",
     newActions: true,
@@ -952,6 +986,7 @@ const requests: Request[] = [
   // Requests of several steps. The worker plans them first (plan.ts).
   {
     id: "find a note by a word, copy a number from it into another note, confirm",
+    held: true,
     app: "invoiceNotes",
     goal: "Find the note whose name has the word invoice, copy its invoice number into the note named Call list as a new line, then tell me the number.",
     done: (state, said) => {
@@ -1055,12 +1090,9 @@ const requests: Request[] = [
 // request, any other goes into the body on its way out (`withEvalRequest`).
 const efforts = new Map<string, string>();
 const planners = new Map<string, PlannerOptions>(
-  checking
+  checking || comparing
     ? []
-    : (words.some((word) => !word.startsWith("--"))
-        ? words.filter((word) => !word.startsWith("--"))
-        : [null]
-      ).map((word) => {
+    : (flags.models.length ? flags.models : [null]).map((word) => {
         const [model, effort, ...rest] = (word ?? "").split("@");
         if (
           rest.length ||
@@ -1088,12 +1120,28 @@ const planners = new Map<string, PlannerOptions>(
       }),
 );
 const models = [...planners.keys()];
-const repeats = Math.max(1, Math.floor(Number(process.env.REPEATS ?? "1")));
+const repeats = repeatsOf(flags, process.env, 1);
 const only = process.env.ONLY;
 const chosen = requests.filter(
   (request) =>
-    (withNew || !request.newActions) && (!only || request.id.includes(only)),
+    (withNew || !request.newActions) &&
+    inSplit(request.held === true, flags.split) &&
+    (!only || request.id.includes(only)),
 );
+const heldCount = chosen.filter((request) => request.held).length;
+const splitText = `split ${flags.split}: ${chosen.length - heldCount} dev, ${heldCount} held`;
+/** The runs of each request in the order of the requests, as the result lists them. */
+const inOrder = (runs: CaseRun[]) => {
+  const order = new Map(chosen.map((request, index) => [request.id, index]));
+  return runs.sort(
+    (a, b) =>
+      models.indexOf(a.model) - models.indexOf(b.model) ||
+      order.get(a.name)! - order.get(b.name)! ||
+      a.run - b.run,
+  );
+};
+const isHeld = (id: string) =>
+  chosen.find((request) => request.id === id)?.held === true;
 
 interface Row {
   model: string;
@@ -1121,7 +1169,8 @@ interface Row {
   /** Why a scripted path could not go on, when it could not. */
   trouble?: string;
 }
-const browser = await chromium.launch({ headless: true });
+// Launched only when the eval runs: --compare reads files and needs no browser.
+let browser: Browser;
 
 /** Who chooses the actions: a model by its name, or a scripted path. */
 type Chooser = { model: string } | { path: Path };
@@ -1319,33 +1368,34 @@ async function pool<T, R>(
 /** The check mode: every path of every chosen request, and one line for each request. */
 async function check() {
   const offered = await newKindsOffered();
-  const jobs = chosen.flatMap((request) =>
-    request.paths.map((path) => ({ request, path })),
+  const runNumbers = Array.from({ length: repeats }, (_, index) => index + 1);
+  const jobs = runNumbers.flatMap((run) =>
+    chosen.flatMap((request) =>
+      request.paths.map((path) => ({ request, path, run })),
+    ),
   );
-  const results = await pool(jobs, 6, async ({ request, path }) => {
+  const done = await pool(jobs, 6, async ({ request, path, run }) => {
     const lack = missing(path.needs, offered);
-    if (lack.length) return { request, path, lack, row: null };
-    const row = await one(request, 1, { path }).catch((error) =>
-      faultRow("check", request, 1, error, path),
+    if (lack.length) return { request, path, run, lack, row: null };
+    const row = await one(request, run, { path }).catch((error) =>
+      faultRow("check", request, run, error, path),
     );
-    return { request, path, lack, row };
+    return { request, path, run, lack, row };
   });
-  let failed = 0;
-  let skippedPaths = 0;
-  let unproven = 0;
-  const lacking = new Set<NewKind>();
-  for (const request of chosen) {
-    const mine = results.filter((result) => result.request === request);
+  /** What the paths of one request in one run say: an ideal path must be done, a wrong one must not. */
+  const verdict = (mine: typeof done) => {
     const problems: string[] = [];
     const notes: string[] = [];
+    const lack = new Set<NewKind>();
     let proven = 0;
     let refused = 0;
     let wrongRan = 0;
-    for (const { path, lack, row } of mine) {
+    let skipped = 0;
+    for (const { path, lack: needs, row } of mine) {
       if (!row) {
-        skippedPaths += 1;
-        for (const kind of lack) lacking.add(kind);
-        notes.push(`"${path.name}" skipped: needs ${lack.join(", ")}`);
+        skipped += 1;
+        for (const kind of needs) lack.add(kind);
+        notes.push(`"${path.name}" skipped: needs ${needs.join(", ")}`);
         continue;
       }
       const end = `${row.state}${row.reason && row.state !== "completed" ? `: ${row.reason}` : ""}`;
@@ -1367,23 +1417,67 @@ async function check() {
       }
     }
     if (wrongRan) notes.push(`${refused} of ${wrongRan} wrong paths not done`);
+    const seconds = mine.reduce((sum, { row }) => sum + (row?.seconds ?? 0), 0);
+    return { problems, notes, lack, proven, skipped, seconds };
+  };
+  let failed = 0;
+  let skippedPaths = 0;
+  let unproven = 0;
+  const lacking = new Set<NewKind>();
+  const runs: CaseRun[] = [];
+  for (const request of chosen) {
+    const each = runNumbers.map((run) =>
+      verdict(
+        done.filter(
+          (result) => result.request === request && result.run === run,
+        ),
+      ),
+    );
+    for (const [index, item] of each.entries())
+      runs.push({
+        model: "check",
+        name: request.id,
+        held: request.held === true,
+        run: index + 1,
+        pass: !item.problems.length,
+        ms: Math.round(item.seconds * 1000),
+      });
+    const first = each[0]!;
+    const clean = each.filter((item) => !item.problems.length).length;
+    // A path that this build cannot play is skipped in every run: count it once.
+    skippedPaths += first.skipped;
+    for (const item of each) for (const kind of item.lack) lacking.add(kind);
+    // A check gives the same verdict in every run, or it fails.
+    const problems =
+      clean > 0 && clean < each.length
+        ? [`ok in ${clean} of ${each.length} runs`]
+        : first.problems;
     if (problems.length) failed += 1;
-    else if (!proven) unproven += 1;
-    const mark = problems.length ? "FAIL" : proven ? "ok  " : "skip";
-    console.log(`${mark} ${request.id}: ${[...problems, ...notes].join("; ")}`);
+    else if (!first.proven) unproven += 1;
+    const mark = problems.length ? "FAIL" : first.proven ? "ok  " : "skip";
+    console.log(
+      `${mark} ${request.id}: ${[...problems, ...first.notes].join("; ")}${repeats > 1 ? ` (${clean} of ${each.length} runs)` : ""}`,
+    );
   }
   console.log(
-    `\n${chosen.length} requests: ${chosen.length - failed - unproven} ok, ${failed} failed, ${unproven} with no ideal path run. ${skippedPaths} of ${jobs.length} paths skipped${lacking.size ? `: this build does not offer ${[...lacking].join(", ")}` : ""}.`,
+    `\n${chosen.length} requests (${splitText}), ${repeats} ${repeats === 1 ? "run" : "runs"} of each: ${chosen.length - failed - unproven} ok, ${failed} failed, ${unproven} with no ideal path run. ${skippedPaths} of ${jobs.length / repeats} paths skipped${lacking.size ? `: this build does not offer ${[...lacking].join(", ")}` : ""}.`,
   );
-  if (process.env.OUT)
-    writeFileSync(
-      process.env.OUT,
-      `${JSON.stringify({ at: new Date().toISOString(), check: true, rows: results.map((result) => result.row).filter(Boolean) }, null, 1)}\n`,
+  if (outFile) {
+    writeResults(
+      outFile,
+      toResults(
+        "request",
+        { check: true, split: flags.split, repeats },
+        inOrder(runs),
+        done.flatMap((result) => (result.row ? [result.row] : [])),
+      ),
     );
+    console.log(`The result of each request is in ${outFile}.`);
+  }
   return failed;
 }
 
-/** The model mode: every chosen request with each model, as often as REPEATS says. */
+/** The model mode: every chosen request with each model, as often as --repeat says. */
 async function measure() {
   const rows: Row[] = [];
   for (const model of models)
@@ -1398,12 +1492,26 @@ async function measure() {
       );
       rows.push(...batch);
     }
-  if (process.env.OUT)
-    writeFileSync(
-      process.env.OUT,
-      `${JSON.stringify({ at: new Date().toISOString(), repeats, rows }, null, 1)}\n`,
-    );
-  console.log(`${chosen.length} requests, ${repeats} runs of each.`);
+  const out = toResults(
+    "request",
+    { check: false, split: flags.split, repeats },
+    inOrder(
+      rows.map((row) => ({
+        model: row.model,
+        name: row.request,
+        held: isHeld(row.request),
+        run: row.run,
+        pass: row.done,
+        // A request that failed inside the test has no time of its own.
+        ms: row.state === "fault" ? null : Math.round(row.seconds * 1000),
+      })),
+    ),
+    rows,
+  );
+  if (outFile) writeResults(outFile, out);
+  console.log(
+    `${chosen.length} requests (${splitText}), ${repeats} runs of each.`,
+  );
   for (const model of models) {
     const mine = rows.filter((row) => row.model === model);
     const total = (pick: (row: Row) => number) =>
@@ -1412,22 +1520,28 @@ async function measure() {
       `\n${model}: ${mine.filter((row) => row.done).length} of ${mine.length} done | ${total((row) => row.steps)} steps | ${Math.round(total((row) => row.seconds))} s in all | plan ${Math.round(total((row) => row.planMs) / 1000)} s, look ${Math.round(total((row) => row.lookMs) / 1000)} s, act ${Math.round(total((row) => row.actMs) / 1000)} s`,
     );
     console.log(
-      "request | done | end | steps | inputs | questions | seconds | actions | faults",
+      "request | run | done | end | steps | inputs | questions | seconds | actions | faults",
     );
     for (const row of mine)
       console.log(
-        `${row.request} | ${row.done ? "yes" : "NO"} | ${row.state}${row.reason && row.state !== "completed" ? ` (${row.reason})` : ""} | ${row.steps} | ${row.inputs} | ${row.questions} | ${row.seconds} | ${row.kinds} | ${row.faults.join(", ")}`,
+        `${row.request} | ${row.run} | ${row.done ? "yes" : "NO"} | ${row.state}${row.reason && row.state !== "completed" ? ` (${row.reason})` : ""} | ${row.steps} | ${row.inputs} | ${row.questions} | ${row.seconds} | ${row.kinds} | ${row.faults.join(", ")}`,
       );
     for (const row of mine.filter((item) => !item.done))
-      console.log(`  not done: ${row.request}: ${row.said}`);
+      console.log(`  not done: ${row.request}, run ${row.run}: ${row.said}`);
   }
+  printResults(out, { word: "done", cases: true });
+  if (outFile) console.log(`\nThe result of each request is in ${outFile}.`);
 }
 
 let failed = 0;
-try {
-  if (checking) failed = await check();
-  else await measure();
-} finally {
-  await browser.close();
+if (comparing) compareFiles(comparing, flags.split);
+else {
+  browser = await chromium.launch({ headless: true });
+  try {
+    if (checking) failed = await check();
+    else await measure();
+  } finally {
+    await browser.close();
+  }
 }
 if (failed) process.exitCode = 1;

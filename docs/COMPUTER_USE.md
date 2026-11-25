@@ -966,6 +966,39 @@ The panel needs two permissions in System Settings, Privacy & Security:
 Accessibility, and Screen & System Audio Recording. When one is missing, the
 request ends as `blocked` and the message names the permission to grant.
 
+### Repeats, the held split and a comparison
+
+Both tests take the same flags. `--repeat N` runs every case N times (the
+planner test runs 2 by default and the request test 1; `REPEATS` still
+works). The output gives each case its passes out of N with a 95 percent
+interval and its median and 90th percentile time, then the pass rate of each
+model with its interval, and the flaky cases: those that passed in some runs
+and not in all. The interval is the score interval of a share. 2 of 2 is 34 to
+100 percent, so a case with few runs proves little.
+
+A fixed quarter of the cases of each test is held (`held: true` on the case),
+chosen once by a hash of its name. `--split dev`, `--split held` or `--split
+all` (the default) runs those cases. The rule: tune prompts and rules only on
+dev, and judge a change on held. A new case is held when `heldByHash` in
+`tests/computer-eval-stats.ts` says so.
+
+`--out FILE.json` writes the result of each case and every run.
+`--compare A.json B.json` reads two such files and runs nothing. It prints the
+pass rate before and after for all, dev and held cases, the difference with
+its 95 percent interval, the median time, and each case whose pass rate
+changed. A difference of the pass rate is beyond the noise when its interval
+leaves out zero. A single case is beyond the noise only when its two intervals
+do not overlap. When a change wins by a small margin, run both again with more
+repeats before you keep it. `--check` takes `--repeat`, `--split` and `--out`
+too, with no network, and a check that does not give the same verdict in every
+run fails.
+
+```sh
+npm run eval:computer:planner -- gpt-6.2-sol --repeat 3 --out before.json
+npm run eval:computer:planner -- gpt-6.2-sol --repeat 3 --out after.json
+npx tsx tests/computer-planner.eval.ts --compare before.json after.json --split held
+```
+
 ### Give it a task
 
 Talk to ClawdTime: in the chat of the panel, by voice, or on a phone call. Your
