@@ -10,6 +10,7 @@ import {
   FakeHands,
   observation,
   ScriptedPlanner,
+  until,
 } from "./connectors-computer-fixture.js";
 
 const roots: string[] = [];
@@ -59,6 +60,15 @@ describe("a done after an input that changed nothing", () => {
     expect(said.at(-1)).toBe("Done. Saved.");
   });
 
+  it("tells the planner at once that a click changed nothing", async () => {
+    const { worker, planner } = setup([click, done, done], [save]);
+    await worker.submit("still_told", "Save the note");
+    await worker.idle();
+    expect(planner.inputs[1]!.history.at(-1)?.outcome).toMatch(
+      /^sent, but the screen looks the same after it/,
+    );
+  });
+
   it("lets the planner act again after the note, as a person would retry", async () => {
     const { worker, hands, said } = setup(
       [click, done, click, done],
@@ -92,5 +102,43 @@ describe("a done after an input that changed nothing", () => {
     await worker.idle();
     expect(planner.inputs).toHaveLength(2);
     expect(said.at(-1)).toBe("Done. Saved.");
+  });
+});
+
+describe("an answer to a question of the planner", () => {
+  const ask = (question: string): Action => ({ kind: "ask", question });
+  it("takes an email address for a question about an email, also when it names the password step", async () => {
+    const { worker, planner } = setup(
+      [
+        ask(
+          "Please type your work email in the Email field, then tell me when you are ready for the password step.",
+        ),
+        done,
+      ],
+      [save],
+    );
+    await worker.submit("email_answer", "Sign in with my work email");
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    expect((await worker.answer("ada@example.com")).message).toBe(
+      "Thank you. I go on.",
+    );
+    await worker.idle();
+    expect(planner.inputs[1]!.history.at(-1)?.outcome).toBe(
+      "the person answered: ada@example.com",
+    );
+  });
+
+  it("still refuses a bare value for a question about a password", async () => {
+    const { worker } = setup(
+      [ask("What is the password of the Ledger account?"), done],
+      [save],
+    );
+    await worker.submit("password_answer", "Sign in to Ledger");
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    expect((await worker.answer("hunter22")).message).toMatch(
+      /^I do not take a password or a key in the chat/,
+    );
+    worker.stop();
+    await worker.idle();
   });
 });

@@ -1704,10 +1704,15 @@ export class ComputerWorker implements DesktopExecutorPort {
       // The answer goes to the planner. A credential never does, nor a short
       // value that answers a question about a secret field.
       const asked = namesSecret(question.text);
+      // An email address that answers a question for an email is no secret,
+      // also when the same question names the password step after it.
+      const email =
+        /\be-?mail\b|\buser ?name\b/i.test(question.text) &&
+        /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(words.trim());
       if (
         looksSecret(text) ||
         this.holdsSecret(run, text) ||
-        (asked && looksBareSecret(words))
+        (asked && !email && looksBareSecret(words))
       )
         return { message: secretText };
       run.question = null;
@@ -2821,6 +2826,17 @@ export class ComputerWorker implements DesktopExecutorPort {
       pending.before === after
         ? pending.kind
         : undefined;
+    // The planner reads it at once: a click or a key that changed nothing is
+    // no success, so its next turn can try another way before it types on.
+    const last = run.history.at(-1);
+    if (
+      this.options.unchangedDone &&
+      run.stillAfter &&
+      last &&
+      last.outcome === "ok"
+    )
+      last.outcome =
+        "sent, but the screen looks the same after it, so it may not have worked. Look again; if nothing new shows, try another way (a menu item or a keyboard shortcut).";
     const verdict = run.progress.step({ ...pending, after }, this.context(run));
     if (verdict.kind === "allow") return "go";
     this.mark(run, `${verdict.kind}_${verdict.pattern}`);
