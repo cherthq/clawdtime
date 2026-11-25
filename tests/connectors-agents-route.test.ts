@@ -765,6 +765,35 @@ describe("a drafted offer for a clear request", () => {
   );
 });
 
+describe("the instructions of the model", () => {
+  it("tell it to act on a clear request, never to offer it, and to search the web on the engine", async () => {
+    const f = mac();
+    const run = scripted(["Two sessions work."]);
+    await new Supervisor(f.world, run.model).reply(
+      [],
+      "what is every agent doing?",
+      "chat",
+    );
+    const system = run.seen[0]!.system;
+    expect(system).toContain('Never ask "Should I?", "Want me to?"');
+    expect(system).toContain(
+      "never answer that no job or task runs for it yet: start it",
+    );
+    expect(system).toContain(
+      "that only the person knows (which account, which file)",
+    );
+    expect(system).toContain(
+      "searches the web in a new tab of the person's Chrome",
+    );
+    expect(system).not.toContain("offer the one next step");
+    expect(system).not.toMatch(/I can start that[^"]*Should I\?/);
+    expect(
+      run.seen[0]!.tools.find((tool) => tool.name === "delegate_computer_task")!
+        .description,
+    ).toContain("a search of the web");
+  });
+});
+
 describe("with computer use off", () => {
   const screenWork = table
     .filter(([, road]) => road === "engine")
