@@ -212,6 +212,8 @@ export function buildComputer(options: ComputerOptions): {
   const hands = new PanelHands();
   const worker = new ComputerWorker({
     unchangedDone: true,
+    // The owner turns off the questions before what cannot be undone.
+    ...(options.env.CLAWDTIME_COMPUTER_TRUST === "on" ? { trust: true } : {}),
     hands,
     planner: options.planner ?? planner,
     journal: new ComputerJournal(options.root),

@@ -512,6 +512,14 @@ export interface ComputerWorkerOptions {
    * hands of tests show one screen, so it is off unless asked for.
    */
   unchangedDone?: boolean;
+  /**
+   * The owner's trust: no question before an action of the ask policy. The
+   * checks still refuse what they refuse, the last look before an input still
+   * runs, Stop still wins, a result that is not known is never sent again,
+   * and a password is still typed by the person. Off unless the owner turns
+   * it on (`CLAWDTIME_COMPUTER_TRUST=on` for the desktop service).
+   */
+  trust?: boolean;
   /** The most time for one request, with the time it waits for the person. */
   maxMs?: number;
   /** How long one call to the browser may take. */
@@ -2619,7 +2627,11 @@ export class ComputerWorker implements DesktopExecutorPort {
     // Only a row of the policy asks (`askPolicy` in guards.ts). The same
     // action again needs no yes of its own: the row of tries that changed
     // nothing, and the progress guard, answer a loop.
-    if (checked.risk) {
+    // The owner's trust: the action goes with no question, and the record
+    // keeps which row of the policy it passed.
+    if (checked.risk && this.options.trust)
+      this.mark(run, `trusted_${checked.policy ?? "risk"}`);
+    else if (checked.risk) {
       const question = yesQuestion(checked, before, run.page);
       if (!granted.includes(question)) {
         const reply = await this.ask(

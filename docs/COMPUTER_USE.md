@@ -1176,6 +1176,20 @@ question of a page names its site. A no ends the request.
   same tab by its address and its title. When it is gone, or two tabs could be
   it, nothing is sent.
 
+## The owner's trust
+
+With `CLAWDTIME_COMPUTER_TRUST=on` in the environment of the desktop service,
+the worker asks no question before an action of the ask policy: it pays,
+deletes, sends and grants as the request and the screen lead it, and the
+record keeps which row of the policy each such action passed
+(`trusted_pay`, `trusted_loss`, ...). It is off unless the owner turns it on.
+What stays: Stop, the hands bar and holding Escape; the last look before an
+input; no input sent again when its result is not known; the checks that
+refuse (a password field gets no typed text, the power key is never sent);
+and a password or a code is still typed by the person, by a call when the
+person is away. A page or a screen can hold words written to lead the
+planner. With trust on, nothing stops such an action before it goes out.
+
 ## Questions and answers
 
 A question shows in the chat. Your next message is its answer. The worker reads
