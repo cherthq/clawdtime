@@ -21,12 +21,16 @@ public final class PanelClient {
   }
   public func close() { session.invalidateAndCancel() }
   private func request(path: String, body: Data? = nil, patient: Bool = false) async throws -> Data {
+    try await exchange(path: path, body: body, patient: patient).data
+  }
+  /// One request, with the headers of the answer.
+  private func exchange(path: String, body: Data? = nil, patient: Bool = false) async throws -> (data: Data, response: HTTPURLResponse) {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
       path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/execution/decision" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
-      path == "/desktop/computer" || path == "/desktop/hands/result" || path == "/desktop/hands/presentation" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}$", options: .regularExpression) != nil ||
+      path == "/desktop/computer" || path == "/desktop/hands/result" || path == "/desktop/hands/presentation" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}(&wait=[0-9]{1,4})?$", options: .regularExpression) != nil ||
       (path.hasPrefix("/desktop/operations/") && PanelConfiguration.identity(String(path.dropFirst("/desktop/operations/".count)))) else { throw PanelFailure.configuration }
     guard let url = URL(string: configuration.origin + path) else { throw PanelFailure.configuration }
     var request = URLRequest(url: url)
@@ -45,7 +49,7 @@ public final class PanelClient {
         guard data.count < 262144 else { throw PanelFailure.response }
         data.append(byte)
       }
-      return data
+      return (data, response)
     } catch { throw PanelFailure.unavailable } // Never emit URL/header/peer-body diagnostics.
   }
   public func state() async throws -> PanelSnapshot {
@@ -138,6 +142,17 @@ public final class PanelClient {
     let result = try JSONDecoder().decode(HandsNext.self, from: await request(path: "/desktop/hands/next?after=\(seq)"))
     try result.validate()
     return result
+  }
+  /// The same read, which the service may hold for up to `wait` seconds until a command waits or
+  /// what runs changes. `held` is true when the service says that it held the read: the hands may
+  /// then read again at once. A service that does not know the wait answers at once, as before.
+  public func handsNext(after seq: Int, wait: Double) async throws -> (next: HandsNext, held: Bool) {
+    guard seq >= 0, wait.isFinite else { throw PanelFailure.configuration }
+    let ms = Int(min(2000, max(0, (wait * 1000).rounded())))
+    let (data, response) = try await exchange(path: "/desktop/hands/next?after=\(seq)&wait=\(ms)")
+    let result = try JSONDecoder().decode(HandsNext.self, from: data)
+    try result.validate()
+    return (result, response.value(forHTTPHeaderField: HandsPace.heldHeader) != nil)
   }
   /// Computer use: true when the worker that commands the panel's hands is the engine of this
   /// service. A service without that route, or without the worker, is not: the call throws or says false.

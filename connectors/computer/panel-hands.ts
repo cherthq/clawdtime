@@ -8,6 +8,11 @@
  * result arrives, with the same number, so the panel can tell a command that
  * it already ran from a new one.
  *
+ * A read of the panel can be held (`wait`): it is answered as soon as a
+ * command waits, so no command waits for the next read. A held read never
+ * serves a command by itself and never runs one: the answer is the same
+ * `next` as an ordinary read.
+ *
  * A command whose result does not come in time is never sent again. The
  * rejection says whether the panel had fetched it. If it had not, the command
  * certainly did not run. If it had, nobody knows, and the worker treats the
@@ -32,6 +37,32 @@ export class HandsTimeout extends Error {
   }
 }
 
+/** The clock of the hands. Tests replace it, so that no test waits. */
+export interface HandsClock {
+  /** Milliseconds, only ever compared with each other. */
+  now(): number;
+  /** Calls `fire` once after `ms` milliseconds. It never keeps the process alive. */
+  later(fire: () => void, ms: number): unknown;
+  cancel(timer: unknown): void;
+}
+
+export const systemHandsClock: HandsClock = {
+  now: () => performance.now(),
+  later: (fire, ms) => {
+    const timer = setTimeout(fire, ms);
+    timer.unref();
+    return timer;
+  },
+  cancel: (timer) => clearTimeout(timer as NodeJS.Timeout),
+};
+
+/** The header with which the service says that it held a read. */
+export const handsHeldHeader = "x-clawdtime-hands-wait";
+/** The longest time that one read of the panel is held. */
+export const handsWaitLimitMs = 2000;
+/** How often a held read looks whether what runs changed. */
+export const handsChangeCheckMs = 100;
+
 interface Waiting {
   seq: number;
   command: HandCommand;
@@ -40,7 +71,7 @@ interface Waiting {
   served: boolean;
   resolve: (result: HandResult) => void;
   reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
+  timer: unknown;
 }
 
 export class PanelHands implements Hands {
@@ -48,6 +79,9 @@ export class PanelHands implements Hands {
   private waiting: Waiting | undefined;
   private presentedCommand = 0;
   private readonly timeoutMs: number;
+  private readonly clock: HandsClock;
+  /** Held reads of the panel, woken when a command is queued. */
+  private readonly sleepers = new Set<() => void>();
   constructor(
     options: {
       /** How long one command may take, from the moment it is queued. */
@@ -58,10 +92,12 @@ export class PanelHands implements Hands {
        * panel that outlived a restart of the service does not skip a command.
        */
       first?: number;
+      clock?: HandsClock;
     } = {},
   ) {
     this.timeoutMs = options.timeoutMs ?? 20_000;
     this.seq = options.first ?? Date.now();
+    this.clock = options.clock ?? systemHandsClock;
   }
 
   run(command: HandCommand, label: string): Promise<HandResult> {
@@ -80,15 +116,14 @@ export class PanelHands implements Hands {
         : valid.data.kind === "type"
           ? valid.data.text.length * 25
           : 0;
-    return new Promise<HandResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
+    const running = new Promise<HandResult>((resolve, reject) => {
+      const timer = this.clock.later(() => {
         const waiting = this.waiting;
         if (waiting?.seq !== seq) return;
         this.waiting = undefined;
         this.presentedCommand = 0;
         waiting.reject(new HandsTimeout(waiting.served));
       }, this.timeoutMs + own);
-      timer.unref();
       this.waiting = {
         seq,
         command: valid.data,
@@ -98,6 +133,58 @@ export class PanelHands implements Hands {
         reject,
         timer,
       };
+    });
+    // A held read answers now: the panel gets the command with no wait.
+    for (const wake of [...this.sleepers]) wake();
+    return running;
+  }
+
+  /** A command waits whose number is above `after`. */
+  private ready(after: number) {
+    return this.waiting !== undefined && this.waiting.seq > after;
+  }
+
+  /**
+   * Holds a read of the panel until a command waits above `after`, `changed`
+   * says that what runs changed, `signal` ends the read, or `ms` pass. It
+   * never rejects and serves nothing: the caller then reads `next(after)`.
+   * `changed` is asked every `handsChangeCheckMs`, so a run that ends or waits
+   * for the person shows on the panel at once too.
+   */
+  wait(
+    after: number,
+    ms: number,
+    options: { signal?: AbortSignal; changed?: () => boolean } = {},
+  ): Promise<void> {
+    const limit = Number.isFinite(ms)
+      ? Math.min(handsWaitLimitMs, Math.max(0, ms))
+      : 0;
+    if (limit === 0 || this.ready(after) || options.signal?.aborted)
+      return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let over = false;
+      let check: unknown;
+      const done = () => {
+        if (over) return;
+        over = true;
+        this.sleepers.delete(wake);
+        this.clock.cancel(timer);
+        if (check !== undefined) this.clock.cancel(check);
+        options.signal?.removeEventListener("abort", done);
+        resolve();
+      };
+      const wake = () => {
+        if (this.ready(after)) done();
+      };
+      const look = () => {
+        if (over) return;
+        if (options.changed?.()) return done();
+        check = this.clock.later(look, handsChangeCheckMs);
+      };
+      this.sleepers.add(wake);
+      const timer = this.clock.later(done, limit);
+      if (options.changed) check = this.clock.later(look, handsChangeCheckMs);
+      options.signal?.addEventListener("abort", done, { once: true });
     });
   }
 
@@ -124,7 +211,7 @@ export class PanelHands implements Hands {
     const waiting = this.waiting;
     if (!waiting || waiting.seq !== result.seq) return false;
     this.waiting = undefined;
-    clearTimeout(waiting.timer);
+    this.clock.cancel(waiting.timer);
     if (!result.ok || result.interrupted) this.presentedCommand = 0;
     waiting.resolve(result);
     return true;
@@ -140,7 +227,7 @@ export class PanelHands implements Hands {
     const waiting = this.waiting;
     if (!waiting || waiting.served) return false;
     this.waiting = undefined;
-    clearTimeout(waiting.timer);
+    this.clock.cancel(waiting.timer);
     waiting.resolve({
       seq: waiting.seq,
       ok: false,

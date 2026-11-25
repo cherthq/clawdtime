@@ -286,6 +286,25 @@ final class HandsContractTests: XCTestCase {
     // A service that does not answer is asked less and less often, whatever the run was.
     XCTAssertEqual([1, 2, 3, 4, 9].map { HandsPace.delay(active: true, failures: $0) }, [1, 2, 4, 5, 5])
     XCTAssertEqual(HandsPace.delay(active: false, failures: 2), 2)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 2, elapsed: 1, held: true, ran: true), 2)
+  }
+  func testAServiceThatHoldsTheReadIsReadAgainAtOnceWithNoBusyLoop() {
+    // The read was held until a command came or the time passed: the next read goes at once.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: HandsPace.hold, held: true), 0)
+    XCTAssertEqual(HandsPace.delay(active: false, failures: 0, elapsed: 0.4, held: true), 0)
+    // A service that says that it holds and still answers at once is not read more than 50 times a second.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0, held: true), HandsPace.shortestGap)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0.005, held: true), 0.015, accuracy: 0.000_001)
+    XCTAssertGreaterThan(HandsPace.shortestGap, 0)
+    // The held read stays well under the time limit of one request of the panel, 4 seconds.
+    XCTAssertLessThanOrEqual(HandsPace.hold, 2)
+    // A service that answers at once keeps the old pace between the starts of two reads.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0.02), 0.10, accuracy: 0.000_001)
+    XCTAssertEqual(HandsPace.delay(active: false, failures: 0, elapsed: 0.05), 0.20, accuracy: 0.000_001)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 3), 0)
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: .nan), 0.12)
+    // Right after a result the next command of the step usually waits already: one read at once.
+    XCTAssertEqual(HandsPace.delay(active: true, failures: 0, elapsed: 0.3, ran: true), 0)
   }
   func testTheLastCheckBeforeAnEventSendsNothingAfterStopOrWhenThePersonTookOver() {
     let running = HandsNext.Run(active: true, goal: "Save the note", step: 2, state: "running")

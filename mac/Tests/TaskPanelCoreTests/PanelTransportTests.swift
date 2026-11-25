@@ -275,6 +275,27 @@ final class PanelTransportTests: XCTestCase {
     do { try await client.handsResult(HandResult(seq: 3, ok: true, error: .failed)); XCTFail("A done result with an error accepted") } catch {}
     XCTAssertEqual(server.requests().count, 3)
   }
+  func testTheHandsAskTheServiceToHoldTheRead() async throws {
+    let next = #"{"version":1,"command":null,"run":{"active":true,"goal":"Save the note","step":3,"state":"running"}}"#
+    let server = try FixtureHTTP { request, _ in
+      if request.hasPrefix("GET /desktop/hands/next?after=7&wait=1000 ") {
+        return (200, ["Content-Type": "application/json", "X-ClawdTime-Hands-Wait": "1000"], Data(next.utf8))
+      }
+      // A service that does not know the wait answers at once, with no word of it.
+      if request.hasPrefix("GET /desktop/hands/next?after=8&wait=1000 ") { return (200, ["Content-Type": "application/json"], Data(next.utf8)) }
+      return (404, ["Content-Type": "application/json"], Data("{}".utf8))
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let held = try await client.handsNext(after: 7, wait: HandsPace.hold)
+    XCTAssertTrue(held.held); XCTAssertNil(held.next.command)
+    let plain = try await client.handsNext(after: 8, wait: HandsPace.hold)
+    XCTAssertFalse(plain.held)
+    XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    // A wait that cannot be one is refused before any request.
+    do { _ = try await client.handsNext(after: 7, wait: .nan); XCTFail("A wait that is not a number was accepted") } catch {}
+    XCTAssertEqual(server.requests().count, 2)
+  }
   func testAHandsResultIsPostedOnceAndNeverReplayedOrRedirected() async throws {
     for status in [503, 302, 404] {
       let server = try FixtureHTTP { _, port in (status, ["Location": "http://127.0.0.1:\(port)/other"], Data("{}".utf8)) }

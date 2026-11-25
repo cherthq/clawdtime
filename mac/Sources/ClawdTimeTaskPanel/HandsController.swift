@@ -91,7 +91,9 @@ import TaskPanelCore
 
   // MARK: the loop
 
-  /// Starts to ask the task service for commands. It asks often while the worker runs, and seldom otherwise.
+  /// Starts to ask the task service for commands. A service that holds a read answers as soon as a command
+  /// waits, so the hands read again at once. Another service is asked often while the worker runs, and
+  /// seldom otherwise. `HandsPace` holds the rule.
   func start(client: PanelClient) {
     guard loop == nil else { return }
     self.client = client
@@ -106,7 +108,9 @@ import TaskPanelCore
       var failures = 0
       while !Task.isCancelled {
         guard let self else { return }
-        var active = false
+        var active = false, held = false, ran = false
+        // The gap between two reads counts from the start of this one.
+        let began = Date()
         do {
           // Which engine the service has changes only when the service starts again, or with the
           // switch. A read every few seconds is enough.
@@ -114,13 +118,16 @@ import TaskPanelCore
             self.engine = (try? await client.handsAreEngine()) ?? false
             self.engineRead = Date()
           }
-          let next = try await client.handsNext(after: self.ledger.last)
+          let read = try await client.handsNext(after: self.ledger.last, wait: HandsPace.hold)
+          held = read.held
+          let next = read.next
           failures = 0
           active = next.run.active || next.command != nil
           self.present(next)
           // A number that was taken before is never run again.
           if let pending = next.command, self.ledger.claim(pending.seq) {
             let result = await self.perform(pending)
+            ran = true
             // Exactly one POST for this number. A failure is not sent again: the
             // worker reads a missing answer as an unknown outcome.
             do { try await client.handsResult(result) }
@@ -133,7 +140,8 @@ import TaskPanelCore
           // A service that is gone commands nothing: the bar goes too.
           if failures >= HandsPace.failuresBeforeQuiet { self.desktop.invalidate(); self.quiet() }
         }
-        try? await Task.sleep(nanoseconds: UInt64(HandsPace.delay(active: active, failures: failures) * 1_000_000_000))
+        let pause = HandsPace.delay(active: active, failures: failures, elapsed: Date().timeIntervalSince(began), held: held, ran: ran)
+        if pause > 0 { try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000)) }
       }
     }
   }

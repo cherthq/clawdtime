@@ -48,6 +48,15 @@ import {
 export interface ComputerPort {
   /** `GET /desktop/hands/next`: the command that waits, and what runs. */
   next(after: number): HandsNext;
+  /**
+   * `GET /desktop/hands/next?wait=MS`: the same answer, held until a command
+   * waits, what runs changes, or the time passes. Absent where no worker runs.
+   */
+  waitNext?(
+    after: number,
+    ms: number,
+    signal?: AbortSignal,
+  ): Promise<HandsNext>;
   /** `POST /desktop/hands/result`. False when no command waits for that result. */
   result(raw: unknown): boolean;
   /** `GET /desktop/computer`. */
@@ -79,13 +88,23 @@ export function computerPort(
       hands.presentationCommand() > 0
     );
   };
+  const next = (after: number) =>
+    handsNextSchema.parse({
+      version: 1,
+      command: hands.next(after),
+      run: worker.run(),
+    });
   return {
-    next: (after) =>
-      handsNextSchema.parse({
-        version: 1,
-        command: hands.next(after),
-        run: worker.run(),
-      }),
+    next,
+    waitNext: async (after, ms, signal) => {
+      // What runs now. A change of it answers the held read too.
+      const seen = JSON.stringify(worker.run());
+      await hands.wait(after, ms, {
+        ...(signal ? { signal } : {}),
+        changed: () => JSON.stringify(worker.run()) !== seen,
+      });
+      return next(after);
+    },
     result: (raw) => hands.result(raw),
     status: () => computerStatusSchema.parse(worker.status()),
     present: (raw) => events.accept(raw, hands.presentationCommand(), active()),

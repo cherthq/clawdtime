@@ -55,15 +55,33 @@ public enum HandsGate {
 }
 
 /// How often the hands ask for the next command.
+///
+/// A service that holds a read (it answers with `HandsPace.heldHeader`) answers as soon as a command
+/// waits, or when what runs changes, or after `hold`. The hands then read again at once: no command
+/// waits for the next read. A service that answers at once is read at the old pace.
 public enum HandsPace {
-  /// Seconds between two reads while the worker runs, and while it does not. The idle time is what a new
-  /// request waits before the hands see it: a second there was half a second lost, on average, at the start
-  /// of every request. A read is one small request on this Mac, so four a second cost nothing that counts.
+  /// Seconds between the starts of two reads while the worker runs, and while it does not, at a service
+  /// that answers at once. The idle time is what a new request waits before the hands see it.
   public static let active = 0.12, idle = 0.25
-  /// The wait before the next read. A service that does not answer is asked less often.
-  public static func delay(active: Bool, failures: Int) -> Double {
+  /// The longest time that one read waits at the service for a command. It is well under the time limit
+  /// of one request of the panel (4 seconds), so a held read never counts as a service that is gone.
+  public static let hold = 1.0
+  /// The shortest time between the starts of two reads, also at a service that holds them: a service that
+  /// says that it holds a read and still answers at once is never read more often than this.
+  public static let shortestGap = 0.02
+  /// The header with which a service says that it held the read.
+  public static let heldHeader = "X-ClawdTime-Hands-Wait"
+  /// The wait before the next read. `elapsed` is how long the last read took, `held` says that the service
+  /// held it, and `ran` that the hands just ran a command and posted its result. A service that does not
+  /// answer is asked less often.
+  public static func delay(active: Bool, failures: Int, elapsed: Double = 0, held: Bool = false, ran: Bool = false) -> Double {
     if failures > 0 { return min(5, pow(2, Double(min(failures, 4) - 1))) }
-    return active ? Self.active : idle
+    let spent = elapsed.isFinite ? max(0, elapsed) : 0
+    // The service waits for the next command itself.
+    if held { return max(0, shortestGap - spent) }
+    // The next command of a step usually comes a moment after a result: one read at once.
+    if ran { return 0 }
+    return max(0, (active ? Self.active : idle) - spent)
   }
   /// After this many reads with no answer, the bar goes: nothing can command the hands.
   public static let failuresBeforeQuiet = 3
