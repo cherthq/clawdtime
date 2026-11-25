@@ -437,6 +437,8 @@ clawdtime computer status    # on or off, and the last request
 clawdtime computer doctor    # what is ready and what is missing
 clawdtime computer off       # off again. A request that runs stops
 clawdtime computer clear     # after a request with an unknown result
+clawdtime keys set anthropic # a key of any provider, from a hidden prompt
+clawdtime computer model     # the model of the planner, or choose one
 ```
 
 ### Which engine does the computer work
@@ -461,8 +463,9 @@ when it starts, in this order (`chooseExecution` in
      state folder (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`). A
      switch file that is not a regular file of this user for its owner only
      does not turn it on.
-   - A key for the language model is in the environment of the service:
-     `CLAWDTIME_OPENAI_API_KEY`, or `OPENAI_API_KEY`.
+   - A key for the language model is in the environment of the service, or
+     in its key store: `CLAWDTIME_OPENAI_API_KEY`, `OPENAI_API_KEY`, or the
+     key of another provider. See [Models and keys](#models-and-keys).
    - The agent board of the service is on, and the service has no phone or
      presentation actors.
    - No test started the service. A service with `VITEST` in its environment
@@ -477,14 +480,139 @@ So after `clawdtime computer on`, start the desktop service again.
 `clawdtime computer off` needs no restart: the worker reads the switch before
 every action.
 
-The model is `gpt-5.4`. `CLAWDTIME_COMPUTER_MODEL` changes it. When the service
-says that a key may not use `gpt-5.4`, the planner goes to `gpt-4.1`, the model
-before it, and stays there. A model that you chose is never replaced.
+With a key of OpenAI and no other choice, the model is `gpt-5.4`.
+`CLAWDTIME_COMPUTER_MODEL` changes it. When the service says that a key may
+not use `gpt-5.4`, the planner goes to `gpt-4.1`, the model before it, and
+stays there. A model that you chose is never replaced.
+
+### Models and keys
+
+The planner can use the language model of any of these providers. A key in
+the environment of the service wins over a stored key.
+
+| Provider      | Id           | Key variables                                                  | Address                                                   | Default model     |
+| ------------- | ------------ | -------------------------------------------------------------- | --------------------------------------------------------- | ----------------- |
+| OpenAI        | `openai`     | `CLAWDTIME_OPENAI_API_KEY`, `OPENAI_API_KEY`                   | `https://api.openai.com/v1`                               | `gpt-5.4`         |
+| Anthropic     | `anthropic`  | `CLAWDTIME_ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY`             | `https://api.anthropic.com`, through its official library | `claude-opus-5-5` |
+| Together AI   | `together`   | `CLAWDTIME_TOGETHER_API_KEY`, `TOGETHER_API_KEY`               | `https://api.together.xyz/v1`                             | you choose        |
+| OpenRouter    | `openrouter` | `CLAWDTIME_OPENROUTER_API_KEY`, `OPENROUTER_API_KEY`           | `https://openrouter.ai/api/v1`                            | you choose        |
+| Groq          | `groq`       | `CLAWDTIME_GROQ_API_KEY`, `GROQ_API_KEY`                       | `https://api.groq.com/openai/v1`                          | you choose        |
+| Fireworks AI  | `fireworks`  | `CLAWDTIME_FIREWORKS_API_KEY`, `FIREWORKS_API_KEY`             | `https://api.fireworks.ai/inference/v1`                   | you choose        |
+| xAI           | `xai`        | `CLAWDTIME_XAI_API_KEY`, `XAI_API_KEY`                         | `https://api.x.ai/v1`                                     | you choose        |
+| Google Gemini | `gemini`     | `CLAWDTIME_GEMINI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` | you choose        |
+| Mistral       | `mistral`    | `CLAWDTIME_MISTRAL_API_KEY`, `MISTRAL_API_KEY`                 | `https://api.mistral.ai/v1`                               | you choose        |
+| DeepSeek      | `deepseek`   | `CLAWDTIME_DEEPSEEK_API_KEY`, `DEEPSEEK_API_KEY`               | `https://api.deepseek.com`                                | you choose        |
+| Custom        | `custom`     | `CLAWDTIME_CUSTOM_API_KEY`, which it may also go without       | the base address that you give                            | you choose        |
+
+Every provider but Anthropic gets the chat completions route of its address.
+
+**Set a key.**
+
+```sh
+clawdtime keys set anthropic         # a hidden prompt: the key is not shown
+pbpaste | clawdtime keys set groq    # or from standard input
+clawdtime keys list                  # set or not set, and where it comes from
+clawdtime keys remove anthropic
+```
+
+The key store is `computer/keys.json` in the state folder: a file for its
+owner only (mode 600) in a folder for its owner only (mode 700). It is written
+whole and then renamed. A store that is not a regular file of this user for
+its owner only is not read and not overwritten, and the doctor says why. The
+desktop service reads the store when it starts: start it again after a change.
+No command prints a key, not even a part of it. A key never goes to a log, an
+error, the journal or the timing record.
+
+**Choose a model.**
+
+```sh
+clawdtime computer model                               # the model now, and where its key comes from
+clawdtime computer model anthropic/claude-opus-5-5
+clawdtime computer model together/MODEL                # a provider with no default needs one
+clawdtime computer model custom/MODEL --base-url http://127.0.0.1:8080/v1
+clawdtime computer model auto                          # back to the first provider with a key
+```
+
+The choice is `computer/model.json` in the state folder, with the same rules
+as the key store. `CLAWDTIME_COMPUTER_MODEL` takes the same `provider/model`
+and wins over the stored choice. A bare model, such as `gpt-4.1`, means
+OpenAI, as before. With no choice, the planner takes the first provider that
+has a key, in this order: OpenAI, Anthropic, then the rest of the table, with
+its default model. Only OpenAI and Anthropic have a default. For any other
+provider, choose a model that reads pictures. `clawdtime computer doctor`
+says so when one is missing. The fallback from `gpt-5.4` to `gpt-4.1` is only
+for OpenAI with no chosen model.
+
+The base address of a custom service must use https, or http to this Mac
+only (`localhost`, `127.0.0.1` or `[::1]`), with no name, password or query in
+it. `CLAWDTIME_CUSTOM_BASE_URL` wins over the stored address. With no key, the
+request goes with no key header.
+
+Run the planner test before you rely on a new model. Both tests take
+`provider/model`:
+
+```sh
+npm run eval:computer:planner -- anthropic/claude-opus-5-5 together/MODEL
+npm run eval:computer:request -- anthropic/claude-opus-5-5
+```
+
+**What each provider gets.**
+
+- **OpenAI**, as before: one forced function call and the large picture,
+  the small picture for the outline. It
+  gets `reasoning_effort` only when you set an effort, and only on a model
+  that takes it: the `gpt-5` models that are not chat models, and the `o`
+  models.
+- **Anthropic**, through its official library (`@anthropic-ai/sdk`) and its
+  Messages interface. Each picture is a base64 image block: the screen, and
+  the closer look as a second one when there is one. Each function is a tool
+  with `strict: true` on the models that take it, inside the limits of the
+  service: 20 strict tools, 24 optional parameters and 16 parameters with a
+  union type in one request. A tool past those limits goes without strict,
+  and the limits that a strict tool cannot have (a smallest or a largest
+  number, a length) are left out of it. The worker checks every action in
+  code anyway. The tool choice is `auto`, with one call at most: current
+  models refuse a forced choice, and the repair handles an answer with no
+  call. No temperature and no thinking setting go out. The library never
+  retries, so the planner's own retries are the only ones.
+- **Refusal fallback of Anthropic.** On `claude-fable-5-2`, `claude-fable-5-1`,
+  `claude-opus-5-5`, `claude-opus-5` and `claude-sonnet-5-5`, each request turns
+  on the server-side refusal fallback (`fallbacks: "default"`, with the beta
+  `server-side-fallback-2026-07-01`). When the model declines for a policy
+  reason, the service runs the same request on its own fallback model, in the
+  same call. When the whole chain declines, the answer is `refused`.
+- **Every other provider** gets its chat completions route, with the key as a
+  bearer token. It gets no forced tool choice and no effort: each takes these
+  in its own way. An answer with no call, or with several, gets the repair.
+
+**Speed.** Almost all of the time of a step is the answer of the model.
+
+- The rules and the functions come first in every request, the same bytes
+  from step to step. Only the turn after them changes. OpenAI keeps such a
+  first part in its cache by itself. For Anthropic the rules carry one cache
+  marker, so the functions and the rules come from the cache after the first
+  step.
+- Each answer tells how many tokens of the request came from the cache. The
+  planner gives them, with the input and output tokens, to its `onUsage`
+  callback.
+- `CLAWDTIME_COMPUTER_EFFORT` is `low`, `medium` or `high`. Anthropic gets it
+  as `output_config.effort`, and `low` when you set none, on the models that
+  take it. OpenAI gets it as `reasoning_effort` when you set one. With none,
+  the request of OpenAI stays as it was measured above. Any other value stops
+  the planner, and the doctor says why.
+- `CLAWDTIME_COMPUTER_SPEED=fast` turns on fast mode (`speed: "fast"`) on
+  `claude-opus-5-5`, `claude-fable-5-2` and `claude-mythos-5-2`. It costs more
+  for each token. On any other model it does nothing, and the doctor says so.
+
+The command that starts the desktop service passes every key variable of the
+table, `CLAWDTIME_COMPUTER_MODEL`, `CLAWDTIME_COMPUTER_EFFORT`,
+`CLAWDTIME_COMPUTER_SPEED` and `CLAWDTIME_CUSTOM_BASE_URL` to it.
 
 ### The planner test
 
 `npm run eval:computer:planner -- gpt-4.1 gpt-5.4` measures a model before it
-becomes the planner. Each task is one decision: a goal and a rendered screen
+becomes the planner. Each argument is `provider/model`, or a bare model of
+OpenAI. Each task is one decision: a goal and a rendered screen
 that looks like a Mac app window (a notes app, a settings pane, a save dialog,
 a table of invoices, a sign-in form), as a picture and as named elements in the
 form that the hands give. The real planner code builds the request, the model
@@ -1267,8 +1395,9 @@ The chat keeps what the worker said to you: its questions and its last message.
 The last message of a finished request is the planner's summary, cut to 900
 characters. It can repeat words from the screen.
 
-The language model receives, for each action: your request, what you said for
-it while it ran, the plan with the facts that it kept, the last 12 steps
+The language model of the provider that you chose receives, for each action,
+and no other service does: your request, what you said for it while it ran,
+the plan with the facts that it kept, the last 12 steps
 with the text that was typed, the names and values of up to 150 elements, the
 image of the screen, and the text of the page when the browser read it. The
 value of a secure field is never sent. Nothing of this is written to disk by
@@ -1328,12 +1457,18 @@ action on the Mac keeps its rule: no blind retry.
 - **Budget.** The requests, the waits and the repair of one call share 75
   seconds. A retry starts only when 2 seconds are left after its wait.
 - **No retry.** A 429 with `insufficient_quota` or a billing code is `quota`.
-  A 401 is `auth`. A 403 or a 404 for the default model goes once to the model
-  before it, as before. After that a 403 is `auth` and a 404 is `other`. Every
-  other status is `other`. None of these goes out again.
+  A 401 is `auth`. A 403 or a 404 for the default model of OpenAI goes once
+  to the model before it, as before. After that a 403 is `auth` and a 404 is
+  `other`. Every other status is `other`. None of these goes out again.
+- **Anthropic.** The errors of its library map the same way, by their status.
+  A 529 (overloaded) is transient too. A `billing_error` and a 429 with
+  `enforced_spend_limit_reached` (the spend cap) are `quota`. An answer that
+  stops with `refusal` is `refused`, after the refusal fallback where it is
+  on. The message names the status and the error type of the service only.
 - **An answer that cannot be used.** No tool call, more than one tool call,
   arguments that are not one JSON object, a function that was not offered, or
-  arguments that do not fit the action: nothing runs. The planner sends the
+  arguments that do not fit the action, or an answer that stopped at its
+  length limit, so that a call in it can be cut short: nothing runs. The planner sends the
   request once more, with the answer of the model and a short message. The
   message says what was wrong and asks for exactly one of the offered
   functions. A second such answer fails as `malformed`. A refusal of the model
@@ -1373,6 +1508,7 @@ sharing, independent disable control, zoom integration and acceptance gaps.
 | One command to the hands       | 20 seconds, more for a wait and a long text |
 | One request to the model       | 45 seconds                                  |
 | One call to the language model | 75 seconds, 4 requests, one repair          |
+| One answer of Anthropic        | 16000 tokens, its thinking included         |
 | Planner failures in a row      | 2 end the request                           |
 | Breaker of the planner         | 30 seconds, after 8 failures in a row       |
 | Waits after a short failure    | 3 in one request, of 3 to 15 seconds        |
@@ -1394,7 +1530,7 @@ Tested, with made-up hands, a scripted planner, a scripted language model and
 a made-up browser. No test moves the real mouse, presses a real key, captures
 the real screen, draws the cursor or calls a language model.
 
-347 tests in `tests/connectors-computer-*.test.ts`:
+402 tests in `tests/connectors-computer-*.test.ts`:
 
 - `guards` (88): every check above, one by one.
 - `worker` (56): a task that completes; Stop before, during and after an
@@ -1453,6 +1589,19 @@ the real screen, draws the cursor or calls a language model.
   when the panel gives it up; the wait of each command for the panel; the cost
   header; the parts in the timing record and its line; and the held route
   over a real worker.
+- `providers` (42): the table of providers; `provider/model` and a bare
+  model; the order of the choice; the request of each chat provider (address,
+  key header, functions, picture, effort) and of Anthropic through its
+  library over a scripted network (cached rules, strict tools inside the
+  limits, image, `auto`, effort, fast mode, refusal fallback); one call back;
+  429, 529, 5xx, 401, 403, billing, the spend cap, quota and refusal; the
+  repair that sends the answer back unchanged; the use of tokens; the same
+  bytes from step to step.
+- `keys` (13): set, list and remove; the modes of the file and the folder; a
+  store that others can read, a link, a file of another user and a file that
+  is not valid, none of which is read or overwritten; the environment that
+  wins; `clawdtime computer model` and the doctor; a key that never appears
+  in a message or in the output.
 - `planner-resilience` (45): each status with and without a retry,
   Retry-After in its three forms, errors of the network, the timeout of one
   request, the budget, an abort during a wait and during a request, each kind
@@ -1501,7 +1650,10 @@ Not tested, and so not proven:
   and with your sign-ins. `npm run test:computer:own-browser` runs it with no
   window, in the Chromium of Playwright only, and `npm test` does not run it.
 - The planner against the real language model. Its request has the shape that
-  the tests check. No test shows that the model picks good actions.
+  the tests check. No test shows that the model picks good actions, for any
+  provider. No test calls a provider: the library of Anthropic runs against a
+  scripted network. Which models of the other providers read pictures and
+  follow the functions is known only from the planner test.
 - The supervisor's language model. No test shows which tool the real model
   picks for a sentence that the code does not route by itself.
 - A phone call that reaches the worker. `clawdtime chat TEXT` is tested
