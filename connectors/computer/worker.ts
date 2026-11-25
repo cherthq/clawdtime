@@ -295,10 +295,11 @@ const retryAfterOf = (error: unknown) => {
  * A reason to give up that only the person can change, or a risk: their
  * decision, an account, a permission, a password or a secret, money, or a
  * harm. Such a give_up ends at once. Every other first give_up is told the
- * ways that were not tried.
+ * ways that were not tried. A plain "you" is no such reason: "the button
+ * you named does nothing" is about the screen.
  */
 const forThePerson =
-  /\b(?:person|people|user|human|owner|you|your|yours|yourself|permissions?|allow(?:ed)?|access|privacy|accessibility|screen recording|automation|passwords?|passcode|passphrase|pin|secrets?|credentials?|tokens?|api key|license key|2fa|two[- ]factor|verification code|one[- ]time code|captcha|sign[- ]?in|log[- ]?in|login|accounts?|pay|payment|purchase|buy|card|bank|money|consent|approv(?:e|al)|confirm|decide|decision|choose|choice|unsafe|dangerous|danger|harm(?:ful)?|risk(?:y)?|destructive|irreversible|illegal|forbidden|prohibited|policy|refuse|malicious|private|confidential)\b/i;
+  /\b(?:person|people|user|human|owner|permissions?|allow(?:ed)?|access|privacy|accessibility|screen recording|automation|passwords?|passcode|passphrase|pin|secrets?|credentials?|tokens?|api key|license key|2fa|two[- ]factor|verification code|one[- ]time code|captcha|sign[- ]?in|log[- ]?in|login|accounts?|pay|payment|purchase|buy|card|bank|money|consent|approv(?:e|al)|confirm|decide|decision|choose|choice|unsafe|dangerous|danger|harm(?:ful)?|risk(?:y)?|destructive|irreversible|illegal|forbidden|prohibited|policy|refuse|malicious|private|confidential)\b/i;
 /** A request that the person ended with a plain no to a question of the worker. */
 const plainNo =
   /^\s*(?:no|nope|nah|no thanks|no thank you|never mind|nevermind)\s*[.!]*\s*$/i;

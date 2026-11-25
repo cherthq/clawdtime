@@ -6624,7 +6624,7 @@ describe("a first give_up", () => {
       },
     });
     const { worker, planner, journal } = setup(
-      [{ kind: "give_up", reason: "The button does nothing." }, done],
+      [{ kind: "give_up", reason: "The button you named does nothing." }, done],
       { screens: [chrome], browser: new FakeBrowser() },
     );
     await worker.submit("r1", "Find the price");
