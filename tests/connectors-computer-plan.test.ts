@@ -334,6 +334,7 @@ const turned = (request: typeof fetch): Planner => planner(request);
 const planner = (request: typeof fetch) =>
   new OpenAIPlanner({
     key: "sk-fixture-key-that-stays-hidden",
+    api: "chat",
     request,
     sleep: async () => {},
   });

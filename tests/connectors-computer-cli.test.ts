@@ -150,7 +150,7 @@ describe("clawdtime computer", () => {
       /model key +missing\. The service needs CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY in its environment\./,
     );
     expect(missing).toMatch(
-      /model +gpt-5\.4\. CLAWDTIME_COMPUTER_MODEL changes it\. A key that may not use it falls back to gpt-4\.1\./,
+      /model +gpt-6\.2-astra\. CLAWDTIME_COMPUTER_MODEL changes it\. A key that may not use it falls back to gpt-5\.4\./,
     );
     expect(missing).toMatch(/journal +no request yet/);
     expect(missing).toMatch(/unknown result +none/);

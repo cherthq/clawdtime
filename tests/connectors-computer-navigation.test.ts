@@ -36,8 +36,22 @@ function network(calls: { name: string; arguments: string }[]) {
     tool_choice: string;
     parallel_tool_calls: boolean;
   }[] = [];
-  const request: typeof fetch = async (_url, options) => {
+  const request: typeof fetch = async (url, options) => {
     sent.push(JSON.parse(String(options?.body)));
+    if (String(url).endsWith("/responses")) {
+      return new Response(
+        JSON.stringify({
+          status: "completed",
+          output: calls.map((fn, i) => ({
+            type: "function_call",
+            id: `fc_${i}`,
+            call_id: `call_${i}`,
+            name: fn.name,
+            arguments: fn.arguments,
+          })),
+        }),
+      );
+    }
     return new Response(
       JSON.stringify({
         choices: [
@@ -65,7 +79,11 @@ describe("goal-only semantic navigation interpretation", () => {
       const model =
         which === "supervisor"
           ? new OpenAIModel("fixture-key", "fixture-model", net.request)
-          : new OpenAIPlanner({ key: "fixture-key", request: net.request });
+          : new OpenAIPlanner({
+              key: "fixture-key",
+              api: "chat",
+              request: net.request,
+            });
       const goal =
         "  Would you slide us over to the workspace immediately on my left?  ";
       expect(await model.navigation(goal)).toEqual({
@@ -86,7 +104,7 @@ describe("goal-only semantic navigation interpretation", () => {
   );
   it("reads with the reader's model, and all other calls keep the chat's model", async () => {
     const models: { model: string; effort?: string; tools: number }[] = [];
-    const request: typeof fetch = async (_url, options) => {
+    const request: typeof fetch = async (url, options) => {
       const body = JSON.parse(String(options?.body)) as {
         model: string;
         reasoning_effort?: string;
@@ -97,6 +115,22 @@ describe("goal-only semantic navigation interpretation", () => {
         ...(body.reasoning_effort ? { effort: body.reasoning_effort } : {}),
         tools: body.tools?.length ?? 0,
       });
+      if (String(url).endsWith("/responses")) {
+        return new Response(
+          JSON.stringify({
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                id: "fc_c",
+                call_id: "c",
+                name: "none",
+                arguments: "{}",
+              },
+            ],
+          }),
+        );
+      }
       return new Response(
         JSON.stringify({
           choices: [
@@ -184,6 +218,100 @@ describe("goal-only semantic navigation interpretation", () => {
     await expect(broken.reading("go to Notes")).rejects.toThrow(
       "The language model answered 400.",
     );
+  });
+  it("routes defaultReaderModel (gpt-6.2-astra) over /v1/responses, falls back to gpt-5.4 then chat model on 403/404, and rejects empty cut responses", async () => {
+    expect(defaultReaderModel).toBe("gpt-6.2-astra");
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const fallbackRequest: typeof fetch = async (url, options) => {
+      const body = JSON.parse(String(options?.body)) as Record<
+        string,
+        unknown
+      >;
+      calls.push({ url: String(url), body });
+      if (body.model === "gpt-6.2-astra")
+        return new Response("{}", { status: 404 });
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    id: "c",
+                    function: {
+                      name: "desktop",
+                      arguments: '{"direction":"left","only":true}',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    };
+    const model = supervisorModel({}, "fixture-key", fallbackRequest);
+    expect((await model.reading("one desktop left")).intent).toEqual({
+      kind: "desktop",
+      direction: "left",
+    });
+    await model.reading("one desktop left");
+    expect(calls.map((c) => [c.url, c.body.model])).toEqual([
+      ["https://api.openai.com/v1/responses", "gpt-6.2-astra"],
+      ["https://api.openai.com/v1/chat/completions", "gpt-5.4"],
+      ["https://api.openai.com/v1/chat/completions", "gpt-5.4"],
+    ]);
+    expect(calls[0]!.body.reasoning).toEqual({ effort: "low" });
+    expect(calls[0]!.body.store).toBe(false);
+
+    // If gpt-5.4 is also refused, falls back to the chat model (gpt-4.1-mini).
+    const modelsTried: string[] = [];
+    const bothRefused: typeof fetch = async (_url, options) => {
+      const body = JSON.parse(String(options?.body)) as { model: string };
+      modelsTried.push(body.model);
+      if (body.model === "gpt-6.2-astra" || body.model === "gpt-5.4")
+        return new Response("{}", { status: 403 });
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  { id: "c", function: { name: "none", arguments: "{}" } },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    };
+    const model2 = supervisorModel({}, "fixture-key", bothRefused);
+    await model2.reading("go to Notes");
+    await model2.reading("go to Notes");
+    expect(modelsTried).toEqual([
+      "gpt-6.2-astra",
+      "gpt-5.4",
+      "gpt-4.1-mini",
+      "gpt-4.1-mini",
+    ]);
+
+    // Empty cut: true response throws cleanly instead of returning empty output.
+    const cutModel = new OpenAIModel("fixture-key", "gpt-6.2-astra", async () =>
+      new Response(
+        JSON.stringify({
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [{ type: "reasoning", id: "rs_1", summary: [] }],
+        }),
+      ),
+    );
+    await expect(
+      cutModel.complete({
+        system: "s",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+      }),
+    ).rejects.toThrow(/length limit/);
   });
   it.each([
     {

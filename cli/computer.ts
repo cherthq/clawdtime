@@ -428,21 +428,21 @@ function modelLine(setup: Selection, root: string) {
 
 function effortLine(settings: PlannerSettings) {
   const { provider, model, effort } = settings;
-  if (openaiWire(provider, model, settings.api) === "responses") {
+  if (openaiWire(provider, model, settings.api, effort) === "responses") {
     const route = `${settings.api ? "CLAWDTIME_OPENAI_API chose" : `${model} goes to`} the Responses route`;
     if (!responsesEffort(model, effort, "low"))
       return `not sent: ${model} takes no reasoning effort. ${route}.`;
     return effort
       ? `${effort}, set by CLAWDTIME_COMPUTER_EFFORT, as reasoning.effort. ${route}.`
-      : `low for a step and medium for the plan, as reasoning.effort. ${route}. CLAWDTIME_COMPUTER_EFFORT (low, medium, high) changes it.`;
+      : `low for a step and medium for the plan, as reasoning.effort. ${route}. CLAWDTIME_COMPUTER_EFFORT (low, medium, high, xhigh) changes it.`;
   }
   const sent = sentEffort(provider.id, model, effort);
   if (sent)
-    return `${sent}${effort ? ", set by CLAWDTIME_COMPUTER_EFFORT" : ", the default of the planner. CLAWDTIME_COMPUTER_EFFORT (low, medium, high) changes it"}.`;
+    return `${sent}${effort ? ", set by CLAWDTIME_COMPUTER_EFFORT" : ", the default of the planner. CLAWDTIME_COMPUTER_EFFORT (low, medium, high, xhigh) changes it"}.`;
   if (provider.id === "openai")
     return effort
       ? `not sent: ${model} takes no reasoning effort.`
-      : "the default of the model. CLAWDTIME_COMPUTER_EFFORT (low, medium, high) sets reasoning_effort on the models that take it.";
+      : "the default of the model. CLAWDTIME_COMPUTER_EFFORT (low, medium, high, xhigh) sets reasoning_effort on the models that take it.";
   return provider.id === "anthropic"
     ? `not sent: ${model} takes no effort.`
     : `not sent: ${provider.name} gets no effort setting.`;

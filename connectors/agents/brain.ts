@@ -19,6 +19,14 @@ import type {
   DesktopExecutorPort,
 } from "../../src/control/desktop-executor.js";
 import {
+  fallbackComputerModel,
+  reasoningModels,
+  responsesAnswer,
+  responsesEndpoint,
+  responsesModels,
+  responsesText,
+} from "../computer/providers.js";
+import {
   asksForScreenWork,
   readCodingSession,
   CodingSessionInterpretationError,
@@ -1122,8 +1130,20 @@ export class OpenAIModel implements ModelClient {
       readerModel?: string;
     } = {},
   ) {}
-  /** The service refused the reader's model for this key: the chat's own model reads from then on. */
-  private readerRefused = false;
+  /** Reader models that this key could not use (403/404): skipped on later turns. */
+  private refusedReaders = new Set<string>();
+  private readerCandidates(): (string | undefined)[] {
+    const configured = this.options.readerModel;
+    if (!configured || configured === this.model) return [undefined];
+    const list: (string | undefined)[] = [configured];
+    if (
+      configured === defaultReaderModel &&
+      fallbackComputerModel !== this.model
+    )
+      list.push(fallbackComputerModel);
+    list.push(undefined);
+    return list;
+  }
   async navigation(goal: string): Promise<NavigationIntent> {
     return (await this.reading(goal)).intent;
   }
@@ -1140,31 +1160,36 @@ export class OpenAIModel implements ModelClient {
         requireTool: true,
         ...(model ? { model } : {}),
       });
-    const reader =
-      this.readerRefused || this.options.readerModel === this.model
-        ? undefined
-        : this.options.readerModel;
-    let result: Awaited<ReturnType<typeof ask>>;
-    try {
-      result = await ask(reader);
-    } catch (error) {
-      // 403 and 404: this key may not use the reader's model, or the service
-      // does not know it. The chat's own model reads, now and from now on.
-      if (
-        !reader ||
-        !(error instanceof Error) ||
-        !/answered (?:403|404)\.$/.test(error.message)
-      )
-        throw error;
-      this.readerRefused = true;
-      result = await ask();
+    const candidates = this.readerCandidates().filter(
+      (candidate) =>
+        candidate === undefined || !this.refusedReaders.has(candidate),
+    );
+    let result: Awaited<ReturnType<typeof ask>> | undefined;
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      try {
+        result = await ask(candidate);
+        break;
+      } catch (error) {
+        // 403 and 404: this key may not use the reader's model, or the service
+        // does not know it. Fall back to the next reader candidate or the chat's model.
+        const hasNext = i + 1 < candidates.length;
+        if (
+          !candidate ||
+          !hasNext ||
+          !(error instanceof Error) ||
+          !/answered (?:403|404)\.$/.test(error.message)
+        )
+          throw error;
+        this.refusedReaders.add(candidate);
+      }
     }
-    const codingSession = readCodingSession(result.toolCalls, goal);
+    const codingSession = readCodingSession(result!.toolCalls, goal);
     if (codingSession)
       return { intent: { kind: "none" }, work: false, codingSession };
     return {
-      intent: parseNavigationCalls(result.toolCalls),
-      work: asksForScreenWork(result.toolCalls),
+      intent: parseNavigationCalls(result!.toolCalls),
+      work: asksForScreenWork(result!.toolCalls),
     };
   }
   async complete(input: {
@@ -1175,42 +1200,94 @@ export class OpenAIModel implements ModelClient {
     /** Another model for this one call. It gets no reasoning effort of the chat's model. */
     model?: string;
   }) {
-    const messages = [
-      { role: "system", content: input.system },
-      ...input.messages.map((message) =>
-        message.role === "tool"
-          ? {
-              role: "tool",
-              tool_call_id: message.toolCallId,
-              content: message.content,
-            }
-          : {
-              role: message.role,
-              content: message.content,
-              ...(message.toolCalls?.length
-                ? {
-                    tool_calls: message.toolCalls.map((call) => ({
-                      id: call.id,
-                      type: "function",
-                      function: { name: call.name, arguments: call.arguments },
+    const effectiveModel = input.model ?? this.model;
+    const useResponses = responsesModels.test(effectiveModel);
+    const body = useResponses
+      ? {
+          model: effectiveModel,
+          instructions: input.system,
+          input: input.messages.flatMap((message): Record<string, unknown>[] =>
+            message.role === "tool"
+              ? [
+                  {
+                    type: "function_call_output",
+                    call_id: message.toolCallId,
+                    output: message.content,
+                  },
+                ]
+              : message.role === "assistant"
+                ? [
+                    ...(message.content.trim()
+                      ? [{ role: "assistant", content: message.content }]
+                      : []),
+                    ...(message.toolCalls ?? []).map((call) => ({
+                      type: "function_call",
+                      call_id: call.id,
+                      name: call.name,
+                      arguments: call.arguments,
                     })),
+                  ]
+                : [{ role: "user", content: message.content }],
+          ),
+          ...(input.tools.length
+            ? {
+                tools: input.tools.map((tool) => ({
+                  type: "function",
+                  name: tool.name,
+                  ...(tool.description
+                    ? { description: tool.description }
+                    : {}),
+                  parameters: tool.parameters,
+                  strict: false,
+                })),
+                ...(input.requireTool
+                  ? { tool_choice: "required", parallel_tool_calls: false }
+                  : {}),
+              }
+            : {}),
+          ...(reasoningModels.test(effectiveModel)
+            ? {
+                reasoning: {
+                  effort:
+                    !input.model &&
+                    this.options.reasoningEffort &&
+                    this.options.reasoningEffort !== "none"
+                      ? this.options.reasoningEffort
+                      : "low",
+                },
+              }
+            : {}),
+          store: false,
+        }
+      : {
+          model: effectiveModel,
+          messages: [
+            { role: "system", content: input.system },
+            ...input.messages.map((message) =>
+              message.role === "tool"
+                ? {
+                    role: "tool",
+                    tool_call_id: message.toolCallId,
+                    content: message.content,
                   }
-                : {}),
-            },
-      ),
-    ];
-    // The request, the same each time: it reads an answer and changes nothing,
-    // so one more try is safe. A tool acts only after an answer came back.
-    const ask = (waitMs: number) =>
-      this.request("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.key}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: input.model ?? this.model,
-          messages,
+                : {
+                    role: message.role,
+                    content: message.content,
+                    ...(message.toolCalls?.length
+                      ? {
+                          tool_calls: message.toolCalls.map((call) => ({
+                            id: call.id,
+                            type: "function",
+                            function: {
+                              name: call.name,
+                              arguments: call.arguments,
+                            },
+                          })),
+                        }
+                      : {}),
+                  },
+            ),
+          ],
           ...(this.options.reasoningEffort && !input.model
             ? { reasoning_effort: this.options.reasoningEffort }
             : {}),
@@ -1226,14 +1303,29 @@ export class OpenAIModel implements ModelClient {
                 })),
               }
             : {}),
-        }),
-        signal: AbortSignal.timeout(waitMs),
-      });
+        };
+    // The request, the same each time: it reads an answer and changes nothing,
+    // so one more try is safe. A tool acts only after an answer came back.
+    const ask = (waitMs: number) =>
+      this.request(
+        useResponses
+          ? responsesEndpoint
+          : "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.key}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(waitMs),
+        },
+      );
     // An answer takes about one second. A request that still waits after the
     // first wait is stuck, and a new one often passes: the two waits together
     // are as long as the one long wait was. With a reasoning effort an answer
     // can take long, so that request keeps the whole time and has no second.
-    const slow = !!this.options.reasoningEffort;
+    const slow = !!this.options.reasoningEffort || useResponses;
     const firstWait =
       this.options.timeoutMs ?? (slow ? modelLongWaitMs : modelWaitMs);
     const secondWait =
@@ -1262,7 +1354,34 @@ export class OpenAIModel implements ModelClient {
     // The body of a failure can echo the request: only the status is reported.
     if (!response.ok)
       throw new Error(`The language model answered ${response.status}.`);
-    const body = (await response.json()) as {
+    if (useResponses) {
+      const parsed = (await response.json()) as unknown;
+      const status =
+        parsed && typeof parsed === "object"
+          ? (parsed as { status?: unknown }).status
+          : undefined;
+      if (status === "failed")
+        throw new Error("The language model answered failed.");
+      const answer = responsesAnswer(parsed, effectiveModel);
+      const text = responsesText(parsed);
+      const toolCalls = answer.calls.flatMap((call) =>
+        call.id && call.name
+          ? [
+              {
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments || "{}",
+              },
+            ]
+          : [],
+      );
+      if (answer.cut && !text && !toolCalls.length)
+        throw new Error(
+          "The language model stopped at its length limit before answering.",
+        );
+      return { text, toolCalls };
+    }
+    const parsed = (await response.json()) as {
       choices?: {
         message?: {
           content?: string | null;
@@ -1273,7 +1392,7 @@ export class OpenAIModel implements ModelClient {
         };
       }[];
     };
-    const message = body.choices?.[0]?.message;
+    const message = parsed.choices?.[0]?.message;
     return {
       text: typeof message?.content === "string" ? message.content : "",
       toolCalls: (message?.tool_calls ?? []).flatMap((call) =>
@@ -1294,12 +1413,11 @@ export class OpenAIModel implements ModelClient {
 /** The model that every chat, voice and call turn uses when the person set no other. */
 export const defaultSupervisorModel = "gpt-4.1-mini";
 /**
- * The model that reads what a message asks of the screen. Measured on real
- * calls: 20 of 20 sentences right, three times, and 16 of 16 requests with a
- * web address, where the small chat model had about 19 and 10. CLAWDTIME_READER_MODEL
- * changes it. A key that may not use it gets the chat's own model.
+ * The model that reads what a message asks of the screen. CLAWDTIME_READER_MODEL
+ * changes it. A key that may not use it falls back to `gpt-5.4`, then to the
+ * chat's own model.
  */
-export const defaultReaderModel = "gpt-5.4";
+export const defaultReaderModel = "gpt-6.2-astra";
 /**
  * The language model from this Mac's settings: CLAWDTIME_SUPERVISOR_MODEL names
  * it, and CLAWDTIME_SUPERVISOR_REASONING sets its reasoning effort.

@@ -1,6 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  reasoningModels,
+  responsesEndpoint,
+  responsesModels,
+  responsesText,
+} from "../computer/providers.js";
 import type { Runner } from "./focus.js";
 
 /**
@@ -58,42 +64,80 @@ export async function readPicture(input: {
   request?: typeof fetch;
 }): Promise<string | null> {
   try {
+    const useResponses = responsesModels.test(input.model);
     const response = await (input.request ?? fetch)(
-      "https://api.openai.com/v1/chat/completions",
+      useResponses
+        ? responsesEndpoint
+        : "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
         headers: {
           authorization: `Bearer ${input.key}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          model: input.model,
-          messages: [
-            { role: "system", content: brief },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: input.question.slice(0, 1000) },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:image/jpeg;base64,${input.image}`,
-                    detail: "high",
+        body: JSON.stringify(
+          useResponses
+            ? {
+                model: input.model,
+                instructions: brief,
+                input: [
+                  {
+                    role: "user",
+                    content: [
+                      { type: "input_text", text: input.question.slice(0, 1000) },
+                      {
+                        type: "input_image",
+                        image_url: `data:image/jpeg;base64,${input.image}`,
+                        detail: "high",
+                      },
+                    ],
                   },
-                },
-              ],
-            },
-          ],
-        }),
+                ],
+                ...(reasoningModels.test(input.model)
+                  ? { reasoning: { effort: "low" } }
+                  : {}),
+                store: false,
+              }
+            : {
+                model: input.model,
+                messages: [
+                  { role: "system", content: brief },
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: input.question.slice(0, 1000) },
+                      {
+                        type: "image_url",
+                        image_url: {
+                          url: `data:image/jpeg;base64,${input.image}`,
+                          detail: "high",
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+        ),
         signal: AbortSignal.timeout(60_000),
       },
     );
     // The body of a failure can echo the request: only the fact is reported.
     if (!response.ok) return null;
-    const body = (await response.json()) as {
-      choices?: { message?: { content?: string | null } }[];
-    };
-    const text = body.choices?.[0]?.message?.content;
+    const body = (await response.json()) as unknown;
+    if (
+      useResponses &&
+      body &&
+      typeof body === "object" &&
+      (body as { status?: unknown }).status === "failed"
+    )
+      return null;
+    const text = useResponses
+      ? responsesText(body)
+      : (
+          body as {
+            choices?: { message?: { content?: string | null } }[];
+          }
+        ).choices?.[0]?.message?.content;
     return typeof text === "string" && text.trim()
       ? text.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, 2500)
       : null;

@@ -260,6 +260,58 @@ describe("a picture of the screen", () => {
     ).toBeNull();
   });
 
+  it("routes GPT-6 models over /v1/responses with low reasoning effort and keeps chat models on chat completions", async () => {
+    const seen: { url: string; body: Record<string, unknown> }[] = [];
+    const request = (async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      seen.push({
+        url: String(url),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      });
+      return new Response(
+        JSON.stringify({
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "One unread message." }],
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    expect(
+      await readPicture({
+        key: "sk-test",
+        model: "gpt-6.2-astra",
+        image: "AAAA",
+        question: "What is on screen?",
+        request,
+      }),
+    ).toBe("One unread message.");
+    expect(seen[0]!.url).toBe("https://api.openai.com/v1/responses");
+    expect(seen[0]!.body.model).toBe("gpt-6.2-astra");
+    expect(seen[0]!.body.reasoning).toEqual({ effort: "low" });
+    expect(seen[0]!.body.store).toBe(false);
+    expect(seen[0]!.body.input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "What is on screen?" },
+          {
+            type: "input_image",
+            image_url: "data:image/jpeg;base64,AAAA",
+            detail: "high",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("says what is missing: a key, or the permission to record the screen", async () => {
     const shot = shooting(5000);
     expect(

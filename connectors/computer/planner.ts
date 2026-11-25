@@ -966,7 +966,7 @@ export class ModelPlanner implements Planner {
     // The fallback is only for the default of OpenAI, never for a chosen model.
     const fallback =
       provider.id === "openai" && !options.model ? fallbackComputerModel : null;
-    const wire = openaiWire(provider, model, options.api);
+    const wire = openaiWire(provider, model, options.api, options.effort);
     if (wire === "messages")
       this.transport = new MessagesTransport({
         key: options.key,

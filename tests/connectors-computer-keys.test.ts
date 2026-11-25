@@ -340,7 +340,7 @@ describe("clawdtime computer model", () => {
   it("shows, chooses and clears the model, and the environment wins", async () => {
     const { root, keys, computer } = cli();
     expect(await computer("model")).toMatch(
-      /^Model of the planner: gpt-5\.4\. CLAWDTIME_COMPUTER_MODEL changes it\./,
+      /^Model of the planner: gpt-6\.2-astra\. CLAWDTIME_COMPUTER_MODEL changes it\./,
     );
     const chosen = await computer("model", "anthropic/claude-opus-5-5");
     expect(chosen).toMatch(
@@ -464,7 +464,7 @@ describe("clawdtime computer model", () => {
       CLAWDTIME_COMPUTER_EFFORT: "huge",
     }).computer("doctor");
     expect(bad).toMatch(
-      /model +none\. CLAWDTIME_COMPUTER_EFFORT is not low, medium or high/,
+      /model +none\. CLAWDTIME_COMPUTER_EFFORT is not low, medium, high or xhigh/,
     );
   });
 });

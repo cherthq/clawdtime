@@ -189,6 +189,7 @@ describe("the outline's line in the planner", () => {
   const planner = (request: typeof fetch) =>
     new OpenAIPlanner({
       key: "sk-fixture-key-that-stays-hidden",
+      api: "chat",
       request,
       sleep: async () => {},
     });

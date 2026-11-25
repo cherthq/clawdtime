@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chatModelSetup,
+  defaultChatAgentModel,
   toConversation,
 } from "../connectors/agents/chat-model.js";
 import type { LoopMessage } from "../connectors/agents/agent-loop.js";
@@ -466,11 +467,145 @@ describe("the chat's model setting", () => {
     expect(net.sent[0]!.body.model).toBe("llama-fixture");
   });
 
-  it("keeps the chat's default model of OpenAI when nothing is set", () => {
+  it("defaults to gpt-6.2-astra and falls back to gpt-5.4 on 403/404 only when unchosen", async () => {
+    expect(defaultChatAgentModel).toBe("gpt-6.2-astra");
     expect(chatModelSetup({ OPENAI_API_KEY: key })).toMatchObject({
       ok: true,
-      name: "gpt-4.1-mini",
+      name: "gpt-6.2-astra",
     });
+
+    for (const status of [403, 404]) {
+      const sent: { url: string; body: Record<string, unknown> }[] = [];
+      const request = (async (
+        url: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        sent.push({ url: String(url), body });
+        if (body.model === "gpt-6.2-astra")
+          return new Response(
+            JSON.stringify({ error: { code: "model_not_found" } }),
+            { status, headers: { "content-type": "application/json" } },
+          );
+        return new Response(
+          JSON.stringify({
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Fallback worked." }],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch;
+      const setup = chatModelSetup({ OPENAI_API_KEY: key }, undefined, request);
+      if (!setup.ok) throw new Error(setup.problem);
+      expect(
+        await setup.model.next(
+          { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+          new AbortController().signal,
+        ),
+      ).toEqual({ text: "Fallback worked.", calls: [] });
+      await setup.model.next(
+        {
+          system: "R",
+          messages: [{ role: "user", content: "again" }],
+          tools: [],
+        },
+        new AbortController().signal,
+      );
+      expect(sent.map((item) => [item.url, item.body.model])).toEqual([
+        ["https://api.openai.com/v1/responses", "gpt-6.2-astra"],
+        ["https://api.openai.com/v1/responses", "gpt-5.4"],
+        ["https://api.openai.com/v1/responses", "gpt-5.4"],
+      ]);
+      // Unchosen fallback sends no forced reasoning effort on gpt-5.4.
+      expect(sent[0]!.body.reasoning).toEqual({ effort: "medium" });
+      expect(sent[1]!.body).not.toHaveProperty("reasoning");
+    }
+
+    // Explicitly chosen gpt-6.2-astra never falls back on 403/404.
+    const chosenSent: string[] = [];
+    const chosenRequest = (async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const body = JSON.parse(String(init?.body)) as { model: string };
+      chosenSent.push(body.model);
+      return new Response(JSON.stringify({ error: { code: "model_not_found" } }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const explicit = chatModelSetup(
+      {
+        OPENAI_API_KEY: key,
+        CLAWDTIME_SUPERVISOR_MODEL: "gpt-6.2-astra",
+      },
+      undefined,
+      chosenRequest,
+    );
+    if (!explicit.ok) throw new Error(explicit.problem);
+    await expect(
+      explicit.model.next(
+        { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/404/);
+    expect(chosenSent).toEqual(["gpt-6.2-astra"]);
+
+    // gpt-5.4 with explicit effort routes to /v1/responses; with no effort stays on chat completions.
+    const responsesNet = network({
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Hi." }],
+        },
+      ],
+    });
+    const withEffort = chatModelSetup(
+      {
+        OPENAI_API_KEY: key,
+        CLAWDTIME_SUPERVISOR_MODEL: "gpt-5.4",
+        CLAWDTIME_SUPERVISOR_REASONING: "low",
+      },
+      undefined,
+      responsesNet.request,
+    );
+    if (!withEffort.ok) throw new Error(withEffort.problem);
+    await withEffort.model.next(
+      { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+      new AbortController().signal,
+    );
+    expect(responsesNet.sent[0]!.url).toBe(
+      "https://api.openai.com/v1/responses",
+    );
+    expect(responsesNet.sent[0]!.body.reasoning).toEqual({ effort: "low" });
+
+    const chatNet = network({
+      choices: [{ message: { content: "Hi." }, finish_reason: "stop" }],
+    });
+    const noEffort = chatModelSetup(
+      {
+        OPENAI_API_KEY: key,
+        CLAWDTIME_SUPERVISOR_MODEL: "gpt-5.4",
+      },
+      undefined,
+      chatNet.request,
+    );
+    if (!noEffort.ok) throw new Error(noEffort.problem);
+    await noEffort.model.next(
+      { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+      new AbortController().signal,
+    );
+    expect(chatNet.sent[0]!.url).toBe(
+      "https://api.openai.com/v1/chat/completions",
+    );
   });
 
   it("says what to set when the key is missing or the setting is a key, and never quotes the setting", () => {
