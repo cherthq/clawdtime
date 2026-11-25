@@ -184,18 +184,22 @@ final class DockBarView: NSView {
 /// The mascot on the desktop: where it sits, how it is dragged, tucked against an
 /// edge and brought back, the two buttons on it, its bubble, and the Stop controls.
 final class PetController: NSObject {
-  enum Placement: Equatable { case free, docked(PetSide) }
+  enum Placement: Equatable {
+    case free, docked(PetSide)
+    var dockedSide: PetSide? { if case .docked(let side) = self { return side }; return nil }
+  }
   let window: PetWindow
   let mascot: MascotView
   private let gestures = PetGestureView()
-  private let closeButton: IconButton, sideButton: IconButton
+  /// One column on the side of the mascot: the close button on top, the side button under it.
+  let closeButton: IconButton, sideButton: IconButton
   private let bubbleWindow: PetWindow
   private let bubble = BubbleView(frame: .zero)
   private let controlsWindow: PetWindow
   private var bar: DockBarView!
   private var barWidth = Spring(86, response: 0.30, dampingRatio: 0.72)
   private var phase = 0.0
-  private let defaults = UserDefaults.standard
+  private let defaults: UserDefaults
 
   /// A bubble about one session that waits for the person: its terminal comes forward.
   var onOpenSession: ((String) -> Void)?
@@ -233,6 +237,9 @@ final class PetController: NSObject {
   private var reveal = Spring(PetLayout.revealResting, response: 0.34, dampingRatio: 0.74)
   private var lean = Spring(0, response: 0.42, dampingRatio: 0.7)
   private var buttons = Spring(0, response: 0.24, dampingRatio: 0.7)
+  /// The placement that the two buttons are laid out for. It follows `placement` only while
+  /// they are hidden, so they never jump to the other side, or change their arrow, while they show.
+  private var buttonsPlacement = Placement.free
   private var bubbleShown = Spring(0, response: 0.30, dampingRatio: 0.68)
   private var drag: PanelDrag?
   private var lastDrag: (point: CGPoint, time: TimeInterval)?
@@ -247,9 +254,10 @@ final class PetController: NSObject {
   private var stopSharingAllowed = false, stopCallAllowed = false
   var status = PetStatus(mood: .offline, headline: "", detail: "", bubble: nil) { didSet { mascot.mood = status.mood } }
 
-  override init() {
+  init(defaults: UserDefaults = .standard) {
+    self.defaults = defaults
     // No choice yet: the start size, which is smaller than the full size.
-    petScale = PetLayout.scale(UserDefaults.standard.object(forKey: "pet.size") as? Double ?? PetLayout.defaultScale)
+    petScale = PetLayout.scale(defaults.object(forKey: "pet.size") as? Double ?? PetLayout.defaultScale)
     petSize = PetLayout.size(scale: petScale)
     let size = petSize
     window = PetWindow.make(size: size)
@@ -261,9 +269,10 @@ final class PetController: NSObject {
     super.init()
     gestures.frame = NSRect(origin: .zero, size: size); gestures.controller = self
     gestures.addSubview(mascot)
-    for (button, x) in [(closeButton, CGFloat(8)), (sideButton, size.width - 34)] {
+    let rest = PetLayout.buttons(size: size, side: PetLayout.buttonSide(docked: nil))
+    for (button, frame) in [(closeButton, rest.close), (sideButton, rest.side)] {
       button.floating = true; button.target = self
-      button.frame = NSRect(x: x, y: size.height - 34, width: 26, height: 26)
+      button.frame = frame
       button.alphaValue = 0; button.isHidden = true
       gestures.addSubview(button)
     }
@@ -333,6 +342,7 @@ final class PetController: NSObject {
     } else { origin = PetLayout.defaultOrigin(in: screen, size: petSize) }
     dockY = origin.y
     placement = PetSide(rawValue: defaults.string(forKey: "pet.dock") ?? "").map { .docked($0) } ?? .free
+    buttonsPlacement = placement
     let start = target(in: screen)
     x.snap(to: Double(start.x)); y.snap(to: Double(start.y))
     window.setFrameOrigin(start)
@@ -365,10 +375,36 @@ final class PetController: NSObject {
     defaults.set(Double(fraction.x), forKey: "pet.x"); defaults.set(Double(fraction.y), forKey: "pet.y")
     if case .docked(let side) = placement { defaults.set(side.rawValue, forKey: "pet.dock") } else { defaults.removeObject(forKey: "pet.dock") }
   }
+  /// The side button tucks a free mascot against the nearer edge, and brings a tucked one back out.
   private func updateSideButton() {
-    let side = PetLayout.nearestSide(frame: window.frame, in: visibleFrame)
-    sideButton.toolTip = "Tuck against the \(side == .left ? "left" : "right") edge"
+    if let side = buttonsPlacement.dockedSide {
+      sideButton.symbolName = side == .left ? "arrow.right" : "arrow.left"
+      sideButton.toolTip = "Bring ClawdTime back from the edge"
+    } else {
+      let side = PetLayout.nearestSide(frame: window.frame, in: visibleFrame)
+      sideButton.symbolName = "arrow.right.to.line"
+      sideButton.toolTip = "Tuck against the \(side == .left ? "left" : "right") edge"
+    }
     sideButton.setAccessibilityLabel(sideButton.toolTip)
+  }
+  /// The buttons take the mascot's placement now if they are hidden. False: they still show,
+  /// and must go away first.
+  @discardableResult func buttonsFollowPlacement() -> Bool {
+    guard buttonsPlacement != placement else { return true }
+    guard buttons.value < 0.02 else { return false }
+    buttonsPlacement = placement; updateSideButton()
+    return true
+  }
+  /// The column at its place for `shown`, 0 to 1: the buttons grow out of their middles as they come out.
+  func layoutButtons(shown: CGFloat) {
+    let rest = PetLayout.buttons(size: petSize, side: PetLayout.buttonSide(docked: buttonsPlacement.dockedSide))
+    let scale = 0.6 + 0.4 * shown
+    for (button, frame) in [(closeButton, rest.close), (sideButton, rest.side)] {
+      button.isHidden = shown < 0.02
+      button.alphaValue = shown
+      let inset = frame.width * (1 - scale) / 2
+      button.frame = frame.insetBy(dx: inset, dy: inset).offsetBy(dx: 0, dy: -6 * (1 - shown))
+    }
   }
 
   /// Tucks the mascot against the nearer side edge. It keeps watching from there.
@@ -376,6 +412,7 @@ final class PetController: NSObject {
     let chosen = side ?? PetLayout.nearestSide(frame: window.frame, in: visibleFrame)
     dockY = window.frame.minY
     placement = .docked(chosen); reveal.target = PetLayout.revealResting
+    buttonsFollowPlacement()
     save(); onMoved?()
   }
   func undock() {
@@ -385,9 +422,10 @@ final class PetController: NSObject {
     // Come back to where it was, but never stay against the edge it was tucked on.
     let screen = visibleFrame
     origin.x = max(screen.minX + 24, min(origin.x, screen.maxX - petSize.width - 24))
+    buttonsFollowPlacement()
     mascot.tap(); save(); onMoved?()
   }
-  @objc private func sideRequested() { dock() }
+  @objc private func sideRequested() { if isDocked { undock() } else { dock() } }
   @objc private func hideRequested() { onHide?() }
   @objc private func chatPressed() { onChat?() }
   @objc private func talkPressed() { onTalk?() }
@@ -498,11 +536,9 @@ final class PetController: NSObject {
     let screen = visibleFrame
     let pointer = NSEvent.mouseLocation
     let box = window.frame
-    // The stone and its ring: an ellipse. Clicks outside it go to whatever is behind.
-    let dx = (pointer.x - box.midX) / (box.width * 0.42), dy = (pointer.y - (box.midY - 4)) / (box.height * 0.36)
-    let overStone = dx * dx + dy * dy <= 1
-    let overButtons = buttons.value > 0.3 && pointer.y >= box.maxY - 40 && box.contains(pointer) && (pointer.x <= box.minX + 40 || pointer.x >= box.maxX - 40)
-    let inside = !clickThrough && (drag != nil || overStone || overButtons)
+    // The stone and its ring, and the buttons while they show. Clicks anywhere else go to whatever is behind.
+    let buttonSide = PetLayout.buttonSide(docked: buttonsPlacement.dockedSide)
+    let inside = !clickThrough && (drag != nil || PetLayout.takesPress(pointer: pointer, window: box, buttons: buttonSide, shown: buttons.value))
     if window.ignoresMouseEvents == inside { window.ignoresMouseEvents = !inside }
     mascot.hovering = inside && drag == nil
 
@@ -542,17 +578,12 @@ final class PetController: NSObject {
       if abs(next.x - box.minX) > 0.05 || abs(next.y - box.minY) > 0.05 { window.setFrameOrigin(next); layoutControls(); onMoved?() }
     }
 
-    // The two buttons come out when the pointer is on a free mascot.
-    buttons.target = mascot.hovering && !isDocked && drag?.didDrag != true ? 1 : 0
+    // The two buttons come out when the pointer is on the mascot, free or tucked. After it is tucked
+    // or comes back, they go away first and come back on their new side.
+    let ready = buttonsFollowPlacement()
+    buttons.target = mascot.hovering && ready && drag?.didDrag != true ? 1 : 0
     buttons.step(step)
-    let shown = CGFloat(max(0, min(1, buttons.value)))
-    for (index, button) in [closeButton, sideButton].enumerated() {
-      button.isHidden = shown < 0.02
-      button.alphaValue = shown
-      let scale = 0.6 + 0.4 * shown
-      let size = petSize, base = index == 0 ? CGFloat(8) : size.width - 34
-      button.frame = NSRect(x: base + 13 * (1 - scale), y: size.height - 34 + 13 * (1 - scale) - 6 * (1 - shown), width: 26 * scale, height: 26 * scale)
-    }
+    layoutButtons(shown: CGFloat(max(0, min(1, buttons.value))))
 
     // The bubble: only when there is news, the chat is closed, and it was not dismissed.
     let news = status.bubble.flatMap { $0.key == dismissedBubble || sheetOpen ? nil : $0 }
