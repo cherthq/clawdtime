@@ -7,10 +7,13 @@ import {
   type PlannerOptions,
 } from "../connectors/computer/planner.js";
 import {
+  ChatTransport,
   chatEndpoint,
   defaultAnthropicModel,
   defaultComputerModel,
   messagesTools,
+  openaiApiSetting,
+  openaiWire,
   parseModel,
   plannerVariables,
   providerById,
@@ -1202,5 +1205,591 @@ describe("the merged planner features through every provider", () => {
         (part) => part.type,
       ),
     ).toEqual(["image", "text"]);
+  });
+});
+
+/** A Responses answer with these output items. */
+const responses = (output: unknown[], extra: Record<string, unknown> = {}) => ({
+  id: "resp_fixture",
+  object: "response",
+  status: "completed",
+  output,
+  ...extra,
+});
+const functionCall = (name: string, args: unknown, callId = "call_1") => ({
+  type: "function_call",
+  id: `fc_${callId}`,
+  call_id: callId,
+  name,
+  arguments: typeof args === "string" ? args : JSON.stringify(args),
+  status: "completed",
+});
+const reasoned = {
+  type: "reasoning",
+  id: "rs_fixture",
+  summary: [],
+  encrypted_content: "fixture-encrypted-reasoning",
+};
+const said = (text: string) => ({
+  type: "message",
+  id: "msg_fixture",
+  role: "assistant",
+  status: "completed",
+  content: [{ type: "output_text", text, annotations: [] }],
+});
+/** The input items of a request on the Responses route. */
+const inputOf = (sent: Sent) => sent.body.input as Record<string, unknown>[];
+const noCallNote =
+  "The program could not use your last answer. It had no tool call. Nothing was run. Call exactly one of the offered functions, with its arguments as one JSON object.";
+
+describe("the Responses route of OpenAI", () => {
+  const astra = (
+    request: typeof fetch,
+    options: Partial<PlannerOptions> = {},
+  ) => planner(request, { model: "gpt-6.2-astra", ...options });
+  const wait = () =>
+    json(responses([functionCall("wait", { ms: 1, why: "w" })]));
+
+  it("sends the rules as instructions, the turn and the picture as input, the functions in its form, a forced call and the effort, and stores nothing", async () => {
+    const net = service(
+      json(
+        responses([
+          reasoned,
+          functionCall("click_element", { element: 1, why: "Open" }),
+        ]),
+      ),
+    );
+    expect(await astra(net.request).next(input())).toEqual({
+      action: { kind: "click_element", element: 1 },
+      why: "Open",
+    });
+    const only = net.sent[0]!;
+    expect(only.url).toBe("https://api.openai.com/v1/responses");
+    expect(only.headers.get("authorization")).toBe(`Bearer ${key}`);
+    const body = only.body as Record<string, unknown>;
+    // What never changes comes first: the rules and the functions.
+    expect(Object.keys(body)).toEqual([
+      "model",
+      "instructions",
+      "tools",
+      "input",
+      "tool_choice",
+      "parallel_tool_calls",
+      "reasoning",
+      "include",
+      "store",
+    ]);
+    expect(body.model).toBe("gpt-6.2-astra");
+    expect(body.instructions).toMatch(/one action at a time/);
+    const tools = body.tools as Record<string, unknown>[];
+    const click = tools.find((tool) => tool.name === "click_element")!;
+    expect(Object.keys(click)).toEqual([
+      "type",
+      "name",
+      "description",
+      "parameters",
+      "strict",
+    ]);
+    expect(click.type).toBe("function");
+    expect(click.strict).toBe(false);
+    expect(tools.some((tool) => "function" in tool)).toBe(false);
+    expect(body.input).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: expect.stringContaining(`Goal: ${goal}`),
+          },
+          {
+            type: "input_image",
+            image_url: "data:image/jpeg;base64,aW1hZ2U=",
+            detail: "high",
+          },
+        ],
+      },
+    ]);
+    expect(body.tool_choice).toBe("required");
+    expect(body.parallel_tool_calls).toBe(false);
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(body.store).toBe(false);
+    for (const field of [
+      "messages",
+      "reasoning_effort",
+      "temperature",
+      "max_output_tokens",
+    ])
+      expect(body).not.toHaveProperty(field);
+  });
+
+  it("keeps the instructions and the functions the same bytes from step to step, and allows two calls with a plan", async () => {
+    const net = service(wait());
+    const model = astra(net.request);
+    await model.next(input("Shopping"));
+    await model.next(input("Groceries"));
+    const [a, b] = net.sent.map((item) => item.body as Record<string, unknown>);
+    expect(JSON.stringify([a!.model, a!.instructions, a!.tools])).toBe(
+      JSON.stringify([b!.model, b!.instructions, b!.tools]),
+    );
+    expect(JSON.stringify(a!.input)).not.toBe(JSON.stringify(b!.input));
+    const plan = TaskPlan.from([
+      { goal: "Open the note", check: "The editor shows it" },
+    ])!.view();
+    const planned = service(wait());
+    await astra(planned.request).next({ ...input(), plan });
+    const body = planned.sent[0]!.body as Record<string, unknown>;
+    expect(body.parallel_tool_calls).toBe(true);
+    expect(body.tool_choice).toBe("required");
+    expect(
+      (body.tools as { name: string }[]).map((tool) => tool.name),
+    ).toContain("plan_update");
+  });
+
+  it("gives the outline medium effort and the small picture, and a set effort wins for a step and the outline", async () => {
+    const subgoals = [{ goal: "Open the note", check: "The editor shows it" }];
+    const outlined = () =>
+      json(responses([functionCall("outline", { subgoals, why: "One" })]));
+    const net = service(outlined());
+    expect(
+      await astra(net.request).outline({
+        goal,
+        observation: observation(),
+        page: null,
+      }),
+    ).toEqual({ subgoals });
+    const body = net.sent[0]!.body as Record<string, unknown>;
+    expect(body.reasoning).toEqual({ effort: "medium" });
+    expect(inputOf(net.sent[0]!)[0]!.content).toContainEqual(
+      expect.objectContaining({ type: "input_image", detail: "low" }),
+    );
+    const high = service(wait(), outlined());
+    const set = astra(high.request, { effort: "high" });
+    await set.next(input());
+    await set.outline({ goal, observation: observation(), page: null });
+    expect(high.sent.map((item) => item.body.reasoning)).toEqual([
+      { effort: "high" },
+      { effort: "high" },
+    ]);
+  });
+
+  it("tells the use of tokens, with the ones from the cache", async () => {
+    const seen: PlannerUsage[] = [];
+    const net = service(
+      json(
+        responses([functionCall("wait", { ms: 1, why: "w" })], {
+          usage: {
+            input_tokens: 3200,
+            input_tokens_details: { cached_tokens: 3072 },
+            output_tokens: 48,
+            output_tokens_details: { reasoning_tokens: 30 },
+            total_tokens: 3248,
+          },
+        }),
+      ),
+    );
+    await astra(net.request, { onUsage: (usage) => seen.push(usage) }).next(
+      input(),
+    );
+    expect(seen).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-6.2-astra",
+        inputTokens: 3200,
+        cachedTokens: 3072,
+        cacheWriteTokens: null,
+        outputTokens: 48,
+      },
+    ]);
+  });
+
+  it("sends a message with no call to the repair, with the answer as it came and what was wrong as words of the person", async () => {
+    const net = service(
+      json(responses([reasoned, said("I will open it.")])),
+      wait(),
+    );
+    expect((await astra(net.request).next(input())).action).toEqual({
+      kind: "wait",
+      ms: 1,
+    });
+    expect(net.sent).toHaveLength(2);
+    const [turn, ...repair] = inputOf(net.sent[1]!);
+    expect(turn).toEqual(inputOf(net.sent[0]!)[0]);
+    expect(repair).toEqual([
+      reasoned,
+      said("I will open it."),
+      { role: "user", content: noCallNote },
+    ]);
+    // The rules and the functions stay as they were.
+    expect(JSON.stringify(net.sent[1]!.body.tools)).toBe(
+      JSON.stringify(net.sent[0]!.body.tools),
+    );
+  });
+
+  it("gives each call of an answer that cannot be used a result that says what was wrong", async () => {
+    const two = service(
+      json(
+        responses([
+          reasoned,
+          functionCall("click_element", { element: 1, why: "a" }, "call_a"),
+          functionCall("key", { combo: "cmd+q", why: "b" }, "call_b"),
+        ]),
+      ),
+      wait(),
+    );
+    expect((await astra(two.request).next(input())).action).toEqual({
+      kind: "wait",
+      ms: 1,
+    });
+    const repair = inputOf(two.sent[1]!).slice(1);
+    expect(repair.slice(0, 3)).toEqual([
+      reasoned,
+      functionCall("click_element", { element: 1, why: "a" }, "call_a"),
+      functionCall("key", { combo: "cmd+q", why: "b" }, "call_b"),
+    ]);
+    expect(repair.slice(3)).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_a",
+        output: expect.stringMatching(/It had 2 tool calls.*none of them ran/),
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_b",
+        output: repair[3]!.output,
+      },
+    ]);
+    // Reasoning with no encrypted content cannot go back: the words and the
+    // call go back with no ids of the service.
+    const bare = service(
+      json(
+        responses([
+          { type: "reasoning", id: "rs_bare", summary: [] },
+          said("Clicking it."),
+          functionCall(
+            "click_element",
+            '{"element": 1, "why": "open',
+            "call_c",
+          ),
+        ]),
+      ),
+      wait(),
+    );
+    await astra(bare.request).next(input());
+    expect(inputOf(bare.sent[1]!).slice(1)).toEqual([
+      { role: "assistant", content: "Clicking it." },
+      {
+        type: "function_call",
+        call_id: "call_c",
+        name: "click_element",
+        arguments: '{"element": 1, "why": "open',
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_c",
+        output: expect.stringMatching(/not valid JSON/),
+      },
+    ]);
+  });
+
+  it("sends an answer cut at its token limit to the repair, and maps a refusal and the content filter to refused", async () => {
+    const cut = service(
+      json(
+        responses([functionCall("type", '{"text":"Hel', "call_cut")], {
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+        }),
+      ),
+      wait(),
+    );
+    expect((await astra(cut.request).next(input())).action).toEqual({
+      kind: "wait",
+      ms: 1,
+    });
+    expect(cut.sent).toHaveLength(2);
+    expect(inputOf(cut.sent[1]!).at(-1)).toEqual({
+      type: "function_call_output",
+      call_id: "call_cut",
+      output: expect.stringMatching(/stopped at its length limit/),
+    });
+    const refusals = [
+      responses([
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "refusal", refusal: "I cannot help with that." }],
+        },
+      ]),
+      responses([], {
+        status: "incomplete",
+        incomplete_details: { reason: "content_filter" },
+      }),
+    ];
+    for (const body of refusals) {
+      const net = service(json(body));
+      expect((await failed(astra(net.request).next(input()))).trouble).toBe(
+        "refused",
+      );
+      expect(net.sent).toHaveLength(1);
+    }
+  });
+
+  it("maps the statuses as chat completions does: 429 and 5xx are asked again, 401 is auth, a quota code is quota, and no key is in a message", async () => {
+    const time = clock();
+    const busy = service(
+      json({ error: { code: "rate_limit_exceeded" } }, 429, {
+        "retry-after": "1",
+      }),
+      json({}, 503),
+      json(
+        responses([], { status: "failed", error: { code: "server_error" } }),
+      ),
+      wait(),
+    );
+    expect(
+      (
+        await new ModelPlanner({
+          key,
+          model: "gpt-6.2-astra",
+          request: busy.request,
+          ...time,
+        }).next(input())
+      ).action,
+    ).toEqual({ kind: "wait", ms: 1 });
+    expect(busy.sent).toHaveLength(4);
+    expect(time.waits[0]).toBe(1000);
+    const troubles: [number, unknown, string, string][] = [
+      [
+        401,
+        { error: { message: key, code: "invalid_api_key" } },
+        "auth",
+        "401 (invalid_api_key)",
+      ],
+      [403, { error: { message: key } }, "auth", "403"],
+      [
+        429,
+        { error: { code: "insufficient_quota", message: key } },
+        "quota",
+        "429 (insufficient_quota)",
+      ],
+      [402, {}, "quota", "402"],
+      [
+        404,
+        { error: { code: "model_not_found", message: key } },
+        "other",
+        "404 (model_not_found)",
+      ],
+      [
+        400,
+        {
+          error: {
+            message: key,
+            type: "invalid_request_error",
+            param: "input",
+          },
+        },
+        "other",
+        "400 (invalid_request_error)",
+      ],
+    ];
+    for (const [status, body, trouble, text] of troubles) {
+      const net = service(json(body, status));
+      const error = await failed(astra(net.request).next(input()));
+      expect(error.trouble).toBe(trouble);
+      expect(error.message).toBe(`The language model answered ${text}.`);
+      expect(error.message).not.toContain(key);
+      expect(error.message).not.toContain(goal);
+      // A chosen model has no fallback, and a 400 that names the input is no effort.
+      expect(net.sent).toHaveLength(1);
+    }
+    const garbled = service(() => new Response("{", { status: 200 }), wait());
+    expect((await astra(garbled.request).next(input())).action).toEqual({
+      kind: "wait",
+      ms: 1,
+    });
+  });
+
+  it("goes to auto when the service refuses a forced call, and drops an effort that it refuses, each for good", async () => {
+    const forced = service(
+      json(
+        {
+          error: {
+            type: "invalid_request_error",
+            param: "tool_choice",
+            message: "echo",
+          },
+        },
+        400,
+      ),
+      json(responses([said("I will wait.")])),
+      wait(),
+    );
+    const model = astra(forced.request);
+    // The answer with no call gets the repair, with the choice still auto.
+    expect((await model.next(input())).action).toEqual({ kind: "wait", ms: 1 });
+    await model.next(input("Groceries"));
+    expect(forced.sent.map((item) => item.body.tool_choice)).toEqual([
+      "required",
+      "auto",
+      "auto",
+      "auto",
+    ]);
+    const effort = service(
+      json(
+        { error: { type: "invalid_request_error", param: "reasoning.effort" } },
+        400,
+      ),
+      wait(),
+    );
+    const dropped = astra(effort.request);
+    await dropped.next(input());
+    await dropped.next(input("Groceries"));
+    expect(effort.sent.map((item) => item.body.reasoning)).toEqual([
+      { effort: "low" },
+      undefined,
+      undefined,
+    ]);
+    expect(effort.sent[1]!.body).not.toHaveProperty("include");
+  });
+
+  it("chooses the route by the name of the model, and CLAWDTIME_OPENAI_API for any model of OpenAI", async () => {
+    const openai = providerById("openai")!;
+    const route = (model: string, api?: "chat" | "responses") =>
+      openaiWire(openai, model, api);
+    for (const model of [
+      "gpt-6.2-astra",
+      "gpt-6.2-sol",
+      "gpt-6.1-terra",
+      "gpt-5.6-sol",
+    ])
+      expect(route(model)).toBe("responses");
+    for (const model of ["gpt-5.4", "gpt-4.1", "gpt-4.1-mini", "o4-mini"])
+      expect(route(model)).toBe("chat");
+    expect(route("gpt-6.2-astra", "chat")).toBe("chat");
+    expect(route("gpt-4.1", "responses")).toBe("responses");
+    // The setting is only for OpenAI.
+    expect(openaiWire(providerById("anthropic")!, "m", "responses")).toBe(
+      "messages",
+    );
+    expect(
+      openaiWire(providerById("groq")!, "gpt-6.2-astra", "responses"),
+    ).toBe("chat");
+    expect(openaiApiSetting(" Responses ")).toBe("responses");
+    expect(openaiApiSetting("chat")).toBe("chat");
+    expect(openaiApiSetting("")).toBeNull();
+    expect(openaiApiSetting(undefined)).toBeNull();
+    expect(openaiApiSetting("realtime")).toBe("invalid");
+    expect(plannerVariables).toContain("CLAWDTIME_OPENAI_API");
+    const bad = selectPlanner({
+      setting: null,
+      findKey: () => ({ key, from: { kind: "store" } }),
+      api: "realtime",
+    });
+    expect(bad).toMatchObject({ ok: false, reason: "invalid" });
+    expect(!bad.ok && bad.problem).toMatch(
+      /CLAWDTIME_OPENAI_API is not responses or chat/,
+    );
+
+    // By name, from the environment as the service reads it.
+    const sol = service(wait());
+    await plannerFromEnvironment(
+      { OPENAI_API_KEY: key, CLAWDTIME_COMPUTER_MODEL: "gpt-6.2-sol" },
+      { request: sol.request },
+    )!.next(input());
+    expect(sol.sent[0]!.url).toBe("https://api.openai.com/v1/responses");
+    // The override sends a newest model to chat completions.
+    const chat = service(json(chatCall("wait", { ms: 1, why: "w" })));
+    await plannerFromEnvironment(
+      {
+        OPENAI_API_KEY: key,
+        CLAWDTIME_COMPUTER_MODEL: "gpt-6.2-astra",
+        CLAWDTIME_OPENAI_API: "chat",
+      },
+      { request: chat.request },
+    )!.next(input());
+    expect(chat.sent[0]!.url).toBe(
+      "https://api.openai.com/v1/chat/completions",
+    );
+    // And the default model to Responses, with its fallback there too.
+    const fallback = service(
+      json({ error: { code: "model_not_found" } }, 404),
+      wait(),
+    );
+    const built = plannerFromEnvironment(
+      { OPENAI_API_KEY: key, CLAWDTIME_OPENAI_API: "responses" },
+      { request: fallback.request },
+    )!;
+    await built.next(input());
+    expect(fallback.sent.map((item) => [item.url, item.body.model])).toEqual([
+      ["https://api.openai.com/v1/responses", defaultComputerModel],
+      ["https://api.openai.com/v1/responses", "gpt-4.1"],
+    ]);
+    expect(built.model).toBe("gpt-4.1");
+    // gpt-5.4 reasons and gets the effort; gpt-4.1 does not.
+    expect(fallback.sent[0]!.body.reasoning).toEqual({ effort: "low" });
+    expect(fallback.sent[1]!.body).not.toHaveProperty("reasoning");
+    expect(fallback.sent[1]!.body).not.toHaveProperty("include");
+  });
+
+  it("leaves the chat completions request of gpt-5.4 byte for byte as it was", async () => {
+    const tool: FunctionTool = {
+      type: "function",
+      function: {
+        name: "wait",
+        description: "Wait.",
+        parameters: {
+          type: "object",
+          properties: { ms: { type: "integer" } },
+          required: ["ms"],
+        },
+      },
+    };
+    const transport = new ChatTransport({
+      provider: providerById("openai")!,
+      endpoint: "https://api.openai.com/v1/chat/completions",
+      key,
+      model: "gpt-5.4",
+      fallback: "gpt-4.1",
+      effort: null,
+      request: fetch,
+      now: () => 0,
+    });
+    // Recorded from the code before the Responses route (27f5758).
+    expect(
+      JSON.stringify(
+        transport.body({
+          system: "Rules.",
+          tools: [tool],
+          user: { text: "Goal: open the note", images: ["aW1hZ2U="] },
+        }),
+      ),
+    ).toBe(
+      '{"model":"gpt-5.4","messages":[{"role":"system","content":"Rules."},{"role":"user","content":[{"type":"text","text":"Goal: open the note"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,aW1hZ2U=","detail":"high"}}]}],"tools":[{"type":"function","function":{"name":"wait","description":"Wait.","parameters":{"type":"object","properties":{"ms":{"type":"integer"}},"required":["ms"]}}}],"tool_choice":"required","parallel_tool_calls":false}',
+    );
+    expect(
+      JSON.stringify(
+        transport.conversationBody({
+          system: "Rules.",
+          tools: [tool],
+          messages: [
+            { role: "user", content: "hello" },
+            {
+              role: "assistant",
+              content: "",
+              calls: [{ id: "call_a", name: "wait", arguments: '{"ms":1}' }],
+            },
+            { role: "tool", callId: "call_a", content: "Done." },
+          ],
+        }),
+      ),
+    ).toBe(
+      '{"model":"gpt-5.4","messages":[{"role":"system","content":"Rules."},{"role":"user","content":"hello"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_a","type":"function","function":{"name":"wait","arguments":"{\\"ms\\":1}"}}]},{"role":"tool","tool_call_id":"call_a","content":"Done."}],"tools":[{"type":"function","function":{"name":"wait","description":"Wait.","parameters":{"type":"object","properties":{"ms":{"type":"integer"}},"required":["ms"]}}}],"parallel_tool_calls":true}',
+    );
+    // The planner of gpt-5.4 still goes there, even with
+    // CLAWDTIME_OPENAI_API unset in the options.
+    const net = service(json(chatCall("wait", { ms: 1, why: "w" })));
+    await planner(net.request, { model: "gpt-5.4" }).next(input());
+    expect(net.sent[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
+    expect(net.sent[0]!.body).not.toHaveProperty("input");
   });
 });

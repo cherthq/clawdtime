@@ -20,7 +20,8 @@
  *   npx tsx tests/computer-request.eval.ts --check
  *   npx tsx tests/computer-request.eval.ts --check --new-actions
  *
- * Each argument is provider/model, or a bare model of OpenAI. With none it
+ * Each argument is provider/model, or a bare model of OpenAI, with "@effort"
+ * for a reasoning effort (`gpt-6.2-astra@low`). With none it
  * uses the model that the service would use. REPEATS (default 1) is how often each request runs; ONLY names a
  * part of a request's name; OUT names a file for every result.
  *
@@ -77,6 +78,7 @@ import {
 } from "./computer-eval-hands.js";
 import {
   scriptedModel,
+  withEvalRequest,
   withModelFaults,
   type ModelFault,
 } from "./computer-eval-model.js";
@@ -1048,7 +1050,10 @@ const requests: Request[] = [
   },
 ];
 
-// Each argument is provider/model, or a bare model of OpenAI.
+// Each argument is provider/model, or a bare model of OpenAI, with "@effort"
+// for a reasoning effort: an effort of Anthropic is a setting of its
+// request, any other goes into the body on its way out (`withEvalRequest`).
+const efforts = new Map<string, string>();
 const planners = new Map<string, PlannerOptions>(
   checking
     ? []
@@ -1056,8 +1061,30 @@ const planners = new Map<string, PlannerOptions>(
         ? words.filter((word) => !word.startsWith("--"))
         : [null]
       ).map((word) => {
-        const chosen = keyFor(word);
-        return [word ?? chosen.name, chosen.options];
+        const [model, effort, ...rest] = (word ?? "").split("@");
+        if (
+          rest.length ||
+          (word !== null && !model) ||
+          (effort !== undefined && !/^[a-z]+$/.test(effort))
+        )
+          throw new Error(
+            `Use provider/model, with @effort for a reasoning effort. Got: ${word}`,
+          );
+        const chosen = keyFor(model || null);
+        const label = word ?? chosen.name;
+        if (effort === undefined) return [label, chosen.options];
+        if (chosen.options.provider !== "anthropic") {
+          efforts.set(label, effort);
+          return [label, chosen.options];
+        }
+        if (!["low", "medium", "high"].includes(effort))
+          throw new Error(
+            `Anthropic takes @low, @medium or @high. Got: ${word}`,
+          );
+        return [
+          label,
+          { ...chosen.options, effort: effort as "low" | "medium" | "high" },
+        ];
       }),
 );
 const models = [...planners.keys()];
@@ -1148,7 +1175,12 @@ async function one(
         ? { key: "no-key-scripted", model: "scripted" }
         : planners.get(chooser.model)!),
       request: withModelFaults(
-        script ? scriptedModel(script.choose) : fetch,
+        script
+          ? scriptedModel(script.choose)
+          : withEvalRequest(fetch, {
+              effort:
+                "model" in chooser ? efforts.get(chooser.model) : undefined,
+            }),
         request.faults?.model ?? [],
         applied,
       ),

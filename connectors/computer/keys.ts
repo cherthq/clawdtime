@@ -317,6 +317,7 @@ export function plannerSetup(
       env.CLAWDTIME_CUSTOM_BASE_URL?.trim() || stored.choice?.baseUrl || null,
     effort: env.CLAWDTIME_COMPUTER_EFFORT,
     speed: env.CLAWDTIME_COMPUTER_SPEED,
+    api: env.CLAWDTIME_OPENAI_API,
     looksSecret,
   });
   // A key that is missing can be in a store that cannot be read: say so.

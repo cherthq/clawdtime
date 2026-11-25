@@ -444,6 +444,21 @@ describe("clawdtime computer model", () => {
     expect(text).toMatch(
       /speed +standard: fast mode is not there for gpt-4\.1\./,
     );
+    const newest = await cli({
+      OPENAI_API_KEY: other,
+      CLAWDTIME_COMPUTER_MODEL: "gpt-6.2-astra",
+    }).computer("doctor");
+    expect(newest).toMatch(
+      /effort +low for a step and medium for the plan, as reasoning\.effort\. gpt-6\.2-astra goes to the Responses route\./,
+    );
+    const routed = await cli({
+      OPENAI_API_KEY: other,
+      CLAWDTIME_COMPUTER_EFFORT: "high",
+      CLAWDTIME_OPENAI_API: "responses",
+    }).computer("doctor");
+    expect(routed).toMatch(
+      /effort +high, set by CLAWDTIME_COMPUTER_EFFORT, as reasoning\.effort\. CLAWDTIME_OPENAI_API chose the Responses route\./,
+    );
     const bad = await cli({
       OPENAI_API_KEY: other,
       CLAWDTIME_COMPUTER_EFFORT: "huge",

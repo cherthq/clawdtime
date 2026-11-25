@@ -6,13 +6,15 @@
  * model is known to work as the planner. A provider with no default needs a
  * model that the person chose: no model id is guessed here.
  *
- * Two transports carry one request of the planner. Most providers speak the
+ * Three transports carry one request of the planner. Most providers speak the
  * chat completions interface of OpenAI, so one transport over `fetch` serves
- * them all, with their own address and key. Anthropic gets its official
- * library and its Messages interface. Both take the same request (the rules,
- * the functions and the turn) and give back the same answer (the tool calls,
- * a refusal, the use of tokens). Neither retries: `model-call.ts` is the only
- * layer that asks again.
+ * them all, with their own address and key. The newest models of OpenAI take
+ * functions with a reasoning effort only on its Responses route, so they get
+ * a transport of their own over `fetch` (`openaiWire`). Anthropic gets its
+ * official library and its Messages interface. All three take the same
+ * request (the rules, the functions and the turn) and give back the same
+ * answer (the tool calls, a refusal, the use of tokens). None retries:
+ * `model-call.ts` is the only layer that asks again.
  *
  * A request puts what never changes first: the functions and the rules, the
  * same bytes in every step, so that the service can keep them in its cache.
@@ -76,6 +78,7 @@ export interface Provider {
   readonly endpoint: string | null;
   /** The model when the person chose none. Null: the person must choose. */
   readonly defaultModel: string | null;
+  /** The interface. OpenAI also has its Responses route, by model or by setting (`openaiWire`). */
   readonly wire: "chat" | "messages";
 }
 
@@ -166,6 +169,7 @@ export const plannerVariables: readonly string[] = [
   "CLAWDTIME_COMPUTER_EFFORT",
   "CLAWDTIME_COMPUTER_SPEED",
   "CLAWDTIME_CUSTOM_BASE_URL",
+  "CLAWDTIME_OPENAI_API",
 ];
 
 export type Effort = "low" | "medium" | "high";
@@ -194,8 +198,60 @@ const fastModels = new Set([
   "claude-fable-5-2",
   "claude-mythos-5-2",
 ]);
-/** OpenAI models that take `reasoning_effort`: the reasoning models, not their chat versions. */
-const reasoningModels = /^(?:gpt-5(?![\w.-]*chat)|o[1-9])/;
+/** OpenAI models that take a reasoning effort: the reasoning models, not their chat versions. */
+const reasoningModels = /^(?:gpt-[56](?![\w.-]*chat)|o[1-9])/;
+
+/** The two routes of OpenAI: chat completions and Responses. */
+export type OpenAIApi = "chat" | "responses";
+export const openaiApis: readonly OpenAIApi[] = ["chat", "responses"];
+/** The Responses route of OpenAI. */
+export const responsesEndpoint = "https://api.openai.com/v1/responses";
+/**
+ * OpenAI models that go to the Responses route by their name. On chat
+ * completions `gpt-6.2-astra` and `gpt-6.2-sol` answer 400 to functions with
+ * a reasoning effort, and refuse `none` (measured 26 Nov 2026).
+ */
+const responsesModels = /^(?:gpt-6|gpt-5\.6)/;
+
+/**
+ * `CLAWDTIME_OPENAI_API`: `responses` or `chat` for every model of OpenAI,
+ * null when it is not set, `invalid` for any other value.
+ */
+export function openaiApiSetting(
+  text: string | undefined,
+): OpenAIApi | null | "invalid" {
+  const value = text?.trim().toLowerCase();
+  if (!value) return null;
+  return openaiApis.includes(value as OpenAIApi)
+    ? (value as OpenAIApi)
+    : "invalid";
+}
+
+/**
+ * The transport of a request: the Messages interface of Anthropic, the
+ * Responses route of OpenAI, or chat completions. OpenAI follows the setting
+ * when there is one, else the name of the model.
+ */
+export function openaiWire(
+  provider: Provider,
+  model: string,
+  api?: OpenAIApi | null,
+): "chat" | "messages" | "responses" {
+  if (provider.id !== "openai") return provider.wire;
+  return api ?? (responsesModels.test(model) ? "responses" : "chat");
+}
+
+/**
+ * The effort of a request on the Responses route: the person's, or the
+ * default of the request, on a model that reasons. This route always names
+ * one: the step planner gets `low`, the outline and the chat `medium`.
+ */
+export const responsesEffort = (
+  model: string,
+  setting: Effort | null | undefined,
+  fallback: Effort,
+): Effort | null =>
+  reasoningModels.test(model) ? (setting ?? fallback) : null;
 
 /**
  * The effort that a request names, or null when it names none. Anthropic gets
@@ -320,6 +376,8 @@ export interface PlannerSettings {
   /** The effort that the person set, or null for the default. */
   effort: Effort | null;
   speed: Speed;
+  /** The route of OpenAI that the person set, or null: the name of the model chooses (`openaiWire`). */
+  api: OpenAIApi | null;
 }
 export type Selection =
   | { ok: true; settings: PlannerSettings }
@@ -346,10 +404,13 @@ export function selectPlanner(input: {
   customBase?: string | null;
   effort?: string | undefined;
   speed?: string | undefined;
+  /** `CLAWDTIME_OPENAI_API`. */
+  api?: string | undefined;
   looksSecret?: (value: string) => boolean;
 }): Selection {
   const effortText = input.effort?.trim().toLowerCase();
   const speedText = input.speed?.trim().toLowerCase();
+  const api = openaiApiSetting(input.api);
   const invalid = (problem: string): Selection => ({
     ok: false,
     reason: "invalid",
@@ -363,6 +424,10 @@ export function selectPlanner(input: {
   if (speedText && speedText !== "fast" && speedText !== "standard")
     return invalid(
       "CLAWDTIME_COMPUTER_SPEED is not fast or standard, so the planner does not start. Fix it or remove it.",
+    );
+  if (api === "invalid")
+    return invalid(
+      "CLAWDTIME_OPENAI_API is not responses or chat, so the planner does not start. Fix it or remove it.",
     );
   const effort = (effortText || null) as Effort | null;
   const speed: Speed = speedText === "fast" ? "fast" : "standard";
@@ -404,6 +469,7 @@ export function selectPlanner(input: {
         endpoint,
         effort,
         speed,
+        api,
       },
     };
   };
@@ -465,6 +531,11 @@ export interface PlannerRequest {
   repairs?: readonly { answer: ModelAnswer; note: string }[];
   /** A change of the plan may come with one action in the same answer: two calls are allowed. */
   pair?: boolean;
+  /**
+   * The effort of this request on a route that always names one (Responses)
+   * when the person set none. Left out: `low`, the effort of a step.
+   */
+  defaultEffort?: Effort;
 }
 
 /** One tool call of an answer. Nothing in it is trusted. */
@@ -890,31 +961,493 @@ export class ChatTransport implements Transport {
         return { ok: true, value: parse(JSON.parse(text) as unknown) };
       } catch {
         // A cut or garbled answer: the next request can pass.
-        return {
-          ok: false,
-          error: new PlannerError(
-            "transient",
-            "The language model sent an answer that is not JSON.",
-          ),
-        };
+        return { ok: false, error: notJson() };
       }
     }
-    // The body of a failure can echo the request: only its error code is read.
-    let code: string | null = null;
-    try {
-      code = errorCode(await response.text());
-    } catch {
-      // No body: the status says enough.
-    }
-    const wait = retryAfterMs(response.headers, this.options.now());
-    return {
-      ok: false,
-      error: new PlannerError(
-        statusTrouble(response.status, code),
-        `The language model answered ${response.status}${code ? ` (${code})` : ""}.`,
+    return failure(response, this.options.now());
+  }
+}
+
+const notJson = () =>
+  new PlannerError(
+    "transient",
+    "The language model sent an answer that is not JSON.",
+  );
+
+/**
+ * A failed answer over `fetch` as the trouble of the planner. The body of a
+ * failure can echo the request: only its error code is read. `body` is the
+ * text when it was read already.
+ */
+async function failure(
+  response: Response,
+  now: number,
+  body?: string | null,
+): Promise<Attempt<never>> {
+  let code: string | null = null;
+  try {
+    code = errorCode(body ?? (await response.text()));
+  } catch {
+    // No body: the status says enough.
+  }
+  const wait = retryAfterMs(response.headers, now);
+  return {
+    ok: false,
+    error: new PlannerError(
+      statusTrouble(response.status, code),
+      `The language model answered ${response.status}${code ? ` (${code})` : ""}.`,
+    ),
+    ...(wait !== undefined ? { retryAfterMs: wait } : {}),
+  };
+}
+
+/** The parameter that a refused request names (`error.param`), only in a plain shape. */
+const plainParam = /^[a-z][a-z0-9_.]{0,63}$/;
+export function errorParam(body: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const error =
+    parsed && typeof parsed === "object"
+      ? (parsed as { error?: unknown }).error
+      : undefined;
+  const param =
+    error && typeof error === "object"
+      ? (error as { param?: unknown }).param
+      : undefined;
+  return typeof param === "string" && plainParam.test(param) ? param : null;
+}
+
+// The Responses transport of OpenAI, over `fetch`.
+
+/** One item of a Responses answer. Nothing in it is trusted. */
+interface ResponsesItem {
+  type?: unknown;
+  id?: unknown;
+  call_id?: unknown;
+  name?: unknown;
+  arguments?: unknown;
+  content?: unknown;
+  encrypted_content?: unknown;
+}
+interface ResponsesPart {
+  type?: unknown;
+  text?: unknown;
+  refusal?: unknown;
+}
+
+const outputItems = (body: unknown): ResponsesItem[] => {
+  const output =
+    body && typeof body === "object"
+      ? (body as { output?: unknown }).output
+      : undefined;
+  return Array.isArray(output)
+    ? output.filter(
+        (item): item is ResponsesItem => !!item && typeof item === "object",
+      )
+    : [];
+};
+const itemParts = (item: ResponsesItem): ResponsesPart[] =>
+  Array.isArray(item.content)
+    ? item.content.filter(
+        (part): part is ResponsesPart => !!part && typeof part === "object",
+      )
+    : [];
+/** The words of one message item. */
+const itemText = (item: ResponsesItem) =>
+  itemParts(item)
+    .flatMap((part) =>
+      part.type === "output_text" && typeof part.text === "string"
+        ? [part.text]
+        : [],
+    )
+    .join("");
+
+/** The words of the messages of a Responses answer. */
+export function responsesText(body: unknown): string {
+  return outputItems(body)
+    .filter((item) => item.type === "message")
+    .map(itemText)
+    .filter((text) => text !== "")
+    .join("\n")
+    .trim();
+}
+
+/** A Responses answer in the shared shape. `raw` is its output items, for its repair. */
+export function responsesAnswer(body: unknown, model: string): ModelAnswer {
+  const items = outputItems(body);
+  const top =
+    body && typeof body === "object"
+      ? (body as {
+          status?: unknown;
+          incomplete_details?: { reason?: unknown } | null;
+          usage?: unknown;
+        })
+      : {};
+  const reason =
+    top.incomplete_details && typeof top.incomplete_details === "object"
+      ? top.incomplete_details.reason
+      : undefined;
+  const incomplete = top.status === "incomplete";
+  const used =
+    top.usage && typeof top.usage === "object"
+      ? (top.usage as {
+          input_tokens?: unknown;
+          output_tokens?: unknown;
+          input_tokens_details?: { cached_tokens?: unknown } | null;
+        })
+      : null;
+  return {
+    refused:
+      (incomplete && reason === "content_filter") ||
+      items.some(
+        (item) =>
+          item.type === "message" &&
+          itemParts(item).some(
+            (part) =>
+              part.type === "refusal" &&
+              typeof part.refusal === "string" &&
+              part.refusal.trim() !== "",
+          ),
       ),
-      ...(wait !== undefined ? { retryAfterMs: wait } : {}),
+    cut: incomplete && reason === "max_output_tokens",
+    calls: items
+      .filter((item) => item.type === "function_call")
+      .map((call) => ({
+        id: typeof call.call_id === "string" ? call.call_id : null,
+        name: typeof call.name === "string" ? call.name : null,
+        arguments: typeof call.arguments === "string" ? call.arguments : "",
+      })),
+    usage: used
+      ? {
+          provider: "openai",
+          model,
+          inputTokens: count(used.input_tokens),
+          cachedTokens: count(used.input_tokens_details?.cached_tokens),
+          cacheWriteTokens: null,
+          outputTokens: count(used.output_tokens),
+        }
+      : null,
+    raw: items,
+  };
+}
+
+/** The functions in the form of the Responses route. Not strict, as on chat completions: their schemas have optional fields. */
+export function responsesTools(
+  tools: readonly FunctionTool[],
+): Record<string, unknown>[] {
+  return tools.map(({ function: spec }) => ({
+    type: "function",
+    name: spec.name,
+    ...(spec.description ? { description: spec.description } : {}),
+    parameters: spec.parameters,
+    strict: false,
+  }));
+}
+
+/** A function call as an input item of its own, with no id of the service. */
+const callItem = (call: { id: string; name: string; arguments: string }) => ({
+  type: "function_call",
+  call_id: call.id,
+  name: call.name,
+  arguments: call.arguments,
+});
+
+/**
+ * The input items that go back after a Responses answer that cannot be
+ * used. The answer goes back as the service sent it, its reasoning included,
+ * when the service can read all of it again: every reasoning item has its
+ * encrypted content, and every call has its id and its name. Each call then
+ * gets a result that says what was wrong, and an answer with no call gets it
+ * as words of the person. When a reasoning item cannot go back, the words
+ * and the calls go back with no ids of the service, so that no item points
+ * at one that is not there. A call with no id or no name cannot go back.
+ */
+function responsesRepair(
+  raw: unknown,
+  note: string,
+): Record<string, unknown>[] {
+  const items = Array.isArray(raw)
+    ? raw.filter(
+        (item): item is ResponsesItem => !!item && typeof item === "object",
+      )
+    : [];
+  const calls = items.filter((item) => item.type === "function_call");
+  const usable = calls.every(
+    (call) =>
+      typeof call.call_id === "string" &&
+      call.call_id !== "" &&
+      typeof call.name === "string" &&
+      call.name !== "",
+  );
+  const results = usable
+    ? calls.map((call) => ({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: note,
+      }))
+    : [];
+  const after = results.length ? results : [{ role: "user", content: note }];
+  const whole =
+    usable &&
+    items.every(
+      (item) =>
+        item.type !== "reasoning" || typeof item.encrypted_content === "string",
+    );
+  if (whole)
+    return [
+      ...(items.filter((item) =>
+        ["reasoning", "message", "function_call"].includes(String(item.type)),
+      ) as Record<string, unknown>[]),
+      ...after,
+    ];
+  return [
+    ...items
+      .filter((item) => item.type === "message")
+      .map(itemText)
+      .filter((text) => text.trim() !== "")
+      .map((text) => ({ role: "assistant", content: text })),
+    ...(usable
+      ? calls.map((call) =>
+          callItem({
+            id: call.call_id as string,
+            name: call.name as string,
+            arguments: typeof call.arguments === "string" ? call.arguments : "",
+          }),
+        )
+      : []),
+    ...after,
+  ];
+}
+
+/** Error codes of a Responses answer that failed after its start, that a later request can pass. */
+const passingCodes = new Set(["server_error", "rate_limit_exceeded"]);
+
+/**
+ * The Responses route of OpenAI. It takes what chat completions takes, in
+ * its own form: the rules as `instructions`, the turn and the repairs as
+ * `input` items, the functions with their name at the top, and the effort as
+ * `reasoning.effort`, always named on a model that reasons. The rules and
+ * the functions come first, the same bytes in every step. Nothing is stored
+ * on the service (`store: false`), so the reasoning of an answer comes back
+ * encrypted, for its repair. A forced call is `tool_choice: "required"`; when
+ * the service refuses it, the tool choice is the model's own from then on,
+ * and the repair of the planner handles an answer with no call.
+ */
+export class ResponsesTransport implements Transport {
+  private current: string;
+  /** The model to go to when the service refuses the default one. Null when the person chose the model. */
+  private fallback: string | null;
+  /** The service refused the effort: it is not sent again. */
+  private noEffort = false;
+  /** The service refused a forced call: the choice is `auto` from then on. */
+  private noRequired = false;
+  constructor(
+    private readonly options: {
+      key: string;
+      model: string;
+      fallback: string | null;
+      effort: Effort | null;
+      request: typeof fetch;
+      now: () => number;
+    },
+  ) {
+    this.current = options.model;
+    this.fallback = options.fallback;
+  }
+
+  get model() {
+    return this.current;
+  }
+
+  private effort(fallback: Effort) {
+    return this.noEffort
+      ? null
+      : responsesEffort(this.current, this.options.effort, fallback);
+  }
+
+  /** The body of one request. The rules and the functions come before the turn. */
+  body(request: PlannerRequest): Record<string, unknown> {
+    const { user } = request;
+    const effort = this.effort(request.defaultEffort ?? defaultEffort);
+    return {
+      model: this.current,
+      instructions: request.system,
+      tools: responsesTools(request.tools),
+      input: [
+        {
+          role: "user",
+          content:
+            typeof user === "string"
+              ? user
+              : [
+                  { type: "input_text", text: user.text },
+                  ...(user.images ?? []).map((image) => ({
+                    type: "input_image",
+                    image_url: `data:image/jpeg;base64,${image}`,
+                    detail: user.detail ?? "high",
+                  })),
+                ],
+        },
+        ...(request.repairs ?? []).flatMap(({ answer, note }) =>
+          responsesRepair(answer.raw, note),
+        ),
+      ],
+      // One action for each turn: a function call, and only one.
+      tool_choice: this.noRequired ? "auto" : "required",
+      parallel_tool_calls: request.pair === true,
+      ...(effort
+        ? {
+            reasoning: { effort },
+            include: ["reasoning.encrypted_content"],
+          }
+        : {}),
+      store: false,
     };
+  }
+
+  async send(
+    request: PlannerRequest,
+    signal: AbortSignal,
+  ): Promise<Attempt<ModelAnswer>> {
+    return this.exchange(
+      () => this.body(request),
+      signal,
+      (parsed) => responsesAnswer(parsed, this.current),
+    );
+  }
+
+  /** The body of one turn of a conversation. The tool choice is the model's own. */
+  conversationBody(request: ConversationRequest): Record<string, unknown> {
+    const effort = this.effort("medium");
+    return {
+      model: this.current,
+      instructions: request.system,
+      // A request with no functions carries no list: an empty one is refused.
+      ...(request.tools.length
+        ? { tools: responsesTools(request.tools), parallel_tool_calls: true }
+        : {}),
+      input: request.messages.flatMap((message): Record<string, unknown>[] =>
+        message.role === "tool"
+          ? [
+              {
+                type: "function_call_output",
+                call_id: message.callId,
+                output: message.content,
+              },
+            ]
+          : message.role === "assistant"
+            ? [
+                ...(message.content.trim()
+                  ? [{ role: "assistant", content: message.content }]
+                  : []),
+                ...(message.calls ?? []).map(callItem),
+              ]
+            : [{ role: "user", content: message.content }],
+      ),
+      ...(effort ? { reasoning: { effort } } : {}),
+      store: false,
+    };
+  }
+
+  async converse(
+    request: ConversationRequest,
+    signal: AbortSignal,
+  ): Promise<Attempt<ConversationAnswer>> {
+    return this.exchange(
+      () => this.conversationBody(request),
+      signal,
+      (parsed) => {
+        const { refused, cut, calls, usage } = responsesAnswer(
+          parsed,
+          this.current,
+        );
+        return { text: responsesText(parsed), refused, cut, calls, usage };
+      },
+    );
+  }
+
+  /**
+   * One request and its answer. The body is made again for each try. A 400
+   * that names `tool_choice` turns the forced call off; any other 400 to a
+   * request with an effort drops the effort, as on chat completions. Each
+   * goes out once more, and stays so. A 403 or 404 to the default model goes
+   * to the model before it, once.
+   */
+  private async exchange<T>(
+    make: () => Record<string, unknown>,
+    signal: AbortSignal,
+    parse: (parsed: unknown) => T,
+  ): Promise<Attempt<T>> {
+    let body: Record<string, unknown> = {};
+    const post = () => {
+      body = make();
+      return this.options.request(responsesEndpoint, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.options.key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    };
+    let response = await post();
+    let read: string | null = null;
+    while (response.status === 400) {
+      read = await response.text().catch(() => "");
+      const param = errorParam(read);
+      if (param === "tool_choice" && body.tool_choice === "required")
+        this.noRequired = true;
+      else if (
+        "reasoning" in body &&
+        (param === null || param.startsWith("reasoning"))
+      )
+        this.noEffort = true;
+      else break;
+      read = null;
+      response = await post();
+    }
+    if (
+      this.fallback !== null &&
+      (response.status === 403 || response.status === 404)
+    ) {
+      response.body?.cancel().catch(() => {});
+      this.current = this.fallback;
+      this.fallback = null;
+      response = await post();
+    }
+    if (!response.ok) return failure(response, this.options.now(), read);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await response.text()) as unknown;
+    } catch {
+      return { ok: false, error: notJson() };
+    }
+    const top =
+      parsed && typeof parsed === "object"
+        ? (parsed as { status?: unknown; error?: { code?: unknown } | null })
+        : {};
+    if (top.status === "failed") {
+      const code =
+        top.error &&
+        typeof top.error === "object" &&
+        typeof top.error.code === "string" &&
+        plainParam.test(top.error.code)
+          ? top.error.code
+          : null;
+      return {
+        ok: false,
+        error: new PlannerError(
+          code === null || passingCodes.has(code) ? "transient" : "other",
+          `The language model answered failed${code ? ` (${code})` : ""}.`,
+        ),
+      };
+    }
+    return { ok: true, value: parse(parsed) };
   }
 }
 
