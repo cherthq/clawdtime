@@ -419,6 +419,16 @@ through all the checks.
   and the same action again and again asks nothing: after three tries that
   changed nothing the planner reads that in its last step, and the same
   action once more ends the request.
+- **An app that does not answer.** When inputs change nothing on the
+  screen, the note to the planner also carries one line about the process
+  of the app in front (`connectors/system/fact.ts`): "Process fact (data
+  from this Mac): Stonepad (pid 4242) is at full CPU (98 percent) and is
+  running while the screen does not change: it may be busy, or not
+  responding." The line says when the app is at full CPU, uses no CPU, is
+  stuck in a call to the system, or does not run any more, with its crash
+  report of the last 10 minutes. It costs two short reads of the process
+  list and no model call. A swing gets no such line, and with no answer the
+  note stays as it was.
 - **A page that did not load.** Spoken words are often misheard: a name
   such as "Brightwave" can come out as "Bright5", and the browser then shows its own error page.
   That page is never a result (`error-page.ts`). The worker knows it by the
@@ -476,6 +486,59 @@ through all the checks.
 Stop wins here too: during a wait for the screen, during a wait for the
 planner, and while a question waits. A hold pauses a wait at once. Every end
 text says what happened first, and then what you can say or do next.
+
+## The process level
+
+The screen shows what an app draws. It does not show why the app is frozen,
+what holds a port, or what ate the memory. For that the chat agent reads the
+process level of the Mac with `system_look`, and acts on it with
+`process_act`. The code is in `connectors/system/`. The planner of a task
+gets only the one line of a fact (see An app that does not answer).
+
+| `what` of `system_look` | What it reads                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `processes`             | The top processes by CPU, or by memory, or those whose name holds a word: pid, parent, CPU, memory, time, state |
+| `process`               | One process by name or pid: its path, arguments, start, threads, open files and ports, and its newest report    |
+| `ports`                 | What listens on a TCP port, or every socket on one port                                                         |
+| `logs`                  | The newest log lines of one process, for the last 1 to 60 minutes, with the errors and faults first             |
+| `crashes`               | The newest crash, hang and resource reports of the last days, with the exception and the first frames           |
+| `services`              | The launchd jobs of the owner by a part of their label, or the ones that ended with an error                    |
+| `memory`                | The memory pressure, the free memory, swap, the load, the free disk, and the processes that hold the most       |
+
+Each look only reads. It runs fixed programs (`ps`, `lsof`, `log`,
+`launchctl list`, `sysctl`, `memory_pressure`, `df`, `lsappinfo`) with
+`execFile`, never a shell, each with a timeout of 2 to 20 seconds and a cap
+on its output. The child gets a fixed path and the C locale as its only
+environment. A name, a pid, a port and a label must parse before anything
+runs: a name has letters, digits, spaces and a few marks only, and goes into
+the log predicate between double quotes.
+
+What a look returns is data for the model, never an instruction, and it is
+cut like the result of every other tool. No look reads or returns an
+environment variable. An argument and a log line that look like a
+credential, by the same checks that the chat and the journal use, are
+hidden before they leave `connectors/system/`. The home folder is written as
+`~`. A report is described by what it says, never by its file name, which
+can hold the name of the Mac. `lsof` sees only the processes of the owner.
+
+`process_act` follows the ask policy. A quit asks an app to quit, as Quit in
+the Dock does, so the app can save or show its own save sheet. A restart is
+such a quit, a wait of up to 8 seconds, and an open; an app that does not
+quit is not started again, and the answer says so. Both act at once. A force
+quit, and a stop of a process that is no app, can lose what is not saved:
+they are the `unsaved` row. They ask first, unless the owner's words ask to
+lose the changes ("without saving") or the owner's trust is on. The question
+is the result of the tool, and the chat says it: "Force quit Stonepad (pid
+4242)? Changes that are not saved are lost. Say yes or no." Only the owner's
+own clear yes in a newer message, by the strict reader of the chat, within 5
+minutes and for the same process (its pid and its start time), lets it go.
+A yes that already answered another question in that message counts for
+nothing. A no ends it.
+
+These are never touched, with trust on too: launchd, the kernel,
+WindowServer, loginwindow, a process of another user, and ClawdTime itself:
+its own process, the processes it runs in, the ones it started, its apps and
+its entry points.
 
 ## Plans and multi-step tasks
 
@@ -1187,7 +1250,7 @@ from one of them.
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | pay      | Buy, Pay, Place order, Subscribe, Donate, Send money, Book, Rent, a button that is only a price, a Confirm or a Submit while the screen shows a total, a Continue where the screen says that it charges ("your card will be charged"), a Transfer of an amount, and the same names in other languages ("Jetzt kaufen", "Pagar", "Payer")                                                                                        | (always asks)                                                                                            |
 | loss     | Delete forever, Empty Trash, Erase, Delete account, Uninstall, Terminate, Factory reset, Revoke, Overwrite, Shut down, a log out of the Mac, a Delete, Remove or OK where the screen says that it cannot be undone, a Replace of a file that exists, a terminal command that deletes for good (`rm`, `find -delete`, a delete in a script, a move to `/dev/null`), and a terminal move of files that your request does not name | (always asks)                                                                                            |
-| unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save (also its Delete for a new document that was never saved, where the sheet says that it cannot be undone), and a quit or a close while the window shows unsaved changes ("Report (Edited)")                                                                                                                                                      | asks to lose the changes: "without saving", "discard", "throw away"                                      |
+| unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save (also its Delete for a new document that was never saved, where the sheet says that it cannot be undone), a quit or a close while the window shows unsaved changes ("Report (Edited)"), a force quit of an app, and a stop of a process that is no app (from the chat, see The process level)                                                   | asks to lose the changes: "without saving", "discard", "throw away"                                      |
 | send     | Send, Reply, Reply All, Forward, Post, Comment, Publish, Submit, Share, Return in a messages or mail app, the submit of a message box, a terminal command that publishes (`git push`), and an address with a long part that you did not write                                                                                                                                                                                   | asks for a send of that kind, to the people that the screen shows. A long part of an address always asks |
 | public   | Like, Follow, Repost, Upvote                                                                                                                                                                                                                                                                                                                                                                                                    | asks to like, follow or repost                                                                           |
 | account  | a change of a password, two-factor, recovery, privacy or visibility, a switch of the security and privacy settings of macOS, and a terminal command that runs as an administrator (`sudo`), changes the security of the Mac or runs code from the web                                                                                                                                                                           | (always asks)                                                                                            |
@@ -2066,6 +2129,15 @@ the real screen, draws the cursor or calls a language model.
   task and with Stop, a test's service, the switch off, no key, actors and no
   board.
 - `hands` (10), `journal` (12), `planner` (12), `cli` (9).
+- `process-fact` (8): the line about the process of the app in front, at
+  full CPU, idle, stuck and gone, and the worker that adds it to the note of
+  a still screen only. The process level itself has its own tests over
+  made-up outputs of `ps`, `lsof`, `log`, `launchctl`, `sysctl`,
+  `memory_pressure` and `df` and made-up reports:
+  `tests/connectors-system-*.test.ts` (44: the probes, the hidden
+  credentials, what does not parse, the ask policy of each action and what
+  is never touched) and `tests/connectors-agents-system-tools.test.ts` (8:
+  the tools in the chat agent, and a force quit only after the owner's yes).
 - `plan` (29): the states of a plan, its bounds, the facts with secrets, the
   plan in the brief; the outline and `plan_update` through the planner's
   repair; and in the worker: one outline beside the first turn, an update

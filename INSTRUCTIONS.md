@@ -383,12 +383,44 @@ The chat agent can:
 - hand code work to a coding agent in a new terminal session, and read its
   answer;
 - add, list, pause and remove routines;
-- search memory and keep what you tell it, while memory is on.
+- search memory and keep what you tell it, while memory is on;
+- debug the Mac at the process level, and quit, force quit or restart an
+  app (see [Debug the Mac](#debug-the-mac)).
 
 Some rules are code, and no answer of the model changes them. A "stop" stops
 the task before the model reads it. A yes to a question of a task is your own
 newest message, read by a strict reader. A message that holds a password, a
 key or a code never goes to the model or to memory.
+
+### Debug the Mac
+
+Ask the chat agent why the Mac is slow, what is on port 3000, why an app
+crashed, what eats memory, or whether a build still runs. It reads the
+process level of the Mac, not the screen: the top processes, one process in
+detail, the listening ports, the recent log lines of one process, the newest
+crash and hang reports, the launchd jobs, and the memory, swap and disk. A
+look only reads, and changes nothing.
+
+It never reads an environment variable. A value in the arguments of a
+process or in a log line that looks like a password or a key is hidden
+before the model sees it.
+
+Say "quit Stonepad" or "restart Stonepad" and it acts at once: the app gets
+the same request to quit as from the Dock, so it can save first. A force
+quit can lose what is not saved, and so can a stop of a process that is no
+app, so they ask first:
+
+> Force quit Stonepad (pid 4242)? Changes that are not saved are lost. Say
+> yes or no.
+
+Your own clear yes in your next message lets it go. "Force quit Stonepad
+without saving" needs no question, and neither does a force quit with trust
+on (see [The owner's trust](#the-owners-trust)). It never ends a part of
+macOS that keeps the Mac running, a process of another user, or ClawdTime
+itself.
+
+When a task on the screen finds an app that does not answer, the planner
+also reads one line about its process, such as "Stonepad is at full CPU".
 
 ### A new chat, and the chats before
 
@@ -412,7 +444,7 @@ everything else with no question.
 | ---------------------------- | -------------------------------------------------------------------------------- |
 | A payment                    | Buy, Pay, Place order, Subscribe, Book, a Confirm while the screen shows a total |
 | A loss for good              | Delete forever, Empty Trash, Erase, Uninstall, a terminal command that deletes   |
-| A loss of unsaved changes    | Don't Save, Discard, a quit while the window shows unsaved changes               |
+| A loss of unsaved changes    | Don't Save, Discard, a quit while the window shows unsaved changes, a force quit |
 | A send                       | Send, Reply, Forward, Post, Publish, Share, `git push`                           |
 | A public act                 | Like, Follow, Repost, Upvote                                                     |
 | A change of account security | A password, two-factor or privacy change, `sudo`                                 |
