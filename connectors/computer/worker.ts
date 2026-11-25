@@ -596,8 +596,6 @@ interface Run {
   page: BrowserPage | null;
   /** The observation came after the last action that was sent. */
   fresh: boolean;
-  /** The last action that was sent, and how many times in a row. */
-  streak: { signature: string; count: number } | null;
   /**
    * What came of the action of this turn, for the row below. Absent: it does
    * not count there. Clicked: the focus click went out, and the text did not.
@@ -1303,7 +1301,6 @@ export class ComputerWorker implements DesktopExecutorPort {
       observation: null,
       page: null,
       fresh: false,
-      streak: null,
       sentInput: false,
       stepInput: false,
       progress: new ProgressGuard(),
@@ -2640,14 +2637,6 @@ export class ComputerWorker implements DesktopExecutorPort {
       "person_typed",
     );
   }
-  private count(run: Run, signature: string | null) {
-    // A scroll, a wait or a reading has no signature: it does not end the row.
-    if (signature === null) return;
-    run.streak =
-      run.streak?.signature === signature
-        ? { signature, count: run.streak.count + 1 }
-        : { signature, count: 1 };
-  }
   /** Adds the action of this turn to its row, when it went out or was not sent. */
   private tally(
     run: Run,
@@ -3166,7 +3155,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         run.pauseText = holdText(wantedOf(action, first, before));
       }
       if (countTry) {
-        // No complete action went out, so this is no repeat in run.streak.
+        // No complete action went out: only the click on the field.
         run.tried = "clicked";
         const target = focusTarget();
         run.focusClicks =
@@ -3256,8 +3245,6 @@ export class ComputerWorker implements DesktopExecutorPort {
         ready,
         run.hold ? heldByWordReason : saidMoreText,
       );
-    const streak = run.streak;
-    this.count(run, ready.signature);
     // A wait changes nothing on the Mac: the person's input during it is
     // kept for the next input, as for the look before a plan.
     const handed = await this.hand(
@@ -3272,9 +3259,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       : activationRefusal(send.command, handed.result);
     if (refusal) {
       // The hands opened nothing. The planner reads why and chooses again,
-      // as after a refusal of the checks: it counts in the same row of three,
-      // and it is not a repeat of an action that went out.
-      run.streak = streak;
+      // as after a refusal of the checks: it counts in the same row of three.
       this.note(
         run,
         action,
@@ -3288,8 +3273,6 @@ export class ComputerWorker implements DesktopExecutorPort {
       return;
     }
     if (!sendsNoInput(send) && heldForPerson(handed)) {
-      // No complete action went out, so this is no repeat either.
-      run.streak = streak;
       // With a click on the field before the text, that click went out.
       return send.focus
         ? clickedOnly("clicked the field. The text was not typed.")
@@ -3379,7 +3362,6 @@ export class ComputerWorker implements DesktopExecutorPort {
       !handed.result.ok &&
       !sendsNoInput(send)
     ) {
-      run.streak = streak;
       // A list or a card of the app lies over the place: the planner reads
       // that in plain words, and it counts in the row of held steps.
       if (coversThePlace(send.command, handed.result)) {
@@ -3574,7 +3556,6 @@ export class ComputerWorker implements DesktopExecutorPort {
     const effect = !quiet && call.name !== "scroll";
     const pageBefore = call.name === "read" ? null : pagePrint(run.page);
     if (call.name !== "read") run.fresh = false;
-    this.count(run, first.signature);
     if (effect) run.inFlight = true;
     try {
       if (quiet) {

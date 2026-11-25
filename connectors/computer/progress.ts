@@ -18,8 +18,8 @@
  * - A still screen: several inputs in a row, after none of which the screen
  *   showed anything that this request had not seen before.
  *
- * A run of one and the same action is the worker's own streak and row. This
- * guard does not judge it, so their questions and texts stay as they are.
+ * A run of one and the same action is the worker's own row of tries: it
+ * tells the planner, then ends the request. This guard does not judge it.
  *
  * It keeps digests and signatures only, never a text of the screen. It has
  * no timer and does no input or output, so it is tested alone.
@@ -183,7 +183,7 @@ export class ProgressGuard {
     const swing = this.swing();
     const pattern: ProgressPattern | null = swing
       ? "swing"
-      : // One and the same action in a row is the worker's streak, not this.
+      : // One and the same action in a row is the worker's row, not this.
         this.still.count >= this.limits.still && this.still.signatures.size > 1
         ? "still"
         : null;
@@ -223,7 +223,7 @@ export class ProgressGuard {
         second.every(
           (input, index) => input.signature === first[index]!.signature,
         ) &&
-        // A run of one action is the worker's streak, not a swing.
+        // A run of one action is the worker's row, not a swing.
         new Set(first.map((input) => input.signature)).size > 1 &&
         second.every((input) => !input.fresh)
       )
