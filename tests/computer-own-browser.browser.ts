@@ -362,7 +362,7 @@ try {
     },
   );
   await step(
-    "a page that replaces the hit test, and a frame inside a button, are refused",
+    "a page that replaces the hit test, a frame inside a button and a key in a password field are refused",
     async () => {
       const page = await driver.open(`${origin}/hostile`);
       // The script runs in a world of its own, which the page cannot change.
@@ -373,6 +373,12 @@ try {
       await assert.rejects(
         driver.click(number(page, "Framed")),
         /has a frame at its centre \(iframe\)/,
+      );
+      const secret = page.elements.find((item) => item.password)!;
+      await driver.click(secret.index);
+      await assert.rejects(
+        driver.key("Space"),
+        /The focus is in a password field\. The worker never presses a key there/,
       );
       assert.match((await driver.read()).text, /Covered button\n0\n/);
     },

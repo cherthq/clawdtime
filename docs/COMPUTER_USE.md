@@ -77,6 +77,8 @@ and no Automation right of macOS.
   frame lies there (the click would land in another page, maybe of another
   site), when another control lies inside it there, or when the page replaced
   the browser's hit test, nothing is sent.
+- Before a key, the page script says where the focus is. In a password field
+  or in a frame, no key is pressed.
 - After an open, a click, a key or back, it waits until the page has loaded
   and the network is quiet, for at most 5 seconds, or 10 after an open.
 - It can also hover, pick an option by its label, press one key, wait for a

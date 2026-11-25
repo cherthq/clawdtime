@@ -40,7 +40,9 @@ export type PageCall =
   | { do: "select"; index: number; option: string }
   | { do: "key"; combo: PageKey }
   /** Where element N is, for a driver that sends real input. It sends no event. */
-  | { do: "locate"; index: number };
+  | { do: "locate"; index: number }
+  /** Whether the focus may take a real key: not in a password field, not in a frame. It sends no event. */
+  | { do: "focus" };
 
 /** The keys that a page takes, as the planner names them. */
 export const pageKeys = [
@@ -1154,6 +1156,16 @@ function locate(index) {
   if (way && way.why) answer.blocked = way.why;
   return answer;
 }
+// Focus: for a driver that sends real keys. A key goes to the element that
+// has the focus, so the step says no when that is a password field, or a
+// frame, whose inside this script cannot see.
+function focusCheck() {
+  var el = focusedElement();
+  if (!el) fail("The page has nothing that could take a key.");
+  if (secret(el)) fail("The focus is in a password field. The worker never presses a key there: ask the person.");
+  if (FRAMES[tagOf(el)] === 1) fail("The focus is in a frame of the page, which ClawdTime cannot see into. No key was pressed. Click into the page itself, or use the screen.");
+  return { ok: true };
+}
 // End of locate.
 
 var answer;
@@ -1168,6 +1180,7 @@ try {
   else if (call.do === "key") answer = key(String(call.combo));
   else if (call.do === "ping") answer = { ok: true };
   else if (call.do === "locate") answer = locate(call.index);
+  else if (call.do === "focus") answer = focusCheck();
   else fail("The page was asked for a step that it does not know.");
 } catch (problem) {
   if (problem && typeof problem.told === "string") answer = { ok: false, error: problem.told };

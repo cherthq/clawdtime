@@ -24,7 +24,8 @@
  * page sees them as trusted. Before a pointer event, the page script brings
  * the element into view and says whether a pointer at its centre reaches it
  * and nothing else: no element on top, no frame and no other control there.
- * When it does not, nothing is sent.
+ * When it does not, nothing is sent. Before a key, the page script says
+ * where the focus is: a password field or a frame takes no key.
  *
  * No blind retry. A read may start the browser again when it ended. An input
  * never starts it, and an input whose answer did not come back is never sent
@@ -776,10 +777,15 @@ export class OwnBrowser implements BrowserPort {
     });
   }
 
-  /** One key or combo in the page: it goes to the element with the focus. */
+  /**
+   * One key or combo in the page: it goes to the element with the focus. The
+   * page script says first where the focus is: in a password field or in a
+   * frame, no key is pressed.
+   */
   async key(combo: string): Promise<BrowserPage> {
     const events = keyEvents(combo);
     return this.input(async (tab, step) => {
+      await this.ask(tab, { do: "focus" });
       await this.keys(tab, step, events);
       return this.settled(tab, ownTiming.waitMs);
     });
