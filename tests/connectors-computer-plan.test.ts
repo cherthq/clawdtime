@@ -524,46 +524,160 @@ describe("a turn of the planner with a plan", () => {
     );
   });
 
-  it("keeps the rules and the functions of a turn with no plan as they are, and only adds to them", async () => {
-    const plain = network(called("wait", { ms: 100 }));
-    await turned(plain.request).next(turn());
-    const planned = network(called("wait", { ms: 100 }));
-    await turned(planned.request).next(turn(view()));
-    const before = plain.sent[0]!;
-    const after = planned.sent[0]!;
-    expect(before.tools.map((tool) => tool.function.name)).not.toContain(
-      "plan_update",
-    );
-    expect(userText(before)).not.toMatch(/Your plan/);
-    const rules = before.messages[0]!.content as string;
-    const more = after.messages[0]!.content as string;
-    expect(more.startsWith(`${rules}\n`)).toBe(true);
-    expect(more.slice(rules.length)).toMatch(
-      /plan_update changes only the plan/,
-    );
-    expect(more.slice(rules.length)).toMatch(/natural end/);
-    expect(after.tools.map((tool) => tool.function.name)).toEqual([
-      ...before.tools.map((tool) => tool.function.name),
-      "plan_update",
-    ]);
-  });
-
-  it("offers no plan_update while none may come, and a call of it is then no offered function", async () => {
+  it("keeps system, tools, and tool_choice byte-for-byte identical across no-plan, active-plan, and updatesLeft === 0 turns", async () => {
     const tired = planOf(3);
     for (const fact of ["a", "b", "c"])
       tired.apply({ op: "note", facts: [fact] });
-    const net = network(called("plan_update", { op: "note", facts: ["d"] }));
-    const error = await turned(net.request)
+    expect(tired.view().updatesLeft).toBe(0);
+
+    const net = network(called("wait", { ms: 100, why: "look" }));
+    const model = turned(net.request);
+    await model.next(turn());
+    await model.next(turn(view()));
+    await model.next(turn(tired.view()));
+
+    const [plain, active, exhausted] =
+      net.sent as ((typeof net.sent)[number] & {
+        parallel_tool_calls?: boolean;
+      })[];
+    expect(userText(plain!)).not.toMatch(/Your plan/);
+    expect(userText(active!)).toMatch(/Your plan/);
+    expect(userText(exhausted!)).toMatch(/No plan_update now/);
+
+    const prefix = (body: typeof plain) =>
+      JSON.stringify({
+        system: body!.messages[0]!.content,
+        tools: body!.tools,
+        tool_choice: body!.tool_choice,
+        parallel_tool_calls: body!.parallel_tool_calls,
+      });
+    expect(prefix(active)).toBe(prefix(plain));
+    expect(prefix(exhausted)).toBe(prefix(plain));
+
+    const system = plain!.messages[0]!.content as string;
+    expect(system).toContain(
+      "When a plan appears below the goal, work on the subgoal marked now. Only call plan_update when a plan is shown and plan_update calls are left.",
+    );
+    expect(system).toMatch(/plan_update changes only the plan/);
+    expect(system).toMatch(/natural end/);
+    expect(plain!.tools.map((tool) => tool.function.name).at(-1)).toBe(
+      "plan_update",
+    );
+    expect(plain!.parallel_tool_calls).toBe(true);
+  });
+
+  it("keeps plan_update in tools when updatesLeft === 0 or no plan exists, and repairs calls with a clear note", async () => {
+    const tired = planOf(3);
+    for (const fact of ["a", "b", "c"])
+      tired.apply({ op: "note", facts: [fact] });
+
+    // Exhausted plan: calling plan_update triggers repair and fails if repeated.
+    const exhaustedNet = network(
+      called("plan_update", { op: "note", facts: ["d"], why: "note" }),
+    );
+    const error = await turned(exhaustedNet.request)
       .next(turn(tired.view()))
       .catch((caught: unknown) => caught);
     expect((error as PlannerError).trouble).toBe("malformed");
-    expect(net.sent[0]!.tools.map((tool) => tool.function.name)).not.toContain(
-      "plan_update",
+    expect(
+      exhaustedNet.sent[0]!.tools.map((tool) => tool.function.name),
+    ).toContain("plan_update");
+    expect(userText(exhaustedNet.sent[0]!)).toMatch(/No plan_update now/);
+    expect(exhaustedNet.sent[1]!.messages.at(-1)!.content).toContain(
+      "No plan_update is allowed on this turn. Choose one action tool instead.",
     );
-    expect(userText(net.sent[0]!)).toMatch(/No plan_update now/);
-    expect(net.sent[1]!.messages.at(-1)!.content).toMatch(
-      /"plan_update" is not one of the offered functions/,
+
+    // Exhausted plan: recovering with an action on repair succeeds.
+    const recoveredNet = network(
+      called("plan_update", { op: "note", facts: ["d"], why: "note" }),
+      called("click_element", { element: 1, why: "act instead" }),
     );
+    const recovered = await turned(recoveredNet.request).next(
+      turn(tired.view()),
+    );
+    expect(recovered).toEqual({
+      action: { kind: "click_element", element: 1 },
+      why: "act instead",
+    });
+
+    // No plan: calling plan_update is also rejected with the same repair note.
+    const noPlanNet = network(
+      called("plan_update", { op: "note", facts: ["d"], why: "note" }),
+      called("wait", { ms: 100, why: "wait instead" }),
+    );
+    const afterNoPlan = await turned(noPlanNet.request).next(turn());
+    expect(afterNoPlan).toEqual({
+      action: { kind: "wait", ms: 100 },
+      why: "wait instead",
+    });
+    expect(noPlanNet.sent[1]!.messages.at(-1)!.content).toContain(
+      "No plan_update is allowed on this turn. Choose one action tool instead.",
+    );
+  });
+
+  it("ignores a disallowed plan_update when paired with a valid action so no repair turn is wasted", async () => {
+    const tired = planOf(3);
+    for (const fact of ["a", "b", "c"])
+      tired.apply({ op: "note", facts: [fact] });
+    expect(tired.view().updatesLeft).toBe(0);
+
+    const paired = {
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "plan_update",
+                  arguments: JSON.stringify({
+                    op: "done",
+                    evidence: "Seen",
+                    why: "Mark done",
+                  }),
+                },
+              },
+              {
+                id: "call_2",
+                type: "function",
+                function: {
+                  name: "click_element",
+                  arguments: JSON.stringify({
+                    element: 1,
+                    why: "Click button",
+                  }),
+                },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    };
+
+    // Exhausted plan (updatesLeft === 0): takes the action cleanly without repair.
+    const exhaustedNet = network(paired);
+    const exhaustedChoice = await turned(exhaustedNet.request).next(
+      turn(tired.view()),
+    );
+    expect(exhaustedChoice).toEqual({
+      action: { kind: "click_element", element: 1 },
+      why: "Click button",
+    });
+    expect("update" in exhaustedChoice).toBe(false);
+    expect(exhaustedNet.sent).toHaveLength(1);
+
+    // No plan at all: takes the action cleanly without repair.
+    const noPlanNet = network(paired);
+    const noPlanChoice = await turned(noPlanNet.request).next(turn());
+    expect(noPlanChoice).toEqual({
+      action: { kind: "click_element", element: 1 },
+      why: "Click button",
+    });
+    expect("update" in noPlanChoice).toBe(false);
+    expect(noPlanNet.sent).toHaveLength(1);
   });
 
   it("repairs a plan_update that does not fit, and drops arguments that the model wrote as null", async () => {

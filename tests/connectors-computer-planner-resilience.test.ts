@@ -450,7 +450,7 @@ describe("the repair of an answer that cannot be used", () => {
     );
     expect(second.tools).toEqual(first.tools);
     expect(second.tool_choice).toBe("required");
-    expect(second.parallel_tool_calls).toBe(false);
+    expect(second.parallel_tool_calls).toBe(true);
     expect(added(net)).toEqual([
       { role: "assistant", content: "I will click Pay." },
       {

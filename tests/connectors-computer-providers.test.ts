@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { browserMethodNames } from "../connectors/computer/guards.js";
 import {
   ModelPlanner,
   OpenAIPlanner,
   PlannerError,
   plannerFromEnvironment,
+  toolsFor,
   type PlannerOptions,
 } from "../connectors/computer/planner.js";
 import {
@@ -488,9 +490,9 @@ describe("the chat completions providers", () => {
         url: "data:image/jpeg;base64,aW1hZ2U=",
         ...(openai ? { detail: "high" } : {}),
       });
-      // Only OpenAI gets a forced single call: the others get the repair.
+      // Only OpenAI gets a forced call; parallel_tool_calls stays true for static prefix caching.
       expect(only.body.tool_choice).toBe(openai ? "required" : undefined);
-      expect(only.body.parallel_tool_calls).toBe(openai ? false : undefined);
+      expect(only.body.parallel_tool_calls).toBe(openai ? true : undefined);
       expect(only.body.reasoning_effort).toBeUndefined();
     },
   );
@@ -698,7 +700,7 @@ describe("the Anthropic provider", () => {
     expect(body.output_config).toEqual({ effort: "low" });
     expect(body.tool_choice).toEqual({
       type: "auto",
-      disable_parallel_tool_use: true,
+      disable_parallel_tool_use: false,
     });
     // No sampling setting and no thinking setting.
     for (const field of ["temperature", "top_p", "top_k", "thinking", "speed"])
@@ -1101,6 +1103,51 @@ describe("the strict tools of Anthropic", () => {
     expect(messagesTools(many, false).some((tool) => tool.strict)).toBe(false);
   });
 
+  it("marks every offered planner tool strict when browser and all browser methods are enabled", () => {
+    const offered = toolsFor(true, browserMethodNames);
+    const out = messagesTools(offered, true);
+    expect(out.length).toBeLessThanOrEqual(strictLimits.tools);
+    expect(out.length).toBe(20);
+    expect(out.every((tool) => tool.strict === true)).toBe(true);
+
+    // Count optional properties and unions across all strict tool schemas.
+    let optional = 0;
+    let unions = 0;
+    const walk = (node: unknown) => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (!node || typeof node !== "object") return;
+      const { properties, required } = node as {
+        properties?: Record<string, unknown>;
+        required?: unknown;
+      };
+      if (properties && typeof properties === "object") {
+        const needed = new Set(Array.isArray(required) ? required : []);
+        for (const [key, inner] of Object.entries(properties)) {
+          if (!needed.has(key)) optional++;
+          if (
+            inner &&
+            typeof inner === "object" &&
+            ((inner as { anyOf?: unknown }).anyOf !== undefined ||
+              Array.isArray((inner as { type?: unknown }).type))
+          )
+            unions++;
+        }
+      }
+      for (const [key, value] of Object.entries(node))
+        if (key !== "properties") walk(value);
+      if (properties) Object.values(properties).forEach(walk);
+    };
+    for (const tool of out) walk(tool.input_schema);
+
+    expect(optional).toBeLessThanOrEqual(strictLimits.optional);
+    expect(optional).toBe(22);
+    expect(unions).toBeLessThanOrEqual(strictLimits.unions);
+    expect(unions).toBe(2);
+
+    // Memoized toolsFor reference hits the WeakMap conversion cache on every turn.
+    expect(messagesTools(toolsFor(true, browserMethodNames), true)).toBe(out);
+  });
+
   it("names no provider that is not in the registry", () => {
     expect(providerById("anthropic")?.wire).toBe("messages");
     expect(providerById("nowhere")).toBeUndefined();
@@ -1164,6 +1211,7 @@ describe("the merged planner features through every provider", () => {
       JSON.stringify([b!.tools, b!.messages[0]]),
     );
     const messages = service(
+      json(message([toolUse("wait", { ms: 1, why: "w" })])),
       json(
         message([
           toolUse("plan_update", {
@@ -1173,17 +1221,28 @@ describe("the merged planner features through every provider", () => {
           }),
         ]),
       ),
+      json(message([toolUse("wait", { ms: 1, why: "w" })])),
     );
-    const anthropic = planner(messages.request, { provider: "anthropic" });
+    const anthropic = planner(messages.request, {
+      provider: "anthropic",
+      browser: true,
+      browserMethods: browserMethodNames,
+    });
+    const exhausted = { ...plan, updatesLeft: 0 };
+    await anthropic.next(input("Shopping"));
     const chosen = await anthropic.next({ ...input("Shopping"), plan });
     expect(chosen).toMatchObject({ update: { op: "done" } });
-    await anthropic.next({ ...input("Groceries"), plan });
-    const [c, d] = messages.sent.map((item) => item.body);
-    expect((c!.tools as { name: string }[]).map((tool) => tool.name)).toContain(
-      "plan_update",
+    await anthropic.next({ ...input("Groceries"), plan: exhausted });
+    const [c, d, e] = messages.sent.map((item) => item.body);
+    const anthropicTools = c!.tools as { name: string; strict?: boolean }[];
+    expect(anthropicTools).toHaveLength(20);
+    expect(anthropicTools.every((tool) => tool.strict === true)).toBe(true);
+    expect(anthropicTools.map((tool) => tool.name)).toContain("plan_update");
+    expect(JSON.stringify([c!.tools, c!.system, c!.tool_choice])).toBe(
+      JSON.stringify([d!.tools, d!.system, d!.tool_choice]),
     );
-    expect(JSON.stringify([c!.tools, c!.system])).toBe(
-      JSON.stringify([d!.tools, d!.system]),
+    expect(JSON.stringify([c!.tools, c!.system, c!.tool_choice])).toBe(
+      JSON.stringify([e!.tools, e!.system, e!.tool_choice]),
     );
   });
 
@@ -1330,7 +1389,7 @@ describe("the Responses route of OpenAI", () => {
       },
     ]);
     expect(body.tool_choice).toBe("required");
-    expect(body.parallel_tool_calls).toBe(false);
+    expect(body.parallel_tool_calls).toBe(true);
     expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.include).toEqual(["reasoning.encrypted_content"]);
     expect(body.store).toBe(false);

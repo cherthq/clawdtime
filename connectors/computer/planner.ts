@@ -98,30 +98,32 @@ export {
 const laterRules = (browser: boolean, methods: readonly BrowserMethod[]) => {
   const offered = (name: string) => browser && browserCan(name, methods);
   return [
-    `To open a menu or a tooltip that shows on hover, call ${offered("browser_hover") ? "hover (on a web page, browser_hover)" : "hover"} first, then click what it shows.`,
+    `To open a menu or a tooltip that shows on hover, call ${offered("browser_hover") ? "hover (on a web page, browser_click with hover true)" : "hover"} first, then click what it shows.`,
     "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
     ...(offered("browser_select")
       ? [
-          "For a dropdown of a web page, prefer browser_select with the text of its option.",
+          "For a dropdown of a web page, prefer browser_page with op select, index, and value set to the text of its option.",
         ]
       : []),
     ...(offered("browser_key")
       ? [
-          "To submit a search on a web page, call browser_key with Enter once the words are in the field.",
+          "To submit a search on a web page, call browser_page with op key and value Enter once the words are in the field.",
         ]
       : []),
     ...(offered("browser_wait")
-      ? ["While a web page is still loading, call browser_wait."]
+      ? ["While a web page is still loading, call browser_page with op wait."]
       : []),
     ...(offered("browser_tabs")
       ? [
-          `When the web page in front is not the one the goal is about, call browser_tabs${offered("browser_switch_tab") ? ", then browser_switch_tab" : ""}.`,
+          `When the web page in front is not the one the goal is about, call browser_page with op tabs${offered("browser_switch_tab") ? ", then op switch_tab" : ""}.`,
         ]
       : []),
     "Do the goal without asking first: open the apps and sites that it needs, read, scroll, search, fill in forms, add to a cart and close what is in the way. Never call ask only to get a yes: the program asks the person itself before a payment, a loss that cannot be undone, a send that the goal did not ask for, and a change of security or privacy.",
     "On a cookie banner, choose the option that shares the least, such as Reject all or Only necessary.",
     "When an address does not load, the owner's words may have been misheard: search the web for the name and open the site that fits, then check it loaded.",
     "When the goal asks you to tell something, read it and finish with done: its summary is the answer. Use ask only for what you need from the person.",
+    "Elements with role OCRText come from on-screen text recognition when the accessibility tree is sparse; use click_element on them as usual.",
+    ...planRules,
   ];
 };
 
@@ -132,7 +134,7 @@ const rules = (browser: boolean, methods: readonly BrowserMethod[] = []) =>
     "Prefer an element by its number (click_element, or type with an element) over a point. Use click_at only when no element fits.",
     ...(browser
       ? [
-          "When a web page is in front, prefer the browser tools over pixels: call browser_read first, then browser_click and browser_type with the numbers of that reading.",
+          "When a web page is in front, prefer the browser tools over pixels: call browser_page with op read first, then browser_click and browser_type with the numbers of that reading.",
         ]
       : []),
     "A number names an element for this turn only. Never use a number from an earlier turn.",
@@ -344,129 +346,259 @@ const pageNumber = {
   type: "integer",
   description: "The number of an element in the last reading of the page.",
 };
-const browserTools = [
-  tool(
-    "browser_read",
-    "Read the web page in front: its text and its elements.",
-    {},
-    [],
-  ),
-  tool(
-    "browser_open",
-    "Open an http or https link in the browser and read the page.",
-    { url: { type: "string" } },
-    ["url"],
-  ),
-  tool(
-    "browser_click",
-    "Click one element of the page by its number.",
-    { index: pageNumber },
-    ["index"],
-  ),
-  tool(
-    "browser_type",
-    "Fill one field of the page. Never a password.",
-    {
-      index: pageNumber,
-      text: { type: "string" },
-      submit: { type: "boolean", description: "Submit the form after it." },
+/**
+ * Legacy individual browser tool names still accepted in actionFromCall and
+ * readCall when the browser supports them.
+ */
+const legacyBrowserToolNames = [
+  "browser_read",
+  "browser_scroll",
+  "browser_back",
+  "browser_hover",
+  "browser_select",
+  "browser_key",
+  "browser_wait",
+  "browser_tabs",
+  "browser_switch_tab",
+] as const;
+
+/**
+ * Consolidated browser tools (4 tools total) so screen tools, browser tools,
+ * and plan_update stay within strict schema limits on every provider.
+ */
+function browserToolsFor(methods: readonly BrowserMethod[]): FunctionTool[] {
+  const canHover = browserCan("browser_hover", methods);
+  const canTabs = browserCan("browser_tabs", methods);
+  const canSwitchTab = browserCan("browser_switch_tab", methods);
+  const canSelect = browserCan("browser_select", methods);
+  const canKey = browserCan("browser_key", methods);
+  const canWait = browserCan("browser_wait", methods);
+
+  const pageOps: string[] = [
+    "read",
+    "back",
+    "scroll_up",
+    "scroll_down",
+    ...(canTabs ? ["tabs"] : []),
+    ...(canSwitchTab ? ["switch_tab"] : []),
+    ...(canSelect ? ["select"] : []),
+    ...(canKey ? ["key"] : []),
+    ...(canWait ? ["wait"] : []),
+  ];
+  const opNotes: string[] = [
+    "read: read the web page text and elements",
+    "back: go back one page",
+    "scroll_up: scroll the page up",
+    "scroll_down: scroll the page down",
+    ...(canTabs
+      ? ["tabs: list the tabs of the front browser window with their numbers"]
+      : []),
+    ...(canSwitchTab
+      ? [
+          "switch_tab: bring one tab to the front with value set to its tab number",
+        ]
+      : []),
+    ...(canSelect
+      ? [
+          "select: choose one option of a dropdown (requires both index and value)",
+        ]
+      : []),
+    ...(canKey
+      ? [
+          `key: press one key in the page with value set to one of ${pageKeys.join(", ")}`,
+        ]
+      : []),
+    ...(canWait
+      ? [
+          "wait: wait up to ms milliseconds for value text to show, or for the page to load when value is omitted",
+        ]
+      : []),
+  ];
+  const pageProperties: Properties = {
+    op: {
+      type: "string",
+      enum: pageOps,
+      description: `${opNotes.join(". ")}.`,
     },
-    ["index", "text"],
-  ),
-  tool("browser_scroll", "Scroll the page.", { direction: directionProperty }, [
-    "direction",
-  ]),
-  tool("browser_back", "Go back one page.", {}, []),
-];
-/** Browser functions that a driver may lack. Each is offered only when the driver has its methods. */
-const laterBrowserTools = [
-  tool(
-    "browser_hover",
-    "Move the pointer over one element of the page by its number, with no click: a menu or a tooltip that shows on hover opens.",
-    { index: pageNumber },
-    ["index"],
-  ),
-  tool(
-    "browser_select",
-    "Choose one option of a dropdown or a list of the page, by the text that the option shows.",
-    {
-      index: pageNumber,
-      option: {
-        type: "string",
-        description: "The text of the option, as the page shows it.",
+  };
+  if (canSelect)
+    pageProperties.index = {
+      type: "integer",
+      description:
+        "For select: the number of the dropdown element in the last reading of the page.",
+    };
+  const valueNotes: string[] = [
+    ...(canSelect
+      ? ["For select: the text of the option as the page shows it."]
+      : []),
+    ...(canKey ? [`For key: one of ${pageKeys.join(", ")}.`] : []),
+    ...(canSwitchTab
+      ? ["For switch_tab: the number of a tab in the last list of tabs."]
+      : []),
+    ...(canWait
+      ? [
+          "For wait: words that the page shows once it is ready. Leave it out to wait for the page to load.",
+        ]
+      : []),
+  ];
+  if (valueNotes.length)
+    pageProperties.value = {
+      type: "string",
+      description: valueNotes.join(" "),
+    };
+  if (canWait)
+    pageProperties.ms = {
+      type: "integer",
+      minimum: 100,
+      maximum: 10000,
+      description:
+        "For wait: the longest wait, in milliseconds (defaults to 5000).",
+    };
+
+  return [
+    tool(
+      "browser_click",
+      canHover
+        ? "Click one element of the page by its number, or move the pointer over it with hover true to open a menu or a tooltip."
+        : "Click one element of the page by its number.",
+      {
+        index: pageNumber,
+        ...(canHover
+          ? {
+              hover: {
+                type: "boolean",
+                description:
+                  "Move the pointer over the element without clicking, to open a menu or a tooltip.",
+              },
+            }
+          : {}),
       },
-    },
-    ["index", "option"],
-  ),
-  tool(
-    "browser_key",
-    "Press one key in the page, where its focus is. Enter submits the field that has the focus. Escape closes a menu or a dialog of the page.",
-    { combo: { type: "string", enum: [...pageKeys] } },
-    ["combo"],
-  ),
-  tool(
-    "browser_wait",
-    "Wait until the page shows some words, or, with no words, until it has loaded. It changes nothing on the page.",
-    {
-      text: {
-        type: "string",
-        description:
-          "Words that the page shows once it is ready. Leave it out to wait for the page to load.",
+      ["index"],
+    ),
+    tool(
+      "browser_type",
+      "Fill one field of the page. Never a password.",
+      {
+        index: pageNumber,
+        text: { type: "string" },
+        submit: { type: "boolean", description: "Submit the form after it." },
       },
-      ms: {
-        type: "integer",
-        minimum: 100,
-        maximum: 10000,
-        description: "The longest wait, in milliseconds.",
-      },
-    },
-    ["ms"],
-  ),
-  tool(
-    "browser_tabs",
-    "List the tabs of the front browser window, with their numbers.",
-    {},
-    [],
-  ),
-  tool(
-    "browser_switch_tab",
-    "Bring one tab of the last list of tabs to the front, by its number.",
-    {
-      tab: {
-        type: "integer",
-        minimum: 1,
-        description: "The number of a tab in the last list of tabs.",
-      },
-    },
-    ["tab"],
-  ),
-];
-/** The functions of one turn: the browser ones only where the browser can be used, and only those that its driver can do. */
-const toolsFor = (browser: boolean, methods: readonly BrowserMethod[]) =>
-  browser
-    ? [
-        ...screenTools,
-        ...browserTools,
-        ...laterBrowserTools.filter((item) =>
-          browserCan(item.function.name, methods),
-        ),
-      ]
-    : screenTools;
-const toolNames = new Set(
-  [...screenTools, ...browserTools, ...laterBrowserTools].map(
-    (item) => item.function.name,
-  ),
-);
+      ["index", "text"],
+    ),
+    tool(
+      "browser_open",
+      "Open an http or https link in the browser and read the page.",
+      { url: { type: "string" } },
+      ["url"],
+    ),
+    tool(
+      "browser_page",
+      "Read, navigate, scroll, or inspect the web page in front.",
+      pageProperties,
+      ["op"],
+    ),
+  ];
+}
+
+const toolCache = new Map<string, readonly FunctionTool[]>();
+
+/**
+ * The functions of one turn, memoized by browser availability and driver
+ * methods so the exact same array reference is passed on every turn.
+ */
+export function toolsFor(
+  browser: boolean,
+  methods: readonly BrowserMethod[] = [],
+): readonly FunctionTool[] {
+  const key = `${browser}|${methods.join(",")}`;
+  const cached = toolCache.get(key);
+  if (cached) return cached;
+  const list: readonly FunctionTool[] = browser
+    ? [...screenTools, ...browserToolsFor(methods), planUpdateTool]
+    : [...screenTools, planUpdateTool];
+  toolCache.set(key, list);
+  return list;
+}
+
+const toolNames = new Set([
+  ...screenTools.map((item) => item.function.name),
+  "browser_click",
+  "browser_type",
+  "browser_open",
+  "browser_page",
+  ...legacyBrowserToolNames,
+]);
 /** An object whose arguments that are null are left out. */
 const withoutNulls = (value: Record<string, unknown>) =>
   Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null));
 
+const pageKeySet = new Set<string>(pageKeys);
+
+/** Translate a consolidated browser_page call into its underlying Action shape. */
+function pageActionFromCall(
+  given: Record<string, unknown>,
+): Record<string, unknown> {
+  const { op, index, value, ms, ...extra } = given;
+  switch (op) {
+    case "read":
+      return { ...extra, kind: "browser_read" };
+    case "back":
+      return { ...extra, kind: "browser_back" };
+    case "scroll_up":
+      return { ...extra, kind: "browser_scroll", direction: "up" };
+    case "scroll_down":
+      return { ...extra, kind: "browser_scroll", direction: "down" };
+    case "tabs":
+      return { ...extra, kind: "browser_tabs" };
+    case "switch_tab": {
+      if (value !== undefined && value !== "") {
+        const tab =
+          typeof value === "string" && /^\s*\d+\s*$/.test(value)
+            ? Number.parseInt(value.trim(), 10)
+            : value;
+        return { ...extra, kind: "browser_switch_tab", tab };
+      }
+      if (index !== undefined) {
+        return { ...extra, kind: "browser_switch_tab", tab: index };
+      }
+      return { ...extra, kind: "browser_switch_tab" };
+    }
+    case "select":
+      return {
+        ...extra,
+        kind: "browser_select",
+        ...(index !== undefined ? { index } : {}),
+        ...(value !== undefined ? { option: value } : {}),
+      };
+    case "key":
+      if (typeof value !== "string" || !pageKeySet.has(value)) {
+        return { ...given, kind: "browser_page" };
+      }
+      return {
+        ...extra,
+        kind: "browser_key",
+        combo: value,
+      };
+    case "wait":
+      return {
+        ...extra,
+        kind: "browser_wait",
+        ms: ms === undefined ? 5000 : ms,
+        ...(value !== undefined && value !== "" ? { text: value } : {}),
+      };
+    default:
+      return { ...given, kind: "browser_page" };
+  }
+}
+
 /**
  * One function call of the model as the shape of an action. A model writes
  * null for an argument that it leaves out, also inside an end of a drag: such
- * an argument is dropped. Nothing else is changed or filled in, so a call out
- * of shape stays out of shape for the checks to refuse. `problem` says so in
- * fixed words, with no word of the arguments: null when the shape is right.
+ * an argument is dropped. Consolidated browser calls are translated into their
+ * underlying Action shape while legacy individual browser names remain
+ * accepted. Nothing else is changed or filled in, so a call out of shape stays
+ * out of shape for the checks to refuse. `problem` says so in fixed words,
+ * with no word of the arguments: null when the shape is right.
  */
 export function actionFromCall(
   name: string,
@@ -479,7 +611,16 @@ export function actionFromCall(
       if (end !== null && typeof end === "object" && !Array.isArray(end))
         given[side] = withoutNulls(end as Record<string, unknown>);
     }
-  const action = { ...given, kind: name } as unknown as Action;
+  let rawAction: Record<string, unknown>;
+  if (name === "browser_click" && typeof given.hover === "boolean") {
+    const { hover, ...rest } = given;
+    rawAction = { ...rest, kind: hover ? "browser_hover" : "browser_click" };
+  } else if (name === "browser_page") {
+    rawAction = pageActionFromCall(given);
+  } else {
+    rawAction = { ...given, kind: name };
+  }
+  const action = rawAction as unknown as Action;
   return {
     action,
     problem: actionSchema.safeParse(action).success
@@ -772,7 +913,7 @@ export function brief(
     if (input.page) parts.push(...pageLines(input.page));
     else
       parts.push(
-        "No reading of a web page. When a web page is in front, call browser_read first.",
+        "No reading of a web page. When a web page is in front, call browser_page with op read first.",
       );
   }
   return parts.join("\n");
@@ -835,6 +976,8 @@ function readAnswer(
   offered: ReadonlySet<string>,
   /** The closer picture of this turn: a click in it becomes a click in the first picture. */
   closer?: Closer,
+  allowPlanUpdate = true,
+  browserMethods?: readonly BrowserMethod[],
 ): Reading {
   if (answer.refused) return { kind: "refused" };
   const { calls } = answer;
@@ -859,9 +1002,32 @@ function readAnswer(
     updates.length === 1 &&
     offered.has(planUpdateName)
   ) {
-    const update = readCall(updates[0]!, offered, malformed, closer);
     const other = calls.find((call) => call.name !== planUpdateName)!;
-    const acted = readCall(other, offered, malformed, closer);
+    const acted = readCall(
+      other,
+      offered,
+      malformed,
+      closer,
+      allowPlanUpdate,
+      browserMethods,
+    );
+    if (!allowPlanUpdate) {
+      if (acted.kind === "malformed") return acted;
+      if (acted.kind !== "action")
+        return malformed(
+          "several_tool_calls",
+          "It had two tool calls that are not one plan_update and one action, so none of them ran.",
+        );
+      return acted;
+    }
+    const update = readCall(
+      updates[0]!,
+      offered,
+      malformed,
+      closer,
+      allowPlanUpdate,
+      browserMethods,
+    );
     if (update.kind === "malformed") return update;
     if (acted.kind === "malformed") return acted;
     if (update.kind !== "plan" || acted.kind !== "action")
@@ -876,7 +1042,14 @@ function readAnswer(
       "several_tool_calls",
       `It had ${calls.length} tool calls, and only one is taken, so none of them ran. Only plan_update may come with one action.`,
     );
-  return readCall(calls[0]!, offered, malformed, closer);
+  return readCall(
+    calls[0]!,
+    offered,
+    malformed,
+    closer,
+    allowPlanUpdate,
+    browserMethods,
+  );
 }
 
 /** One function call of an answer, read as an action or as a change of the plan. */
@@ -885,6 +1058,8 @@ function readCall(
   offered: ReadonlySet<string>,
   malformed: (code: string, problem: string) => Reading,
   closer?: Closer,
+  allowPlanUpdate = true,
+  browserMethods?: readonly BrowserMethod[],
 ): Reading {
   const name = call.name ?? "";
   if (!name)
@@ -893,6 +1068,11 @@ function readCall(
     return malformed(
       "unknown_function",
       `"${quoted(name, 64)}" is not one of the offered functions.`,
+    );
+  if (name === planUpdateName && !allowPlanUpdate)
+    return malformed(
+      "plan_update_not_allowed",
+      "No plan_update is allowed on this turn. Choose one action tool instead.",
     );
   const args = call.arguments;
   let parsed: unknown;
@@ -933,6 +1113,15 @@ function readCall(
       `The arguments of ${name} do not fit its parameters: ${issues}.`,
     );
   }
+  if (
+    planned.action.kind.startsWith("browser_") &&
+    browserMethods !== undefined &&
+    !browserCan(planned.action.kind, browserMethods)
+  )
+    return malformed(
+      "invalid_arguments",
+      `The arguments of ${name} do not fit its parameters: that browser operation is not available.`,
+    );
   return { kind: "action", ...planned };
 }
 
@@ -1143,16 +1332,11 @@ export class ModelPlanner implements Planner {
     const closer = image ? input.closer : undefined;
     const chosen = await this.decide(
       {
-        // The rules and the functions first: the same bytes in each step
-        // while the plan does not change, so that the service can read them
-        // from its cache. The turn comes after.
-        system: rules(browser, this.browserMethods) + planSystem(input.plan),
-        tools: [
-          ...toolsFor(browser, this.browserMethods),
-          ...planTools(input.plan),
-        ],
-        // plan_update may come with one action in the same answer.
-        ...(planTools(input.plan).length ? { pair: true } : {}),
+        // Keep system, tools, and tool_choice byte-identical from turn 1 to
+        // turn N so prompt caching hits on every turn of a run.
+        system: rules(browser, this.browserMethods),
+        tools: toolsFor(browser, this.browserMethods),
+        pair: true,
         user: {
           text: brief(input, browser),
           images: [
@@ -1163,6 +1347,10 @@ export class ModelPlanner implements Planner {
       },
       input.signal,
       closer,
+      {
+        allowPlanUpdate: Boolean(input.plan && input.plan.updatesLeft > 0),
+        browser,
+      },
     );
     // The outline is offered only in its own call.
     if ("outline" in chosen) throw unreadable("unknown_function");
@@ -1211,13 +1399,23 @@ export class ModelPlanner implements Planner {
     signal: AbortSignal | undefined,
     /** The closer picture of this turn, when there is one. */
     closer?: Closer,
+    context: { allowPlanUpdate?: boolean; browser?: boolean } = {},
   ): Promise<Chosen | PlanReading["chosen"]> {
     const deadline = this.clock.now() + this.policy.budgetMs;
     const offered = new Set(request.tools.map((tool) => tool.function.name));
+    if (context.browser) {
+      for (const legacy of legacyBrowserToolNames) {
+        if (browserCan(legacy, this.browserMethods)) offered.add(legacy);
+      }
+    }
+    const allowPlanUpdate = context.allowPlanUpdate ?? false;
+    const browserMethods = context.browser ? this.browserMethods : undefined;
     const first = readAnswer(
       await this.call(request, signal, deadline),
       offered,
       closer,
+      allowPlanUpdate,
+      browserMethods,
     );
     if (first.kind === "action")
       return {
@@ -1241,6 +1439,8 @@ export class ModelPlanner implements Planner {
       ),
       offered,
       closer,
+      allowPlanUpdate,
+      browserMethods,
     );
     if (second.kind === "action")
       return {
@@ -1424,14 +1624,14 @@ const outlineRules = [
   ...proactiveRules,
 ].join("\n");
 
-/** Lines for the system message of a turn with a plan. */
-const planRules = [
-  "You made a plan for this goal before the first action. It is below the goal: each subgoal, its check, and the one to work on now. Keep the whole task in mind, and work on the subgoal marked now.",
+/** Planning rules included statically in every turn's system prompt. */
+const planRules: readonly string[] = [
+  "When a plan appears below the goal, work on the subgoal marked now. Only call plan_update when a plan is shown and plan_update calls are left.",
   "plan_update changes only the plan and sends nothing to the Mac. Call it in place of an action: op done when the screen shows the check of the current subgoal, with what on the screen shows it; op skip when it is not needed, with why; op revise, with the new rest of the plan, when the screen shows that the plan was wrong.",
   "Call plan_update together with the next action in the same answer: mark the subgoal done and take the first step of the next one at once. Never two actions in one answer.",
   "When the screen shows something that the person will want (an order number, a name, a link), keep it in facts of plan_update. Never a password, a code or another secret.",
   ...proactiveRules,
-].join("\n");
+];
 
 const subgoalItems = {
   type: "object",
@@ -1504,13 +1704,7 @@ const planUpdateTool = tool(
 function planBrief(plan: PlanView | undefined): string[] {
   return plan ? [...planLines(plan), ""] : [];
 }
-/** The lines that a turn with a plan adds to the system message. */
-const planSystem = (plan: PlanView | undefined) =>
-  plan ? `\n${planRules}` : "";
 const planUpdateName = "plan_update";
-/** plan_update is offered only with a plan, and only while an update may come. */
-const planTools = (plan: PlanView | undefined) =>
-  plan && plan.updatesLeft > 0 ? [planUpdateTool] : [];
 
 /**
  * A call of outline or of plan_update, read with the plan's own schemas.
