@@ -49,9 +49,31 @@ const aboutErrors =
 const wordsIn = (text: string) =>
   errorWords.find((row) => row.words.test(text))?.label ?? null;
 
+/** Maps a Chromium Network.loadingFailed errorText to a fixed label with sanitized code. */
+export function navErrorLabel(errorText: string): string {
+  const raw = String(errorText ?? "").trim();
+  const code = /\b(ERR_[A-Z0-9_]{3,60})\b/.exec(raw)?.[1] ?? null;
+  if (!code) return "a network error";
+  if (code === "ERR_NAME_NOT_RESOLVED" || code.startsWith("ERR_DNS_"))
+    return `the server was not found (${code})`;
+  if (code === "ERR_CONNECTION_REFUSED")
+    return `the site refused the connection (${code})`;
+  if (code === "ERR_CONNECTION_TIMED_OUT" || code === "ERR_TIMED_OUT")
+    return `the connection timed out (${code})`;
+  if (code === "ERR_INTERNET_DISCONNECTED")
+    return `the network is disconnected (${code})`;
+  if (code.startsWith("ERR_CERT_")) return `a certificate error (${code})`;
+  if (code.startsWith("ERR_SSL_")) return `a secure connection error (${code})`;
+  if (code === "ERR_TOO_MANY_REDIRECTS") return `too many redirects (${code})`;
+  return `a network error (${code})`;
+}
+
 /** What a reading of the page shows when it is an error page, as a fixed label, or null. */
 export function pageError(page: BrowserPage | null): string | null {
   if (!page) return null;
+  const navError = (page as BrowserPage & { navError?: unknown }).navError;
+  if (typeof navError === "string" && navError.trim())
+    return navErrorLabel(navError);
   const url = page.url.trim();
   // The address of Chrome's own error page, and Safari's title for one.
   if (/^chrome-error:/i.test(url)) return "an error page of the browser";

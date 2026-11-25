@@ -921,6 +921,35 @@ describe("the browser driver: its switch", () => {
     );
     expect(made).toBe(1);
   });
+
+  it("supports CLAWDTIME_COMPUTER_BROWSER=auto using makeOwn only when Chromium is available", () => {
+    let madeApple = 0;
+    let madeOwn = 0;
+    const apple = {} as BrowserPort;
+    const own = {} as BrowserPort;
+    const make = () => ((madeApple += 1), apple);
+    const makeOwn = () => ((madeOwn += 1), own);
+    expect(
+      browserFromEnvironment(
+        { [browserSwitch]: "auto" },
+        make,
+        makeOwn,
+        () => false,
+      ),
+    ).toBeUndefined();
+    expect(madeApple).toBe(0);
+    expect(madeOwn).toBe(0);
+    expect(
+      browserFromEnvironment(
+        { [browserSwitch]: "auto" },
+        make,
+        makeOwn,
+        () => true,
+      ),
+    ).toBe(own);
+    expect(madeApple).toBe(0);
+    expect(madeOwn).toBe(1);
+  });
 });
 
 describe("the browser driver: the command runner of the program", () => {
