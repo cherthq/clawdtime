@@ -704,6 +704,7 @@ describe("a direct request for a web address in the worker", () => {
         action: opened,
         why: "The person asked to open this address.",
         outcome: "ok",
+        target: "app.example.com",
       },
     ]);
     expect(f.planner.inputs[0]!.observation?.app.window).toBe("Example Domain");
@@ -841,6 +842,7 @@ describe("a direct request for a web address in the worker", () => {
         outcome: expect.stringMatching(
           /^refused: No app with that name opens web addresses on this Mac\. Nothing was opened\./,
         ),
+        target: "app.example.com",
       },
     ]);
     expect(f.worker.status()).toMatchObject({

@@ -329,6 +329,7 @@ describe("explicit directional navigation", () => {
         outcome: expect.stringMatching(
           /^refused: No app with that name was found on this Mac\. Nothing was opened\./,
         ),
+        target: "Chrome",
       },
     ]);
     expect(worker.status()).toMatchObject({

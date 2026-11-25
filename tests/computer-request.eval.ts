@@ -1239,6 +1239,7 @@ async function one(
     const timed: StepTiming[] = [];
     const worker = new ComputerWorker({
       unchangedDone: true,
+      failedWays: true,
       hands,
       planner,
       journal,

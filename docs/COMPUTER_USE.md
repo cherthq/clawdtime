@@ -115,6 +115,12 @@ computer.
 6. The action goes to the hands or to the browser. Then the worker looks again
    and the planner picks the next action.
 
+Each step that the planner reads names the element that it was on, by its role
+and its name, as in `click_element on AXButton "Export": ok`. A click at a
+point also says the point. The name is the one that the journal keeps, cut to
+60 characters, and it is left out when it looks like a secret. The line never
+gives an element number: that number is from an old look.
+
 A look takes the picture and walks the Accessibility tree at the same time,
 so the slower of the two sets its time. The picture is 1280 pixels on its
 longer side, a JPEG of quality 0.5, written off the main thread. The walk
@@ -437,6 +443,18 @@ through all the checks.
   Mac is the "Color" that you said. Only the app in front is seen; a second
   done is taken. The same option as the check of a done after an input that
   changed nothing turns it on (`quit-done.ts`).
+- **A way that did not work, long ago.** The planner reads only the last 12
+  steps, and a request may take 80 actions. So the worker keeps a list of the
+  ways that did not work in the request (`failed-ways.ts`): the kind of
+  action, the role and the name of its element, a few fixed words for why
+  (refused, held back, the screen did not change, the page did not load) and
+  how often. One way is one row, and the newest 12 stay. With every turn
+  the planner reads the ways that are older than the steps that it sees, as
+  data: try one again only when the screen shows that it can work now. A
+  request of 12 steps or fewer reads the same words as before. A way never
+  holds typed text or a name that looks like a secret, and a step held back
+  for you is no failed way. Your new words start the list again. Nothing of it
+  is written to disk.
 - **A give_up.** The first give_up of a request goes back to the planner
   with the ways that it did not try, and the planner chooses again. A
   give_up about you, an account, a permission, a password, a secret, money
@@ -1877,7 +1895,7 @@ characters. It can repeat words from the screen.
 The language model of the provider that you chose receives, for each action,
 and no other service does: your request, what you said for it while it ran,
 the notes from memory while memory is on, the plan with the facts that it kept,
-the last 12 steps with the text that was typed, the names and values of up to
+the last 12 steps with the text that was typed, the ways that did not work, the names and values of up to
 150 elements, the image of the screen, and the text of the page when the
 browser read it. The value of a secure field is never sent. Nothing of this is written to disk by
 ClawdTime. Close what you do not want in the picture before you start a task.
