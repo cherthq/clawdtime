@@ -270,14 +270,14 @@ try {
   await step(
     "typed text replaces the old text of a field that a framework controls, and stays",
     async () => {
-      await driver.type(number(seen, "Your name"), "Ada Lovelace", false);
+      await driver.type(number(seen, "Your name"), "Ada Brook", false);
       await new Promise((resolve) => setTimeout(resolve, 150));
       const after = await driver.read();
       assert.equal(
         after.elements.find((item) => item.label === "Your name")!.value,
-        "Ada Lovelace",
+        "Ada Brook",
       );
-      assert.match(after.text, /\nAda Lovelace\n/);
+      assert.match(after.text, /\nAda Brook\n/);
     },
   );
   await step("no text goes into a password field", async () => {

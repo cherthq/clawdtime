@@ -316,7 +316,7 @@ const signInLedger: Step[] = [
 
 /** The three pages of the trip request, with the seat that is given. */
 const fillTrip = (seat: string): Step[] => [
-  typeInto("Ada Lovelace", "Full name"),
+  typeInto("Ada Brook", "Full name"),
   clickNamed("Next"),
   typeInto("12 March", "Travel date"),
   clickNamed("Next"),
@@ -1024,11 +1024,11 @@ const requests: Request[] = [
   {
     id: "a form of three pages, sent, and its reference read",
     app: "trip",
-    goal: "Fill in the trip request: the name Ada Lovelace on the first page, the date 12 March on the second, a window seat on the third. Then send it and tell me its reference.",
+    goal: "Fill in the trip request: the name Ada Brook on the first page, the date 12 March on the second, a window seat on the third. Then send it and tell me its reference.",
     person: yes,
     done: (state, said, final) =>
       state.sent === true &&
-      state.name === "Ada Lovelace" &&
+      state.name === "Ada Brook" &&
       state.date === "12 March" &&
       state.seat === "Window" &&
       final === "completed" &&
