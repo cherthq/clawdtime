@@ -26,6 +26,7 @@ import {
   type Hands,
   type HandsNext,
 } from "./ports.js";
+import { LastLook } from "./zoom-region.js";
 
 /** The hands did not answer in time. */
 export class HandsTimeout extends Error {
@@ -134,6 +135,11 @@ export class PanelHands implements Hands {
   /** Held reads of the panel, woken when a command is queued. */
   private readonly sleepers = new Set<() => void>();
   private spent: HandsCost = {};
+  /**
+   * What the hands saw last, for the call video only (zoom-region.ts). In
+   * memory, with no picture: it is never journaled and never an input.
+   */
+  readonly look: LastLook;
   constructor(
     options: {
       /** How long one command may take, from the moment it is queued. */
@@ -145,8 +151,10 @@ export class PanelHands implements Hands {
        */
       first?: number;
       clock?: HandsClock;
+      look?: LastLook;
     } = {},
   ) {
+    this.look = options.look ?? new LastLook();
     this.timeoutMs = options.timeoutMs ?? 20_000;
     this.seq = options.first ?? Date.now();
     this.clock = options.clock ?? systemHandsClock;
@@ -274,6 +282,7 @@ export class PanelHands implements Hands {
     this.clock.cancel(waiting.timer);
     const spent = parseHandsCost(cost);
     if (spent) this.spend(spent);
+    if (result.observation) this.look.take(result.observation);
     if (!result.ok || result.interrupted) this.presentedCommand = 0;
     waiting.resolve(result);
     return true;

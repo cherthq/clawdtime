@@ -19,6 +19,14 @@ import {
   presentationEventSchema,
   type PresentationEvent,
 } from "./presentation.js";
+import {
+  LastLook,
+  resolveRegion,
+  systemWindows,
+  type RegionAnswer,
+  type WindowList,
+} from "./zoom-region.js";
+import { realRunner } from "../agents/focus.js";
 import { browserMethods } from "./guards.js";
 import { plannerSetup } from "./keys.js";
 import { ModelPlanner, plannerOptions } from "./planner.js";
@@ -70,6 +78,11 @@ export interface ComputerPort {
   status(): ComputerStatus;
   present(raw: unknown): boolean;
   presentation(): { version: 1; event: PresentationEvent | null };
+  /**
+   * `POST /desktop/presentation/region`: where a named thing is, for the call
+   * video. Read only: no input, no picture, no command for the hands.
+   */
+  region(name: string): Promise<RegionAnswer>;
   /** Stop, for the existing stop route. Absent when no worker runs here. */
   stop?(): DesktopExecutionSnapshot;
 }
@@ -85,6 +98,7 @@ const nothingRuns: HandsNext["run"] = {
 export function computerPort(
   worker: ComputerWorker,
   hands: PanelHands,
+  options: { windows?: WindowList } = {},
 ): ComputerPort {
   const events = new PresentationEvents();
   const active = () => {
@@ -116,6 +130,11 @@ export function computerPort(
     status: () => computerStatusSchema.parse(worker.status()),
     present: (raw) => events.accept(raw, hands.presentationCommand(), active()),
     presentation: () => ({ version: 1, event: events.latest(active()) }),
+    region: (name) =>
+      resolveRegion(name, {
+        look: hands.look,
+        ...(options.windows ? { windows: options.windows } : {}),
+      }),
     stop: () => {
       events.clear();
       return worker.stop();
@@ -124,7 +143,12 @@ export function computerPort(
 }
 
 /** The routes where no worker runs: nothing to do, and the reason. */
-export function offComputerPort(message: string): ComputerPort {
+export function offComputerPort(
+  message: string,
+  options: { windows?: WindowList } = {},
+): ComputerPort {
+  // No hands run here, so there is no look: only the windows answer.
+  const look = new LastLook();
   return {
     next: () => ({ version: 1, command: null, run: nothingRuns }),
     result: (raw) => {
@@ -136,6 +160,11 @@ export function offComputerPort(message: string): ComputerPort {
       return false;
     },
     presentation: () => ({ version: 1, event: null }),
+    region: (name) =>
+      resolveRegion(name, {
+        look,
+        ...(options.windows ? { windows: options.windows } : {}),
+      }),
     status: () => ({
       version: 1,
       enabled: false,
@@ -198,9 +227,12 @@ export function buildComputer(options: ComputerOptions): {
   worker: ComputerWorker | null;
   port: ComputerPort;
 } {
+  // The windows on the screen, for zoom on the call video. A service of a
+  // test reads no window list of this Mac.
+  const windows = options.env.VITEST ? undefined : systemWindows(realRunner);
   const off = (message: string) => ({
     worker: null,
-    port: offComputerPort(message),
+    port: offComputerPort(message, windows ? { windows } : {}),
   });
   if (options.unavailable) return off(options.unavailable);
   // Before the switch is read: a service of a test does not look at it.
@@ -244,7 +276,10 @@ export function buildComputer(options: ComputerOptions): {
         }
       : {}),
   });
-  return { worker, port: computerPort(worker, hands) };
+  return {
+    worker,
+    port: computerPort(worker, hands, windows ? { windows } : {}),
+  };
 }
 
 /** The engines that can do computer work in one desktop service. */

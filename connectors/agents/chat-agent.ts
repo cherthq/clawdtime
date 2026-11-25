@@ -47,6 +47,7 @@ import {
   phoneIsLive,
   phoneTurn,
   presentationFact,
+  callerZoom,
 } from "./phone-turn.js";
 import { userMessageLimit, userMessageTooLong } from "./request-text.js";
 import { TaskGraph } from "./task-graph.js";
@@ -489,9 +490,11 @@ export class ChatAgent implements ChatBrain {
     const world = this.toolWorld();
     const memoryOn = this.memoryOn;
     const conversation = this.conversation(history, words);
-    const presentation = context?.phonePresentation?.applied
-      ? presentationFact(context.phonePresentation)
-      : null;
+    const presentation =
+      context?.phonePresentation?.applied ||
+      callerZoom(context?.phonePresentation)
+        ? presentationFact(context!.phonePresentation!)
+        : null;
     const contextText = () =>
       [
         `Now: ${new Date(this.options.world.now()).toString().slice(0, 21)}. The owner ${via === "call" ? "is on a phone call with you: keep it very short" : via === "voice" ? "speaks to you by voice: keep it short" : "writes in the chat"}.`,

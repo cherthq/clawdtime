@@ -10,6 +10,7 @@ import {
   phoneEnded,
   guardPhonePort,
   presentationFact,
+  callerZoom,
 } from "./phone-turn.js";
 import { randomBytes } from "node:crypto";
 import { userMessageLimit, userMessageTooLong } from "./request-text.js";
@@ -10900,7 +10901,7 @@ export class Supervisor {
       if (!phoneIsLive()) return { text: phoneEnded, choices: [] };
       try {
         const presentation = context?.phonePresentation;
-        if (presentation?.applied) {
+        if (presentation?.applied || callerZoom(presentation)) {
           const decision = await this.presentationIntent(
             spoken,
             presentationFact(presentation),

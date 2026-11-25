@@ -267,5 +267,7 @@ export function makeCamera({
       manual: manual !== null,
       reducedMotion: still,
     }),
+    /** The part of the screen that the camera goes to, or holds: a share of the display, for the caller's zoom. */
+    current: () => ({ ...to }),
   };
 }

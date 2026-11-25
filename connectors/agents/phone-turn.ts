@@ -41,9 +41,20 @@ export function guardPhonePort<T extends object>(
   });
 }
 
+/**
+ * The caller's own zoom is call video only, found or not: a zoom that found
+ * nothing is never work for the Mac.
+ */
+export const callerZoom = (
+  value: PhonePresentation | undefined,
+): value is PhonePresentation =>
+  value?.kind === "zoom" && value.action === "zoom";
+
 export function presentationFact(value: PhonePresentation): string {
   if (!value.applied)
-    return "The requested call presentation change was not applied.";
+    return callerZoom(value)
+      ? "The line handled the caller's call-video zoom. It did not find what the caller named, and the view did not change."
+      : "The requested call presentation change was not applied.";
   if (value.kind === "sharing")
     return value.action === "show"
       ? "Screen sharing is on."
@@ -57,5 +68,6 @@ export function presentationFact(value: PhonePresentation): string {
     enable: "Call auto-zoom is on.",
     disable: "Call auto-zoom is off.",
     resume: "Call auto-zoom has resumed.",
+    zoom: "The call video shows the part of the screen that the caller asked for.",
   }[value.action];
 }

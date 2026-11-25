@@ -1,5 +1,9 @@
 import { makeCamera } from "./camera.mjs";
-import { startContinuousScreen, videoFPS } from "./continuous-screen.mjs";
+import {
+  mainScreenDevice,
+  startContinuousScreen,
+  videoFPS,
+} from "./continuous-screen.mjs";
 import { makeVideoRenderer } from "./video-transform.mjs";
 import { startPresentation } from "./presentation-source.mjs";
 
@@ -27,7 +31,9 @@ export function makeCallVideo({
     closed = false,
     generation = 0,
     display = null,
-    hadFrame = false;
+    hadFrame = false,
+    // The screen's width by its height, from the last frame of this call. It stays through a hide.
+    aspect = null;
   let settings = { enabled, overview, revision };
   const hide = () => {
     generation++;
@@ -127,8 +133,20 @@ export function makeCallVideo({
         return null;
       }
       hadFrame = true;
+      aspect = frame.width / frame.height;
       return renderer.render(frame, camera.crop(frame), layout);
     },
     status: () => ({ ...camera.status(), sharing: screen !== null }),
+    /**
+     * What the caller's zoom starts from: the part that the video shows, the screen's shape, and whether the
+     * capture is the main display, the only one that the Mac's places describe.
+     */
+    view: () => ({
+      crop: camera.current(),
+      aspect,
+      main: screen
+        ? screen.supportsAutomaticZoom === true
+        : !device || device === mainScreenDevice,
+    }),
   };
 }
