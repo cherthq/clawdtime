@@ -165,45 +165,136 @@ No request opens with a fixed sentence. The code is in
 - The state when nothing runs is a fact, not an invitation: "Computer use is
   on. No computer task runs now.".
 
-What you say while a request runs is for that request: "open it in the
-browser", "use the other tab", "just press return". It starts no second
-request. The worker keeps your words in order and gives them to the planner
-with its next action, marked as what you said after the start, so that your
-newest word wins. An action that was chosen before you spoke did not have your
-words: it is not sent, also when it was already on its way, and the planner
-chooses again. The answer is a fixed sentence that says where your words are
-now, for example "Got it. I take that into the task that runs.". It never says
-that something was done. Every action after it goes through the same checks.
-One request takes 8 such additions of 600 characters each, and none that holds
-a password or a key. The same message a second time adds nothing and starts
-nothing.
+What you say while a request runs is for that request, and the request goes
+on by itself. "open it in the browser", "not instagram, flipkart", "no, the
+other one", "hmm try the search box", "that's wrong, go back": each one steers
+the task, and the task keeps going. No magic word is needed to go on. Your
+words start no second request. The worker keeps them in order and gives them
+to the planner with its next action, marked as what you said after the start,
+so that your newest word wins. An action that was chosen before you spoke did
+not have your words: it is not sent, also when it was already on its way, and
+the planner chooses again. The answer is one short sentence that says where
+your words are now, for example "Got it. I take that into the task that
+runs.". It never says that something was done. Every action after it goes
+through the same checks. One request takes 8 such additions of 600 characters
+each, and none that holds a password or a key. The same message a second time
+adds nothing and starts nothing.
 
-These rules hold at the worker, for words that are handed to it as a request
-(`submit`). They are read by `readWords` in `connectors/computer/orders.ts`,
-which is safe by default: a task goes on only for a narrow written shape of
-screen order (or a plain continue phrase without a question mark), and
-everything else holds. While the worker waits for you, the chat hands your
-next message to it as the answer (see Questions and answers), and `answer` is
-as it was. On a phone call the bridge answers with the state while a request
-runs, and hands no words to it.
+### Words while a task runs
 
-- **Stop (`stop`).** Any stop word anywhere in the message (`stop`, `stopp`,
-  `stahp`, `cancel`, `abort`, `halt`, `quit it`, `kill it`, also inside polite
-  or casual forms such as "can you stop?", "pls stop", "actually stop", "i said
-  stop", or a screen phrase such as "cancel the dialog" or "stop the video",
-  and also with a typo: see Casual words and typos) stops the request at once.
-  This holds in every state, also while the initial navigation reading or the
-  first look is in flight, at the step limit, at the 8-addition cap, when the
-  record cannot be written, or when the words also look like a secret. The
-  word `enough` is not a stop word, so phrases such as "scroll down enough to
-  see the button" do not cancel the task.
-- **Continue (`continue`).** A standalone continue phrase (`continue`, `go
-on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
-  optional fillers, with no question mark and nothing else ("continue?",
-  "ok?", "yes?", and "can you continue?" all hold). While paused, it resumes
-  with a fresh look before the first input. While running, nothing changes.
-  At a waiting approval or question of the planner, it never approves: what
-  waited is set aside and the task pauses (`hold`).
+The worker reads each message with `readMidTask` in
+`connectors/computer/orders.ts`. One of five things happens.
+
+- **Stop.** Any stop word anywhere in the message (`stop`, `stopp`, `stahp`,
+  `cancel`, `abort`, `halt`, `quit it`, `kill it`, also inside polite or
+  casual forms such as "can you stop?", "pls stop", "actually stop", "i said
+  stop", "wait, stop", or a screen phrase such as "cancel the dialog" or "stop
+  the video", and also with a typo: see Casual words and typos) stops the
+  request at once. This holds in every state: while the first reading or the
+  first look is in flight, while the planner chooses, while an input is with
+  the hands, at a pause, at a question, at the step limit, at the 8-addition
+  cap, when the record cannot be written, and when the words also look like a
+  secret. The word `enough` is not a stop word, so "scroll down enough to see
+  the button" does not cancel the task.
+- **Pause.** The message only asks to wait, or says that you do it yourself:
+  "wait", "hold on", "hang on", "pause", "one sec", "give me a minute", "not
+  yet", "don't touch anything", "let me do it", "let me check", "I'll take it
+  from here", "hang on, I'm checking something", "my turn", "brb", a raised
+  hand. A yes, a no or a thanks may stand beside it ("no wait", "ok, hold
+  on"). The worker pauses before the next input and says "Paused. Your next
+  message goes on with it.". An action that was on its way is held back. The
+  words of a pause carry nothing for the planner. When you move the mouse or
+  press a key while the hands work, the worker pauses in the same way.
+- **Status.** A question about how the task goes, as the whole message: "are
+  you done?", "what are you doing?", "how's it going?", "where are you?", "is
+  it done yet?", "done?", "r u stuck?". The answer is one short sentence:
+  'Still working on "open the editor", at step 3, and it is not done yet.'.
+  Nothing is kept, and nothing pauses.
+- **Go.** "continue", "go on", "ok", "thanks", a thumbs up: nothing to steer
+  with. The task goes on, and the words are not kept.
+- **Steer.** Everything else. Negations, doubts, remarks, time words, other
+  questions and orders all steer: "don't click that", "is that the right
+  page?", "do it later", "wait for the page to load", "pause the video". A
+  wait inside other words steers too: "wait, not that one, the blue one".
+
+**Going on after a pause.** Any next message ends a pause. Words that steer go
+into the task, and the task goes on after a fresh look. A go word and a
+status question go on too. Another wait keeps the pause, and so do words that
+hold a secret. A stop stops. The chat's answer at a pause (`answer`) is read
+in the same way. With the owner's trust (see The owner's trust), a pause with
+no message ends by itself after 60 seconds (`resumeMs` of the worker): the
+pause says so, and the worker says when it goes on. Without trust a pause
+waits for your next message, within the time limit of the request.
+
+**At a question.** A yes and an answer come through `answer` (see Questions
+and answers). Words that come through `submit` are no yes and no answer.
+Words that steer set aside what waited, and the planner chooses again with
+them. A wait sets it aside and pauses. "continue" or "ok" at a yes is no yes:
+the question still waits. At a question of the planner a go word sets it
+aside, and the task goes on. A status question gets the question that waits.
+
+**At the start.** While the planner reads whether the request is a one-step
+move, or while the first look is in flight, words steer as always: the
+planner plans with them, and a one-step move read from the first words is not
+made. Once a one-step move is on its way, words are not taken, and the reply
+says that the task is at its end. A wait still holds the next input then.
+
+**Secrets.** Words that hold a password, passcode, passphrase, PIN, secret,
+token, API key, credential, `pw`, `pwd`, `2fa`, `ssn`, `cvv`, `cvc`, or a
+short numeric code (including contractions, `"set to <value>"`, `"saved as
+<value>"`, `"<noun> for <target> is <value>"`, value-before-noun forms such as
+`"type 4821 as the pin"`, quoted or bare values after secret nouns, spaced PIN
+digits, full-width digits or a colon after NFKC normalization, one- or
+two-sided invisible format or combining joiner characters around
+`is`/`was`/`:`/`=`, tokens split across indented line breaks, a word between
+the noun and its value as in "my pin number is 4821", a value typed into a
+secret field as in "type hunter22 in the password field" or "fill the pin with
+4821", a misspelled secret noun as in "my pasword is hunter22", and 13 to 19
+digit payment card numbers) are refused: they are written nowhere and never
+sent to the planner. A secret split over two messages is refused too: right
+after words that name a secret or a field for one ("type my pin in the pin
+field"), or a question of the planner that does, a short value on its own (a
+number of 3 to 12 digits, or one word with a letter and a digit or a symbol,
+such as "4821" or "hunter22") is a secret. Words with a secret pause nothing
+and change nothing else: the reply says that the words were not kept, a
+running task goes on, a pause stays a pause, and a question still waits.
+Plain state or location remarks ("the password is already filled", "the
+password is the same", "the password is on my phone", "the token is expired")
+and UI labels ("open password generator", "click password recovery") are not
+treated as secrets.
+
+**Limits and scope.** Words that cannot be kept (past the step limit, past 8
+additions, longer than 600 characters, or when the record cannot be written)
+get a reply that says so, and the task goes on. A wait still pauses in all of
+these. When the task is past its deadline or its call authority ended,
+non-stop words are not taken. Words come only from where the request was
+started: the same call, or the chat on both sides. A request that is stopping
+takes none. Words that were read as a one-step move to another desktop or to
+the app before are a request of their own, and wait as before.
+
+**The chat.** While a task runs or is paused, the chat hands each message to
+the worker in your own words, with no offer and no question back, and the
+worker reads it as above. A question gets its answer from the state of the
+task instead: the narrow questions ("are you stuck?", "are you done?", "is it
+open?", "what are you doing?") from code, the others from the language model
+with the state. A thanks, a greeting or a bare yes is a reply of the chat
+while the task runs. At a pause every message goes to the worker, and it goes
+on. Words for other work keep their own road: a session of the board by its
+name, code by what it names (a file, a repository, a branch, a commit, a test),
+the work of the supervisor (agents, jobs, builds, deploys, logs), work to find
+something out, and words for a session ("tell Claude to run the tests").
+Words with a verb of code work ("open the app and add dark mode", "add it to
+the cart") go to the language model first: it starts a job, or hands them to
+the task.
+
+### The strict reader of stops and orders
+
+`readWords` in `connectors/computer/orders.ts` reads stops for every reader:
+the worker, the chat and the reach. It also reads a strict screen order, which
+the chat uses at a question that waits for a yes, and it reads words that hold
+work back before a request starts (`defersWork`). Its reading of a hold no
+longer pauses a task that runs.
+
 - **Screen order (`order`).** The last sentence of the message (with no stop
   word in any sentence) matches a strict screen-order shape: optional
   fillers, an optional polite lead (`can you`, `could you`, `would you`,
@@ -212,7 +303,7 @@ on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
   behaviour adverb such as `automatically` hold), a screen verb (`open`,
   `click`, `press`, `hit`, `tap`, `type`, `enter` with an object, `select`,
   `choose`, `pick`, `scroll up/down`, `drag`, `use`, `try`, `search for`,
-  `close`, `go to`, `go back`, `switch to`), a concrete screen object
+  `close`, `go to`, `go back`, `switch to`), and a concrete screen object
   (pronoun, ordinal, key name, screen noun, web address or `localhost:port`,
   quoted label for non-`type` verbs, known browser or app name, common UI
   button label for click verbs, capitalized name after `open`, `switch to`,
@@ -223,134 +314,63 @@ on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
   comma, dash or semicolon except a filler (`please`, `thanks`, `bro`, `now`,
   `then`). A second action joined by `and` or `then` is allowed only when it
   is also a screen verb with a screen object. Any cue of holding, waiting,
-  delay, doubt, refusal, negation or self-takeover (`not`, `no`, `n't`,
-  `never`, `wait`, `hold`, `hang on`, `give me`, `one sec`, `a sec`, `in <N>
-seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
-  `until`, `before`, `if`, `unless`, `maybe`, `yet`, `nah`, `nope`,
-  `nevermind`, `never mind`, `nvm`, `forget`, `i'm`, `i am`, `i'll`,
-  `i will`, `i got`, `let me`, `already`, `on my cue`, `wrong`, `broken`,
-  `mess`, or any time or date: `in an hour`, `in 5min`, `tomorrow`, `on
-Monday`, `next week`, `at 5`, `5pm`, `17:30`, `Dec 5`) anywhere in any
-  sentence holds, with one narrow exception for an
-  earlier sentence (separated by `.`, `!`, or `, `) that only reports what
-  the person sees or does not see (`I`, `it`, `the page`, or `nothing` with
-  `see`, `open`, `load`, `happen`, `show`, `work`, or `blank` and their
-  negations). While running it steers the task (unless a hold is already
-  pending, in which case the reply says that the task holds while keeping the
-  words); while paused it resumes with a fresh look; while waiting on a yes or
-  a planner question it never approves, sets aside what waited, and the
-  planner chooses again with the words.
-- **Hold (`hold`).** Everything else (questions, remarks, refusals, busy or
-  delay phrases, fillers alone, or non-screen speech such as "go away",
-  "switch off", "press pause", "type faster", or "open the door for the
-  delivery guy") holds. While running, the task pauses at once (with the
-  words kept when they can be kept). While paused, it stays paused. At a
-  waiting approval or planner question, what waited is set aside and the task
-  pauses. The hold takes effect whatever happens to the words: even at the
-  step limit, at the 8-addition cap, when the record cannot be written, or
-  when the words hold a secret, the pause still happens and the reply states
-  truthfully that the words were not kept.
-- **Casual words and typos.** `readWords` reads the words as written first
-  (`readWordsAsWritten`). Then it reads a casual form of the same words with
-  the same rules:
-  - Marks and emoji: smart quotes become plain quotes. A run of three or more
-    of one letter becomes one or two ("pleeease", "stooop", "noooo"). A run of
-    marks becomes one mark, and a run with a question mark stays a question
-    mark ("open chrome?!" is a question). A star around a word goes. Emoji
-    that only decorate (such as folded hands, thumbs up, a check mark) go. A
-    question emoji counts as a question mark.
-  - Casual forms: `u`, `ur`, `n`, `&`, `+`, `w/`, `plis` and its kin, `thx`,
-    `k`, `kk`, `okie`, `aight`, `yup`, `rn`, `asap`, `btn`, `msg`, `pg`,
-    `dwn`, `opn`, `goto`, `teh`, and "ClawdTime" named at the start or the end
-    ("hey clawdtime open chrome"). A bare "search cats" reads as "search for
-    cats". `yo`, `ok so`, `pls` and `plz` were fillers already.
-  - Typos: the screen verbs, the screen nouns, the key names and the known app
-    and browser names take one typo in a word of 4 letters or more, and two in
-    a word of 8 or more (typed and meant). A typo is two neighbouring letters
-    swapped, a letter hit with a neighbouring key, a letter left out, or one
-    letter too many. It is never at the first letter, and one letter too many
-    at the end is only a repeated letter, so "opens", "typed" and "clicked"
-    are never read as the verb. "opne chrome", "clik the blue button", "slect
-    the last link", "scroll dwon" and "hit retrun" are orders. A word that the
-    rules read, a capitalized name inside a sentence, a word with two equally
-    near screen words, and a short deny list of English words ("clock",
-    "chose", "filed", "lost", "fork", "widow", "potion" and others) stay as
-    they are.
-  - Stops: a stop word with one typo stops (`stp`, `srop`, `sttop`, `stoop`,
-    `stpo`, `cancle`, `canceel`, `abortt`, `haltt`), and so do a long
-    `stooop` and the stop sign or stop button emoji. A typo is one as above,
-    so ordinary words near a stop word ("step", "shop", "atop", "stow", "top")
-    do not stop, and a short deny list ("hat", "half", "stomp") stays as it
-    is: "click the shop button" is an order. The chat reads a stop word with a
-    typo the same way, and stops the task.
-  - Holds: a hold cue with a typo or without its apostrophe holds (`dnt`,
-    `wiat`, `wair`, `hld on`, `hol up`, `nvmd`, `idk`, `dunno`, `im`,
-    `lemme`, `gimme`, `brb`, `1 sec`, `jk`, `isnt`), and so does a cue with a
-    doubled letter (`noo`, `waitt`, `nahh`) and an emoji of doubt, refusal or
-    delay (a thinking face, an eye roll, a cross, a raised hand, an hourglass).
-    A hold cue with one typo holds too (`befor`, `untl`, `latr`, `waot`,
-    `nevr`; two typos in a word of 8 letters or more, as in `tomorow`), and
-    so do the short forms `wen`, `nt`, `b4`, `l8r`, `til`, `tmrw`.
-  - Lookalike letters and apostrophes: letters of another script that look
-    like Latin letters (a Cyrillic `о` in `stоp`, a Cyrillic `ѕ`, Greek
-    capitals), small capitals and accents read as the Latin letter, and other
-    marks for the apostrophe (an acute accent, a backtick, a modifier letter
-    apostrophe, a prime, as in "doesn´t") read as the apostrophe. This reading
-    only adds a stop or a hold: when it differs from the reading of the
-    letters as typed, the words hold.
-  - A question about what ClawdTime can do, with a generic object and no
-    target ("Can you click buttons on my screen?", "can u use my mac?", "are
-    you able to open apps", "can you search the web?"), holds. "Can you click
-    the Send button?" is an order.
+  delay, doubt, refusal, negation, self-takeover or a time anywhere in any
+  sentence holds, with one narrow exception for an earlier sentence that only
+  reports what the person sees or does not see ("It didn't load. Use the
+  other tab.").
+- **Continue (`continue`).** A standalone continue phrase (`continue`, `go
+on`, `go ahead`, `resume`, `carry on`, `keep going`, `proceed`) after
+  optional fillers, with no question mark.
+- **Hold (`hold`).** Everything else.
 
-  The casual reading works one way only. It can make words stop or hold more
-  easily, and it can read a clear screen order with a typo or a casual form as
-  that same order (or a plain continue phrase as a continue). It never turns a
-  stop into anything else, and it never removes a negation, a hold cue or a
-  question mark, so words with doubt, delay, negation, a question, a refusal
-  or a remark still hold. An order as written holds when its casual reading
-  holds ("click the button wiat"). Words that look like a secret once spelled
-  out keep their written reading. Quoted labels, web addresses and key
-  combinations stay as written. The casual form is for the reading only: what
-  you wrote is what is kept, sent to the planner and checked for secrets.
+### Casual words and typos
 
-- **Startup.** While the planner's initial navigation reading or the first
-  look at the screen is in flight (before step 1 and with no command in
-  flight), a stop ends the task at once, and anything else sets the hold so
-  that no first input goes out. Once a one-step navigation command is already
-  in flight, non-stop words are not taken and receive the end-of-task reply.
-- **Secrets.** Words that hold a password, passcode, passphrase, PIN, secret,
-  token, API key, credential, `pw`, `pwd`, `2fa`, `ssn`, `cvv`, `cvc`, or
-  short numeric code (including contractions, `"set to <value>"`, `"saved as
-<value>"`, `"<noun> for <target> is <value>"`, value-before-noun forms such
-  as `"type 4821 as the pin"`, quoted or bare values after secret nouns,
-  spaced PIN digits, full-width digits or colon after NFKC normalization,
-  one- or two-sided invisible format or combining joiner characters around
-  `is`/`was`/`:`/`=`, tokens split across indented line breaks, a word
-  between the noun and its value as in "my pin number is 4821", a value typed
-  into a secret field as in "type hunter22 in the password field" or "fill
-  the pin with 4821", a misspelled secret noun as in "my pasword is
-  hunter22", and 13 to 19 digit payment card numbers) are refused: they are
-  written nowhere and never sent to the planner. A secret split over two
-  messages is refused too: right after words that name a secret or a field
-  for one ("type my pin in the pin field"), or a question of the planner that
-  does, a short value on its own (a number of 3 to 12 digits, or one word
-  with a letter and a digit or a symbol, such as "4821" or "hunter22") is a
-  secret. When a running task refuses an order that holds a
-  secret, it also pauses (`hold`) so the person can type the secret on the Mac
-  and tell it to go on. Plain state or location remarks ("the password is
-  already filled", "the password is the same", "the password is on my phone",
-  "the token is expired") and UI labels ("open password generator", "click
-  password recovery") are not treated as secrets.
-- **Limits and scope.** When the task is past its deadline or its call
-  authority ended, non-stop words are not taken. Words come only from where
-  the request was started: the same call, or the chat on both sides. A
-  request that is stopping takes none. Words that were read as a one-step
-  move to another desktop or to the app before are a request of their own,
-  and wait as before.
-- Only the request itself can say that a send, terminal work or the loss of
-  unsaved changes was asked for, and only until you say more. After the first
-  addition such an action asks again, whatever the addition says.
+Both readers read the words as written first, then a casual form of the same
+words with the same rules. The casual form is for the reading only: what you
+wrote is what is kept, sent to the planner and checked for secrets.
+
+- Marks and emoji: smart quotes become plain quotes. A run of three or more of
+  one letter becomes one or two ("pleeease", "stooop", "noooo"). A run of
+  marks becomes one mark, and a run with a question mark stays a question mark
+  ("open chrome?!" is a question). A star around a word goes. Emoji that only
+  decorate (such as folded hands, thumbs up, a check mark) go. A question
+  emoji counts as a question mark.
+- Casual forms: `u`, `ur`, `n`, `&`, `+`, `w/`, `plis` and its kin, `thx`,
+  `k`, `kk`, `okie`, `aight`, `yup`, `rn`, `asap`, `btn`, `msg`, `pg`, `dwn`,
+  `opn`, `goto`, `teh`, and "ClawdTime" named at the start or the end ("hey
+  clawdtime open chrome"). A bare "search cats" reads as "search for cats".
+- Typos: the screen verbs, the screen nouns, the key names and the known app
+  and browser names take one typo in a word of 4 letters or more, and two in a
+  word of 8 or more. A typo is two neighbouring letters swapped, a letter hit
+  with a neighbouring key, a letter left out, or one letter too many. It is
+  never at the first letter, and one letter too many at the end is only a
+  repeated letter, so "opens", "typed" and "clicked" are never read as the
+  verb. A word that the rules read, a capitalized name inside a sentence, a
+  word with two equally near screen words, and a short deny list of English
+  words stay as they are.
+- Stops: a stop word with one typo stops (`stp`, `srop`, `sttop`, `stoop`,
+  `stpo`, `cancle`, `canceel`, `abortt`, `haltt`), and so do a long `stooop`
+  and the stop sign or stop button emoji. Ordinary words near a stop word
+  ("step", "shop", "atop", "stow", "top") do not stop, and a short deny list
+  ("hat", "half", "stomp") stays as it is. The chat reads a stop word with a
+  typo the same way, and stops the task.
+- Waits: a wait with a typo or in a casual form pauses (`wiat`, `hol up`,
+  `holdon`, `brb`, `1 sec`, `gimme a minute`, `lemme do it`, `ill take it from
+here`), and so do a pause button and an hourglass.
+- Lookalike letters and apostrophes: letters of another script that look like
+  Latin letters (a Cyrillic `о` in `stоp`, a Cyrillic `ѕ`, Greek capitals),
+  small capitals and accents read as the Latin letter, and other marks for the
+  apostrophe (an acute accent, a backtick, a modifier letter apostrophe, a
+  prime) read as the apostrophe. This reading can only add a stop or a wait.
+- A question about what ClawdTime can do, with a generic object and no target
+  ("Can you click buttons on my screen?", "can u use my mac?"), is answered as
+  a question by the chat, and starts no task. "Can you click the Send button?"
+  is an order.
+
+**After you said more.** Only the request itself can say that a send,
+terminal work or the loss of unsaved changes was asked for, and only until you
+say more. After the first addition such an action asks again, whatever the
+addition says.
 
 ## When the task does not move on
 
@@ -1165,7 +1185,8 @@ question of a page names its site. A no ends the request.
   as a refusal. A look that names no element cannot say where the focus is,
   and the key goes as before.
 - **You take over.** When the hands report that you moved the mouse or pressed
-  a key, the worker pauses and asks: continue or stop.
+  a key, the worker pauses. Your next message goes on with it, and a stop
+  stops it.
 - **Done is checked.** `done` counts only after an observation that came after
   the last action.
 - **Links.** Only http and https links are opened, with no login in the link.
@@ -1224,7 +1245,9 @@ With `CLAWDTIME_COMPUTER_TRUST=on` in the environment of the desktop service,
 the worker asks no question before an action of the ask policy: it pays,
 deletes, sends and grants as the request and the screen lead it, and the
 record keeps which row of the policy each such action passed
-(`trusted_pay`, `trusted_loss`, ...). It is off unless the owner turns it on.
+(`trusted_pay`, `trusted_loss`, ...). With trust a pause also ends by itself:
+after 60 seconds with no message, the task goes on (see Words while a task
+runs). It is off unless the owner turns it on.
 What stays: Stop, the hands bar and holding Escape; the last look before an
 input; no input sent again when its result is not known; the checks that
 refuse (a password field gets no typed text, the power key is never sent);
@@ -1238,6 +1261,9 @@ A question shows in the chat. Your next message is its answer. The worker reads
 a yes or a no with the same conservative reader that reads a yes on a phone
 call (`interpret` in `connectors/agents/call.ts`). Words that are not a clear
 yes or no change nothing, and the question is said again. A no ends the request.
+
+A pause is no question. Any next message ends it, and words that steer go into
+the task: see Words while a task runs.
 
 A yes is for what you were asked. The worker looks again after your answer. If
 the screen is another one by then, it sends nothing and the planner starts
@@ -1831,6 +1857,11 @@ the real screen, draws the cursor or calls a language model.
   browser", "scroll down in Slack" and "read my Slack messages" reaches the
   engine in the person's own words, at once or through the tool of a scripted
   language model. A question, a state and a bare yes do not.
+- `autonomy` (131): a table of 50 messages while a task runs and what each one
+  does (steer, stop, pause, status, go, a refused secret); any next message
+  ends a pause; a pause that ends by itself with trust on the injected clock,
+  and none without trust; a stop in every state; secrets kept nowhere in every
+  state; and the chat that hands the words to a real worker.
 - `routes` (16): the three routes and the stop route through the real route
   code, with and without the panel credential, with a 6 MB body; and three
   real desktop services on free ports that this test started, which have no
