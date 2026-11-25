@@ -1349,6 +1349,9 @@ and `CHERT_LINE_ID` or a first text from you) are in the environment of the
 desktop service. `clawdtime computer doctor` says for both whether they can
 reach you, and why not.
 
+`clawdtime connect` sets up both, step by step, and says what is still missing.
+See "Connect to Chert in one command" in [the setup guide](../SETUP_CLAWDTIME.md).
+
 A text of yours reaches the worker only when `clawdtime texts run` hands it to
 the desktop service. It does that first now, as `clawdtime chat TEXT` does for
 a call, and it marks the text, so that the service knows these exact words
