@@ -58,8 +58,10 @@ import TaskPanelCore
   private var resolvedApp: String?
   private let menuItems = NSHashTable<NSMenuItem>.weakObjects()
   private var rights: (accessibility: Bool, screenRecording: Bool, at: Date)?
-  /// A run begins: the app's own sheets get out of the way.
+  /// A run begins: the chat gets out of the way.
   var onRunStarted: (() -> Void)?
+  /// A run of these hands is in view, with its bar and Stop.
+  var running: Bool { live }
   /// True when these hands do the computer work of the service. The panel then keeps its chat open
   /// on a sent message: `onRunStarted` closes it when a run really starts.
   private(set) var engine = false

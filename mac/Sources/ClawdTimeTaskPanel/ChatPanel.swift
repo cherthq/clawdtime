@@ -13,11 +13,6 @@ struct ChatModel {
   var notice = ""
   /// The person turned memory on.
   var memory = false
-  var execution: ChatExecution?
-  var executionStopping = false
-  var executionCanStop = false
-  var executionCanDecide = false
-  var executionNotice: String?
 }
 
 private final class ChatFlippedView: NSView { override var isFlipped: Bool { true } }
@@ -110,13 +105,13 @@ private final class ThinkingDotsView: NSView {
   }
 }
 
-/// The chat screen: the conversation with ClawdTime, and one field to write to it.
+/// The chat screen: the conversation with ClawdTime, and one field to write to it. It is where the
+/// person gives ClawdTime work. It shows no status of the work: a question of the worker shows in its
+/// own small window, and Stop is on the bar at the top of the screen during every run.
 final class ChatView: NSView, SheetContent {
   static let width: CGFloat = 392
   var onSend: ((String) -> Void)?
   var onTalk: (() -> Void)?
-  var onStopWork: (() -> Void)?
-  var onExecutionDecision: ((String, Bool) -> Void)?
   var onClose: (() -> Void)?
   var onResize: (() -> Void)?
   var maxHeight: CGFloat = 640
@@ -133,13 +128,6 @@ final class ChatView: NSView, SheetContent {
   private var header: NSStackView!
   private let foot = NSStackView()
   private let noticeRow = NSView()
-  private let executionRow = NSStackView()
-  private let executionStatus = Theme.label("", font: Theme.sans(12), color: .labelSecondary, lines: 3)
-  private var stopWork: PillButton!
-  private let decisionRow = NSStackView()
-  private let decisionText = Theme.label("", font: Theme.sans(12), color: .label, lines: 4)
-  private var approveAction: PillButton!
-  private var denyAction: PillButton!
   private var shown: [String] = []
   private var model = ChatModel()
   private static let starters = ["What needs me?", "What is every agent doing?", "Which agent commands are on this Mac?"]
@@ -176,26 +164,11 @@ final class ChatView: NSView, SheetContent {
     let compose = NSStackView(views: [input, controls]); compose.orientation = .horizontal; compose.alignment = .bottom; compose.spacing = 6
     input.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-    // Executor Stop stays outside the transcript scroller and chat pending lane.
-    stopWork = PillButton("Stop work", kind: .danger, small: true, symbol: "stop.fill", target: self, action: #selector(stopWorkPressed))
-    stopWork.toolTip = "Request a cooperative stop. An action already underway may finish."
-    executionRow.orientation = .horizontal; executionRow.alignment = .centerY; executionRow.spacing = 10
-    executionRow.addArrangedSubview(executionStatus); executionRow.addArrangedSubview(stopWork)
-    executionStatus.preferredMaxLayoutWidth = Self.width - 152
-    executionStatus.setContentHuggingPriority(.defaultLow, for: .horizontal)
-    stopWork.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-    approveAction = PillButton("Approve action", kind: .primary, small: true, target: self, action: #selector(approveExecution))
-    denyAction = PillButton("Deny action", kind: .secondary, small: true, target: self, action: #selector(denyExecution))
-    let choices = NSStackView(views: [approveAction, denyAction]); choices.orientation = .horizontal; choices.spacing = 8
-    decisionRow.orientation = .vertical; decisionRow.alignment = .leading; decisionRow.spacing = 6
-    decisionRow.addArrangedSubview(decisionText); decisionRow.addArrangedSubview(choices)
-    decisionText.preferredMaxLayoutWidth = Self.width - 44
     // The notice and the field stand on the bottom edge. A hidden notice takes no room.
     foot.orientation = .vertical; foot.alignment = .leading; foot.spacing = 8; foot.detachesHiddenViews = true
     // The notice lines up with the headline, six points in from the field's edge.
     noticeRow.addSubview(notice); notice.translatesAutoresizingMaskIntoConstraints = false
-    foot.addArrangedSubview(executionRow); foot.addArrangedSubview(decisionRow); foot.addArrangedSubview(noticeRow); foot.addArrangedSubview(compose)
+    foot.addArrangedSubview(noticeRow); foot.addArrangedSubview(compose)
     for view in [header, scroll, foot] as [NSView] { addSubview(view); view.translatesAutoresizingMaskIntoConstraints = false }
     scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 120)
     let pad = CGFloat(DesignTokens.space5)
@@ -211,9 +184,6 @@ final class ChatView: NSView, SheetContent {
       rows.widthAnchor.constraint(equalTo: content.widthAnchor),
       foot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), foot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
       foot.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 8),
-      executionRow.widthAnchor.constraint(equalTo: foot.widthAnchor),
-      decisionRow.widthAnchor.constraint(equalTo: foot.widthAnchor),
-      decisionText.widthAnchor.constraint(equalTo: decisionRow.widthAnchor),
       compose.widthAnchor.constraint(equalTo: foot.widthAnchor), noticeRow.widthAnchor.constraint(equalTo: foot.widthAnchor),
       notice.leadingAnchor.constraint(equalTo: noticeRow.leadingAnchor, constant: 6), notice.trailingAnchor.constraint(equalTo: noticeRow.trailingAnchor, constant: -8),
       notice.topAnchor.constraint(equalTo: noticeRow.topAnchor), notice.bottomAnchor.constraint(equalTo: noticeRow.bottomAnchor),
@@ -258,20 +228,9 @@ final class ChatView: NSView, SheetContent {
       : model.voice == .speaking ? "Speaking."
       : model.modelReady ? "It sees every agent, answers for you only when you say so, and remembers." + (model.memory ? " Memory is on." : "")
       : "No language model key: it tells the state and takes a clear approve or deny."
+    let noticeChanged = notice.stringValue != model.notice
     notice.stringValue = model.notice; noticeRow.isHidden = model.notice.isEmpty
-    let executionText = model.executionNotice ?? model.execution?.message ?? ""
-    let hideExecution = model.execution?.configured != true && !model.executionStopping
-    let executionChanged = executionStatus.stringValue != executionText || executionRow.isHidden != hideExecution
-    executionStatus.stringValue = executionText; executionStatus.toolTip = executionText
-    executionRow.isHidden = hideExecution
-    stopWork.isEnabled = model.connected && model.executionCanStop
-    let actionText = model.execution?.pendingAction?.description ?? ""
-    let decisionChanged = decisionText.stringValue != actionText || decisionRow.isHidden != (model.execution?.pendingAction == nil)
-    decisionText.stringValue = actionText; decisionText.toolTip = actionText
-    decisionRow.isHidden = model.execution?.pendingAction == nil
-    approveAction.isEnabled = model.connected && model.executionCanDecide
-    denyAction.isEnabled = model.connected && model.executionCanDecide
-    if executionChanged || decisionChanged { onResize?() }
+    if noticeChanged { onResize?() }
     var keys = model.messages.suffix(60).map { "\($0.role)|\($0.at)|\($0.via)|\($0.text)|\($0.offered.joined(separator: "\u{1F}"))" }
     // The service writes the person's message down before it answers. Once the transcript holds it, it is not drawn a second time.
     let heldAlready = ChatTranscript.holdsPending(model.messages, pending: model.pending)
@@ -312,16 +271,6 @@ final class ChatView: NSView, SheetContent {
 
   @objc private func closePressed() { onClose?() }
   @objc private func talkPressed() { onTalk?() }
-  @objc private func approveExecution() { decideExecution(true) }
-  @objc private func denyExecution() { decideExecution(false) }
-  private func decideExecution(_ approve: Bool) {
-    guard model.connected, model.executionCanDecide, let id = model.execution?.pendingAction?.id else { return }
-    onExecutionDecision?(id, approve)
-  }
-  @objc private func stopWorkPressed() {
-    guard model.connected, model.executionCanStop else { return }
-    onStopWork?()
-  }
   @objc private func sendPressed() {
     guard canSend else { return }
     let text = input.string.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -34,8 +34,11 @@ import TaskPanelCore
   private lazy var hands = HandsController(pet: pet)
   private var transcript: ChatTranscript?
   private var executionControl = ChatExecutionControl()
-  private let nativeExecutionPanel = NativeExecutionPanel()
-  private var nativeSubmissionPending = false
+  /// The small window with a question of the worker. It shows only while one waits.
+  private let askPanel = ExecutionAskPanel()
+  private var askAnswers = ExecutionAskAnswers()
+  /// The bar with Stop for an engine that is not the panel's own hands. Those show their own bar.
+  private let workBar = HandsBar()
   private var chatPending: String?
   private var chatNotice = ""
   /// The last spoken turn, shown on the mascot while the chat is closed.
@@ -264,11 +267,9 @@ import TaskPanelCore
     let chat = chatPanel.view
     chat.onSend = { [weak self] text in self?.sendChat(text) }
     chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
-    chat.onStopWork = { [weak self] in self?.stopExecution() }
-    nativeExecutionPanel.onDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
-    nativeExecutionPanel.onStop = { [weak self] in self?.stopExecution() }
-    chat.onExecutionDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
     chat.onClose = { [weak self] in self?.chatPanel.close() }
+    askPanel.onAnswer = { [weak self] key, approve in self?.answerAsk(key, approve: approve) }
+    workBar.onStop = { [weak self] in self?.stopExecution() }
   }
 
   // MARK: mascot
@@ -276,6 +277,7 @@ import TaskPanelCore
   private var petScreen: CGRect { (pet.window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero }
   private func followPet() {
     if chatPanel.isOpen { chatPanel.follow(pet: pet.frame, screen: petScreen) }
+    askPanel.place(pet: pet.frame, screen: petScreen)
   }
   @objc private func tuck(_ sender: Any?) {
     if !pet.visible { pet.show() }
@@ -353,13 +355,36 @@ import TaskPanelCore
     model.voice = voice.phase
     model.notice = chatNotice
     model.memory = transcript?.memory == true
-    model.execution = executionControl.execution
-    model.executionStopping = executionControl.stopping
-    model.executionCanStop = executionControl.canStop
-    model.executionCanDecide = executionControl.canDecide
-    model.executionNotice = executionControl.notice
     chatPanel.view.render(model)
-    nativeExecutionPanel.render(model, submissionPending: nativeSubmissionPending, pet: pet.frame, screen: petScreen)
+    renderWork()
+  }
+  /// What shows of the computer work: the small window while a question of the worker waits, and
+  /// the bar with Stop while an engine other than the panel's own hands runs. No status line and
+  /// no running message: the person sees the work on the screen itself.
+  private func renderWork() {
+    let ask = ExecutionAsk.current(executionControl.execution)
+    askAnswers.observe(ask)
+    let canAnswer = ask.map { ExecutionAsk.canAnswer($0, control: executionControl, answers: askAnswers, chatBusy: chatPending != nil,
+                                                     connected: state.connected) } ?? false
+    askPanel.render(ask, canAnswer: canAnswer, pet: pet.frame, screen: petScreen)
+    if ExecutionStopBar.shows(executionControl, ownHands: hands.engine || hands.running, connected: state.connected) {
+      let waiting = executionControl.execution?.state == "waiting_for_person"
+      workBar.show(detail: executionControl.notice ?? (waiting ? "Waiting for you" : ""), stopped: false, canStop: executionControl.canStop)
+    } else { workBar.hide() }
+  }
+  /// Approve or No on the question in view. An action that the engine holds goes to its decision
+  /// route; a question of the worker gets the person's own word, as a typed "yes" or "no" would.
+  /// Each question takes one answer, and an answer is never sent again.
+  private func answerAsk(_ key: String, approve: Bool) {
+    guard let ask = ExecutionAsk.current(executionControl.execution), ask.key == key,
+      ExecutionAsk.canAnswer(ask, control: executionControl, answers: askAnswers, chatBusy: chatPending != nil, connected: state.connected)
+    else { renderChat(); return }
+    switch ask.route {
+    case .action(let id): decideExecution(id, approve: approve)
+    case .words:
+      askAnswers.begin(ask)
+      sendChat(approve ? ExecutionAsk.yes : ExecutionAsk.no)
+    }
   }
   private func renderTalk() {
     pet.setTalk(on: voice.phase != .off, micOn: voice.micOn, speakerOn: voice.speakerOn, speaking: voice.phase == .speaking, thinking: voice.phase == .thinking)
@@ -368,13 +393,12 @@ import TaskPanelCore
   /// One typed message. The words show at once; the answer follows.
   private func sendChat(_ text: String) {
     guard let client, chatPending == nil else { return }
-    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine)
     releaseNativeEditor()
     chatPending = text; chatNotice = ""; renderChat()
     Task {
       let reply = try? await client.say(text)
       await readChat(client)
-      chatPending = nil; nativeSubmissionPending = false
+      chatPending = nil
       if reply == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." }
       pet.react(success: reply != nil)
       renderChat()
@@ -386,10 +410,8 @@ import TaskPanelCore
   /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.
   private func heard(_ recording: String) async -> URL? {
     guard let client else { return nil }
-    nativeSubmissionPending = NativeExecutionPresentation.releasesEditor(executionControl.execution, ownHands: hands.engine)
     releaseNativeEditor(); renderChat()
     let result = try? await client.hear(recording)
-    nativeSubmissionPending = false
     await readChat(client)
     if result == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." } else if result?.reply != nil { chatNotice = "" }
     if let result, let reply = result.reply {
@@ -449,8 +471,10 @@ import TaskPanelCore
           self.decisions = try? await client.decisions()
           // The watcher is optional, as the sessions are: a service without one changes nothing.
           self.incidents = try? await client.incidents()
-          // The chat is read while it is in view, and once at the start.
-          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil || self.executionControl.execution?.mode == "native" {
+          // The chat is read while it is in view, once at the start, and while an engine is set up:
+          // a question of the worker and the bar with Stop follow what it reads.
+          if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil || self.executionControl.execution?.configured == true
+            || self.executionControl.stopping || self.executionControl.awaitingRead {
             await self.readChat(client)
           }
           self.render(); self.renderChat()

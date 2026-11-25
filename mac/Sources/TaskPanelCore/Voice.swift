@@ -66,13 +66,21 @@ public struct ChatExecution: Codable, Equatable {
   public let message: String
   public let mode: String?
   public let pendingAction: ChatPendingAction?
-  public init(configured: Bool, state: String, canStop: Bool, message: String, pendingAction: ChatPendingAction? = nil, mode: String? = nil) {
+  /// Why the work waits for the person: takeover, approval or question. Nil when it does not wait.
+  /// A word that a newer service adds is kept, and it counts as no question.
+  public let waiting: String?
+  public init(configured: Bool, state: String, canStop: Bool, message: String, pendingAction: ChatPendingAction? = nil, mode: String? = nil,
+              waiting: String? = nil) {
     self.configured = configured; self.state = state; self.canStop = canStop; self.message = message; self.pendingAction = pendingAction; self.mode = mode
+    self.waiting = waiting
   }
   public func validate() throws {
     guard mode == nil || ["native", "browser"].contains(mode!) else { throw PanelFailure.response }
     try pendingAction?.validate()
     guard pendingAction == nil || configured else { throw PanelFailure.response }
+    guard waiting.map({ (1...40).contains($0.count) && $0.range(of: "^[a-z_]+$", options: .regularExpression) != nil }) ?? true else {
+      throw PanelFailure.response
+    }
     guard (1...80).contains(state.count), !state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       state.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
       message.count <= 2000, configured || !canStop else { throw PanelFailure.response }
@@ -198,12 +206,9 @@ public enum NativeExecutionPresentation {
     execution?.configured == true && execution?.mode == "native"
   }
   /// A sent message withdraws our editor for a native engine, because that engine can act at once.
-  /// The panel's own hands are the exception: they close the chat and the board when a run really
-  /// starts, so a plain question keeps its chat open.
+  /// The panel's own hands are the exception: they close the chat when a run really starts, so a
+  /// plain question keeps its chat open.
   public static func releasesEditor(_ execution: ChatExecution?, ownHands: Bool = false) -> Bool {
     native(execution) && !ownHands
-  }
-  public static func visible(_ execution: ChatExecution?, submissionPending: Bool, stopping: Bool) -> Bool {
-    native(execution) && (submissionPending || stopping || execution?.canStop == true || execution?.pendingAction != nil)
   }
 }
