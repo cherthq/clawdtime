@@ -10,10 +10,16 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import type { Server } from "node:http";
+import {
+  createServer as createHttpServer,
+  type Server,
+  type ServerResponse,
+} from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { agentsCli } from "../cli/agents.js";
 import {
   asksForNewChat,
   chatBusyText,
@@ -24,6 +30,7 @@ import {
   type ChatMessage,
   type ModelClient,
 } from "../connectors/agents/brain.js";
+import { desktopChatLostText } from "../connectors/agents/desktop-chat.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import type { Action } from "../connectors/computer/ports.js";
@@ -32,6 +39,7 @@ import { createTaskApp } from "../src/control/task-app.js";
 import type { TaskDesktopService } from "../src/control/task-desktop-service.js";
 import type { TaskService } from "../src/control/task-service.js";
 import { DomainError } from "../src/storage/security.js";
+import { fakeSystem } from "./connectors-agents-fixture.js";
 import {
   element,
   FakeHands,
@@ -458,5 +466,204 @@ describe("the routes of a new chat", () => {
     expect(chatFiles(root)).toEqual(["chat.jsonl"]);
     expect(allWords(root)).toEqual(words);
     feed.close();
+  });
+});
+
+const credential = "c".repeat(48);
+const fingerprint = "a".repeat(64);
+/** A state folder as a desktop service leaves it: three owner-only files. */
+function described(origin: string) {
+  const folder = join(temporary(), "desktop");
+  mkdirSync(folder, { mode: 0o700 });
+  const write = (name: string, value: unknown) =>
+    writeFileSync(join(folder, name), JSON.stringify(value), { mode: 0o600 });
+  write("owner.lock", { pid: process.pid });
+  write("desktop-service.json", {
+    version: 1,
+    instanceId: "instance-1",
+    pid: process.pid,
+    origin,
+    configurationFingerprint: fingerprint,
+  });
+  write("desktop-panel.json", {
+    version: 1,
+    origin,
+    token: credential,
+    configurationFingerprint: fingerprint,
+  });
+  return folder;
+}
+const json = (response: ServerResponse, status: number, value: unknown) => {
+  response.writeHead(status, { "content-type": "application/json" });
+  response.end(JSON.stringify(value));
+};
+/** A made-up desktop service on a free loopback port. */
+async function madeUpService(
+  answer: (method: string, path: string, response: ServerResponse) => void,
+) {
+  const requests: { line: string; authorization: string; body: string }[] = [];
+  const server = createHttpServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const method = request.method ?? "";
+      const path = request.url ?? "";
+      requests.push({
+        line: `${method} ${path}`,
+        authorization: request.headers.authorization ?? "",
+        body: Buffer.concat(chunks).toString("utf8"),
+      });
+      if (method === "GET" && path === "/desktop/state")
+        return json(response, 200, { version: 1, instanceId: "instance-1" });
+      if (method === "GET" && path === "/desktop/chat")
+        return json(response, 200, { version: 1, model: false, messages: [] });
+      answer(method, path, response);
+    });
+  });
+  servers.push(server);
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return { origin, requests };
+}
+/** Runs `clawdtime chat WORDS` with a made-up system and gives what it printed. */
+async function chat(env: Record<string, string | undefined>, words: string[]) {
+  const lines: string[] = [];
+  await agentsCli(["--supervisor", "chat", ...words], {
+    system: fakeSystem({ now, env }),
+    print: (printed) => lines.push(printed),
+    hookScript: "/x.js",
+    model: null,
+  });
+  return lines;
+}
+
+describe("clawdtime chat new, clear, history and open", () => {
+  it("work on the files when no desktop service runs", async () => {
+    const state = temporary();
+    const env = { CLAWDTIME_CONFIG_HOME: state };
+    expect(await chat(env, ["history"])).toEqual([
+      "No chat is kept yet. clawdtime chat new puts the current chat aside.",
+    ]);
+    const log = new ChatLog(state);
+    log.append(line("user", "Find a USB-C charger on Amazon"));
+    log.append(line("assistant", "Started."));
+    expect(await chat(env, ["new"])).toEqual([
+      `A new chat started. The chat before it is kept as ${stamp} (clawdtime chat history). Work that runs goes on.`,
+    ]);
+    expect(await chat(env, ["clear"])).toEqual([
+      "A new chat started. Work that runs goes on.",
+    ]);
+    log.append(line("user", "Read my unread messages in Slack"));
+    expect(await chat(env, ["clear"])).toEqual([
+      `A new chat started. The chat before it is kept as ${stamp}-2 (clawdtime chat history). Work that runs goes on.`,
+    ]);
+    expect(await chat(env, ["history"])).toEqual([
+      `${stamp}-2  1 message  Read my unread messages in Slack`,
+      `${stamp}  2 messages  Find a USB-C charger on Amazon`,
+      "Open one with: clawdtime chat open TIME",
+    ]);
+    // The start of a time opens the one chat that has it, and the full time.
+    await expect(chat(env, ["open", "20261126"])).rejects.toThrow(
+      /fits 2 kept chats/,
+    );
+    await expect(chat(env, ["open", "20250101"])).rejects.toThrow(
+      /No kept chat has the time 20250101/,
+    );
+    expect(await chat(env, ["open", `${stamp}-2`])).toEqual([
+      `Opened the chat ${stamp}-2. Work that runs goes on.`,
+    ]);
+    expect(log.recent().map((message) => message.text)).toEqual([
+      "Read my unread messages in Slack",
+    ]);
+    // The typed words, as one message, start a new chat too.
+    expect(await chat(env, ["new", "chat"])).toEqual([
+      `A new chat started. The chat before it is kept as ${stamp}-2 (clawdtime chat history). Work that runs goes on.`,
+    ]);
+    expect(log.recent()).toEqual([]);
+    expect(allWords(state)).toHaveLength(3);
+    for (const name of chatFiles(state))
+      expect(mode(join(state, "agents", name))).toBe(0o600);
+  });
+
+  it("go to the desktop service when it runs, once, with the panel credential", async () => {
+    const service = await madeUpService((method, path, response) => {
+      if (method === "POST" && path === "/desktop/chat/new")
+        return json(response, 200, {
+          ok: true,
+          archived: stamp,
+          text: "A new chat started. Work that runs goes on.",
+        });
+      if (method === "GET" && path === "/desktop/chat/history")
+        return json(response, 200, {
+          chats: [{ id: stamp, messages: 4, first: "Open Mail" }],
+        });
+      if (method === "POST" && path === "/desktop/chat/open")
+        return json(response, 200, {
+          ok: false,
+          archived: null,
+          text: chatBusyText,
+        });
+      json(response, 404, {});
+    });
+    const state = temporary();
+    const env = {
+      CLAWDTIME_CONFIG_HOME: state,
+      CLAWDTIME_DESKTOP_STATE: described(service.origin),
+    };
+    new ChatLog(state).append(line("user", "the command's own folder"));
+    expect(await chat(env, ["new"])).toEqual([
+      "A new chat started. Work that runs goes on.",
+    ]);
+    expect(await chat(env, ["history"])).toEqual([
+      `${stamp}  4 messages  Open Mail`,
+      "Open one with: clawdtime chat open TIME",
+    ]);
+    await expect(chat(env, ["open", "20261126"])).rejects.toThrow(chatBusyText);
+    const reads = new Set(["GET /desktop/state", "GET /desktop/chat"]);
+    expect(
+      service.requests
+        .map((request) => request.line)
+        .filter((path) => !reads.has(path)),
+    ).toEqual([
+      "POST /desktop/chat/new",
+      "GET /desktop/chat/history",
+      "GET /desktop/chat/history",
+      "POST /desktop/chat/open",
+    ]);
+    expect(
+      service.requests.every(
+        (request) => request.authorization === `Bearer ${credential}`,
+      ),
+    ).toBe(true);
+    const posted = service.requests.filter((request) =>
+      request.line.startsWith("POST"),
+    );
+    expect(posted.map((request) => JSON.parse(request.body))).toEqual([
+      {},
+      { id: stamp },
+    ]);
+    // The service owns the chat: the command's own files did not change.
+    expect(chatFiles(state)).toEqual(["chat.jsonl"]);
+  });
+
+  it("say that no answer came, and send nothing again, when the service took the request and went silent", async () => {
+    const service = await madeUpService((_method, _path, response) =>
+      json(response, 500, {}),
+    );
+    const state = temporary();
+    new ChatLog(state).append(line("user", "kept"));
+    await expect(
+      chat(
+        {
+          CLAWDTIME_CONFIG_HOME: state,
+          CLAWDTIME_DESKTOP_STATE: described(service.origin),
+        },
+        ["clear"],
+      ),
+    ).rejects.toThrow(desktopChatLostText);
+    expect(
+      service.requests.filter((request) => request.line.startsWith("POST")),
+    ).toHaveLength(1);
+    expect(chatFiles(state)).toEqual(["chat.jsonl"]);
   });
 });

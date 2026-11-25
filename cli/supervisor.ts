@@ -32,8 +32,12 @@ import {
   saveCallLink,
 } from "../connectors/agents/call.js";
 import {
+  asksForNewChat,
+  chatArchiveId,
   ChatLog,
   Supervisor,
+  switchChat,
+  type ArchivedChat,
   type ModelClient,
   historyForTurn,
   supervisorModel,
@@ -66,7 +70,11 @@ import { readProcesses } from "../connectors/agents/processes.js";
 import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
-import { sayToDesktop } from "../connectors/agents/desktop-chat.js";
+import {
+  changeDesktopChat,
+  desktopChatHistory,
+  sayToDesktop,
+} from "../connectors/agents/desktop-chat.js";
 import { markTextTurn } from "../connectors/computer/reach.js";
 import {
   userMessageLimit,
@@ -177,6 +185,10 @@ export const supervisorHelp = `Answer agents, and what ClawdTime remembers
   browser tabs | open URL | focus N | text   list, open, bring forward, read the front page
   chat [TEXT]                          talk to ClawdTime in text: it answers and can act. With TEXT,
                                        the desktop service answers when it runs
+  chat new | chat clear                start a new chat. The current one is kept, never deleted.
+                                       Work that runs goes on. Typing "new chat" in the chat does the same
+  chat history                         the chats that were put aside: their time and first words
+  chat open TIME                       make one of them the current chat again; the current one is kept
   talk                                 the same by voice: you speak, it speaks back
   jobs [--json]                        work that ClawdTime handed to a new coding session, and its answers
   jobs retire ID --reason TEXT         retire an unresolved record; does not stop its process or replay it
@@ -872,6 +884,71 @@ export async function supervisorCli(
     return;
   }
 
+  // A new chat, the chats that were put aside, and one of them back. The
+  // desktop service does it when it runs: it owns the chat of the panel and
+  // knows what waits for the person. With no service, the command changes the
+  // files itself. A word that does not fit is a message: "open Safari".
+  const desktopOptions = deps.request ? { request: deps.request } : {};
+  const kept = async (): Promise<ArchivedChat[]> =>
+    (await desktopChatHistory(system, desktopOptions)) ??
+    new ChatLog(root).history();
+  const newChatHere = async (
+    change: "new" | { open: string },
+    supervisor?: Supervisor,
+  ) => {
+    const sent = await changeDesktopChat(system, change, desktopOptions);
+    if (sent.kind !== "absent")
+      return {
+        ok: sent.kind === "answered" && sent.ok === true,
+        text: sent.text,
+      };
+    const result = switchChat(new ChatLog(root), change, system.now());
+    if (result.ok) supervisor?.newConversation();
+    return result;
+  };
+  if (group === "chat" && args.length === 1 && args[0] === "history") {
+    const chats = await kept();
+    if (!chats.length)
+      return print(
+        "No chat is kept yet. clawdtime chat new puts the current chat aside.",
+      );
+    for (const chat of chats)
+      print(
+        `${chat.id}  ${chat.messages} ${chat.messages === 1 ? "message" : "messages"}  ${chat.first || "(no words)"}`,
+      );
+    return print("Open one with: clawdtime chat open TIME");
+  }
+  const opens =
+    group === "chat" &&
+    args.length === 2 &&
+    args[0] === "open" &&
+    /^[0-9]{8}/.test(args[1]!);
+  if (
+    group === "chat" &&
+    (opens || (args.length === 1 && (args[0] === "new" || args[0] === "clear")))
+  ) {
+    let change: "new" | { open: string } = "new";
+    if (opens) {
+      // The full time, or its start when only one kept chat has it.
+      const wanted = args[1]!.toUpperCase();
+      const matches = chatArchiveId.test(wanted)
+        ? [wanted]
+        : (await kept())
+            .map((chat) => chat.id)
+            .filter((id) => id.startsWith(wanted));
+      if (matches.length !== 1)
+        throw new Error(
+          matches.length
+            ? `"${args[1]}" fits ${matches.length} kept chats. Give more of the time. Run: clawdtime chat history`
+            : `No kept chat has the time ${args[1]}. Run: clawdtime chat history`,
+        );
+      change = { open: matches[0]! };
+    }
+    const result = await newChatHere(change);
+    if (!result.ok) throw new Error(result.text);
+    return print(result.text);
+  }
+
   if (group === "chat" && args.length && !args[0]!.startsWith("-")) {
     // One message: when the desktop service runs, it answers. It has the
     // task, the engine for computer work and the conversation of the panel,
@@ -955,6 +1032,9 @@ export async function supervisorCli(
     const log = new ChatLog(root);
     const turn = async (words: string, via: "chat" | "voice") => {
       if (words.length > userMessageLimit) return userMessageTooLong;
+      // "New chat", typed: no turn of the brain, and no line of it is kept.
+      if (via === "chat" && asksForNewChat(words))
+        return (await newChatHere("new", supervisor)).text;
       const history = log.recent(historyForTurn);
       log.append({
         role: "user",
