@@ -265,8 +265,8 @@ Monday`, `next week`, `at 5`, `5pm`, `17:30`, `Dec 5`) anywhere in any
     letters as typed, the words hold.
   - A question about what ClawdTime can do, with a generic object and no
     target ("Can you click buttons on my screen?", "can u use my mac?", "are
-    you able to open apps"), holds. "Can you click the Send button?" is an
-    order.
+    you able to open apps", "can you search the web?"), holds. "Can you click
+    the Send button?" is an order.
 
   The casual reading works one way only. It can make words stop or hold more
   easily, and it can read a clear screen order with a typo or a casual form as
@@ -874,9 +874,10 @@ A question, a bare yes or no, a request for the state and a sentence about a
 session or an agent are never handed over, whatever the model asks. A question
 about what ClawdTime can do, in the form of a polite request with a generic
 object and no target ("Can you click buttons on my screen?", "can u use my
-mac?", "are you able to open apps"), is answered and starts nothing, on every
-road to the worker (`asksWhatItCanDo` in `orders.ts`). "Can you click the Send
-button?" names a target and starts a task. A
+mac?", "are you able to open apps", "can you look things up?"), is answered
+and starts nothing, on every road to the worker (`asksWhatItCanDo` in
+`orders.ts`). "Can you click the Send button?" and "can you search running
+shoes?" name a target and start a task. A
 question that asks for a reading of an app or a page ("did Sam reply on
 Slack?") goes to the worker by the code's road.
 
