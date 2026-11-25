@@ -3280,12 +3280,7 @@ export class ComputerWorker implements DesktopExecutorPort {
   ) {
     this.note(run, action, why, ready.target, `refused: ${reason}`, "refused");
     if ((run.refusals = refused + 1) >= 3)
-      this.finish(
-        run,
-        "blocked",
-        "too_many_refusals",
-        `${refusalsText} The last reason: ${reason}`,
-      );
+      this.finish(run, "blocked", "too_many_refusals", refusalsText(reason));
   }
   /**
    * The action was not sent: the screen is not what the planner saw, or the
