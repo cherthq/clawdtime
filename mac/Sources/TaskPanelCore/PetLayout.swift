@@ -102,6 +102,38 @@ public enum PetLayout {
     frame.origin.x = max(visible.minX + 8, min(frame.origin.x, visible.maxX - size.width - 8))
     return frame
   }
+
+  /// The close button and the side button stand in one column at the top of the mascot:
+  /// the close button on top, the side button just under it.
+  public static let buttonDiameter: CGFloat = 26, buttonInset: CGFloat = 4, buttonGap: CGFloat = 6
+  /// The side of that column. On a tucked mascot it is the side away from the edge, so the
+  /// buttons stay on the screen and leave the edge free. On a free mascot it is the right side.
+  public static func buttonSide(docked: PetSide?) -> PetSide {
+    docked == .right ? .left : .right
+  }
+  /// The two buttons at rest, in the mascot's window (origin at its bottom left).
+  public static func buttons(size: CGSize, side: PetSide) -> (close: CGRect, side: CGRect) {
+    let x = side == .left ? buttonInset : size.width - buttonInset - buttonDiameter
+    let close = CGRect(x: x, y: size.height - buttonInset - buttonDiameter, width: buttonDiameter, height: buttonDiameter)
+    return (close, close.offsetBy(dx: 0, dy: -(buttonDiameter + buttonGap)))
+  }
+  /// Where a press reaches the buttons: the two circles and a little room around them, in the window.
+  public static func buttonsArea(size: CGSize, side: PetSide) -> CGRect {
+    let both = buttons(size: size, side: side)
+    return both.close.union(both.side).insetBy(dx: -6, dy: -6).intersection(CGRect(origin: .zero, size: size))
+  }
+  /// The stone and its ring: an ellipse in the mascot's window, in screen coordinates.
+  public static func overStone(pointer: CGPoint, window box: CGRect) -> Bool {
+    let dx = (pointer.x - box.midX) / (box.width * 0.42), dy = (pointer.y - (box.midY - 4)) / (box.height * 0.36)
+    return dx * dx + dy * dy <= 1
+  }
+  /// The mascot's window takes a press on the stone, and on the buttons while they show
+  /// (`shown` above 0.3). Every other press goes to whatever is behind the mascot.
+  public static func takesPress(pointer: CGPoint, window box: CGRect, buttons side: PetSide, shown: Double) -> Bool {
+    if overStone(pointer: pointer, window: box) { return true }
+    guard shown > 0.3 else { return false }
+    return buttonsArea(size: box.size, side: side).offsetBy(dx: box.minX, dy: box.minY).contains(pointer)
+  }
 }
 
 /// What the mascot says about everything it supervises, in words and in mood.
