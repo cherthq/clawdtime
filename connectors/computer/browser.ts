@@ -456,6 +456,42 @@ const answerSchema = z.union([
     .strict(),
 ]);
 
+/** One answer of the page script, as checked. */
+export type PageAnswer = z.infer<typeof answerSchema>;
+/** The reading in an answer of the page script. */
+export type PageReading = NonNullable<
+  Extract<PageAnswer, { ok: true }>["page"]
+>;
+
+/**
+ * Reads one answer of the page script. A page is not trusted: text that is
+ * not exactly an answer that the script gives is null.
+ */
+export function parsePageAnswer(text: string): PageAnswer | null {
+  try {
+    return answerSchema.parse(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The page of one reading. A password field never carries its value: the
+ * page script never sends it, and a page that tampers with the answer
+ * cannot either.
+ */
+export function pageOfReading(
+  browser: BrowserPage["browser"],
+  reading: PageReading,
+): BrowserPage {
+  const elements = reading.elements.map((element): BrowserElement => {
+    if (!element.password) return element;
+    const { value: _secret, ...rest } = element;
+    return rest;
+  });
+  return { browser, ...reading, elements };
+}
+
 const refusal = (result: { reason: string; closed?: true }) =>
   result.closed ? new BrowserClosed(result.reason) : new Error(result.reason);
 
@@ -749,12 +785,8 @@ export class AppleEventsBrowser implements BrowserPort {
       await this.command(["-e", runScript(browser), script]),
     );
     if ("reason" in result) throw refusal(result);
-    let answer: z.infer<typeof answerSchema>;
-    try {
-      answer = answerSchema.parse(JSON.parse(result.text));
-    } catch {
-      throw new Error(unreadable(browser));
-    }
+    const answer = parsePageAnswer(result.text);
+    if (!answer) throw new Error(unreadable(browser));
     if (!answer.ok) throw new Error(oneLine(answer.error, 300));
     if (answer.next !== undefined) this.next = Math.max(this.next, answer.next);
     return answer;
@@ -764,17 +796,7 @@ export class AppleEventsBrowser implements BrowserPort {
   private async look(browser: SupportedBrowser) {
     const answer = await this.ask(browser, { do: "read" });
     if (!answer.page) throw new Error(unreadable(browser));
-    const elements = answer.page.elements.map((element): BrowserElement => {
-      if (!element.password) return element;
-      // The page script never sends it. A page that tampers with the answer cannot either.
-      const { value: _secret, ...rest } = element;
-      return rest;
-    });
-    const page: BrowserPage = {
-      browser: browser.family,
-      ...answer.page,
-      elements,
-    };
+    const page = pageOfReading(browser.family, answer.page);
     return { ready: answer.ready === true, page };
   }
 
