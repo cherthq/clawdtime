@@ -181,7 +181,8 @@ describe("what a computer request teaches memory", () => {
       },
     ]);
     // What the planner said and what the page showed are not kept.
-    expect(readFileSync(factsFile(root), "utf8")).not.toMatch(/499|black/);
+    // A word boundary: the digits of a time in the file are not the price.
+    expect(readFileSync(factsFile(root), "utf8")).not.toMatch(/\b499\b|black/);
 
     // The next request reads what this one taught.
     const next = setup([done], computerMemory(memory));
@@ -220,7 +221,7 @@ describe("what a computer request teaches memory", () => {
       'Worked on the request "Sign up for the phone shop newsletter". It was done.',
     ]);
     const kept = readFileSync(factsFile(root), "utf8");
-    expect(kept).not.toMatch(/fifteen|Which email|499/);
+    expect(kept).not.toMatch(/fifteen|Which email|\b499\b/);
   });
 
   it("keeps nothing while memory is off", async () => {

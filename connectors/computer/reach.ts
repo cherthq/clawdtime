@@ -3,8 +3,9 @@
  *
  * The worker asks in the chat. When the owner does not answer there in a short
  * time, the reach places ONE call to the owner on the Chert line, through the
- * proactive call path of the line, and says the question in one or two plain
- * sentences. When that call fails, is not answered, or the line is not set up,
+ * call side that the service gives it (the retained proactive call path of
+ * the line, or the Calls API of Chert in calls-api.ts), and says the question
+ * in one or two plain sentences. When that call fails, is not answered, or the line is not set up,
  * it sends ONE text to the owner instead. The owner's answer, spoken or texted,
  * goes to the worker's own `answer`, as an answer in the chat does: the worker
  * reads it with its own rules, and a yes is never inferred here. A question
@@ -895,6 +896,43 @@ export class OwnerReach {
     return message;
   }
 
+  /**
+   * The owner's words said on a call of the Calls API, for that question: the
+   * same `reply` as any answer on a call. `done` is true when the question no
+   * longer waits for this call: it was answered or stopped, it went away, or
+   * it only reported the end of a task.
+   */
+  async callAnswer(
+    questionId: string,
+    words: string,
+  ): Promise<{ message: string; done: boolean }> {
+    const message = await this.reply(words, "call", questionId);
+    const item = this.item;
+    return {
+      message,
+      done:
+        !item ||
+        item.id !== questionId ||
+        item.kind === "blocked" ||
+        item.answeredVia !== undefined,
+    };
+  }
+
+  /** Stop said on a call stops the computer work, whatever it asked. */
+  stopFromCall(questionId?: string): string {
+    const item = this.item;
+    if (item && questionId !== undefined && item.id === questionId) {
+      item.answeredVia = "call";
+      this.record(item, "stopped_by_call");
+    }
+    try {
+      return this.options.worker.stop().message ?? "Stopped.";
+    } catch {
+      // Stop is asked again by the next word or button.
+      return "The stop did not answer. Say stop again, or press Stop on the Mac.";
+    }
+  }
+
   /** What the proactive call path of the line asks of the reach. */
   proactiveSource() {
     return {
@@ -928,20 +966,11 @@ export class OwnerReach {
           : Promise.resolve(reachReplies.gone),
       /** Stop said on the call stops the computer work, whatever it asked. */
       stop: (intent: ProactiveCallIntent) => {
-        const item = this.item;
-        if (
-          item &&
-          intent.source.kind === "computer" &&
-          item.id === intent.source.decisionId
-        ) {
-          item.answeredVia = "call";
-          this.record(item, "stopped_by_call");
-        }
-        try {
-          this.options.worker.stop();
-        } catch {
-          // Stop is asked again by the next word or button.
-        }
+        this.stopFromCall(
+          intent.source.kind === "computer"
+            ? intent.source.decisionId
+            : undefined,
+        );
       },
     };
   }

@@ -1414,19 +1414,89 @@ What holds every time:
   on the Mac yourself, then say done. A reply that holds such a number is
   refused and never passed on. For a question that asks for one, a reply with
   any digit is refused.
-- The call goes through the proactive call path of the line: one spoken alert
-  for one question, under your calling policy, with the same receipts and the
-  same rule against a redial. It shares no screen, so the worker keeps the
-  screen while it rings and can take the answer that you say on it.
+- The call goes through one of two call paths (see "Which call path" below):
+  one spoken alert for one question, with the same rule against a redial. It
+  shares no screen, so the worker keeps the screen while it rings and can take
+  the answer that you say on it.
 - Every attempt and its outcome is kept in `computer/reach.json`: the kind of
   question, the times and one fixed word for each outcome. Never a question,
   an answer or a typed text.
 
 The reach is on when the worker is on. `CLAWDTIME_COMPUTER_REACH=off` turns it
-off. It calls when the line is set up for proactive calls: an outbound line in
-`proactive.json` of the desktop service, and one active calling policy of the
-project with the `decision` trigger and the `phone_alert` channel (and
-`failure` for a request that ended blocked). It texts when the settings of the
+off.
+
+#### Which call path
+
+The desktop service gives the reach one call path when it starts:
+
+- **The retained provider** (`chert-dev-retained-v1`), when `proactive.json`
+  of the desktop service names it and the service could load it. It also
+  needs one active calling policy of the project with the `decision` trigger
+  and the `phone_alert` channel (and `failure` for a request that ended
+  blocked). This provider runs only with one pinned build of
+  `@trychert/facetime` and of Node.
+- **The Chert Calls API** (`chert-calls-api`, in
+  `connectors/computer/calls-api.ts`), in every other case. It works with any
+  build of the chert command. It is ready when these are there: the project
+  API key (`chert-key.json`, or `CHERT_API_KEY` with `CHERT_PROJECT_ID`), the
+  line of the project (`calls.json`, which `clawdtime connect` writes, or
+  `CHERT_LINE_ID`), your number with your yes (`owner.json`), and the LiveKit
+  keys, `OPENAI_API_KEY` and `AGENT_NAME` in `line/.env.local`.
+
+`clawdtime computer doctor` says which path is ready ("calls to you: ready
+(Chert Calls API)"), or the exact piece that is missing.
+
+#### A call over the Chert Calls API
+
+1. The desktop service makes a new LiveKit room for the question, in the
+   LiveKit project of `line/.env.local`, and sends the line agent into it
+   through the agent dispatch API of LiveKit. The job metadata is
+   `{kind: "reach", requestId, questionId, question, answerOrigin}`. It holds
+   no key and no token. The line agent reads its capability for this one call
+   from an owner-only file, `computer/reach-calls/<questionId>.json`.
+2. The line agent joins, publishes its audio and says that it is ready. Only
+   when LiveKit shows it alone in the room, with one audio track that is not
+   muted, is the call placed. When it does not come within 25 seconds, no
+   call is placed and the text goes.
+3. The call: `POST /api/v1/calls` of `https://facetime.trychert.com`
+   (`CHERT_CALLS_API_BASE` changes it), `mode: customer_managed`, your number,
+   the line, audio always and video only when the line has video, a bridge
+   token for this one room with its own identity (15 minutes), and the
+   identity of the line agent. The idempotency key belongs to the question. A
+   request that got no answer at all is sent again, at most twice, with the
+   same body and the same key, so it can never place a second call. Any
+   answer of Chert ends the retries.
+4. The desktop service reads the call and its events about once a second. On
+   `bridge_ready` it sets `chert_bridge_ready: true` in the room metadata, and
+   the line agent greets with the question.
+5. The line agent posts your words to `POST /computer/reach/call/<questionId>`
+   of the desktop service, with its capability. They go to the reach as an
+   answer said on a call, only once FaceTime is ready: the line agent greets
+   on the ready mark alone. Stop stops the computer task. The line agent never
+   asks for a password, a code, a card or another private number: a question
+   that asks for one, or names one, is not said, as a second check after the
+   reach's own. The copy of the question in the LiveKit job has no long
+   numbers; the line agent says the one that the desktop service gives it.
+6. Once your answer settles the question, the line agent says a short
+   goodbye and leaves, and the call ends (`POST /api/v1/calls/{id}/end`, with
+   its own idempotency key). A call also ends when it rings 90 seconds without
+   FaceTime being ready, 4 minutes after it was ready, or when the question
+   goes away.
+7. The outcome goes to the reach: answered (you picked up), no answer, failed
+   (no call reached you) or unknown. The text then goes exactly as with the
+   other path. An unknown outcome stays unknown and is never placed again,
+   also after a restart. A call that Chert had allocated when the desktop
+   service stopped is ended when it starts again. `computer/reach-calls.json` keeps ids, states and
+   fixed codes, never a number, a key, a token or a word of the question.
+
+The line agent must run the code of this checkout with the same LiveKit keys,
+and with the same state folder (`CLAWDTIME_CONFIG_HOME`) as the desktop
+service. Restart it after an update. A line that is in another call gets no
+reach call: the text goes instead.
+
+#### Texts
+
+It texts when the settings of the
 text channel (`CHERT_API_KEY`, `CHERT_PROJECT_ID`, `CLAWDTIME_OWNER_PHONE`,
 and `CHERT_LINE_ID` or a first text from you) are in the environment of the
 desktop service. `clawdtime computer doctor` says for both whether they can
