@@ -3,9 +3,11 @@ import Darwin
 import Foundation
 import TaskPanelCore
 
-/// The app: one mascot on the desktop and one board that opens out of it. The task
-/// service owns every fact. This process shows them, sends the person's actions once,
-/// and keeps a receipt for each.
+/// The app: one mascot on the desktop and the chat that opens out of it. ClawdTime is a
+/// computer use agent: the person gives it work in the chat, and coding agents run only in
+/// the background, for code work. Nothing here lists coding sessions. The task service owns
+/// every fact. This process shows them, sends the person's actions once, and keeps a receipt
+/// for each.
 @MainActor final class TaskPanelApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var exitStatus: Int32 = 0
   private var reopenName: Notification.Name?
@@ -15,6 +17,7 @@ import TaskPanelCore
   private var client: PanelClient?
   private var state = PanelState()
   private var pollTask: Task<Void, Never>?
+  /// The coding-agent sessions, read only for the mascot's bubble.
   private var board: AgentBoard?
   private var decisions: PendingDecisions?
   /// What the watcher found: a long wait, a stall, a bad end, finished work.
@@ -23,12 +26,8 @@ import TaskPanelCore
   private var celebrated: Set<String> = []
   private var awayItems: [NSMenuItem] = []
   private var memoryItems: [NSMenuItem] = []
-  private var showRevision = false
-  private var lastTaskId: String?
   private var startTucked = false
-  private var localNotice = ""
   private let pet = PetController()
-  private let boardPanel = SheetController(BoardView(frame: NSRect(x: 0, y: 0, width: BoardView.width, height: 400)))
   private let chatPanel = SheetController(ChatView(frame: NSRect(x: 0, y: 0, width: ChatView.width, height: 400)))
   private let voice = VoiceController()
   /// Computer use: the panel sees the screen and sends input for the worker.
@@ -65,7 +64,6 @@ import TaskPanelCore
 
   private func actions(into menu: NSMenu) {
     menu.addItem(withTitle: "Show ClawdTime", action: #selector(showPanel), keyEquivalent: "0").target = self
-    menu.addItem(withTitle: "Open or close the board", action: #selector(toggleBoard), keyEquivalent: "b").target = self
     menu.addItem(withTitle: "Chat with ClawdTime", action: #selector(toggleChat), keyEquivalent: "k").target = self
     menu.addItem(withTitle: "Talk to ClawdTime", action: #selector(toggleTalk), keyEquivalent: "t").target = self
     menu.addItem(withTitle: "Tuck against the edge", action: #selector(tuck), keyEquivalent: "").target = self
@@ -222,7 +220,8 @@ import TaskPanelCore
       receipts = store; client = PanelClient(configuration: config); state.pending = store.entries
       wire(); render()
       pet.show()
-      if !startTucked { openBoard() }
+      // The chat opens beside the mascot, without the keys: the window in use keeps them.
+      if !startTucked { openChat(focus: false) }
       beginPolling()
       if let client { hands.start(client: client) }
     } catch let failure as PanelFailure { showStartupFailure(failure) }
@@ -236,25 +235,23 @@ import TaskPanelCore
   }
 
   private func wire() {
-    pet.onToggleBoard = { [weak self] in self?.toggleBoard(nil) }
     pet.onOpenSession = { [weak self] id in self?.openAgent(id) }
     pet.onDecide = { [weak self] id, decision in self?.decide(id, decision, nil, false) }
     pet.onDismissIncident = { [weak self] id in self?.dismissIncident(id) }
     pet.onStopSharing = { [weak self] in self?.perform(.stopSharing) }
     pet.onStopCall = { [weak self] in self?.perform(.stopCall) }
-    pet.onHide = { [weak self] in self?.closeBoard(); self?.chatPanel.close(); self?.voice.stop(); self?.pet.hide() }
+    pet.onHide = { [weak self] in self?.chatPanel.close(); self?.voice.stop(); self?.pet.hide() }
     pet.onMoved = { [weak self] in self?.followPet() }
     pet.menu = { [weak self] in self?.contextMenu() ?? NSMenu() }
     pet.afterFrame = { [weak self] step in
       guard let self else { return }
-      self.boardPanel.step(step); self.chatPanel.step(step)
-      self.pet.wantsBoost = !self.boardPanel.settled || !self.chatPanel.settled
+      self.chatPanel.step(step)
+      self.pet.wantsBoost = !self.chatPanel.settled
     }
-    boardPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.chatPanel.isOpen ?? false }
-    chatPanel.onClosed = { [weak self] in self?.pet.boardOpen = self?.boardPanel.isOpen ?? false }
-    // ClawdTime starts to use the Mac: the board and the chat get out of its way.
-    hands.onRunStarted = { [weak self] in self?.closeBoard(); self?.chatPanel.close() }
-    // The bar under the mascot, and the conversation it starts.
+    chatPanel.onClosed = { [weak self] in self?.pet.sheetOpen = false }
+    // ClawdTime starts to use the Mac: the chat gets out of its way.
+    hands.onRunStarted = { [weak self] in self?.chatPanel.close() }
+    // A click on the mascot, the bar under it, and the conversation they start.
     pet.onChat = { [weak self] in self?.toggleChat(nil) }
     pet.onTalk = { [weak self] in self?.startTalk() }
     pet.onMic = { [weak self] in self?.voice.micOn.toggle() }
@@ -272,55 +269,30 @@ import TaskPanelCore
     nativeExecutionPanel.onStop = { [weak self] in self?.stopExecution() }
     chat.onExecutionDecision = { [weak self] id, approve in self?.decideExecution(id, approve: approve) }
     chat.onClose = { [weak self] in self?.chatPanel.close() }
-    let view = boardPanel.view
-    view.onOpenSession = { [weak self] id in self?.openAgent(id) }
-    view.onDecide = { [weak self] id, decision, text, remember in self?.decide(id, decision, text, remember) }
-    view.onSubmit = { [weak self] text in self?.perform(.submit, text: text) }
-    view.onAnswer = { [weak self] text in self?.perform(.decide, text: text) }
-    view.onAccept = { [weak self] in self?.perform(.accept) }
-    view.onCancelTask = { [weak self] in self?.cancelTask() }
-    view.onRevise = { [weak self] in self?.showRevision = true; self?.render() }
-    view.onStopSharing = { [weak self] in self?.perform(.stopSharing) }
-    view.onStopCall = { [weak self] in self?.perform(.stopCall) }
-    view.onDock = { [weak self] in self?.tuck(nil) }
-    view.onClose = { [weak self] in self?.closeBoard() }
   }
 
-  // MARK: mascot and board
+  // MARK: mascot
 
   private var petScreen: CGRect { (pet.window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero }
   private func followPet() {
-    if boardPanel.isOpen { boardPanel.follow(pet: pet.frame, screen: petScreen) }
     if chatPanel.isOpen { chatPanel.follow(pet: pet.frame, screen: petScreen) }
-  }
-  private func openBoard() {
-    if pet.isDocked { pet.undock() }
-    // One sheet at a time: the board and the chat share the place beside the mascot.
-    chatPanel.close()
-    pet.boardOpen = true
-    boardPanel.open(pet: pet.frame, screen: petScreen)
-  }
-  private func closeBoard() { boardPanel.close() }
-  @objc private func toggleBoard(_ sender: Any?) {
-    if !pet.visible { pet.show() }
-    if boardPanel.isOpen { closeBoard() } else { openBoard() }
   }
   @objc private func tuck(_ sender: Any?) {
     if !pet.visible { pet.show() }
-    closeBoard(); chatPanel.close(); voice.stop(); pet.dock()
+    chatPanel.close(); voice.stop(); pet.dock()
   }
 
   // MARK: talking to ClawdTime
 
-  private func openChat() {
+  /// The chat, where the person gives ClawdTime work. `focus`: the person opened it to write.
+  private func openChat(focus: Bool = true) {
     if !pet.visible { pet.show() }
     if pet.isDocked { pet.undock() }
-    boardPanel.close()
-    pet.boardOpen = true
+    pet.sheetOpen = true
     renderChat()
     chatPanel.open(pet: pet.frame, screen: petScreen)
     // The person opened it to write: the field takes the keys.
-    chatPanel.window.makeKey(); chatPanel.view.focus()
+    if focus { chatPanel.window.makeKey(); chatPanel.view.focus() }
     refreshChat()
   }
   @objc private func toggleChat(_ sender: Any?) {
@@ -341,7 +313,6 @@ import TaskPanelCore
     // Release only our UI. AppKit returns focus; no AX activation or target
     // restoration is attempted. Native capture still verifies the real focus.
     chatPanel.close(immediately: true)
-    boardPanel.close(immediately: true)
   }
   private func decideExecution(_ id: String, approve: Bool) {
     guard let client, state.connected, executionControl.beginDecision(id) else { return }
@@ -447,7 +418,7 @@ import TaskPanelCore
   }
   @objc func showPanel(_ sender: Any?) {
     pet.show()
-    if !boardPanel.isOpen && !chatPanel.isOpen { openBoard() }
+    if !chatPanel.isOpen { openChat() }
   }
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showPanel(nil); return true }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -471,11 +442,12 @@ import TaskPanelCore
           self.hands.service(instance: snapshot.instanceId)
           for operation in snapshot.operations { try self.receipts?.observe(operation) }
           self.state.pending = self.receipts?.entries ?? []
-          // The board is optional. A service without one never affects the task state.
+          // The sessions are optional, for the mascot's bubble only. A service without them never
+          // affects the task state.
           self.board = try? await client.agents()
           // Reading this also tells the agents' hooks that someone is here to answer.
           self.decisions = try? await client.decisions()
-          // The watcher is optional, as the board is: a service without one changes nothing.
+          // The watcher is optional, as the sessions are: a service without one changes nothing.
           self.incidents = try? await client.incidents()
           // The chat is read while it is in view, and once at the start.
           if self.chatPanel.isOpen || self.voice.phase != .off || self.transcript == nil || self.executionControl.execution?.mode == "native" {
@@ -510,7 +482,6 @@ import TaskPanelCore
     let snapshot = state.snapshot, task = snapshot?.task
     let now = Date().timeIntervalSince1970 * 1000
     let liveBoard = board.flatMap { $0.isFresh(now: now) ? $0 : nil }
-    if task?.id != lastTaskId { showRevision = false; lastTaskId = task?.id; localNotice = "" }
     let taskNeedsPerson = task?.decision != nil || task?.canAccept == true
     let sharing = snapshot?.controls.sharingActive == true || snapshot?.controls.callActive == true
     let asked = (decisions?.pending ?? []).filter { $0.holdUntil > now }
@@ -525,35 +496,19 @@ import TaskPanelCore
     if let said, said.until > Date(), !chatPanel.isOpen {
       pet.status = PetStatus(mood: status.mood, headline: status.headline, detail: status.detail, bubble: said.bubble)
     } else { pet.status = status }
-    // Stop is always one click away: on the mascot, in the board and in every menu.
+    // Stop is always one click away: on the bar under the mascot and in every menu.
     pet.setStop(sharing: state.allows(.stopSharing), call: state.allows(.stopCall))
     refreshMenus()
-
-    var model = BoardModel()
-    model.status = status; model.board = liveBoard; model.now = now; model.decisions = asked
-    model.projectPath = configuration?.projectRoot ?? ""
-    model.modeText = snapshot?.worker == "simulation" ? "Simulation · tasks stay queued" : state.connected ? "Codex · independently checked" : "Connecting"
-    model.stage = state.stage; model.task = task
-    model.canSubmit = snapshot?.canSubmit != false && state.connected
-    model.showRevision = showRevision
-    model.allowSubmit = state.allows(.submit); model.allowDecide = state.allows(.decide)
-    model.allowAccept = state.allows(.accept); model.allowCancel = state.allows(.cancel)
-    model.allowStopSharing = state.allows(.stopSharing); model.allowStopCall = state.allows(.stopCall)
-    model.sharingActive = sharing; model.callStatus = state.callStatus
-    if !state.connected {
-      model.notice = "Connection unavailable. Existing work continues; no requests are repeated."
-    } else if state.pending.contains(where: \.unresolved) {
-      model.notice = "A request is unconfirmed. Checking its receipt; it will not be sent again."
-    } else if state.waitingForSnapshot {
-      model.notice = "Request recorded. Refreshing task progress."
-    } else if !localNotice.isEmpty {
-      model.notice = localNotice
-    } else if let message = snapshot?.notice, !message.isEmpty {
-      model.notice = message
-    } else if let last = snapshot?.operations.last, last.state == "refused" {
-      model.notice = "Request not applied. " + last.message
-    }
-    boardPanel.view.render(model)
+  }
+  /// One line that confirms what just happened, on the mascot. It leaves by itself.
+  private func note(_ text: String) {
+    // The first sentence is the title, the rest its detail.
+    let split = text.range(of: ". ")
+    let title = split.map { String(text[..<$0.lowerBound]) + "." } ?? text
+    let detail = split.map { String(text[$0.upperBound...]) } ?? ""
+    let bubble = PetStatus.Bubble(key: "note-" + UUID().uuidString, title: title, detail: detail, sessionId: nil, caption: true)
+    said = (bubble, Date().addingTimeInterval(4))
+    render()
   }
 
   // MARK: actions
@@ -567,7 +522,7 @@ import TaskPanelCore
     Task {
       let ok = (try? await client.answerDecision(id, decision: decision, text: text, remember: remember)) == true
       pet.react(success: ok)
-      boardPanel.view.showToast(!ok ? "That request no longer waits here. Answer it in its terminal."
+      note(!ok ? "That request no longer waits here. Answer it in its terminal."
         : decision == "allow" ? (remember ? "Allowed, and remembered for this project." : "Allowed. It continues.")
         : decision == "deny" ? "Denied. It is told." : "Answered. It continues.")
       decisions = try? await client.decisions()
@@ -581,7 +536,7 @@ import TaskPanelCore
       try? await client.setMemory(next)
       await readChat(client)
       refreshMenus(); renderChat()
-      boardPanel.view.showToast(transcript?.memory == true ? "Memory is on. ClawdTime keeps what you tell it." : "Memory is off. Nothing is kept.")
+      note(transcript?.memory == true ? "Memory is on. ClawdTime keeps what you tell it." : "Memory is off. Nothing is kept.")
     }
   }
   /// The person has seen what the watcher found. It leaves every view.
@@ -600,44 +555,25 @@ import TaskPanelCore
       try? await client.setAway(next)
       decisions = try? await client.decisions()
       refreshMenus()
-      boardPanel.view.showToast(next ? "Away. Requests wait for an answer by phone." : "Here. Requests are answered on this Mac.")
+      note(next ? "Away. Requests wait for an answer by phone." : "Here. Requests are answered on this Mac.")
     }
   }
-  /// Brings one session's terminal forward. This is not a task operation: it has no
-  /// receipt and it is safe to repeat.
+  /// Brings one session's terminal forward, from the bubble of a session that waits for the
+  /// person. This is not a task operation: it has no receipt and it is safe to repeat.
   private func openAgent(_ id: String) {
     guard let client else { return }
     Task {
       let result = try? await client.focusAgent(id)
-      let opened = result?.ok == true
-      pet.react(success: opened)
-      boardPanel.view.showToast(result?.message ?? "The task service did not answer. Nothing was opened.")
-      if opened {
-        // The terminal is what the person asked for: the board gets out of its way.
-        try? await Task.sleep(nanoseconds: 420_000_000)
-        closeBoard()
-      }
+      pet.react(success: result?.ok == true)
+      note(result?.message ?? "The task service did not answer. Nothing was opened.")
     }
   }
-  private func cancelTask() {
-    guard state.allows(.cancel), let task = state.snapshot?.task else { return }
-    let alert = NSAlert(); alert.messageText = "Cancel this task?"
-    alert.informativeText = "This requests cancellation of the coding work. It is separate from stopping a call or sharing."
-    alert.alertStyle = .warning; alert.addButton(withTitle: "Keep working"); alert.addButton(withTitle: "Cancel task")
-    alert.beginSheetModal(for: boardPanel.window) { [weak self] response in
-      guard response == .alertSecondButtonReturn, let self else { return }
-      guard self.state.snapshot?.task?.id == task.id, self.state.snapshot?.task?.runId == task.runId,
-        self.state.snapshot?.task?.revision == task.revision else {
-        self.localNotice = "The task changed. Review its current state before canceling."; self.render(); return
-      }
-      self.perform(.cancel)
-    }
-  }
-  private func perform(_ action: PanelAction, text: String = "") {
+  /// Stop sharing and Stop call: one POST each, with a receipt reserved before it.
+  private func perform(_ action: PanelAction) {
     guard let client, let receipts else { return }
     let id = "panel_" + UUID().uuidString.lowercased()
     do {
-      let payload = try JSONSerialization.data(withJSONObject: state.payload(action, text: text, eventId: id), options: [.sortedKeys])
+      let payload = try JSONSerialization.data(withJSONObject: state.payload(action, text: "", eventId: id), options: [.sortedKeys])
       try receipts.reserve(action: action, eventId: id, payload: payload)
       state.taskMutationBoundary(action)
       state.pending = receipts.entries; render()
@@ -646,17 +582,16 @@ import TaskPanelCore
           let operation = try await client.submit(payload, eventId: id, action: action)
           if operation.resolved { state.taskMutationBoundary(action) }
           try receipts.observe(operation)
-          if operation.state == "done" {
-            let view = boardPanel.view
-            if action == .submit && view.taskInput.string == text { view.clearTaskInput() }
-            if action == .decide && view.answerInput.string == text { view.clearAnswerInput(); showRevision = false }
-            pet.react(success: true)
-          } else if operation.state == "refused" { pet.react(success: false) }
-        } catch { try? receipts.markUnknown(id) }
+          if operation.state == "done" { pet.react(success: true) }
+          else if operation.state == "refused" { pet.react(success: false); note("Request not applied. " + operation.message) }
+        } catch {
+          try? receipts.markUnknown(id)
+          note("A request is unconfirmed. Checking its receipt; it will not be sent again.")
+        }
         state.pending = receipts.entries; render()
       }
     } catch {
-      localNotice = (error as? PanelFailure)?.errorDescription ?? "Request unavailable. No action was sent."
+      note((error as? PanelFailure)?.errorDescription ?? "Request unavailable. No action was sent.")
       state.pending = receipts.entries; render()
     }
   }

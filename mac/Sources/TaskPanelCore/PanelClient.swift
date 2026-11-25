@@ -66,7 +66,7 @@ public final class PanelClient {
     guard result.eventId == eventId else { throw PanelFailure.response }
     return result
   }
-  /// The board of coding-agent sessions. A service with no board answers with an error.
+  /// The coding-agent sessions on this Mac, for the mascot's bubble. A service with none answers with an error.
   public func agents() async throws -> AgentBoard {
     let result = try JSONDecoder().decode(AgentBoard.self, from: await request(path: "/desktop/agents"))
     try result.validate()

@@ -197,7 +197,7 @@ final class PetController: NSObject {
   private var phase = 0.0
   private let defaults = UserDefaults.standard
 
-  var onToggleBoard: (() -> Void)?
+  /// A bubble about one session that waits for the person: its terminal comes forward.
   var onOpenSession: ((String) -> Void)?
   /// request id, "allow" or "deny"
   var onDecide: ((String, String) -> Void)?
@@ -205,7 +205,8 @@ final class PetController: NSObject {
   var onDismissIncident: ((String) -> Void)?
   var onStopSharing: (() -> Void)?
   var onStopCall: (() -> Void)?
-  /// The bar under the mascot: chat, talk, and the controls of a conversation.
+  /// A click on the mascot, the chat button of its bar, or a bubble with no session: the chat
+  /// opens, where the person gives ClawdTime work. Nothing here lists sessions.
   var onChat: (() -> Void)?
   var onTalk: (() -> Void)?
   var onMic: (() -> Void)?
@@ -221,7 +222,8 @@ final class PetController: NSObject {
 
   private(set) var placement = Placement.free
   private(set) var visible = false
-  var boardOpen = false
+  /// The chat is open beside the mascot: the bubble waits until it closes.
+  var sheetOpen = false
   private var origin = CGPoint.zero
   private var dockY: CGFloat = 0
   /// The size that the person chose with the slider, and the window that it gives.
@@ -449,21 +451,28 @@ final class PetController: NSObject {
   fileprivate func release(_ event: NSEvent) {
     guard let gesture = drag else { return }
     drag = nil; mascot.pressed = false; mascot.dragVelocity = .zero
-    if gesture.didDrag {
-      let screen = visibleFrame
-      if let side = PetLayout.magneticSide(frame: window.frame, in: screen) {
-        // Let go against the left or right edge: it tucks there.
-        body.place(x: Double(window.frame.minX), y: Double(window.frame.minY)); bodyActive = false
-        mascot.motion = BodyPhysics.Frame(); mascot.held = false
-        mascot.land(); dock(side)
-      } else {
-        // Let go in the open: it keeps its speed, slows, and may bounce off an edge.
-        body.letGo()
-        if body.speed < 1 { mascot.land() }
-      }
-      updateSideButton()
-    } else if isDocked { undock() }
-    else { mascot.jump(); onToggleBoard?() }
+    // A click opens the chat, where the person gives ClawdTime work. It never opens a list of sessions.
+    switch MascotClick.release(didDrag: gesture.didDrag, docked: isDocked) {
+    case .none: settle()
+    case .undock: undock()
+    case .openChat: mascot.jump(); onChat?()
+    case .openSession: break
+    }
+  }
+  /// The end of a drag.
+  private func settle() {
+    let screen = visibleFrame
+    if let side = PetLayout.magneticSide(frame: window.frame, in: screen) {
+      // Let go against the left or right edge: it tucks there.
+      body.place(x: Double(window.frame.minX), y: Double(window.frame.minY)); bodyActive = false
+      mascot.motion = BodyPhysics.Frame(); mascot.held = false
+      mascot.land(); dock(side)
+    } else {
+      // Let go in the open: it keeps its speed, slows, and may bounce off an edge.
+      body.letGo()
+      if body.speed < 1 { mascot.land() }
+    }
+    updateSideButton()
   }
   private func decided(_ decision: String) {
     guard let shown = shownBubble, let request = shown.decisionId else { return }
@@ -473,7 +482,11 @@ final class PetController: NSObject {
   private func bubbleClicked() {
     guard let shown = shownBubble else { return }
     dismissedBubble = shown.key
-    if shown.caption { onChat?() } else if let session = shown.sessionId { onOpenSession?(session) } else { onToggleBoard?() }
+    switch MascotClick.bubble(shown) {
+    case .openSession(let session): onOpenSession?(session)
+    case .openChat: onChat?()
+    case .undock, .none: break
+    }
   }
   /// The mascot answers what the person did: a nod for yes, one shake for no.
   func react(success: Bool) { if success { mascot.nod() } else { mascot.shake() } }
@@ -541,14 +554,14 @@ final class PetController: NSObject {
       button.frame = NSRect(x: base + 13 * (1 - scale), y: size.height - 34 + 13 * (1 - scale) - 6 * (1 - shown), width: 26 * scale, height: 26 * scale)
     }
 
-    // The bubble: only when there is news, the board is closed, and it was not dismissed.
-    let news = status.bubble.flatMap { $0.key == dismissedBubble || boardOpen ? nil : $0 }
+    // The bubble: only when there is news, the chat is closed, and it was not dismissed.
+    let news = status.bubble.flatMap { $0.key == dismissedBubble || sheetOpen ? nil : $0 }
     if let news, news != shownBubble {
       shownBubble = news
       bubble.title.stringValue = news.title; bubble.detail.stringValue = news.detail
       bubble.showsActions = news.decisionId != nil; bubble.caption = news.caption
       bubble.needsLayout = true
-      bubble.toolTip = news.caption ? "Open the chat" : news.decisionId != nil ? "Answer here, or click to open the board" : news.sessionId == nil ? "Open the board" : "Open this session's terminal"
+      bubble.toolTip = MascotClick.hint(news)
     }
     bubbleShown.target = news == nil ? 0 : 1
     bubbleShown.step(step)
@@ -586,7 +599,7 @@ final class PetController: NSObject {
     afterFrame?(step)
     mascot.boost = !(x.settled && y.settled && buttons.settled && bubbleShown.settled && reveal.settled && lean.settled && barWidth.settled) || drag != nil || bodyActive || wantsBoost || voice > 0.02
   }
-  /// The board sets this while it opens or closes.
+  /// The chat sets this while it opens or closes.
   var wantsBoost = false
 
   // MARK: computer use
