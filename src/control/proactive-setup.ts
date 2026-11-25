@@ -11,7 +11,10 @@ import { ProactiveSourceAdapter } from "../../connectors/agents/proactive.js";
 import { interpret, callCanApprove } from "../../connectors/agents/call.js";
 import type { BoardFeed } from "../../connectors/agents/feed.js";
 import { readDesktopPrivateJSON } from "./task-desktop-config.js";
-import { ProactivePreparationService } from "./proactive-preparation.js";
+import {
+  ProactivePreparationService,
+  type ProactiveSourceEvidence,
+} from "./proactive-preparation.js";
 import { ProactiveReviewViews } from "./proactive-views.js";
 import {
   ProactiveService,
@@ -64,6 +67,15 @@ export const proactiveConfigSchema = z
       .optional(),
   })
   .strict();
+
+/** A question of the computer worker on this Mac, as the line asks about it. */
+export interface ProactiveComputerSource {
+  evidence(intent: ProactiveCallIntent): ProactiveSourceEvidence;
+  /** The owner's spoken words for that exact question. The answer is spoken back. */
+  answer(intent: ProactiveCallIntent, words: string): Promise<string>;
+  /** The owner asked on the call to stop the computer work. Stop only reduces control. */
+  stop(intent: ProactiveCallIntent): void;
+}
 
 export function createProactiveSetup(options: {
   tasks: TaskService;
@@ -212,10 +224,28 @@ export function createProactiveSetup(options: {
         : [],
     }),
   });
+  // The computer worker attaches its questions after the setup is built.
+  let computer: ProactiveComputerSource | undefined;
+  const computerEvidence = (
+    intent: ProactiveCallIntent,
+  ): ProactiveSourceEvidence =>
+    computer?.evidence(intent) ?? {
+      current: false,
+      sourceFingerprint: hash(JSON.stringify(intent.source)),
+      goal: "A computer task on this Mac",
+      status: "decision",
+      summary: "The computer worker is not attached.",
+      question: "The computer worker is not attached.",
+      checks: [],
+      artifacts: [],
+      views: [],
+    };
   const evidence = (intent: ProactiveCallIntent) =>
     intent.source.kind === "task"
       ? options.reviews.proactiveEvidence(intent)
-      : sources.inspectSource(intent);
+      : intent.source.kind === "computer"
+        ? computerEvidence(intent)
+        : sources.inspectSource(intent);
   const current = (intent: ProactiveCallIntent) => {
     try {
       return evidence(intent).current;
@@ -295,6 +325,10 @@ export function createProactiveSetup(options: {
             coordinator.cancel(pending.id, "stop_calling");
         return "Calling permission is revoked for this scope. Work remains under its existing permissions.";
       }
+      if (intent.source.kind === "computer")
+        return computer
+          ? computer.answer(intent, words)
+          : "That question no longer waits, so nothing was passed on.";
       if (intent.source.kind === "task")
         return options.reviews.applyProactiveAnswer(
           intent,
@@ -319,8 +353,18 @@ export function createProactiveSetup(options: {
       }
       return "This call reports the exact job result. It does not wake an idle coding chat or authorize more work. Start a revision through that job's supported session.";
     },
-    stopSharing: async (intent) =>
-      views?.release(intent.id) ?? { confirmed: true },
+    stopSharing: async (intent) => {
+      // A call about a computer question shares no screen. Its stop tool is
+      // the owner's Stop for the computer work, while the call is open; the
+      // end of the call itself stops nothing.
+      if (
+        intent.source.kind === "computer" &&
+        intent.attemptId &&
+        line.status(intent.attemptId)?.closed === false
+      )
+        computer?.stop(intent);
+      return views?.release(intent.id) ?? { confirmed: true };
+    },
     frame: async (intent) => views?.frame(intent) ?? null,
   });
   production =
@@ -376,6 +420,12 @@ export function createProactiveSetup(options: {
     preparation,
     service,
     line,
+    /** Lets the line ask about questions of the computer worker, and pass its answers. */
+    attachComputer(source: ProactiveComputerSource) {
+      computer = source;
+    },
+    /** An outbound line that can place a call is configured. */
+    deliveryConfigured: () => !!options.delivery || !!production,
     probe: () => production?.probe(),
     viewOccupied: () => views?.occupied ?? false,
     status: () => ({
