@@ -31,6 +31,7 @@ import {
 } from "../computer/navigation.js";
 import {
   asksWhatItCanDo,
+  latinLookalikes,
   readWords,
   spellStopWords,
 } from "../computer/orders.js";
@@ -402,9 +403,13 @@ const stopHoldsCodingWork = (words: string): boolean =>
  * work, and names no session, job, build, server, test run, watch, or coding
  * task.
  */
-const computerStopKind = (spoken: string): "explicit" | "general" | null => {
-  // A stop word with a typo ("stpo", "cancle", "stooop") is read as that
-  // stop word. Nothing else of the message changes.
+const computerStopKind = (spoken: string): "explicit" | "general" | null =>
+  // The words as typed, then with lookalike letters of another script read
+  // as Latin letters ("ѕtop іt"). Either reading that stops, stops.
+  stopKindOf(spoken) ?? stopKindOf(latinLookalikes(spoken));
+const stopKindOf = (spoken: string): "explicit" | "general" | null => {
+  // A stop word with a typo ("stpo", "cancle", "stp", "stooop") is read as
+  // that stop word. Nothing else of the message changes.
   const text = spellStopWords(clean(spoken, 400));
   if (!text || readWords(text) !== "stop") return null;
   // The stop word opens a clause (after fillers): "stop, don't click that",
@@ -10898,7 +10903,7 @@ export class Supervisor {
       // Stop remains available before any model request and invalidates an in-flight classification.
       if (
         /^(?:please\s+)?(?:stop|cancel|abort)(?:\s+(?:the\s+)?(?:task|job|work|everything))?[.!]*$/i.test(
-          words,
+          spellStopWords(words),
         )
       ) {
         this.intentEpoch++;
@@ -11499,7 +11504,7 @@ export class Supervisor {
           !taskIsOver(this.world.tasks.current()!)
         ) &&
         /^(?:please\s+)?(?:stop|cancel|abort)(?:\s+(?:computer(?: task)?|execution|browser(?: task)?))?[.!?]*$/i.test(
-          words,
+          spellStopWords(words),
         )
       )
         return execution.stop().message;

@@ -210,6 +210,8 @@ const table: readonly (readonly [string, WordKind, WordKind, Category])[] = [
   ["stop \u{1F914}", "stop", "stop", "stop"],
   ["can u stop?", "stop", "stop", "stop"],
   ["opne chrome. stop", "stop", "stop", "stop"],
+  // One letter doubled, as in "sttop": a typo of stop that stops.
+  ["stoop", "hold", "stop", "stop"],
 
   // Ordinary words near a stop word
   ["step", "hold", "hold", "near"],
@@ -217,7 +219,6 @@ const table: readonly (readonly [string, WordKind, WordKind, Category])[] = [
   ["atop", "hold", "hold", "near"],
   ["stow", "hold", "hold", "near"],
   ["top", "hold", "hold", "near"],
-  ["stoop", "hold", "hold", "near"],
   ["stow it", "hold", "hold", "near"],
   ["atop the page", "hold", "hold", "near"],
   ["click the shop button", "order", "order", "near"],
@@ -256,7 +257,8 @@ const table: readonly (readonly [string, WordKind, WordKind, Category])[] = [
   ["brb", "hold", "hold", "hold"],
   ["afk", "hold", "hold", "hold"],
   ["1 sec", "hold", "hold", "hold"],
-  ["click the button 1 sec", "order", "hold", "hold"],
+  // A time phrase holds as written too.
+  ["click the button 1 sec", "hold", "hold", "hold"],
   ["click it, jk", "hold", "hold", "hold"],
   ["click the button jk", "order", "hold", "hold"],
   ["nooo dont", "hold", "hold", "hold"],
@@ -1076,5 +1078,61 @@ describe("a secret in casual words, while a task runs", () => {
     const { casualWords } = await import("../connectors/computer/orders.js");
     const text = "tpye 4821 as the pin";
     expect(looksSecretStrict(casualWords(text))).toBe(true);
+  });
+});
+
+describe("natural words: lookalike letters and typos of stops and holds", () => {
+  it.each(["ѕtop іt", "STОP", "stóp", "cancél", "Srop"])(
+    "stops on %j",
+    (words) => {
+      expect(readWords(words)).toBe("stop");
+    },
+  );
+
+  it.each(["hat", "half", "stomp", "click the half price button"])(
+    "does not stop on %j, a word of its own",
+    (words) => {
+      expect(readWords(words)).not.toBe("stop");
+    },
+  );
+
+  it("spells out the stop word only, and leaves the other words as typed", () => {
+    expect(spellStopWords("stоp the tеsts")).toBe("stop the tеsts");
+    expect(spellStopWords("click the srop button")).toBe(
+      "click the stop button",
+    );
+  });
+
+  it("reads lookalike letters never less safely than the letters as typed", () => {
+    // A Cyrillic е in "send": the same order as typed and as Latin letters.
+    expect(readWords("click the sеnd button")).toBe("order");
+    // A Cyrillic о in "not": the negation holds.
+    expect(readWords("click the send button nоt the link")).toBe("hold");
+    // A backtick around a label is no quoted label.
+    expect(readWords("click `Send`")).toBe(readWordsAsWritten("click `Send`"));
+  });
+
+  it.each([
+    "click the Today button",
+    "open the 5 day forecast",
+    "click the send button on monday",
+    "click the send button tmrw",
+    "click the send button tomorow",
+    "click the send button till it loads",
+    "click the send button next week",
+    "click the send button at 17:30",
+  ])("holds on %j", (words) => {
+    expect(readWords(words)).toBe("hold");
+  });
+
+  it.each([
+    "click the send button",
+    "click on the 2nd result",
+    "press cmd+1",
+    "scroll down",
+    "click the shop button",
+    "opne chrome",
+  ])("still reads %j as an order", (words) => {
+    expect(readWords(words)).toBe("order");
   });
 });

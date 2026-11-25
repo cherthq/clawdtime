@@ -194,7 +194,9 @@ seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
   `until`, `before`, `if`, `unless`, `maybe`, `yet`, `nah`, `nope`,
   `nevermind`, `never mind`, `nvm`, `forget`, `i'm`, `i am`, `i'll`,
   `i will`, `i got`, `let me`, `already`, `on my cue`, `wrong`, `broken`,
-  `mess`) anywhere in any sentence holds, with one narrow exception for an
+  `mess`, or any time or date: `in an hour`, `in 5min`, `tomorrow`, `on
+Monday`, `next week`, `at 5`, `5pm`, `17:30`, `Dec 5`) anywhere in any
+  sentence holds, with one narrow exception for an
   earlier sentence (separated by `.`, `!`, or `, `) that only reports what
   the person sees or does not see (`I`, `it`, `the page`, or `nothing` with
   `see`, `open`, `load`, `happen`, `show`, `work`, or `blank` and their
@@ -239,16 +241,28 @@ seconds/minutes`, `a couple`, `pause`, `later`, `when`, `after`, `once`,
     near screen words, and a short deny list of English words ("clock",
     "chose", "filed", "lost", "fork", "widow", "potion" and others) stay as
     they are.
-  - Stops: a stop word swapped or misspelled stops (`stpo`, `sotp`, `cancle`,
-    `cancell`, `abrot`, `aboart`, `hlat`), and so do a long `stooop` and the
-    stop sign or stop button emoji. Ordinary words near a stop word ("step",
-    "shop", "atop", "stow", "top", "stoop") do not: "click the shop button" is
-    an order.
+  - Stops: a stop word with one typo stops (`stp`, `srop`, `sttop`, `stoop`,
+    `stpo`, `cancle`, `canceel`, `abortt`, `haltt`), and so do a long
+    `stooop` and the stop sign or stop button emoji. A typo is one as above,
+    so ordinary words near a stop word ("step", "shop", "atop", "stow", "top")
+    do not stop, and a short deny list ("hat", "half", "stomp") stays as it
+    is: "click the shop button" is an order. The chat reads a stop word with a
+    typo the same way, and stops the task.
   - Holds: a hold cue with a typo or without its apostrophe holds (`dnt`,
     `wiat`, `wair`, `hld on`, `hol up`, `nvmd`, `idk`, `dunno`, `im`,
     `lemme`, `gimme`, `brb`, `1 sec`, `jk`, `isnt`), and so does a cue with a
     doubled letter (`noo`, `waitt`, `nahh`) and an emoji of doubt, refusal or
     delay (a thinking face, an eye roll, a cross, a raised hand, an hourglass).
+    A hold cue with one typo holds too (`befor`, `untl`, `latr`, `waot`,
+    `nevr`; two typos in a word of 8 letters or more, as in `tomorow`), and
+    so do the short forms `wen`, `nt`, `b4`, `l8r`, `til`, `tmrw`.
+  - Lookalike letters and apostrophes: letters of another script that look
+    like Latin letters (a Cyrillic `о` in `stоp`, a Cyrillic `ѕ`, Greek
+    capitals), small capitals and accents read as the Latin letter, and other
+    marks for the apostrophe (an acute accent, a backtick, a modifier letter
+    apostrophe, a prime, as in "doesn´t") read as the apostrophe. This reading
+    only adds a stop or a hold: when it differs from the reading of the
+    letters as typed, the words hold.
   - A question about what ClawdTime can do, with a generic object and no
     target ("Can you click buttons on my screen?", "can u use my mac?", "are
     you able to open apps"), holds. "Can you click the Send button?" is an

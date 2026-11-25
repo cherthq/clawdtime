@@ -26,9 +26,183 @@ function normalize(text: string): { cased: string; lower: string } {
   return { cased, lower: cased.toLowerCase() };
 }
 
+/**
+ * Letters of other scripts that look the same as a Latin letter: Cyrillic,
+ * Greek and the small capitals. NFKC keeps them as they are, so "stоp" with
+ * a Cyrillic о is no "stop" to a pattern. The readers of stop, hold and
+ * negation words read these letters as the Latin letter they look like.
+ */
+const lookalikeLetters: Record<string, string> = {
+  // Cyrillic, small letters.
+  а: "a",
+  в: "b",
+  е: "e",
+  ѐ: "e",
+  ё: "e",
+  һ: "h",
+  і: "i",
+  ї: "i",
+  ј: "j",
+  к: "k",
+  ӏ: "l",
+  м: "m",
+  н: "h",
+  о: "o",
+  р: "p",
+  ԛ: "q",
+  ѕ: "s",
+  с: "c",
+  т: "t",
+  у: "y",
+  ү: "y",
+  х: "x",
+  ԁ: "d",
+  ԝ: "w",
+  ѡ: "w",
+  г: "r",
+  п: "n",
+  // Cyrillic, capital letters.
+  А: "A",
+  В: "B",
+  Е: "E",
+  Ѐ: "E",
+  Ё: "E",
+  Һ: "H",
+  І: "I",
+  Ї: "I",
+  Ӏ: "I",
+  Ј: "J",
+  К: "K",
+  М: "M",
+  Н: "H",
+  О: "O",
+  Р: "P",
+  Ԛ: "Q",
+  Ѕ: "S",
+  С: "C",
+  Т: "T",
+  У: "Y",
+  Ү: "Y",
+  Х: "X",
+  Ԝ: "W",
+  // Greek, small letters.
+  α: "a",
+  β: "b",
+  ε: "e",
+  η: "n",
+  ι: "i",
+  κ: "k",
+  ν: "v",
+  ο: "o",
+  ρ: "p",
+  ς: "s",
+  τ: "t",
+  υ: "u",
+  χ: "x",
+  ω: "w",
+  γ: "y",
+  // Greek, capital letters.
+  Α: "A",
+  Β: "B",
+  Ε: "E",
+  Ζ: "Z",
+  Η: "H",
+  Ι: "I",
+  Κ: "K",
+  Μ: "M",
+  Ν: "N",
+  Ο: "O",
+  Ρ: "P",
+  Τ: "T",
+  Υ: "Y",
+  Χ: "X",
+  // Latin small capitals and the dotless i.
+  ᴀ: "a",
+  ʙ: "b",
+  ᴄ: "c",
+  ᴅ: "d",
+  ᴇ: "e",
+  ɢ: "g",
+  ʜ: "h",
+  ɪ: "i",
+  ᴊ: "j",
+  ᴋ: "k",
+  ʟ: "l",
+  ᴍ: "m",
+  ɴ: "n",
+  ᴏ: "o",
+  ᴘ: "p",
+  ʀ: "r",
+  ꜱ: "s",
+  ᴛ: "t",
+  ᴜ: "u",
+  ᴠ: "v",
+  ᴡ: "w",
+  ʏ: "y",
+  ᴢ: "z",
+  ı: "i",
+};
+const lookalikePattern = new RegExp(
+  `[${Object.keys(lookalikeLetters).join("")}]`,
+  "gu",
+);
+/**
+ * Marks that people type for the apostrophe inside a word: an acute accent,
+ * a backtick, a modifier letter apostrophe, a prime. "doesn´t" is "doesn't".
+ * NFKC turns the acute accent into a space and a combining mark, so this
+ * runs before it.
+ */
+const apostropheMarks = /(?<=\p{L})[`´ʹʻʼʽˈ′‵‛＇](?=\p{L})/gu;
+
+/**
+ * The message with lookalike letters of other scripts read as Latin
+ * letters, accents taken off, and every apostrophe mark read as an
+ * apostrophe. For the readers of stop, hold and negation words only: a
+ * reading of it never counts for more than the reading of the words as they
+ * are (see `readWords`).
+ */
+export function latinLookalikes(text: string): string {
+  return text
+    .replace(apostropheMarks, "'")
+    .normalize("NFKD")
+    .replace(/\p{Mn}/gu, "")
+    .replace(lookalikePattern, (letter) => lookalikeLetters[letter] ?? letter)
+    .normalize("NFC");
+}
+
 /** A stop word anywhere in the message stops the task. */
 const stopWord =
   /\b(?:stop+|stah+p+|cancel|abort|halt)\b|\b(?:quit|kill)\s+it\b/;
+
+/**
+ * Any time or date: a delay ("in an hour", "in 5min", "in 2h"), a day
+ * ("tomorrow", "tonight", "on Monday", "next week"), a clock time ("at 5",
+ * "5pm", "17:30") or a date ("Dec 5", "12/25/2026"). Words with a time in
+ * them wait for that time: they hold.
+ */
+const timeUnit =
+  "(?:seconds?|secs?|minutes?|mins?|moments?|hours?|hrs?|days?|weeks?|wks?|months?|years?|yrs?|bit|while|few)";
+const monthName =
+  "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+const dayName =
+  "(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?";
+const timePhrase = [
+  String.raw`\bin\s+(?:\d+(?:[.,]\d+)?|[a-z]+(?:\s+[a-z]+)?)\s*${timeUnit}\b`,
+  String.raw`\b(?:\d+(?:[.,]\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty|few|several|couple(?:\s+of)?|half\s+an?)\s*-?\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)\b`,
+  String.raw`\b\d+(?:ms|s|m|h|hr|d)\b`,
+  String.raw`\b(?:today|tonight|tonite|tomorrow|tmrw|yesterday|soon|eventually|someday|sometime|afterwards?|overnight|weekend|noon|midnight|morning|afternoon|evening)\b`,
+  String.raw`\b${dayName}\b`,
+  String.raw`\b(?:next|this|every|each|coming)\s+(?:second|minute|hour|day|night|week|weekend|month|year|morning|afternoon|evening|time|${dayName})\b`,
+  String.raw`\b(?:hourly|daily|nightly|weekly|monthly|yearly)\b`,
+  String.raw`\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)(?![a-z])`,
+  String.raw`\b\d{1,2}:\d{2}\b`,
+  String.raw`\bat\s+\d{1,2}(?::\d{2})?(?=$|[\s,.;!?])`,
+  String.raw`\bo'?clock\b`,
+  String.raw`\b${monthName}\.?\s+\d{1,2}(?:st|nd|rd|th)?\b`,
+  String.raw`\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?${monthName}\b`,
+  String.raw`\b\d{1,2}\/\d{1,2}\/\d{2,4}\b`,
+  String.raw`\b\d{4}-\d{2}-\d{2}\b`,
+].join("|");
 
 /** Fillers that may precede a standalone continue phrase. */
 const continueFiller =
@@ -38,12 +212,14 @@ const continueMessage = new RegExp(
 );
 
 /** Anything that defers, negates, conditions, doubts, refuses or takes over anywhere in the message. */
-const deferOrDoubt =
-  /\b(?:not|no|never|wait|waiting|hold|holding|pause|paused|pausing|later|when|after|once|until|before|if|unless|maybe|yet|i'm|i\s+am|i'll|i\s+will|i(?:'ve)?\s+got|let\s+me|dont|doesnt|didnt|wont|cant|cannot|wouldnt|shouldnt|couldnt|hang\s+on|give\s+me|one\s+sec(?:ond)?|a\s+sec(?:ond)?|a\s+couple|nah|nope|nevermind|never\s+mind|nvm|forget|already|on\s+my\s+cue|wrong|broken|mess)\b|n't\b|\bin\s+(?:\d+|[a-z]+(?:\s+[a-z]+)?)\s+(?:seconds?|secs?|minutes?|mins?|moments?|bit|few)\b/;
+const deferOrDoubt = new RegExp(
+  String.raw`\b(?:not|no|never|wait|waiting|hold|holding|pause|paused|pausing|later|when|after|once|until|before|if|unless|maybe|yet|i'm|i\s+am|i'll|i\s+will|i(?:'ve)?\s+got|let\s+me|dont|doesnt|didnt|wont|cant|cannot|wouldnt|shouldnt|couldnt|hang\s+on|give\s+me|one\s+sec(?:ond)?|a\s+sec(?:ond)?|a\s+couple|nah|nope|nevermind|never\s+mind|nvm|forget|already|on\s+my\s+cue|wrong|broken|mess)\b|n't\b|\bin\s+(?:\d+|[a-z]+(?:\s+[a-z]+)?)\s+(?:seconds?|secs?|minutes?|mins?|moments?|bit|few)\b|${timePhrase}`,
+);
 
 /** Hold/delay/doubt/refusal cues that disqualify even an earlier observation report. */
-const hardHoldCue =
-  /\b(?:wait|waiting|hold|holding|pause|paused|pausing|later|when|after|once|until|before|if|unless|maybe|i'm|i\s+am|i'll|i\s+will|i(?:'ve)?\s+got|let\s+me|hang\s+on|give\s+me|one\s+sec(?:ond)?|a\s+sec(?:ond)?|a\s+couple|nah|nope|nevermind|never\s+mind|nvm|forget|already|on\s+my\s+cue|wrong|broken|mess|never|no|why|how|what|whether|should|would|could|but|so|because)\b|\bin\s+(?:\d+|[a-z]+(?:\s+[a-z]+)?)\s+(?:seconds?|secs?|minutes?|mins?|moments?|bit|few)\b/;
+const hardHoldCue = new RegExp(
+  String.raw`\b(?:wait|waiting|hold|holding|pause|paused|pausing|later|when|after|once|until|before|if|unless|maybe|i'm|i\s+am|i'll|i\s+will|i(?:'ve)?\s+got|let\s+me|hang\s+on|give\s+me|one\s+sec(?:ond)?|a\s+sec(?:ond)?|a\s+couple|nah|nope|nevermind|never\s+mind|nvm|forget|already|on\s+my\s+cue|wrong|broken|mess|never|no|why|how|what|whether|should|would|could|but|so|because)\b|\bin\s+(?:\d+|[a-z]+(?:\s+[a-z]+)?)\s+(?:seconds?|secs?|minutes?|mins?|moments?|bit|few)\b|${timePhrase}`,
+);
 
 /** Narrow earlier-sentence exception: only reports what the person sees or does not see. */
 const observationReportShapes = [
@@ -711,6 +887,28 @@ const casualWord: Record<string, string> = {
   unsure: "not sure",
   brb: "wait",
   afk: "wait",
+  w8t: "wait",
+  wt: "wait",
+  nt: "not",
+  wen: "when",
+  whn: "when",
+  b4: "before",
+  bfr: "before",
+  bfor: "before",
+  l8r: "later",
+  l8: "later",
+  ltr: "later",
+  til: "until",
+  till: "until",
+  nvr: "never",
+  tmr: "tomorrow",
+  tmrw: "tomorrow",
+  tmrrw: "tomorrow",
+  "2moro": "tomorrow",
+  "2morrow": "tomorrow",
+  "2day": "today",
+  "2nite": "tonight",
+  tonite: "tonight",
   // Stop words, swapped or misspelled. "Step", "shop", "atop", "stow" and
   // "top" are words of their own and are not here.
   stpo: "stop",
@@ -768,7 +966,30 @@ const holdCueWords = new Set([
   "wrong",
   "broken",
   "mess",
+  "today",
+  "tonight",
+  "tomorrow",
+  "yesterday",
+  "soon",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
 ]);
+
+/**
+ * Words of the rules that hold, with no apostrophe: a typo of one of these
+ * holds as well ("waitng", "doesnot", "cannnot").
+ */
+const holdTypoTargets = [
+  ...holdCueWords,
+  ..."waiting holding paused pausing cannot doesnt didnt wouldnt shouldnt couldnt".split(
+    " ",
+  ),
+];
 
 /** The screen verbs, screen nouns, key names and known app and browser names that a typo may stand for. */
 const typoVocabulary = [
@@ -895,7 +1116,9 @@ const ruleWords = new Set(
     "ticket fix add write change build create push merge deploy install rename remove update edit debug patch " +
     "replace revert ship go use try hit tap stop cancel abort halt quit kill stahp see show load happen work " +
     "bar url app apps row rows pane panel engine history screen computer mac laptop desktop machine " +
-    "device mouse keyboard cursor things stuff able possible know"
+    "device mouse keyboard cursor things stuff able possible know hour hours day days week weeks " +
+    "month months year years noon midnight morning afternoon evening weekend eventually someday sometime " +
+    "afterward afterwards overnight hourly daily nightly weekly monthly yearly clock while"
   ).split(" "),
 );
 
@@ -1105,6 +1328,53 @@ const knownWord = (word: string) =>
   word in casualWord;
 
 /**
+ * English words that are one typo away from a stop word but are words of
+ * their own: "hat" is no "halt", "half" no "halt", "stomp" no "stop". Words
+ * that the reader knows ("top", "step", "shop", "atop", "stow") are never a
+ * typo of a stop word either.
+ */
+const stopTypoDenyList = new Set(["hat", "half", "stomp", "sop"]);
+
+/**
+ * The stop word that a typed word stands for, or null: one typo away from
+ * "stop", "cancel", "abort" or "halt" ("stp", "srop", "sttop", "canceel",
+ * "abortt", "haltt"). A typo is what `typoCount` counts as one.
+ */
+function stopTypo(word: string): string | null {
+  if (stopWords.has(word)) return word;
+  if (word.length < 3 || !/^[a-z]+$/.test(word)) return null;
+  if (stopTypoDenyList.has(word) || knownWord(word)) return null;
+  for (const stop of ["stop", "cancel", "abort", "halt"])
+    if (Math.abs(stop.length - word.length) <= 1 && typoCount(word, stop) <= 1)
+      return stop;
+  return null;
+}
+
+/**
+ * A word one typo away from a hold cue that names a thing on a screen: the
+ * "layer" of a drawing is no "later". Any other such word holds: a hold is
+ * the safe reading.
+ */
+const holdTypoDenyList = new Set(["layer"]);
+
+/**
+ * The hold cue that a typed word of 4 letters or more stands for, or null:
+ * "befor", "untl", "latr", "waot", "nevr", "tomorow". Words of 8 letters or
+ * more take two typos. Every hold cue holds, so two near cues are no tie.
+ */
+function holdTypo(word: string): string | null {
+  if (word.length < 4 || !/^[a-z]+$/.test(word)) return null;
+  if (holdTypoDenyList.has(word) || knownWord(word)) return null;
+  for (const cue of holdTypoTargets) {
+    if (cue.length < 4) continue;
+    const limit = Math.min(word.length, cue.length) >= 8 ? 2 : 1;
+    if (Math.abs(cue.length - word.length) > limit) continue;
+    if (typoCount(word, cue) <= limit) return cue;
+  }
+  return null;
+}
+
+/**
  * A run of three or more of the same letter becomes one or two: "pleeease",
  * "stooop", "noooo". A known word wins; else every run becomes one letter
  * ("Fiiixing" is "Fixing").
@@ -1166,7 +1436,7 @@ function outsideKept(
 
 /** A word on its own: not part of a name such as worker.ts, sign-in, it's or a@b. */
 const wordToken =
-  /(?<![A-Za-z0-9'_\/@-])(?<![A-Za-z0-9]\.)[A-Za-z]+(?![A-Za-z0-9'_\/@-]|\.[A-Za-z0-9])|\bw8\b/g;
+  /(?<![A-Za-z0-9'_\/@-])(?<![A-Za-z0-9]\.)[A-Za-z]+(?![A-Za-z0-9'_\/@-]|\.[A-Za-z0-9])|\b(?:w8t?|b4|l8r?|2moro|2morrow|2day|2nite)\b/gi;
 
 /** True when the word at `index` opens a sentence. */
 function opensSentence(part: string, index: number, partOpens: boolean) {
@@ -1190,6 +1460,12 @@ function readWord(word: string, opens: boolean): string {
   if (knownWord(lower)) return short;
   const single = lower.replace(/([a-z])\1+/g, "$1");
   if (holdCueWords.has(single)) return single;
+  // A typo of a stop word stops and a typo of a hold cue holds, also in a
+  // word that looks like a name.
+  const stop = stopTypo(lower);
+  if (stop !== null) return stop;
+  const cue = holdTypo(lower);
+  if (cue !== null) return cue;
   const capitalized = /^[A-Z][a-z]/.test(short);
   if (capitalized && !opens) return short;
   const target = typoTarget(lower);
@@ -1251,22 +1527,28 @@ export function casualWords(text: string): string {
 }
 
 /**
- * The message with its stop words spelled out ("stpo", "cancle", "stooop",
- * a stop sign) and nothing else changed. Other readers of stop words use it.
+ * A word of any script on its own, for the reader of stop words. Its
+ * letters may be lookalike letters of another script ("stоp").
+ */
+const anyScriptWord =
+  /(?<![\p{L}\p{M}\p{N}'_\/@-])(?<![\p{L}\p{N}]\.)[\p{L}\p{M}]+(?![\p{L}\p{M}\p{N}'_\/@-]|\.[\p{L}\p{N}])/gu;
+
+/**
+ * The message with its stop words spelled out ("stpo", "cancle", "stp",
+ * "sttop", "stooop", "stоp" with a Cyrillic о, a stop sign) and nothing else
+ * changed. Other readers of stop words use it.
  */
 export function spellStopWords(text: string): string {
   return outsideKept(
     normalize(text).cased.replace(stopEmoji, " stop "),
     (part) =>
-      part.replace(wordToken, (word) => {
-        const lower = shortenRuns(word).toLowerCase();
+      part.replace(anyScriptWord, (word) => {
+        const lower = shortenRuns(latinLookalikes(word)).toLowerCase();
+        if (!/^[a-z]+$/.test(lower)) return word;
         const spelled = casualWord[lower];
-        if (
-          spelled !== undefined &&
-          /^(?:stop|cancel|abort|halt)\b/.test(spelled)
-        )
-          return spelled;
-        return stopWords.has(lower) ? lower : word;
+        if (spelled !== undefined)
+          return /^(?:stop|cancel|abort|halt)\b/.test(spelled) ? spelled : word;
+        return stopTypo(lower) ?? word;
       }),
   )
     .replace(/\s+/g, " ")
@@ -1320,6 +1602,20 @@ function asksAbility(text: string, casual: string): boolean {
  * - an order or a continue as written holds when its casual reading holds.
  */
 export function readWords(text: string): WordKind {
+  const plain = readPlainWords(text);
+  if (plain === "stop") return "stop";
+  // Lookalike letters of another script and other apostrophe marks hide no
+  // stop, hold or negation: "stоp" with a Cyrillic о stops, and "doesn´t"
+  // holds. That reading only ever adds a stop or a hold.
+  const latin = latinLookalikes(text);
+  if (latin === text) return plain;
+  const seen = readPlainWords(latin);
+  if (seen === "stop") return "stop";
+  return seen === plain ? plain : "hold";
+}
+
+/** `readWords` for the letters as they are. */
+function readPlainWords(text: string): WordKind {
   const written = readWordsAsWritten(text);
   if (written === "stop") return "stop";
   const casual = casualWords(text);
