@@ -36,6 +36,8 @@ export interface ProgressStep {
   after: string | null;
   /** An input went out in this step: a click, a key, text, a scroll, an open. */
   input: boolean;
+  /** Optional perceptual signal: true when AX and pixels were unchanged despite digest jitter. */
+  visualUnchanged?: boolean;
 }
 
 /** What is in front, to pick the other ways that fit. */
@@ -160,7 +162,7 @@ export class ProgressGuard {
   step(step: ProgressStep, context: ProgressContext): ProgressVerdict {
     if (step.before !== null) this.seen.add(step.before);
     const known = step.after !== null;
-    const fresh = known && !this.seen.has(step.after!);
+    const fresh = known && !step.visualUnchanged && !this.seen.has(step.after!);
     if (known) this.seen.add(step.after!);
     // Anything new on the screen is progress, also after a wait or a reading.
     if (fresh) this.still = stillRow();

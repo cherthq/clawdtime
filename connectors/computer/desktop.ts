@@ -125,11 +125,59 @@ export function sameSurface(before: Observation, after: Observation): boolean {
   return (
     before.surfaceEpoch === after.surfaceEpoch &&
     before.app.bundleId === after.app.bundleId &&
-    before.app.window === after.app.window &&
+    sameWindowTitle(before.app.window, after.app.window) &&
     before.screen.width === after.screen.width &&
     before.screen.height === after.screen.height &&
     before.screen.scale === after.screen.scale
   );
+}
+
+/**
+ * Strips transient dynamic adornments from a window title: unread counts like
+ * (3) or [12+] (never before a file extension like "Report (1).pdf"), leading
+ * dirty bullets, elapsed timers like 04:12 at title edges / inside brackets /
+ * isolated by separators, download percentages like 45%, and tab counts like
+ * "- 4 tabs". Never collapses a non-empty title to an empty string.
+ */
+export function normalizeDynamicTitle(title: string): string {
+  const base = cleanTitle(title).normalize("NFC");
+  if (!base) return "";
+  const timePattern = "\\d{1,2}:\\d{2}(?::\\d{2})?";
+  const stripped = base
+    .replace(/^[•●]\s+/u, "")
+    .replace(/(?:\(\s*\d+\+?\s*\)|\[\s*\d+\+?\s*\])(?!\.[A-Za-z0-9])/g, " ")
+    .replace(
+      new RegExp(`\\(\\s*${timePattern}\\s*\\)|\\[\\s*${timePattern}\\s*\\]`, "g"),
+      " ",
+    )
+    .replace(/(?:\s*[-–—|]\s*|\s+)\d+\s+tabs?\b/gi, " ")
+    .replace(/\b\d{1,3}(?:\.\d+)?%/g, " ")
+    .replace(/\(\s*\)|\[\s*\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(new RegExp(`^${timePattern}(?=\\s|$)`), " ")
+    .replace(new RegExp(`(?:\\s*[-–—|]\\s*|\\s+)${timePattern}$`), " ")
+    .replace(
+      new RegExp(`(?<=[-–—|]\\s+)${timePattern}(?=\\s*[-–—|]|\\s*$)`, "g"),
+      " ",
+    )
+    .replace(/(?:\s*[-–—|]\s*){2,}/g, " - ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[-–—|:]+\s+|\s+[-–—|:]+$/g, "")
+    .trim();
+  return stripped || base;
+}
+
+/**
+ * True when two window titles identify the same window, tolerating transient
+ * dynamic updates (unread badges, dirty bullets, timers, percentages, tab counts).
+ */
+export function sameWindowTitle(before: string, after: string): boolean {
+  if (before === after) return true;
+  const left = normalizeDynamicTitle(before);
+  const right = normalizeDynamicTitle(after);
+  return left !== "" && left === right;
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });

@@ -17,6 +17,7 @@
  *   picture, so that every check of a click runs on it as on any click.
  */
 import type { Action, Closer, Observation } from "./ports.js";
+import { sameWindowTitle } from "./desktop.js";
 
 /** The most closer looks in one request. */
 export const closerLimit = 6;
@@ -59,7 +60,7 @@ export function closerOutOfDate(
   return (
     seen.app.bundleId !== taken.app.bundleId ||
     seen.app.name !== taken.app.name ||
-    seen.app.window !== taken.app.window ||
+    !sameWindowTitle(taken.app.window, seen.app.window) ||
     seen.screen.width !== taken.screen.width ||
     seen.screen.height !== taken.screen.height ||
     seen.screen.scale !== taken.screen.scale ||

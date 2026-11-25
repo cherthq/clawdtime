@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import jpeg from "jpeg-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import {
@@ -58,6 +59,10 @@ function setup(
     settleLimit?: number;
     transientMs?: number;
     timing?: (entry: StepTiming) => void;
+    fastReverify?: boolean;
+    postActionSettleMs?: number;
+    unchangedDone?: boolean;
+    realClock?: boolean;
   } = {},
 ) {
   const home =
@@ -72,7 +77,7 @@ function setup(
     hands,
     planner,
     journal,
-    now: () => clock.now,
+    now: options.realClock ? Date.now : () => clock.now,
     notify: (text) => said.push(text),
     ...(options.browser ? { browser: options.browser } : {}),
     ...(options.maxSteps ? { maxSteps: options.maxSteps } : {}),
@@ -87,6 +92,15 @@ function setup(
       ? { settleLimit: options.settleLimit }
       : {}),
     ...(options.timing ? { timing: options.timing } : {}),
+    ...(options.fastReverify !== undefined
+      ? { fastReverify: options.fastReverify }
+      : {}),
+    ...(options.postActionSettleMs !== undefined
+      ? { postActionSettleMs: options.postActionSettleMs }
+      : {}),
+    ...(options.unchangedDone !== undefined
+      ? { unchangedDone: options.unchangedDone }
+      : {}),
   });
   const waiting = () =>
     until(() => worker.snapshot().state === "waiting_for_person");
@@ -6841,5 +6855,501 @@ describe("a first give_up", () => {
         message: `I could not finish. ${reason} Tell me another way to try, or do this step yourself.`,
       });
     }
+  });
+});
+
+describe("perceptual visual diff, fast re-verify, and bounded post-action settle", () => {
+  const makeJpeg = (
+    width: number,
+    height: number,
+    options: {
+      rects?: {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        r: number;
+        g: number;
+        b: number;
+      }[];
+    } = {},
+  ) => {
+    const data = Buffer.alloc(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+      const off = i * 4;
+      data[off] = 220;
+      data[off + 1] = 220;
+      data[off + 2] = 220;
+      data[off + 3] = 255;
+    }
+    for (const rect of options.rects ?? []) {
+      const x0 = Math.max(0, Math.floor(rect.x));
+      const y0 = Math.max(0, Math.floor(rect.y));
+      const x1 = Math.min(width, Math.ceil(rect.x + rect.w));
+      const y1 = Math.min(height, Math.ceil(rect.y + rect.h));
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const off = (y * width + x) * 4;
+          data[off] = rect.r;
+          data[off + 1] = rect.g;
+          data[off + 2] = rect.b;
+          data[off + 3] = 255;
+        }
+      }
+    }
+    return jpeg.encode({ data, width, height }, 85).data.toString("base64");
+  };
+  const frameBase = makeJpeg(320, 180, {
+    rects: [
+      { x: 260, y: 0, w: 50, h: 5, r: 15, g: 15, b: 15 },
+      { x: 40, y: 60, w: 80, h: 40, r: 50, g: 100, b: 200 },
+    ],
+  });
+  const frameClockTick = makeJpeg(320, 180, {
+    rects: [
+      { x: 260, y: 0, w: 50, h: 5, r: 245, g: 245, b: 245 },
+      { x: 40, y: 60, w: 80, h: 40, r: 50, g: 100, b: 200 },
+    ],
+  });
+  const frameChanged = makeJpeg(320, 180, {
+    rects: [
+      { x: 260, y: 0, w: 50, h: 5, r: 15, g: 15, b: 15 },
+      { x: 40, y: 60, w: 80, h: 40, r: 50, g: 100, b: 200 },
+      { x: 140, y: 80, w: 100, h: 60, r: 20, g: 180, b: 60 },
+    ],
+  });
+
+  const realObs = (
+    image: string,
+    elements = [element(1, { title: "Save" })],
+    extra: Partial<Observation> = {},
+  ) =>
+    observation(elements, {
+      image,
+      imageWidth: 320,
+      imageHeight: 180,
+      ...extra,
+    });
+
+  it("skips the AX walk in fast pre-action visual re-verify when pixels are unchanged (even after a clock tick)", async () => {
+    const initial = realObs(frameBase);
+    // Fast image-only observe returns no elements and a ticked menu bar clock.
+    const fastOnly = realObs(frameClockTick, []);
+    const afterClick = realObs(frameChanged);
+    const { worker, hands } = setup([click, done], {
+      screens: [initial, fastOnly, afterClick],
+    });
+    await worker.submit("fast_reverify_hit", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.sent).toEqual([
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+    ]);
+    // Full initial observe -> image-only fast re-verify -> click -> full post-action observe.
+    expect(hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("falls back to full AX look when fast visual re-verify sees changed pixels", async () => {
+    const initial = realObs(frameBase);
+    const changedFast = realObs(frameChanged, []);
+    const axFallback = realObs(frameChanged, [
+      element(7, { title: "Save", x: 110, y: 200 }),
+    ]);
+    const afterClick = realObs(frameChanged, [
+      element(7, { title: "Saved", x: 110, y: 200 }),
+    ]);
+    const { worker, hands } = setup([click, done], {
+      screens: [initial, changedFast, axFallback, afterClick],
+    });
+    await worker.submit("fast_reverify_miss", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+      { kind: "observe", image: false, elements: true },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("skips fast visual re-verify when fastReverify is false", async () => {
+    const initial = realObs(frameBase);
+    const axLook = realObs(frameBase);
+    const afterClick = realObs(frameChanged);
+    const { worker, hands } = setup([click, done], {
+      screens: [initial, axLook, afterClick],
+      fastReverify: false,
+    });
+    await worker.submit("fast_reverify_off", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: false, elements: true },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("runs one bounded post-action visual follow-up and refreshes full observation when delayed UI change appears", async () => {
+    const initial = realObs(frameBase);
+    const fastSame = realObs(frameBase, []);
+    const postStillSame = realObs(frameClockTick);
+    const probeChanged = realObs(frameChanged, []);
+    const refreshedFull = realObs(frameChanged, [
+      element(1, { title: "Saved" }),
+    ]);
+    const { worker, hands, planner } = setup([click, done], {
+      screens: [initial, fastSame, postStillSame, probeChanged, refreshedFull],
+      postActionSettleMs: 10,
+      unchangedDone: true,
+    });
+    await worker.submit("post_settle_delayed", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    // Done was accepted immediately because refreshedFull showed the visual change.
+    expect(planner.inputs).toHaveLength(2);
+    expect(planner.inputs[1]!.observation?.elements[0]?.title).toBe("Saved");
+    expect(hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("caps post-action visual follow-up at one probe when screen remains unchanged and triggers unchangedDone", async () => {
+    const initial = realObs(frameBase);
+    const fastSame = realObs(frameBase, []);
+    const postSame = realObs(frameClockTick);
+    const probeStillSame = realObs(frameClockTick, []);
+    const { worker, hands, planner } = setup([click, done, done], {
+      screens: [initial, fastSame, postSame, probeStillSame],
+      postActionSettleMs: 10,
+      unchangedDone: true,
+    });
+    await worker.submit("post_settle_still", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    // First done was sent back because even after the bounded follow-up, only the clock ticked.
+    expect(planner.inputs).toHaveLength(3);
+    expect(planner.inputs[1]!.history[0]?.outcome).toMatch(
+      /^sent, but the screen looks the same after it/,
+    );
+    expect(planner.inputs[2]!.history.at(-1)?.outcome).toMatch(
+      /^not taken yet: the screen looks the same as before your last action/,
+    );
+    // At most one follow-up probe, no extra full observe refresh when unchanged.
+    expect(hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+    ]);
+  });
+
+  it("skips post-action follow-up when the first post-action observe already changed and enforces the 450ms hard cap", async () => {
+    const initial = realObs(frameBase);
+    const fastSame = realObs(frameBase, []);
+    const postChanged = realObs(frameChanged);
+    const started = Date.now();
+    const { worker, hands } = setup([click, done], {
+      screens: [initial, fastSame, postChanged],
+      postActionSettleMs: 5_000, // far exceeds 450ms hard cap
+      realClock: true,
+    });
+    await worker.submit("post_settle_cap", "Save the note");
+    await worker.idle();
+    const elapsed = Date.now() - started;
+
+    expect(worker.snapshot().state).toBe("completed");
+    // Hard-capped at 450ms (well under the 5000ms requested even under heavy parallel test load).
+    expect(elapsed).toBeLessThan(2500);
+    // No follow-up probe needed since first post-action observe already changed.
+    expect(hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("cancels post-action settle wait promptly on Stop", async () => {
+    const initial = realObs(frameBase);
+    const fastSame = realObs(frameBase, []);
+    const { worker, hands } = setup([click, done], {
+      screens: [initial, fastSame, realObs(frameBase)],
+      postActionSettleMs: 400,
+      realClock: true,
+    });
+    let clickDone!: () => void;
+    const clicked = new Promise<void>((resolve) => {
+      clickDone = resolve;
+    });
+    hands.answer = (command) => {
+      if (command.kind === "click") setImmediate(clickDone);
+      return undefined;
+    };
+    const started = Date.now();
+    await worker.submit("post_settle_stop", "Save the note");
+    await clicked;
+    worker.stop();
+    await worker.idle();
+    const elapsed = Date.now() - started;
+
+    expect(worker.snapshot().state).toBe("canceled");
+    expect(elapsed).toBeLessThan(300);
+  });
+
+  it("uses image-only polls during settle() recovery on desktop surfaces with real JPEGs", async () => {
+    const initial = realObs(frameBase);
+    const missing = realObs(frameChanged, [element(2, { title: "Other" })]);
+    const settledFrameA = realObs(frameBase, []);
+    const settledFrameB = realObs(frameClockTick, []);
+    const recovered = realObs(frameBase);
+    const afterClick = realObs(frameChanged);
+
+    // Three held click attempts trigger settle():
+    // Each held attempt does: full observe (initial), fast reverify (changed -> fallback AX missing) -> held.
+    // Then settle() polls image-only twice (settledFrameA, settledFrameB -> visually unchanged -> settled!).
+    // Then 4th click succeeds.
+    const { worker, hands } = setup([click, click, click, click, done], {
+      screens: [
+        initial,
+        missing,
+        missing,
+        initial,
+        missing,
+        missing,
+        initial,
+        missing,
+        missing,
+        settledFrameA,
+        settledFrameB,
+        recovered,
+        settledFrameA,
+        afterClick,
+      ],
+    });
+    await worker.submit("visual_settle", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    const settleCommands = hands.commands.filter(
+      (_, i) => hands.labels[i] === "Wait for the screen to settle",
+    );
+    expect(settleCommands).toEqual([
+      { kind: "observe", image: true, elements: false },
+      { kind: "observe", image: true, elements: false },
+    ]);
+  });
+
+  it("treats real pixel change as progress in judge() even when AX elements did not change", async () => {
+    const initial = realObs(frameBase);
+    const fastSame = realObs(frameBase, []);
+    // Same AX elements, but real pixel change in window body.
+    const afterVisualChange = realObs(frameChanged);
+    const { worker, planner } = setup([click, done], {
+      screens: [initial, fastSame, afterVisualChange],
+      unchangedDone: true,
+    });
+    await worker.submit("visual_progress", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    expect(planner.inputs).toHaveLength(2);
+    expect(planner.inputs[1]!.history[0]?.outcome).toBe("ok");
+  });
+
+  it("always runs full AX look in reverify() for type and key actions (never skips AX walk)", async () => {
+    const textField = element(1, {
+      role: "AXTextField",
+      title: "Note",
+      focused: true,
+    });
+    const initial = realObs(frameBase, [textField]);
+    const axLook = realObs(frameBase, [textField]);
+    const afterAction = realObs(frameChanged, [textField]);
+
+    const typeRun = setup([{ kind: "type", text: "hello" }, done], {
+      screens: [initial, axLook, afterAction],
+    });
+    await typeRun.worker.submit("reverify_type_ax", "Write hello");
+    await typeRun.worker.idle();
+    expect(typeRun.worker.snapshot().state).toBe("completed");
+    expect(typeRun.hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: false, elements: true },
+      { kind: "type", text: "hello" },
+      { kind: "observe", image: true, elements: true },
+    ]);
+
+    const keyRun = setup([{ kind: "key", combo: "escape" }, done], {
+      screens: [initial, axLook, afterAction],
+    });
+    await keyRun.worker.submit("reverify_key_ax", "Dismiss dialog");
+    await keyRun.worker.idle();
+    expect(keyRun.worker.snapshot().state).toBe("completed");
+    expect(keyRun.hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: false, elements: true },
+      { kind: "key", combo: "escape" },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("always runs full AX look in reverify() after a user approval pause", async () => {
+    const sendBtn = element(1, { title: "Send" });
+    const initial = realObs(frameBase, [sendBtn]);
+    const axLook = realObs(frameBase, [sendBtn]);
+    const afterClick = realObs(frameChanged, [element(1, { title: "Sent" })]);
+    const { worker, hands, waiting } = setup([click, done], {
+      screens: [initial, axLook, afterClick],
+    });
+    await worker.submit("reverify_approval_ax", "Finish the draft");
+    await waiting();
+    await worker.answer("yes");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    // Must go straight to full AX look (elements: true) after approval, never image-only fast re-verify.
+    expect(hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: false, elements: true },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("always runs full AX look in reverify() when observation is older than 8s or contains a secure element", async () => {
+    const initial = realObs(frameBase);
+    const axLook = realObs(frameBase);
+    const afterClick = realObs(frameChanged);
+    let advanceClock!: () => void;
+    const staleRun = setup(
+      [
+        () => {
+          advanceClock();
+          return click;
+        },
+        done,
+      ],
+      { screens: [initial, axLook, afterClick] },
+    );
+    advanceClock = () => {
+      staleRun.clock.now += 9_000;
+    };
+    await staleRun.worker.submit("reverify_stale_age", "Save the note");
+    await staleRun.worker.idle();
+
+    expect(staleRun.worker.snapshot().state).toBe("completed");
+    expect(staleRun.hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: false, elements: true },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+    ]);
+
+    // When a secure element is present on screen, fast visual re-verify is also bypassed.
+    const secureInitial = realObs(frameBase, [
+      element(1, { title: "Save" }),
+      element(2, { role: "AXTextField", title: "Password", secure: true }),
+    ]);
+    const secureRun = setup([click, done], {
+      screens: [secureInitial, secureInitial, afterClick],
+    });
+    await secureRun.worker.submit("reverify_secure_present", "Save the note");
+    await secureRun.worker.idle();
+
+    expect(secureRun.worker.snapshot().state).toBe("completed");
+    expect(secureRun.hands.commands).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: false, elements: true },
+      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "observe", image: true, elements: true },
+    ]);
+  });
+
+  it("falls back to full AX look in reverify() when pixels change right at the click target even under the cursor", async () => {
+    // Button 1 is at screen (110, 200, 80x24) -> center (150, 212) -> image (24..42, 40..45) on 320x180.
+    // Cursor sits directly on top of the button at (150, 212)!
+    const frameCancel = makeJpeg(320, 180, {
+      rects: [{ x: 24, y: 40, w: 18, h: 5, r: 220, g: 220, b: 220 }],
+    });
+    const frameDeleteSwap = makeJpeg(320, 180, {
+      rects: [{ x: 26, y: 40, w: 10, h: 5, r: 20, g: 20, b: 20 }],
+    });
+    const initial = realObs(frameCancel, [element(1, { title: "Cancel" })], {
+      cursor: { x: 150, y: 212 },
+    });
+    const fastSwapped = realObs(frameDeleteSwap, [], {
+      cursor: { x: 150, y: 212 },
+    });
+    const axSwapped = realObs(
+      frameDeleteSwap,
+      [element(1, { title: "Delete" })],
+      { cursor: { x: 150, y: 212 } },
+    );
+    const { worker, hands } = setup([click, done], {
+      screens: [initial, fastSwapped, axSwapped, axSwapped],
+    });
+    await worker.submit("reverify_target_swap_under_cursor", "Click Cancel");
+    await worker.idle();
+
+    // Must detect the in-place button change under the cursor, run full AX look,
+    // see the label changed from Cancel to Delete, and withhold the click!
+    expect(hands.sent).toEqual([]);
+    expect(hands.commands.slice(0, 3)).toEqual([
+      { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
+      { kind: "observe", image: false, elements: true },
+    ]);
+  });
+
+  it("detects a small UI toggle right under the cursor in judge() as changed (not stillAfter)", async () => {
+    // Button/toggle at screen (110, 200, 80x24) -> center (150, 212) -> image ~(33, 42) on 320x180.
+    // After clicking it, the pointer rests at (150, 212) and a small 20x15px toggle fills right under the cursor.
+    // Previously +/-2 cell cursor masking hid ~25x25px around the cursor and falsely flagged stillAfter!
+    const toggleOff = makeJpeg(320, 180, {
+      rects: [{ x: 24, y: 36, w: 20, h: 14, r: 220, g: 220, b: 220 }],
+    });
+    const toggleOn = makeJpeg(320, 180, {
+      rects: [{ x: 24, y: 36, w: 20, h: 14, r: 30, g: 130, b: 240 }],
+    });
+    const initial = realObs(toggleOff, [element(1, { title: "Save" })], {
+      cursor: { x: 150, y: 212 },
+    });
+    const fastSame = realObs(toggleOff, [], {
+      cursor: { x: 150, y: 212 },
+    });
+    // Same AX elements, cursor sitting directly on the toggled widget, only pixels under cursor changed.
+    const afterToggle = realObs(toggleOn, [element(1, { title: "Save" })], {
+      cursor: { x: 150, y: 212 },
+    });
+    const { worker, planner } = setup([click, done], {
+      screens: [initial, fastSame, afterToggle],
+      unchangedDone: true,
+    });
+    await worker.submit("judge_toggle_under_cursor", "Toggle Save");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    // Done was accepted on the first try (not rejected as stillAfter)!
+    expect(planner.inputs).toHaveLength(2);
+    expect(planner.inputs[1]!.history[0]?.outcome).toBe("ok");
   });
 });
