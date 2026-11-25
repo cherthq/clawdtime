@@ -1,3 +1,4 @@
+import { asksWhatItCanDo, casualWords } from "../computer/orders.js";
 import { catalog } from "./catalog.js";
 
 /**
@@ -22,8 +23,12 @@ import { catalog } from "./catalog.js";
  * language model reads it, with the tools of the turn.
  */
 export type Road =
-  /** Work on the screen. `reads` is true when it only looks and changes nothing. */
-  | { kind: "engine"; reads: boolean }
+  /**
+   * Work on the screen. `reads` is true when it only looks and changes
+   * nothing. `goal` is what the engine gets in place of the person's words,
+   * only for a search of the web with no site named (see `webSearch`).
+   */
+  | { kind: "engine"; reads: boolean; goal?: string }
   /** Code work for a coding agent. */
   | { kind: "job" }
   /** Code work and screen work in one message: the code part first, then the screen part. */
@@ -38,9 +43,13 @@ const answer: Road = { kind: "answer" };
 /** Words that open a message and add nothing to it. */
 const fillers =
   /^(?:(?:hey|hi|hello|yo|ok|okay|so|well|alright|right|um+|uh+|now|also|and|then|clawdtime)[,.!:]?\s+)+/i;
-/** A polite way into a request: "can you", "could you please", "I want you to", "help me". */
+/**
+ * A polite way into a request: "can you", "could you please", "cn u", "are
+ * you able to", "I want you to", "help me". "Can you actually ..." with a
+ * thing named is a request too.
+ */
 const politeLead =
-  /^(?:(?:please|pls|plz)[,]?\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+(?:please\s+|pls\s+)?|i\s+(?:want|need)\s+you\s+to\s+|i(?:['\u2019]d|\s+would)\s+like\s+you\s+to\s+|go\s+ahead\s+and\s+|let['\u2019]?s\s+|help\s+me(?:\s+to)?\s+|i\s+(?:need|want|have)\s+to\s+|i\s+gotta\s+)/i;
+  /^(?:(?:please|pls|plz|plss|kindly)[,]?\s+)?(?:(?:can|could|would|will|cn|cud|cld|coud|culd|wud|wld)\s+(?:you|u|ya|yu)\s+(?:(?:please|pls|plz|kindly|actually|really|even|also|just)[,]?\s+)*|(?:are|r)\s+(?:you|u)\s+able\s+to\s+|is\s+it\s+possible\s+for\s+(?:you|u)\s+to\s+|i\s+(?:want|need)\s+you\s+to\s+|i(?:['\u2019]d|\s+would)\s+like\s+you\s+to\s+|go\s+ahead\s+and\s+|let['\u2019]?s\s+|help\s+me(?:\s+to)?\s+|i\s+(?:need|want|have)\s+to\s+|i\s+gotta\s+)/i;
 /** Soft words before the verb: "please", "just", "quickly". */
 const softeners = /^(?:(?:please|pls|plz|just|quickly|quick)[,]?\s+)+/i;
 /** Soft words at the end: "please", "for me", "thanks". */
@@ -259,6 +268,104 @@ const lastWords = (thing: string) =>
     .replace(timeAtTheEnd, "")
     .replace(/\s+(?:up|down|on|off|out|away)$/i, "");
 
+/** Words that open a search: "search", "search for", "search the web for", "find me", "look up", "look for". "Find out" opens no search. */
+const searchLead =
+  /^(?:search(?:\s+up)?(?:\s+(?:the\s+(?:web|internet|net)|online))?(?:\s+for)?|find(?:\s+(?:me|us))?|look\s+up|lookup|look\s+for|research)\s+(?!out\b)/i;
+/** A price, asked as a question: "what's the price of X", "how much does X cost". */
+const priceQuestion =
+  /^(?:what(?:['’]?s|\s+is|\s+are)|wats?|wat['’]s)\s+(?:the\s+)?(?:current\s+|latest\s+)?(?:price|prices|cost)\s+(?:of|for)\s+(.+)$|^how\s+much\s+(?:does|do|did|would|will)\s+(.+?)\s+cost$/i;
+/** Words that say where on the web, at the end: "online", "on the web". */
+const onTheWeb = /\s+(?:online|on\s+(?:the\s+)?(?:web|internet|net))$/i;
+/**
+ * Words that name nothing to search for ("search it", "find something"),
+ * or that open a sentence about search itself ("search results are empty",
+ * "search bar is broken").
+ */
+const noQuery =
+  /^(?:it|that|this|them|those|these|one|something|anything|everything|stuff|things|more|again|around)$|^(?:results?|bar|box|field|button|engine|history|is|are|was|were|works?|needs?|isn['’]?t|doesn['’]?t)\b/i;
+/** Words that ask why or how: "find out why ...", "find what is wrong". That is no search of the web. */
+const asksWhyOrHow =
+  /^(?:out|why|how|what|where|who|whom|whose|when|which|whether|if)\b/i;
+/** The person's own things, and things that live in their apps and accounts: they are found there, not on the web. */
+const theirThing =
+  /\b(?:my|our|mine|ours|your|yours)\b|\b(?:e-?mails?|mails?|inbox|messages?|texts|dms?|chats?|threads?|channels?|posts?|tweets?|feed|timeline|notifications?|mentions?|comments?|repl(?:y|ies)|calendar|meetings?|invites?|invitations?|slots?|appointments?|cart|basket|checkout|spreadsheets?|slides?|decks?|presentations?|photos?|pictures?|screenshots?|contacts?|profile|bio|subscriptions?|receipts?|invoices?|pdfs?|documents?|docs|files?|folders?|downloads|notes|reminders?|alarms?|timers?|passwords?|unread|standup|followers|likes|stories|finder|icloud)\b/i;
+/** A site at the end, after "on", "at" or "from": "on acme". Days and plain words are none. */
+const siteAtTheEnd =
+  /\s+(?:on|at|from|via|using)\s+(?!(?:the|a|an|sale|discount|offer|time|budget|foot|night|weekends?|weekdays?|today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$)[\p{L}\p{N}][\p{L}\p{N}.-]*$/iu;
+
+/** What a search looks for, when it is something of the web and nothing of the person's, their Mac or their code. */
+const webQuery = (query: string): string | null => {
+  const words = query.replace(onTheWeb, "").trim();
+  if (!words || words.length > 200 || !/[\p{L}\p{N}]/u.test(words)) return null;
+  if (noQuery.test(words) || asksWhyOrHow.test(words)) return null;
+  if (
+    theirThing.test(words) ||
+    codeNoun.test(words) ||
+    screenNoun.test(words) ||
+    terminalWork(words) ||
+    namesCodingAgent(words)
+  )
+    return null;
+  return words;
+};
+
+/** The goal for the engine: a search of the web, in a new tab of the person's own browser. */
+export const webSearchGoal = (query: string) =>
+  `Search the web for ${query} in a new tab of Google Chrome`;
+
+/**
+ * A search of the web: a search, a find or a look up of something that is
+ * no thing of the person's, of their Mac or of code ("search running
+ * shoes", "find barista courses in Delhi", "look up flights to Goa"), or a
+ * question about a price ("what's the price of X"). With no site and no app
+ * named, the engine gets "search the web for X" in a new tab of the
+ * person's browser as its goal. With one named ("on Acme", "in Chrome"),
+ * the engine gets the person's own words. Null: no such search.
+ */
+function webSearch(
+  clause: string,
+): { road: Extract<Road, { kind: "engine" }> } | null {
+  const text = clause.trim();
+  const priced = priceQuestion.exec(text);
+  const lead = priced ? null : searchLead.exec(text);
+  if (!priced && !lead) return null;
+  const query = webQuery(
+    (priced
+      ? `the price of ${(priced[1] ?? priced[2])!.replace(/^the\s+/i, "")}`
+      : text.slice(lead![0].length)
+    ).replace(/[\s.!?,;:]+$/, ""),
+  );
+  if (query === null) return null;
+  if (
+    appNamed(text) ||
+    webAddress.test(text) ||
+    siteAtTheEnd.test(query) ||
+    /\bgoogle\b/i.test(text)
+  )
+    return { road: { kind: "engine", reads: !!priced } };
+  return {
+    road: { kind: "engine", reads: false, goal: webSearchGoal(query) },
+  };
+}
+
+/**
+ * A search of the web that is the whole request, also with its first word
+ * as the casual reader reads it: "srch running shoes", "cn u serch for it".
+ */
+function webSearchOf(body: string): Road | null {
+  const one = (words: string) =>
+    words.split(joiner).filter((part) => part.trim()).length === 1
+      ? (webSearch(words)?.road ?? null)
+      : null;
+  const found = one(body);
+  if (found) return found;
+  const first = /^\S+/.exec(body)?.[0] ?? "";
+  const spelled = first ? casualWords(first) : "";
+  return spelled && spelled.toLowerCase() !== first.toLowerCase()
+    ? one(`${spelled}${body.slice(first.length)}`)
+    : null;
+}
+
 /**
  * Which road one clause of work takes, or null when its words do not say
  * for sure. The thing of the verb decides, by its last words: "open the PR
@@ -275,6 +382,8 @@ function partOf(clause: string): Part {
   if (placed) return partOf(`${placed[2]} ${placed[1]}`);
   if (namesCodingAgent(text) || terminalWork(text)) return "code";
   if (describesSoftware.test(text) || isAStatement.test(text)) return null;
+  // A search of the web: "search running shoes", "find barista courses in Delhi".
+  if (webSearch(text) !== null) return "screen";
   const { verb, rest } = verbOf(text);
   const thing = lastWords(
     objectOf(rest.replace(/^(?:on|to|at|for|in|into|with|about|from)\s+/i, "")),
@@ -392,30 +501,27 @@ const asksSomething = (text: string, polite: boolean) =>
   (!polite && /\?\s*$/.test(text));
 
 /**
- * A question about what ClawdTime can do, asked like a request: "can you
- * click buttons on my screen?", "can you use my browser?", "are you able to
- * read my mail?". It asks for nothing to be done.
+ * A question about what ClawdTime itself can do, with a general object and
+ * no target: "can you click buttons on my screen?", "can you use my
+ * browser?", "can you search the web?", "what can you do?". It asks for
+ * nothing to be done. A polite request with a thing named is work: "can
+ * you search running shoes?", "could you find barista courses in
+ * Delhi", "are you able to book the 3pm slot?".
  */
 const asksWhatItCan = (original: string, body: string, polite: boolean) => {
   if (
-    /\b(?:are\s+you\s+able|do\s+you\s+know\s+how|is\s+it\s+possible|what\s+can\s+you|can\s+you\s+(?:even|actually|really|ever)|be\s+able\s+to|in\s+general|at\s+all)\b/i.test(
-      original,
-    )
+    asksWhatItCanDo(original) ||
+    /\b(?:what\s+(?:else\s+)?can\s+you|in\s+general|at\s+all)\b/i.test(original)
   )
     return true;
   if (!polite || !/\?\s*$/.test(original)) return false;
   const { verb, rest } = verbOf(body);
   // "Can you do that?", "can you use my browser?", "can you see my screen?"
-  if (
+  return (
     /^(?:do|use|see|control|access|handle|operate|drive|run)$/i.test(verb) &&
     /^(?:(?:that|this|it|things|stuff|my\s+(?:browser|computer|screen|mac|mouse|keyboard|apps?)|the\s+(?:browser|computer|screen|mac|mouse|keyboard)|apps|browsers|websites|computers)\b|$)/i.test(
       rest,
     )
-  )
-    return true;
-  // "Can you click buttons?": a thing in the plural with no word that points at one.
-  return /^(?:[\p{L}-]+s)(?:\s+(?:on|in|for)\s+(?:my|the|a)\s+\w+)?$/iu.test(
-    rest.trim(),
   );
 };
 
@@ -451,6 +557,11 @@ export function roadOf(text: string): Road {
     return answer;
   if (asksWhatItCan(original, body, polite)) return answer;
   if (wordsForSomeone.test(body) && !namesCodingAgent(body)) return answer;
+  // A search of the web as the whole request is work, also as a polite
+  // question: "can you search running shoes?", "search for X?", "what's
+  // the price of X?". With no site named, its goal is a search in a new tab.
+  const search = webSearchOf(body);
+  if (search) return search;
   const opening = original.replace(fillers, "");
   if (asksSomething(opening, polite)) {
     // A question asks for a reading of the screen when it names an app or a

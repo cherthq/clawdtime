@@ -1569,11 +1569,12 @@ const abilityFiller =
 const abilityLead =
   "(?:(?:can|could|would|will)\\s+you(?:\\s+(?:even|actually|really|also|ever|now))?|you\\s+can|are\\s+you\\s+(?:able|allowed)\\s+to|(?:do|did)\\s+you\\s+know\\s+how\\s+to|is\\s+it\\s+possible\\s+(?:for\\s+you\\s+)?to|do\\s+you\\s+have\\s+(?:the\\s+)?(?:ability|access)\\s+to)";
 const abilityVerb =
-  "(?:click|tap|press|open|use|type|scroll|control|operate|see|read|look\\s+at|move|drag|select|run|access|navigate|browse|do|work\\s+(?:on|in|with)|touch|handle|take\\s+over|drive|interact\\s+with)";
+  "(?:click|tap|press|open|use|type|scroll|control|operate|see|read|look\\s+at|move|drag|select|run|access|navigate|browse|do|work\\s+(?:on|in|with)|touch|handle|take\\s+over|drive|interact\\s+with|search(?:\\s+for)?|find|google|look\\s+(?:things|stuff)\\s+up|look\\s+up|surf)";
 const genericDevice =
   "(?:(?:my|the|this|your|a)\\s+(?:screen|computer|mac|laptop|desktop|machine|device)|(?:a\\s+)?browsers?|the\\s+(?:mouse|keyboard|cursor))";
-const genericThing = `(?:buttons|links|apps|applications|programs|windows|tabs|menus|websites|sites|web\\s*pages|pages|things|stuff|anything|everything|something|icons|fields|forms|keys|${genericDevice})`;
-const genericTail = `(?:\\s+(?:on|in|with|of|from|across|using|around)\\s+${genericDevice}|\\s+for\\s+me|\\s+(?:by\\s+)?yourself|\\s+like\\s+(?:a\\s+)?(?:person|human|me)|\\s+at\\s+all|\\s+too|\\s+here|\\s+there)*`;
+const genericWeb = "(?:the\\s+(?:web|internet|net)|online)";
+const genericThing = `(?:buttons|links|apps|applications|programs|windows|tabs|menus|websites|sites|web\\s*pages|pages|things|stuff|anything|everything|something|icons|fields|forms|keys|info|information|${genericWeb}|${genericDevice})`;
+const genericTail = `(?:\\s+(?:on|in|with|of|from|across|using|around)\\s+(?:${genericDevice}|${genericWeb})|\\s+${genericWeb}|\\s+for\\s+me|\\s+(?:by\\s+)?yourself|\\s+like\\s+(?:a\\s+)?(?:person|human|me)|\\s+at\\s+all|\\s+too|\\s+here|\\s+there)*`;
 const abilityQuestion = new RegExp(
   `^(?:${abilityFiller}[,\\s]+)*${abilityLead}\\s+${abilityVerb}(?:\\s+(?:on|in|with|around))?(?:\\s+${genericThing})?${genericTail}(?:[,\\s]+(?:please|pls|plz|bro|dude))?\\s*[?.!]*$`,
 );
@@ -1581,9 +1582,10 @@ const abilityQuestion = new RegExp(
 /**
  * A question about what ClawdTime can do, in the form of a polite request
  * whose object is generic and names no target: "Can you click buttons on my
- * screen?", "can u use my mac?", "are you able to open apps". It is answered
- * as a question and starts no task. "Can you click the Send button?" names a
- * target and is a request.
+ * screen?", "can u use my mac?", "are you able to open apps", "can you
+ * search the web?", "can you look things up?". It is answered as a question
+ * and starts no task. "Can you click the Send button?" and "can you search
+ * running shoes?" name a target and are requests.
  */
 export function asksWhatItCanDo(text: string): boolean {
   return asksAbility(text, casualWords(text));

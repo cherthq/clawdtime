@@ -784,12 +784,12 @@ names no tool, so that no new agent starts for it.
 ClawdTime is a computer use agent first. The code reads your own words and
 picks one of four roads (`connectors/agents/route.ts`):
 
-| Road           | When                                                                                                                                                                                            | For example                                                                                                           |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| The engine     | Work that is done on this Mac: in an app, on a web page, in an account such as X, Gmail, Google or Slack, on a file in an app, or in a setting. Also when your words do not name the screen.    | "follow up on my latest X posts", "reply to Sam on Slack", "book the 3pm slot", "what's on my calendar today?"        |
-| A job          | Code work: a repository, a build, a test, a script, a pull request, work in a terminal, or work for a coding agent that you name.                                                               | "fix the failing test", "run the tests", "use Claude to fix the login bug"                                            |
-| Both, in order | Code work and screen work in one message. The code part starts as a job first, then the screen part goes to the engine. The answer says both, in that order.                                    | "fix the failing test and then open the PR page"                                                                      |
-| An answer      | A question about the state, a session or a job, thanks, a question about what ClawdTime can do, words that hold work or take it back, words in quotes, and every message the code cannot place. | "what is every agent doing?", "can you click buttons on my screen?", "don't reply to Sam yet", "make the button blue" |
+| Road           | When                                                                                                                                                                                                                        | For example                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| The engine     | Work that is done on this Mac: in an app, on a web page, in an account such as X, Gmail, Google or Slack, on a file in an app, or in a setting. Also when your words do not name the screen, and a search of the web.       | "follow up on my latest X posts", "reply to Sam on Slack", "book the 3pm slot", "what's on my calendar today?", "can you search running shoes?" |
+| A job          | Code work: a repository, a build, a test, a script, a pull request, work in a terminal, or work for a coding agent that you name.                                                                                           | "fix the failing test", "run the tests", "use Claude to fix the login bug"                                                                      |
+| Both, in order | Code work and screen work in one message. The code part starts as a job first, then the screen part goes to the engine. The answer says both, in that order.                                                                | "fix the failing test and then open the PR page"                                                                                                |
+| An answer      | A question about the state, a session or a job, thanks, a question about what ClawdTime itself can do with a general thing, words that hold work or take it back, words in quotes, and every message the code cannot place. | "what is every agent doing?", "can you click buttons on my screen?", "don't reply to Sam yet", "make the button blue"                           |
 
 How the code reads a message:
 
@@ -798,6 +798,17 @@ How the code reads a message:
   words of its thing: "open the PR page" is a page, and "open the button
   component" is code. A part whose thing the code cannot place makes the whole
   message one for the language model.
+- A polite request that names its thing is a request, and it starts now:
+  "can you search running shoes?", "could you find barista courses in Delhi",
+  "can u look up flights to Goa". Only a question about ClawdTime itself with
+  a general thing is an answer: "can you click buttons on my screen?", "can
+  you use my mac?", "can you search the web?".
+- A search with no site and no app named goes to the engine as "Search the
+  web for X in a new tab of Google Chrome": "search running shoes", "find
+  barista courses in Delhi", "what's the price of X", also with a typo
+  ("srch running shoes"). With a site or an app named ("on Acme", "in
+  Chrome"), the engine gets your words whole. Your own things (mail, files,
+  "my ..."), the screen and code are no search of the web.
 - A question goes to the engine only when it asks for a reading of an app or a
   page: "did Sam reply on Slack?", "any new emails?". A question about whether
   something is open or done, about code, or about how to do something is an
@@ -819,8 +830,8 @@ When the code takes a road by itself:
 
 - With ClawdTime's own computer engine on and free (no task of it runs or
   waits for you), the code hands screen work to the engine before the
-  language model. The worker gets your words whole, and plans. Both roads run
-  there too.
+  language model. The worker gets your words whole (a search of the web gets
+  its search, see above), and plans. Both roads run there too.
 - Only when nothing else waits for you: no request of an agent, no question of
   a task and no computer action. Words for a session, words with the name of a
   coding agent, and a stop by itself keep their own roads.

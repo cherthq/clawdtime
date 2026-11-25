@@ -823,6 +823,13 @@ describe("natural words: questions about what ClawdTime can do", () => {
     "hey, can you actually click stuff for me?",
     "you can open apps?",
     "is it possible for you to type on my mac?",
+    "can you search the web?",
+    "can you search?",
+    "can you look things up?",
+    "can you browse the web?",
+    "can u google stuff for me?",
+    "can you find stuff online?",
+    "could you search for things?",
   ])("knows %j as a question", (words) => {
     expect(asksWhatItCanDo(words)).toBe(true);
   });
@@ -835,6 +842,11 @@ describe("natural words: questions about what ClawdTime can do", () => {
     "click buttons on my screen",
     "can you open apps and click the Send button?",
     "what can you do?",
+    "Can you search iPhone 17 Pro Max?",
+    "could you find barista courses in Delhi",
+    "can u look up flights to Goa",
+    "can you search the web for running shoes?",
+    "can you find me a good Thai place nearby?",
   ])("does not take %j for one", (words) => {
     expect(asksWhatItCanDo(words)).toBe(false);
   });

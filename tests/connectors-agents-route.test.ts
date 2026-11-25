@@ -340,7 +340,11 @@ describe("with ClawdTime's own computer engine on", () => {
         words,
         "chat",
       );
-      expect(f.events).toEqual([`engine: ${words}`]);
+      // A search of the web with no site named goes as a search in a new tab.
+      const road = roadOf(words);
+      expect(f.events).toEqual([
+        `engine: ${road.kind === "engine" && road.goal ? road.goal : words}`,
+      ]);
       expect(said).toBe(startedText);
     },
   );
@@ -472,6 +476,166 @@ describe("words that hold the work back, with the engine on and free", () => {
       );
       expect(f.events).toEqual([]);
       expect(said).not.toBe(startedText);
+    },
+  );
+});
+
+/**
+ * A clear request starts now, on the Mac. The owner typed "Can you search
+ * iPhone 17 Pro Max?" and got "No active job for searching iPhone 17 Pro
+ * Max yet. I can start that search in Google Chrome for you now. Should I?"
+ * (26 Nov 2026). Each row: the message, and what ClawdTime does with it. A
+ * goal is what the engine gets now, "own" is the engine with the person's
+ * own words, "job" is code work for a coding job and never the engine, and
+ * "answer" starts nothing.
+ */
+const search = (query: string) =>
+  `Search the web for ${query} in a new tab of Google Chrome`;
+type Effect = { goal: string } | "own" | "job" | "answer";
+const actNow: [string, Effect][] = [
+  // The owner's own examples.
+  ["Can you search iPhone 17 Pro Max?", { goal: search("iPhone 17 Pro Max") }],
+  [
+    "could you find barista courses in Delhi",
+    { goal: search("barista courses in Delhi") },
+  ],
+  ["can u look up flights to Goa", { goal: search("flights to Goa") }],
+  ["search for running shoes", { goal: search("running shoes") }],
+  [
+    "find me a good Thai place nearby",
+    { goal: search("a good Thai place nearby") },
+  ],
+  ["look up the weather in Mumbai", { goal: search("the weather in Mumbai") }],
+  ["check my Gmail", "own"],
+  ["what's the price of AirPods Pro on Amazon", "own"],
+  // Polite, casual and typo forms.
+  ["can you search iPhone 17 Pro Max", { goal: search("iPhone 17 Pro Max") }],
+  ["search iPhone 17 Pro Max?", { goal: search("iPhone 17 Pro Max") }],
+  ["pls search iphone 17 pro max", { goal: search("iphone 17 pro max") }],
+  ["cn u srch iphone 17 pro max?", { goal: search("iphone 17 pro max") }],
+  ["can you serch iPhone 17 Pro Max?", { goal: search("iPhone 17 Pro Max") }],
+  ["srch running shoes", { goal: search("running shoes") }],
+  [
+    "cud u find me cheap flights to goa?",
+    { goal: search("cheap flights to goa") },
+  ],
+  [
+    "hey could you please look up barista courses in Delhi?",
+    { goal: search("barista courses in Delhi") },
+  ],
+  [
+    "can you actually find barista courses in Delhi?",
+    { goal: search("barista courses in Delhi") },
+  ],
+  [
+    "are you able to search for barista courses in Delhi?",
+    { goal: search("barista courses in Delhi") },
+  ],
+  [
+    "can you search the web for iPhone 17 Pro Max?",
+    { goal: search("iPhone 17 Pro Max") },
+  ],
+  ["search up iphone 17 pro max", { goal: search("iphone 17 pro max") }],
+  ["look for a cheap hotel in Goa", { goal: search("a cheap hotel in Goa") }],
+  ["search iPhone 17 Pro Max. Thanks", { goal: search("iPhone 17 Pro Max") }],
+  [
+    "what's the price of the iPhone 17 Pro Max?",
+    { goal: search("the price of iPhone 17 Pro Max") },
+  ],
+  [
+    "how much does a standing desk cost?",
+    { goal: search("the price of a standing desk") },
+  ],
+  // A site or an app named: the person's own words.
+  ["whats the price of airpods on amazon", "own"],
+  ["search iPhone 17 Pro Max on Amazon", "own"],
+  ["search iPhone 17 Pro Max in Chrome", "own"],
+  ["search Google for flights to Tokyo", "own"],
+  ["google the weather in Paris", "own"],
+  ["could you check my Gmail?", "own"],
+  ["find barista courses in Delhi and book one", "own"],
+  // Things of the person or of code: no search of the web.
+  ["search my email for the invoice", "own"],
+  ["find the invite from Jane", "own"],
+  ["search for the flaky test", "job"],
+  ["find a function that parses dates", "job"],
+  // Questions about ClawdTime itself, with a general thing.
+  ["can you click buttons on my screen?", "answer"],
+  ["can you use my mac?", "answer"],
+  ["can you search the web?", "answer"],
+  ["can you search?", "answer"],
+  ["can you look things up?", "answer"],
+  ["can you browse the web?", "answer"],
+  ["can u google stuff for me?", "answer"],
+  ["can you find stuff online?", "answer"],
+  ["what can you do?", "answer"],
+  // Stops and holds.
+  ["stop", "answer"],
+  ["stop the search", "answer"],
+  ["hold on, search iPhone 17 Pro Max", "answer"],
+  ["wait, search for flights to Goa", "answer"],
+  ["search iPhone 17 Pro Max tomorrow", "answer"],
+  ["search for running shoes later", "answer"],
+  ["don't search iPhone 17 Pro Max", "answer"],
+  ["never mind, look up flights to Goa", "answer"],
+  ["not now, find barista courses in Delhi", "answer"],
+  ["maybe search for running shoes", "answer"],
+  ["search iPhone 17 Pro Max once I say go", "answer"],
+];
+/** The draft of the bug: an offer in place of the start. */
+const offerDraft =
+  "No active job for searching iPhone 17 Pro Max yet. I can start that search in Google Chrome for you now. Should I?";
+/** Words that hold the work back or stop it: they never start, on any road. */
+const holds = actNow
+  .slice(actNow.findIndex(([words]) => words === "stop"))
+  .map(([words]) => words);
+
+describe("a clear request starts now, on the Mac", () => {
+  it(`has ${actNow.length} messages, with true capability questions, holds and stops`, () => {
+    expect(actNow.length).toBeGreaterThanOrEqual(40);
+    expect(holds.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it.each(actNow)(
+    "does what %j asks with the engine free, also when the model would only offer it",
+    async (words, effect) => {
+      const f = mac();
+      const run = scripted(
+        effect === "job"
+          ? [[call("start_job")], "Okay."]
+          : [offerDraft, offerDraft],
+      );
+      const said = await new Supervisor(f.world, run.model).reply(
+        [],
+        words,
+        "chat",
+      );
+      const engine = f.events.filter((event) => event.startsWith("engine:"));
+      if (effect === "answer") expect(f.events).toEqual([]);
+      else if (effect === "job") {
+        expect(engine).toEqual([]);
+        expect(f.events).toHaveLength(1);
+        expect(f.events[0]).toMatch(/^job: /);
+      } else {
+        expect(f.events).toEqual([
+          `engine: ${effect === "own" ? words : effect.goal}`,
+        ]);
+        expect(said).toBe(startedText);
+        // The code started it: the model was not asked.
+        expect(run.seen).toEqual([]);
+      }
+    },
+  );
+
+  it.each(actNow.filter(([, effect]) => typeof effect === "object"))(
+    "reads %j as a search of the web: the engine gets the search in a new tab",
+    (words, effect) => {
+      const road = roadOf(words);
+      expect(road).toEqual({
+        kind: "engine",
+        reads: false,
+        goal: (effect as { goal: string }).goal,
+      });
     },
   );
 });

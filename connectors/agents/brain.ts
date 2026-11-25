@@ -9936,14 +9936,24 @@ export class Supervisor {
       return "That message is not a computer action request. Nothing was delegated.";
     const previous = turn.done.get("execution");
     if (previous !== undefined) return previous;
+    // A search of the web with no site named goes to the engine as a search
+    // in a new tab of the person's browser (see `roadOf`). Words for a task
+    // that runs, and words that hold the work back, go as they were said.
+    const asked =
+      activeMidTask ||
+      (reading !== undefined && reading.kind !== "none") ||
+      defersWork(spoken)
+        ? null
+        : roadOf(clean(spoken, 2000));
+    const goal = asked?.kind === "engine" && asked.goal ? asked.goal : spoken;
     let result: string;
     try {
       // Only ClawdTime's own worker takes a reading. Another engine gets the
       // request as before.
       result = (
         reading && execution.submitRead
-          ? await execution.submitRead(`${turn.id}_execution`, spoken, reading)
-          : await execution.submit(`${turn.id}_execution`, spoken)
+          ? await execution.submitRead(`${turn.id}_execution`, goal, reading)
+          : await execution.submit(`${turn.id}_execution`, goal)
       ).message;
       // What the person asked of the engine, for the offer of a next step.
       this.screenGoal = clean(spoken, 300);
