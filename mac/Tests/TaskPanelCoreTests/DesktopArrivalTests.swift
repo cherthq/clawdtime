@@ -73,4 +73,58 @@ final class DesktopArrivalTests: XCTestCase {
       XCTAssertFalse(DesktopArrival.sameTitle(nothing, nothing))
     }
   }
+
+  func testDynamicLiveTitlesMatchAcrossVolatileDecorationsAndRefuseEmptyCollapse() {
+    // Unread counts in parens and brackets.
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("(3) Inbox - Mail"), "Inbox - Mail")
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("[12+] Slack - #general"), "Slack - #general")
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("Inbox (4)"), "Inbox")
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("(3) Inbox", "(4) Inbox"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Inbox (3)", "Inbox (4)"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Inbox (3) - Mail", "Inbox (4) - Mail"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("(3) Inbox - Mail", "(4) Inbox - Mail"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Inbox - Mail", "(1) Inbox - Mail"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("[12+] Notifications", "[13+] Notifications"))
+    // Dirty dots.
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("• HandsController.swift — ClawdTime"), "HandsController.swift — ClawdTime")
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("• draft.md", "draft.md"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Notes •", "Notes"))
+    // Elapsed timers and clocks at edges or in brackets/parens.
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("Recording - 04:12"), "Recording")
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("04:12 - FaceTime"), "FaceTime")
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("FaceTime 04:12", "FaceTime 04:13"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("04:12 - FaceTime", "04:13 - FaceTime"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Call 04:12", "Call 04:13"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Meet - 1:04:12", "Meet - 1:04:13"))
+    // Percentages.
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("Exporting (45%)"), "Exporting")
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("Download 45%"), "Download")
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Download 45%", "Download 46%"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Uploading 45% - Drive", "Uploading 46% - Drive"))
+    // Tab counts.
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("Docs - Chrome - 4 tabs"), "Docs - Chrome")
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Docs - Chrome - 4 tabs", "Docs - Chrome - 5 tabs"))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("Safari — 1 tab", "Safari — 2 tabs"))
+    // Combined dynamic decorations.
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("(3) • Inbox - Mail 04:12", "(4) Inbox - Mail 04:13"))
+    // Genuine window changes, numbered filenames and mid-title timestamps remain distinct.
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("(3) Inbox - Mail", "(3) Sent - Mail"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("Budget (2026)", "Budget (2025)"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("Report (1).pdf", "Report (2).pdf"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("Report 10:00 Summary", "Report 11:00 Summary"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("Q3 45% Growth", "Q3 50% Growth"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("Notes", "Reminders"))
+    // Empty collapse is refused: volatile-only titles keep their original text and never falsely match each other.
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("(3)"), "(3)")
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("04:12"), "04:12")
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("45%"), "45%")
+    XCTAssertEqual(DesktopArrival.normalizeDynamicTitle("[12+]"), "[12+]")
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("(3)", "(4)"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("(3)", "45%"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("04:12", "04:13"))
+    XCTAssertFalse(DesktopArrival.sameLiveTitle("(3)", ""))
+    // Identical titles (including untitled sheets) remain equal.
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("", ""))
+    XCTAssertTrue(DesktopArrival.sameLiveTitle("04:12", "04:12"))
+  }
 }

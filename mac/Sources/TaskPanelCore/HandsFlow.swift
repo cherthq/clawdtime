@@ -97,10 +97,12 @@ public struct HandsCost: Equatable, Sendable {
   public var imageBytes: Int?
   /// The walk of the Accessibility tree.
   public var walkMs: Int?
+  /// The Vision OCR fallback when the Accessibility tree is sparse.
+  public var ocrMs: Int?
   /// The guided cursor on its way and its wait at the target, before an input.
   public var glideMs: Int?
-  public init(captureMs: Int? = nil, encodeMs: Int? = nil, imageBytes: Int? = nil, walkMs: Int? = nil, glideMs: Int? = nil) {
-    self.captureMs = captureMs; self.encodeMs = encodeMs; self.imageBytes = imageBytes; self.walkMs = walkMs; self.glideMs = glideMs
+  public init(captureMs: Int? = nil, encodeMs: Int? = nil, imageBytes: Int? = nil, walkMs: Int? = nil, glideMs: Int? = nil, ocrMs: Int? = nil) {
+    self.captureMs = captureMs; self.encodeMs = encodeMs; self.imageBytes = imageBytes; self.walkMs = walkMs; self.glideMs = glideMs; self.ocrMs = ocrMs
   }
   /// The name of the header.
   public static let header = "X-ClawdTime-Hands-Cost"
@@ -114,12 +116,13 @@ public struct HandsCost: Equatable, Sendable {
     func bounded(_ value: Int?) -> Int { max(0, min(86_400_000, value ?? 0)) }
     func sum(_ a: Int?, _ b: Int?) -> Int? { a == nil && b == nil ? nil : min(86_400_000, bounded(a) + bounded(b)) }
     captureMs = sum(captureMs, other.captureMs); encodeMs = sum(encodeMs, other.encodeMs)
-    imageBytes = sum(imageBytes, other.imageBytes); walkMs = sum(walkMs, other.walkMs); glideMs = sum(glideMs, other.glideMs)
+    imageBytes = sum(imageBytes, other.imageBytes); walkMs = sum(walkMs, other.walkMs)
+    ocrMs = sum(ocrMs, other.ocrMs); glideMs = sum(glideMs, other.glideMs)
   }
   /// The value of the header, for example `capture=93;encode=21;bytes=183422;walk=412`. Nil when the
   /// command had none of the parts.
   public var headerValue: String? {
-    let parts: [(String, Int?)] = [("capture", captureMs), ("encode", encodeMs), ("bytes", imageBytes), ("walk", walkMs), ("glide", glideMs)]
+    let parts: [(String, Int?)] = [("capture", captureMs), ("encode", encodeMs), ("bytes", imageBytes), ("walk", walkMs), ("ocr", ocrMs), ("glide", glideMs)]
     let shown = parts.compactMap { name, value in value.map { "\(name)=\(max(0, min(86_400_000, $0)))" } }
     return shown.isEmpty ? nil : shown.joined(separator: ";")
   }

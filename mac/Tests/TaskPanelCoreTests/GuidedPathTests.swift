@@ -85,7 +85,7 @@ final class GuidedPathTests: XCTestCase {
     let points = path.points(every: 1.0 / 120)
     XCTAssertEqual(points.last, target)
     // At 120 events a second the way has enough steps to be seen, and not so many that it drags.
-    XCTAssertGreaterThan(points.count, 18); XCTAssertLessThan(points.count, 32)
+    XCTAssertGreaterThan(points.count, 10); XCTAssertLessThan(points.count, 24)
     var before = 0.0, widest = 0.0
     for point in points {
       let now = split(point, path)
@@ -95,46 +95,48 @@ final class GuidedPathTests: XCTestCase {
     }
     // A slight bend, as a hand makes, and never a wide swing.
     XCTAssertGreaterThan(widest, 5); XCTAssertLessThanOrEqual(widest, GuidedPath.maxBend + 0.000_001)
-    // Seen in three frames of a call at least, a little longer for a long way, and short.
-    XCTAssertEqual(GuidedPath.moveDuration(length: 0), 0.15)
-    XCTAssertEqual(GuidedPath.moveDuration(length: 100_000), 0.24)
-    XCTAssertEqual(GuidedPath.moveDuration(length: 300), 0.20, accuracy: 0.000_001)
-    XCTAssertGreaterThanOrEqual(GuidedPath.moveDuration(length: 0), 3.0 / 20)
+    // Already in place takes no time; longer moves stay brisk and capped.
+    XCTAssertEqual(GuidedPath.moveDuration(length: 0), 0)
+    XCTAssertEqual(GuidedPath.moveDuration(length: 2.9), 0)
+    XCTAssertEqual(GuidedPath.moveDuration(length: -10), 0)
+    XCTAssertEqual(GuidedPath.moveDuration(length: .nan), 0)
+    XCTAssertEqual(GuidedPath.moveDuration(length: .infinity), 0)
+    XCTAssertEqual(GuidedPath.moveDuration(length: 100_000), 0.14)
+    XCTAssertEqual(GuidedPath.moveDuration(length: 300), 0.09, accuracy: 0.000_001)
     XCTAssertLessThan(GuidedPath.moveDuration(length: 200), GuidedPath.moveDuration(length: 600))
-    XCTAssertEqual(GuidedPath.dragDuration(length: 0), 0.25); XCTAssertEqual(GuidedPath.dragDuration(length: 100_000), 0.60)
+    XCTAssertEqual(GuidedPath.dragDuration(length: 0), 0.14); XCTAssertEqual(GuidedPath.dragDuration(length: 100_000), 0.36)
+    XCTAssertEqual(GuidedPath.dragDuration(length: 500), 0.24, accuracy: 0.000_001)
     XCTAssertEqual(GuidedPath(from: start, to: target, duration: 0).points(every: 0.01), [target])
     XCTAssertEqual(GuidedPath(from: start, to: target, duration: 99).points(every: 0.001).count, 600)
     XCTAssertEqual(GuidedPath(from: start, to: target, duration: 99).points(every: .leastNonzeroMagnitude).count, 600)
   }
 
   func testTheGlideIsQuickStillReadsAsAWayAndALongWayTakesLonger() {
-    // The picture of a call has 20 frames a second: the shortest glide is in three of them.
-    XCTAssertEqual(GuidedPath.glideDuration(length: 0), 0.15)
-    XCTAssertGreaterThanOrEqual((GuidedPath.shortestGlide * 20).rounded(.down), 3)
-    XCTAssertEqual(GuidedPath.glideDuration(length: -40), 0.15)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 0), 0.08)
+    XCTAssertEqual(GuidedPath.glideDuration(length: -40), 0.08)
     // A short way, the usual ways and a long one.
-    XCTAssertEqual(GuidedPath.glideDuration(length: 40), 0.16, accuracy: 0.000_001)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 150), 0.1875, accuracy: 0.000_001)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 300), 0.225, accuracy: 0.000_001)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 400), 0.25, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 80), 0.09, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 160), 0.10, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 320), 0.12, accuracy: 0.000_001)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 400), 0.13, accuracy: 0.000_001)
     for length in [150.0, 250, 400] {
-      XCTAssertGreaterThanOrEqual(GuidedPath.glideDuration(length: length), 0.18)
-      XCTAssertLessThanOrEqual(GuidedPath.glideDuration(length: length), 0.25)
+      XCTAssertGreaterThanOrEqual(GuidedPath.glideDuration(length: length), 0.09)
+      XCTAssertLessThanOrEqual(GuidedPath.glideDuration(length: length), 0.14)
     }
-    // The cap: across a whole screen it is no slower than a third of a second with its wait.
-    XCTAssertEqual(GuidedPath.glideDuration(length: 1500), 0.26)
-    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.26)
-    XCTAssertEqual(GuidedPath.glideDuration(length: .nan), 0.15)
-    XCTAssertEqual(GuidedPath.glideDuration(length: .infinity), 0.15)
+    // The cap: across a whole screen it stays brisk.
+    XCTAssertEqual(GuidedPath.glideDuration(length: 1500), 0.15)
+    XCTAssertEqual(GuidedPath.glideDuration(length: 100_000), 0.15)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .nan), 0.08)
+    XCTAssertEqual(GuidedPath.glideDuration(length: .infinity), 0.08)
     var before = 0.0
     for length in stride(from: 0.0, through: 4000, by: 50) {
       let now = GuidedPath.glideDuration(length: length)
-      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.15); XCTAssertLessThanOrEqual(now, 0.26)
+      XCTAssertGreaterThanOrEqual(now, before); XCTAssertGreaterThanOrEqual(now, 0.08); XCTAssertLessThanOrEqual(now, 0.15)
       before = now
     }
-    // The screen can change between the worker's last look and the event: the glide and the wait stay under 0.4 seconds.
-    XCTAssertLessThanOrEqual(GuidedPath.longestGlide + GuidedPath.dwell(still: false), 0.4)
-    XCTAssertEqual(GuidedPath.longestLead, 0.38, accuracy: 0.000_001)
+    // The screen can change between the worker's last look and the event: the glide and the wait stay under 0.2 seconds.
+    XCTAssertLessThanOrEqual(GuidedPath.longestGlide + GuidedPath.dwell(still: false), 0.20)
+    XCTAssertEqual(GuidedPath.longestLead, 0.20, accuracy: 0.000_001)
     XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), GuidedPath.longestLead)
     // The way to one target takes the time of its length, and ends on the target.
     for (start, target) in ways {
@@ -158,11 +160,9 @@ final class GuidedPathTests: XCTestCase {
     XCTAssertEqual(away.duration, GuidedPath.glideDuration(length: 3))
     XCTAssertGreaterThanOrEqual(away.duration, GuidedPath.shortestGlide)
     // The wait at a place that did not change is short, with Reduce Motion too, and never longer than a moved one.
-    XCTAssertEqual(GuidedPath.dwell(still: false, moved: false), 0.05)
-    XCTAssertEqual(GuidedPath.dwell(still: true, moved: false), 0.05)
+    XCTAssertEqual(GuidedPath.dwell(still: false, moved: false), 0.02)
+    XCTAssertEqual(GuidedPath.dwell(still: true, moved: false), 0.02)
     XCTAssertLessThan(GuidedPath.dwell(still: false, moved: false), GuidedPath.dwell(still: false))
-    // A picture of a call at 20 frames a second still shows the new label in one frame.
-    XCTAssertGreaterThanOrEqual(GuidedPath.dwell(still: false, moved: false) * 20, 1)
     // The next key with the same label at the same place: no glide and no wait at all.
     XCTAssertEqual(GuidedPath.dwell(still: false, moved: false, relabeled: false), 0)
     XCTAssertEqual(GuidedPath.dwell(still: true, moved: false, relabeled: false), 0)
@@ -185,11 +185,9 @@ final class GuidedPathTests: XCTestCase {
     }
     // With no glide to lead the eye, the cursor waits a little longer at the target before the hands act.
     XCTAssertGreaterThan(GuidedPath.dwell(still: true), GuidedPath.dwell(still: false))
-    // Two frames of a call's picture at the target before the hands act, and never more than about 120 ms.
-    XCTAssertEqual(GuidedPath.dwell(still: false), 0.10)
-    XCTAssertEqual(GuidedPath.dwell(still: true), 0.12)
-    XCTAssertGreaterThanOrEqual(GuidedPath.dwell(still: false) * 20, 2)
-    XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), 0.12)
+    XCTAssertEqual(GuidedPath.dwell(still: false), 0.04)
+    XCTAssertEqual(GuidedPath.dwell(still: true), 0.05)
+    XCTAssertLessThanOrEqual(GuidedPath.dwell(still: true), 0.06)
     // With Reduce Motion the whole lead before an input is the wait: shorter than any glide with its wait.
     XCTAssertLessThan(GuidedPath.glide(from: .zero, to: CGPoint(x: 900, y: 600), still: true).duration + GuidedPath.dwell(still: true),
                       GuidedPath.shortestGlide + GuidedPath.dwell(still: false))

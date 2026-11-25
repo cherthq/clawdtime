@@ -31,7 +31,7 @@ public enum ElementCleaner {
   /// Roles whose value says what the element holds: text, a choice, a state.
   static let holders: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXSlider"]
   /// Roles that a person acts on. They are kept even with no name, and first when there are too many.
-  static let controls: Set<String> = holders.union(["AXButton", "AXLink", "AXMenuButton", "AXMenuItem", "AXMenuBarItem",
+  public static let controls: Set<String> = holders.union(["AXButton", "AXLink", "AXMenuButton", "AXMenuItem", "AXMenuBarItem",
     "AXDisclosureTriangle", "AXIncrementor", "AXColorWell", "AXTab", "AXSegmentedControl", "AXToolbarButton"])
 
   /// One clean line of at most `limit` UTF-16 units. A longer text ends with an ellipsis.

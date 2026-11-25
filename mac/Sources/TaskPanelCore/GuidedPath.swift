@@ -51,31 +51,32 @@ public struct GuidedPath: Equatable, Sendable {
     let count = max(1, Int(min(600, (duration / interval).rounded(.up))))
     return (1...count).map { $0 == count ? target : point(at: duration * Double($0) / Double(count)) }
   }
-  /// Seconds for the real pointer to cross `length` points, as a hand moves it: long enough that the eye
-  /// sees the pointer of the Mac travel, in three frames of a call's picture at least, and still short. A
-  /// way of 150 to 400 points takes 0.18 to 0.22 seconds, a long way 0.24 at most.
-  public static func moveDuration(length: Double) -> Double { min(0.24, 0.15 + max(0, length) / 6000) }
+  /// Seconds for the real pointer to cross `length` points, as a hand moves it. Already in place
+  /// takes no time; a short or long move stays brisk and smooth.
+  public static func moveDuration(length: Double) -> Double {
+    guard length.isFinite, length >= inPlace else { return 0 }
+    return min(0.14, 0.06 + length / 10_000)
+  }
   /// The real pointer bends off the straight line by this share of its way, as a hand does: a little less
   /// than the guided cursor, so it does not swing wide.
   public static let moveArc = 0.06
   /// Seconds for a drag: slow enough that an app follows it.
-  public static func dragDuration(length: Double) -> Double { min(0.60, 0.25 + max(0, length) / 3000) }
-  /// Seconds for the guided cursor to glide `length` points. A glide is quick, and it still reads as a
-  /// way: the picture of a call has 20 frames a second, so the shortest glide is in three of them. A long
-  /// way takes longer than a short one, up to a limit. A way of 150 to 400 points, the usual one between
-  /// two actions, takes 0.19 to 0.25 seconds. The limit is low, because the screen can change between the
-  /// worker's last look and the event: the glide and the wait together stay under 0.4 seconds.
-  public static let shortestGlide = 0.15, longestGlide = 0.26
+  public static func dragDuration(length: Double) -> Double {
+    guard length.isFinite else { return 0.14 }
+    return min(0.36, 0.14 + max(0, length) / 5000)
+  }
+  /// Seconds for the guided cursor to glide `length` points. A glide is brisk and still reads as a
+  /// way across the screen, with a low cap so the screen has little chance to change before input.
+  public static let shortestGlide = 0.08, longestGlide = 0.15
   public static func glideDuration(length: Double) -> Double {
     guard length.isFinite else { return shortestGlide }
-    return min(longestGlide, shortestGlide + max(0, length) / 4000)
+    return min(longestGlide, shortestGlide + max(0, length) / 8000)
   }
   /// Seconds that the cursor waits at the target before the click or the first key, so the eye is there
-  /// before the hand and the label can be read: two frames of a call's picture. Reduce Motion has no glide
-  /// to lead the eye, so its wait is a little longer, and it is still short. A cursor that did not move (the
-  /// next key in the field that it points at) already has the eye there: it waits one frame for a new label,
-  /// and not at all when the label is the same.
-  public static let arrivalWait = 0.10, stillWait = 0.12, relabelWait = 0.05
+  /// before the hand and the label can be read. Reduce Motion has no glide to lead the eye, so its wait
+  /// is slightly longer. A cursor that did not move waits briefly for a new label, and not at all when the
+  /// label is unchanged.
+  public static let arrivalWait = 0.04, stillWait = 0.05, relabelWait = 0.02
   public static func dwell(still: Bool, moved: Bool = true, relabeled: Bool = true) -> Double {
     if !moved { return relabeled ? relabelWait : 0 }
     return still ? stillWait : arrivalWait

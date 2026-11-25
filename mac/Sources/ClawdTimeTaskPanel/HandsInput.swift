@@ -93,6 +93,12 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   @discardableResult func move(to target: CGPoint) async -> Bool {
     let from = pointer
     let length = hypot(Double(target.x - from.x), Double(target.y - from.y))
+    guard length.isFinite else { return false }
+    if length < GuidedPath.inPlace {
+      if interrupted { return false }
+      if length > 0.5 { mouse(.mouseMoved, at: target) }
+      return !interrupted
+    }
     let path = GuidedPath(from: from, to: target, duration: GuidedPath.moveDuration(length: length), arc: GuidedPath.moveArc)
     for point in path.points(every: 1.0 / 120) {
       if interrupted { return false }
@@ -104,17 +110,17 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// One click or a double click, left or right. False when Stop came before the press.
   func click(at point: CGPoint, button: HandCommand.Button, count: Int) async -> Bool {
     guard await move(to: point) else { return false }
-    await pause(0.04)
+    await pause(0.015)
     guard await allowed() else { return false }
     let right = button == .right
     for press in 1...max(1, min(2, count)) {
       if interrupted { return false }
-      guard await allowed() else { return false }
+      if press > 1 { guard await allowed() else { return false } }
       // A button that went down always comes up: nothing between the two can stop.
       mouse(right ? .rightMouseDown : .leftMouseDown, at: point, button: right ? .right : .left, clicks: Int64(press))
-      await pause(0.03)
+      await pause(0.012)
       mouse(right ? .rightMouseUp : .leftMouseUp, at: point, button: right ? .right : .left, clicks: Int64(press))
-      if press < count { await pause(0.08) }
+      if press < count { await pause(0.045) }
     }
     return true
   }
@@ -122,13 +128,13 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// the button is let go where the pointer then is.
   func drag(from: CGPoint, to: CGPoint) async -> Bool {
     guard await move(to: from) else { return false }
-    await pause(0.05)
+    await pause(0.02)
     if interrupted { return false }
     guard await allowed() else { return false }
     mouse(.leftMouseDown, at: from, clicks: 1)
     held = from
     // An app starts a drag only after the button stays down for a moment.
-    await pause(0.10)
+    await pause(0.05)
     let length = hypot(Double(to.x - from.x), Double(to.y - from.y))
     let path = GuidedPath(from: from, to: to, duration: GuidedPath.dragDuration(length: length), arc: 0)
     for point in path.points(every: 1.0 / 60) {
@@ -137,7 +143,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
       held = point
       await pause(1.0 / 60)
     }
-    await pause(0.06)
+    await pause(0.025)
     let finished = !interrupted && held != nil
     letGo()
     return finished
@@ -152,13 +158,15 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// Turns the wheel over one place. False when Stop cut it.
   func scroll(at point: CGPoint, dx: Double, dy: Double) async -> Bool {
     guard await move(to: point) else { return false }
-    for tick in ScrollPlan.ticks(dx: dx, dy: dy) {
-      guard await allowed() else { return false }
+    for (index, tick) in ScrollPlan.ticks(dx: dx, dy: dy).enumerated() {
+      if index % 2 == 0 {
+        guard await allowed() else { return false }
+      }
       if interrupted { return false }
       let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: tick.vertical, wheel2: tick.horizontal, wheel3: 0)
       event?.location = point
       post(event)
-      await pause(0.02)
+      await pause(0.008)
     }
     return true
   }
@@ -167,7 +175,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
 
   private func press(_ code: UInt16, flags: CGEventFlags = []) async {
     post(CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true), flags: flags)
-    await pause(0.02)
+    await pause(0.01)
     post(CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false), flags: flags)
   }
   /// How typing ended: all of it went, Stop cut it, or the keyboard moved to a place where the hands do not type.
@@ -177,7 +185,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// keyboard before the first character. `allowed` asks again when that place
   /// can have changed: after a Return or a Tab, and every few characters.
   func type(_ text: String, allowed: () async -> Bool) async -> Typed {
-    let steps = TypingPlan.steps(text)
+    let steps = TypingPlan.steps(text, perStep: 8)
     var unchecked = 0
     for (index, step) in steps.enumerated() {
       if interrupted { return .stopped }
@@ -193,17 +201,17 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
           event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
           post(event)
         }
-        unchecked += 1
+        unchecked += piece.count
       case .key(let code):
         await press(code)
         if index < steps.count - 1 {
           // The key can move the keyboard to another field, for example from a name to a password. The app gets a moment to do it.
-          await pause(0.08)
+          await pause(0.05)
           guard await allowed() else { return .refused }
           unchecked = 0
         }
       }
-      await pause(0.006)
+      await pause(0.004)
     }
     return .done
   }

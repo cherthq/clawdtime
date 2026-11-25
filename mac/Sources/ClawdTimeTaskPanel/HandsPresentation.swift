@@ -93,7 +93,8 @@ import TaskPanelCore
       // Accessibility work never blocks the panel's UI/Stop button. No field
       // content is requested, and secure fields do not produce a target.
       let field = await Task.detached(priority: .utility) {
-        HandsTree.focusIsSecure() == false ? HandsTree.focusFrame() : nil
+        let info = HandsTree.focusInfo()
+        return info.secure == false ? info.frame : nil
       }.value
       guard active, !Task.isCancelled, allowed?() == true, intent.typing, commandSeq == readingCommand,
         transitionLatch.permitsContent(generation: readingGeneration) else { return }

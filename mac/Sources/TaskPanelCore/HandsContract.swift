@@ -99,7 +99,7 @@ public enum HandCommand: Equatable, Sendable {
   public enum Button: String, Codable, Sendable { case left, right }
   case observe(image: Bool, elements: Bool)
   case move(x: Double, y: Double)
-  case click(x: Double, y: Double, button: Button, count: Int)
+  case click(x: Double, y: Double, button: Button, count: Int, allowCover: Bool? = nil)
   case drag(fromX: Double, fromY: Double, toX: Double, toY: Double)
   /// Lines. Positive dy scrolls the content up, as a wheel turned toward the person.
   case scroll(x: Double, y: Double, dx: Double, dy: Double)
@@ -142,7 +142,7 @@ public enum HandCommand: Equatable, Sendable {
   /// Where a pointing command starts. The guided cursor travels there before the event.
   public var pointsAt: CGPoint? {
     switch self {
-    case .move(let x, let y), .click(let x, let y, _, _), .scroll(let x, let y, _, _): return CGPoint(x: x, y: y)
+    case .move(let x, let y), .click(let x, let y, _, _, _), .scroll(let x, let y, _, _): return CGPoint(x: x, y: y)
     case .drag(let x, let y, _, _): return CGPoint(x: x, y: y)
     default: return nil
     }
@@ -186,7 +186,7 @@ public enum HandCommand: Equatable, Sendable {
 
 extension HandCommand: Codable {
   private enum Key: String, CodingKey {
-    case kind, image, elements, x, y, w, h, width, height, button, count, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, browser, ms
+    case kind, image, elements, x, y, w, h, width, height, button, count, allowCover, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, browser, ms
   }
   public init(from decoder: Decoder) throws {
     let box = try decoder.container(keyedBy: Key.self)
@@ -209,11 +209,12 @@ extension HandCommand: Codable {
       try only(.x, .y)
       self = .move(x: try number(.x), y: try number(.y))
     case "click":
-      try only(.x, .y, .button, .count)
+      try only(.x, .y, .button, .count, .allowCover)
       guard let button = Button(rawValue: try box.decode(String.self, forKey: .button)) else { throw PanelFailure.response }
       let count = try box.decode(Int.self, forKey: .count)
       guard count == 1 || count == 2 else { throw PanelFailure.response }
-      self = .click(x: try number(.x), y: try number(.y), button: button, count: count)
+      let allowCover = try box.decodeIfPresent(Bool.self, forKey: .allowCover)
+      self = .click(x: try number(.x), y: try number(.y), button: button, count: count, allowCover: allowCover == true ? true : nil)
     case "drag":
       try only(.fromX, .fromY, .toX, .toY)
       self = .drag(fromX: try number(.fromX), fromY: try number(.fromY), toX: try number(.toX), toY: try number(.toY))
@@ -271,9 +272,10 @@ extension HandCommand: Codable {
       try box.encode(image, forKey: .image); try box.encode(elements, forKey: .elements)
     case .move(let x, let y):
       try box.encode(x, forKey: .x); try box.encode(y, forKey: .y)
-    case .click(let x, let y, let button, let count):
+    case .click(let x, let y, let button, let count, let allowCover):
       try box.encode(x, forKey: .x); try box.encode(y, forKey: .y)
       try box.encode(button, forKey: .button); try box.encode(count, forKey: .count)
+      if allowCover == true { try box.encode(true, forKey: .allowCover) }
     case .drag(let fromX, let fromY, let toX, let toY):
       try box.encode(fromX, forKey: .fromX); try box.encode(fromY, forKey: .fromY)
       try box.encode(toX, forKey: .toX); try box.encode(toY, forKey: .toY)
