@@ -23,6 +23,13 @@ import { plannerFromEnvironment } from "./planner.js";
 import { browserMethods } from "./guards.js";
 import { recordTiming } from "./timing.js";
 import {
+  OwnerReach,
+  ownerTextPort,
+  proactiveReachCall,
+  type ProactiveReachDeps,
+} from "./reach.js";
+import { Routines } from "./routines.js";
+import {
   handResultSchema,
   handsNextSchema,
   type BrowserPort,
@@ -264,4 +271,69 @@ export function chooseExecution<
     execution: configured ?? computer.worker ?? undefined,
     computer,
   };
+}
+
+/** What the reach and the routines need of the proactive calls of the service. */
+export interface ReachProactive {
+  coordinator: ProactiveReachDeps["coordinator"];
+  configured: () => boolean;
+  pump: () => void;
+  stop: (intentId: string) => void;
+}
+
+/**
+ * The reach and the routines of a worker. The reach is on when the worker is,
+ * unless `CLAWDTIME_COMPUTER_REACH=off`. It calls when the line is set up for
+ * proactive calls, and texts when the text settings are in the environment of
+ * the service. `CLAWDTIME_COMPUTER_REACH_SECONDS` is the time that the owner
+ * has to answer in the chat first, 45 by default.
+ */
+export function buildOwnerReach(options: {
+  worker: ComputerWorker;
+  root: string;
+  env: Record<string, string | undefined>;
+  projectRoot: string;
+  proactive?: ReachProactive | undefined;
+  /** The line is in a call now. */
+  liveCall: () => boolean;
+  notify?: (text: string) => void;
+  request?: typeof fetch;
+}): { reach: OwnerReach | null; routines: Routines } {
+  const journal = new ComputerJournal(options.root);
+  const text = ownerTextPort(options.env, options.root, options.request);
+  const routines = new Routines({
+    root: options.root,
+    worker: options.worker,
+    journal,
+    text,
+    liveCall: options.liveCall,
+    ...(options.notify ? { notify: options.notify } : {}),
+  });
+  if (options.env.CLAWDTIME_COMPUTER_REACH === "off")
+    return { reach: null, routines };
+  const seconds = Number(options.env.CLAWDTIME_COMPUTER_REACH_SECONDS);
+  const proactive = options.proactive;
+  const reach = new OwnerReach({
+    root: options.root,
+    worker: options.worker,
+    journal,
+    text,
+    ...(Number.isFinite(seconds) && seconds >= 0 && seconds <= 600
+      ? { delayMs: Math.round(seconds * 1000) }
+      : {}),
+    ...(proactive
+      ? {
+          call: proactiveReachCall({
+            coordinator: proactive.coordinator,
+            configured: proactive.configured,
+            projectRoot: options.projectRoot,
+            pump: proactive.pump,
+            stop: proactive.stop,
+            liveCall: options.liveCall,
+          }),
+        }
+      : {}),
+    ...(options.notify ? { notify: options.notify } : {}),
+  });
+  return { reach, routines };
 }

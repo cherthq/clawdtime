@@ -16,6 +16,8 @@ import {
 import type { BrowserPort } from "../connectors/computer/ports.js";
 import { browserSwitch } from "../connectors/computer/browser.js";
 import { inspectDesktopReadiness } from "../connectors/agents/desktop-readiness.js";
+import { readReach } from "../connectors/computer/reach.js";
+import { Routines } from "../connectors/computer/routines.js";
 
 export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself, one checked action at a time
   computer status   on or off, and the last request
@@ -24,6 +26,9 @@ export const computerHelp = `clawdtime computer: ClawdTime does a task on this M
   computer doctor [--json]   configured service, capabilities and missing checks
   computer clear    you looked at the result of a request with an unknown result: new work can start
   computer timing   the time of the newest steps: the look, the plan and the action of each
+When a question waits and you do not answer in the chat, ClawdTime calls you on
+the line, or texts you when the call does not get through. doctor says whether
+it can. Routines: clawdtime routine help.
 It is off until you turn it on. Every action is checked in code, and a click that
 cannot be undone needs your yes. See docs/COMPUTER_USE.md.`;
 const usage = "Use: clawdtime computer status|on|off|doctor|clear|timing";
@@ -38,6 +43,61 @@ export interface ComputerCliDependencies {
   browser?: BrowserPort;
   /** Read-only desktop readiness probe; injectable for isolated tests. */
   request?: typeof fetch;
+}
+
+/** Why the reach cannot call or text, in plain words. Only fixed codes come in. */
+const reachReason = (reason: string) => {
+  if (reason.startsWith("missing:"))
+    return `these settings are missing in the environment of the desktop service: ${reason.slice(8).split(",").join(", ")}. See SETUP_CLAWDTIME.md`;
+  const plain: Record<string, string> = {
+    outbound_setup_missing:
+      "the line is not set up for proactive calls: proactive.json of the desktop service has no outbound line",
+    not_set_up:
+      "the line is not set up for proactive calls in this desktop service",
+    no_policy:
+      "no active calling policy lets ClawdTime call you about a question in this project",
+    calling_policy_ambiguous:
+      "more than one calling policy fits this project. Keep one",
+    earlier_call_unknown:
+      "an earlier call has an unknown outcome. Reconcile it with clawdtime proactive doctor first",
+    line_in_a_call: "the line is in a call now",
+    no_line:
+      "no line is known yet. Set CHERT_LINE_ID, or text the line once while clawdtime texts run listens",
+    readiness_failed: "its check failed",
+  };
+  return plain[reason] ?? reason.replace(/_/g, " ");
+};
+/** What the reach of the running desktop service last said, and the routines. */
+function reachRows(
+  root: string,
+  env: Record<string, string | undefined>,
+  now: number,
+) {
+  const found = readReach(root);
+  const said = found?.readiness;
+  const fresh = said && now - said.at < 5 * 60_000;
+  const off = env.CLAWDTIME_COMPUTER_REACH === "off";
+  const side = (value: { ready: boolean; reason: string } | undefined) =>
+    off
+      ? "off: CLAWDTIME_COMPUTER_REACH=off"
+      : !found
+        ? "unknown: computer/reach.json cannot be read"
+        : !value || !fresh
+          ? "not reported: start the desktop service with the computer worker on. It says this within a minute"
+          : value.ready
+            ? "ready. When a question waits, ClawdTime reaches you this way"
+            : `not ready: ${reachReason(value.reason)}`;
+  let routines: string;
+  try {
+    const all = new Routines({ root }).list();
+    const paused = all.filter((routine) => routine.paused).length;
+    routines = all.length
+      ? `${all.length - paused} active, ${paused} paused. See: clawdtime routine list`
+      : "none. Add one: clawdtime routine add every morning at 9, follow up on my latest posts";
+  } catch {
+    routines = "computer/routines.json cannot be read";
+  }
+  return { calls: side(said?.calls), texts: side(said?.texts), routines };
 }
 
 const steps = (count: number) => `${count} ${count === 1 ? "step" : "steps"}`;
@@ -245,6 +305,10 @@ export async function computerCli(
         browser = "cannot be driven. It did not answer.";
       }
     row("browser", browser);
+    const reach = reachRows(root, env, now());
+    row("calls to you", reach.calls);
+    row("texts to you", reach.texts);
+    row("routines", reach.routines);
     if (json) return print(JSON.stringify({ version: 1, desktop, checks }));
     print("Computer use on this Mac");
     for (const { name, detail } of checks)

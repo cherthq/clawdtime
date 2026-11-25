@@ -248,6 +248,12 @@ export class PhoneDesktop {
     };
   }
 
+  /** True while a call of the line holds an open conversation here. Read only. */
+  hasOpenCall() {
+    this.expire();
+    return [...this.calls.values()].some((call) => !call.closed);
+  }
+
   expire() {
     for (const call of this.calls.values())
       if (!call.closed && call.expiresAt <= this.now()) this.end(call);

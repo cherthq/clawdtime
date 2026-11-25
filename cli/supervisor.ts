@@ -67,6 +67,7 @@ import { elapsed, title } from "../connectors/agents/render.js";
 import { renderDeck } from "../connectors/agents/report.js";
 import type { System } from "../connectors/agents/system.js";
 import { sayToDesktop } from "../connectors/agents/desktop-chat.js";
+import { markTextTurn } from "../connectors/computer/reach.js";
 import {
   userMessageLimit,
   userMessageTooLong,
@@ -988,7 +989,22 @@ export async function supervisorCli(
         settings: found.settings,
         root,
         now: () => system.now(),
-        answer: (words) => turn(words, "chat"),
+        // A desktop service on this Mac takes the owner's text first, as it
+        // takes the words of a call: it has the computer worker, so a text
+        // can answer the question that the worker texted. The mark tells the
+        // service that these exact words came by text.
+        answer: async (words) => {
+          try {
+            markTextTurn(root, words.trim(), system.now());
+          } catch {
+            // Without the mark the service reads the text as a chat message.
+          }
+          const said = await sayToDesktop(system, words, {
+            ownModel: deps.model !== undefined ? deps.model !== null : !!key,
+            ...(deps.request ? { request: deps.request } : {}),
+          });
+          return said.kind === "absent" ? turn(words, "chat") : said.text;
+        },
         jobs: () => jobsFor(system, root, runner).recent(20),
         ...(deps.request ? { request: deps.request } : {}),
         log: (line) => print(`${new Date(system.now()).toISOString()} ${line}`),
