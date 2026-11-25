@@ -975,6 +975,53 @@ It is never printed.
 `clawdtime chat` with no text keeps its own conversation in the terminal, as
 before.
 
+### A new chat
+
+The three ways share one conversation. A new chat puts it aside and starts an
+empty one. There are four ways:
+
+- The new chat button in the header of the chat, next to the close button.
+- `clawdtime chat new`, or `clawdtime chat clear`. They do the same thing.
+- Type "new chat", "clear the chat" or "start over" in the chat. Only a message
+  that says that and nothing more counts: "start over the export" is work.
+- `POST /desktop/chat/new` with the panel credential and the body `{}`. The
+  button uses this route.
+
+What happens:
+
+1. The file `agents/chat.jsonl` moves to `agents/chat-<time>.jsonl` beside it,
+   for example `chat-20261126T101530Z.jsonl`. The time is the time it was put
+   aside, in UTC. The file stays owner-only. Nothing is deleted, and no file is
+   written over: a second chat put aside in the same second gets `-2`.
+2. A new, empty chat starts. An empty chat is not put aside.
+3. Work that runs goes on. The computer task, the jobs, the routines and the
+   sessions that you asked to hear about are not touched. The new chat reads
+   their state as every chat does, and their news comes into it.
+4. When the computer worker waits for you (a question, or a yes or no), that
+   question is the first line of the new chat. A yes or a no in the new chat
+   still answers it.
+5. What ClawdTime offered in the old chat and waits for a yes to (a next step,
+   a task proposal) is dropped. The new chat does not show that question.
+
+A new chat does not start while ClawdTime still answers a message: the answer
+belongs with its question. ClawdTime says so, and you start the new chat after
+the answer. The button is off while a message waits for its answer.
+
+The chats that were put aside:
+
+- `clawdtime chat history` lists them, the newest first: the time, the number
+  of messages and the first words.
+- `clawdtime chat open TIME` makes one of them the current chat again. The
+  current chat is put aside first. TIME is the full time, or its start when
+  only one kept chat has it.
+
+When the desktop service runs, these commands go to it with the panel
+credential (`POST /desktop/chat/new`, `GET /desktop/chat/history`,
+`POST /desktop/chat/open` with `{"id":"TIME"}`): it owns the chat of the panel
+and knows what waits for you. With no service, the command changes the files
+itself. When the service took the request and did not answer, the command says
+so and does not send it again.
+
 ### Find a session
 
 A board name such as `work-13` says nothing about the job. Claude Code gives
@@ -1666,6 +1713,8 @@ moves it):
 - `agents/chat.jsonl`: the conversation with ClawdTime, 2,000 characters for
   each message at most. A message that holds a credential is kept as a marker
   only.
+- `agents/chat-<time>.jsonl`: the chats that a new chat put aside, one file
+  each. They are never deleted.
 - `agents/chat-watches.json`: the sessions that you asked to hear about, 8 at
   most: for each one its id, its name and when you asked. A request goes
   when its line is said or when you end it.

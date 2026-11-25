@@ -21,6 +21,11 @@
  * sent a second time and never answered by the command's own brain. Two
  * brains must not act on one sentence.
  *
+ * `clawdtime chat new` and `clawdtime chat open TIME` go to the same service
+ * in the same way, when it runs: it owns the chat of the panel and knows what
+ * waits for the person. `clawdtime chat history` reads the chats that it put
+ * aside. With no service the command works on the files itself.
+ *
  * The credential is read, sent to the loopback address of the service, and
  * nothing else. It is never printed and never part of an error.
  */
@@ -157,33 +162,29 @@ export type DesktopAnswer =
  * within `connectMs`, when it has no chat, and when it has no language model
  * while the command has one. It never throws.
  */
-export async function sayToDesktop(
+interface DesktopOptions {
+  request?: typeof fetch;
+  connectMs?: number;
+  answerMs?: number;
+  exists?: (pid: number) => boolean;
+}
+/**
+ * The desktop service that runs, after its two first reads within one time
+ * limit, or null. The reads show that the service is there, that it takes
+ * this credential, that it is the instance that wrote the files, and that it
+ * has a chat. They change nothing, so with no answer in time the command can
+ * act by itself.
+ */
+async function reachDesktop(
   system: Pick<System, "env" | "home">,
-  text: string,
-  options: {
-    request?: typeof fetch;
-    connectMs?: number;
-    answerMs?: number;
-    exists?: (pid: number) => boolean;
-    /** The command has a language model of its own. */
-    ownModel?: boolean;
-  } = {},
-): Promise<DesktopAnswer> {
-  if (text.length > userMessageLimit)
-    return { kind: "rejected", text: userMessageTooLong };
-  const absent: DesktopAnswer = { kind: "absent" };
-  const words = text.trim();
-  if (!words) return absent;
+  options: DesktopOptions,
+) {
   const folder = desktopStateFolder(system);
-  if (!folder) return absent;
+  if (!folder) return null;
   const service = findDesktopService(folder, options.exists);
-  if (!service) return absent;
+  if (!service) return null;
   const request = options.request ?? fetch;
   const headers = { authorization: `Bearer ${service.token}` };
-  // Two reads come first, within one time limit. They show that the service
-  // is there, that it takes this credential, that it is the instance that
-  // wrote the files, and that it has a chat. They change nothing, so with no
-  // answer in time the command can answer by itself.
   const until = Date.now() + (options.connectMs ?? desktopConnectMs);
   const read = (path: string) =>
     request(`${service.origin}${path}`, {
@@ -193,17 +194,36 @@ export async function sayToDesktop(
     });
   try {
     const state = await read("/desktop/state");
-    if (!state.ok) return absent;
+    if (!state.ok) return null;
     if (stateSchema.parse(await state.json()).instanceId !== service.instanceId)
-      return absent;
+      return null;
     // A service with its agent board off has no chat: the route is not there.
     const chat = await read("/desktop/chat");
-    if (!chat.ok) return absent;
+    if (!chat.ok) return null;
     const { model } = chatSchema.parse(await chat.json());
-    if (!model && options.ownModel) return absent;
+    return { service, request, headers, model };
   } catch {
-    return absent;
+    return null;
   }
+}
+
+export async function sayToDesktop(
+  system: Pick<System, "env" | "home">,
+  text: string,
+  options: DesktopOptions & {
+    /** The command has a language model of its own. */
+    ownModel?: boolean;
+  } = {},
+): Promise<DesktopAnswer> {
+  if (text.length > userMessageLimit)
+    return { kind: "rejected", text: userMessageTooLong };
+  const absent: DesktopAnswer = { kind: "absent" };
+  const words = text.trim();
+  if (!words) return absent;
+  const desk = await reachDesktop(system, options);
+  if (!desk) return absent;
+  if (!desk.model && options.ownModel) return absent;
+  const { service, request, headers } = desk;
   // From here the message may be with the service. Exactly one POST.
   const lost: DesktopAnswer = { kind: "lost", text: desktopLostText };
   try {
@@ -219,5 +239,87 @@ export async function sayToDesktop(
     return answer ? { kind: "answered", text: answer } : lost;
   } catch {
     return lost;
+  }
+}
+
+/** What the person hears when the service took a change of the chat and did not answer. */
+export const desktopChatLostText =
+  "The ClawdTime desktop service took the request and did not answer. I did not send it again. Run clawdtime chat history to see which chats are kept.";
+const switchSchema = z
+  .object({ ok: z.boolean(), text: z.string().min(1).max(600) })
+  .passthrough();
+const historySchema = z
+  .object({
+    chats: z
+      .array(
+        z
+          .object({
+            id: z.string().regex(/^[0-9]{8}T[0-9]{6}Z(?:-[0-9]{1,3})?$/),
+            messages: z.number().int().nonnegative(),
+            first: z.string().max(200),
+          })
+          .strict(),
+      )
+      .max(10_000),
+  })
+  .passthrough();
+
+/**
+ * A new chat, or a chat that was put aside opened again, by the desktop
+ * service that runs: it owns the chat of the panel. `absent` when no
+ * service runs: the command changes the files itself. Exactly one POST,
+ * never sent again. It never throws.
+ */
+export async function changeDesktopChat(
+  system: Pick<System, "env" | "home">,
+  change: "new" | { open: string },
+  options: DesktopOptions = {},
+): Promise<DesktopAnswer & { ok?: boolean }> {
+  const desk = await reachDesktop(system, options);
+  if (!desk) return { kind: "absent" };
+  const { service, request, headers } = desk;
+  const lost = { kind: "lost" as const, text: desktopChatLostText };
+  try {
+    const response = await request(
+      `${service.origin}/desktop/chat/${change === "new" ? "new" : "open"}`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(change === "new" ? {} : { id: change.open }),
+        redirect: "error",
+        signal: AbortSignal.timeout(options.answerMs ?? desktopConnectMs * 5),
+      },
+    );
+    if (!response.ok) return lost;
+    const { ok, text } = switchSchema.parse(await response.json());
+    return { kind: "answered", text, ok };
+  } catch {
+    return lost;
+  }
+}
+
+/**
+ * The chats that the desktop service that runs put aside, or null when no
+ * service runs or it does not answer: the command reads the files itself.
+ */
+export async function desktopChatHistory(
+  system: Pick<System, "env" | "home">,
+  options: DesktopOptions = {},
+) {
+  const desk = await reachDesktop(system, options);
+  if (!desk) return null;
+  try {
+    const response = await desk.request(
+      `${desk.service.origin}/desktop/chat/history`,
+      {
+        headers: desk.headers,
+        redirect: "error",
+        signal: AbortSignal.timeout(options.connectMs ?? desktopConnectMs),
+      },
+    );
+    if (!response.ok) return null;
+    return historySchema.parse(await response.json()).chats;
+  } catch {
+    return null;
   }
 }

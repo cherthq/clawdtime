@@ -17,6 +17,8 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
         linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist",
             "-Xlinker", "\(Context.packageDirectory)/Sources/ClawdTimeTaskPanel/Info.plist"])]),
     .testTarget(name: "TaskPanelCoreTests", dependencies: ["TaskPanelCore"]),
+    // The views of the panel, built off screen: no window is shown and nothing is clicked on the screen.
+    .testTarget(name: "TaskPanelViewTests", dependencies: ["ClawdTimeTaskPanel", "TaskPanelCore"]),
     .executableTarget(name: "ClawdTimeCompanion", dependencies: ["DeviceCore"]),
     .executableTarget(name: "ClawdTimeTaskCapture", dependencies: ["DeviceCore"]),
     .testTarget(name: "DeviceCoreTests", dependencies: ["DeviceCore"]),

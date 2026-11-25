@@ -113,6 +113,8 @@ final class ChatView: NSView, SheetContent {
   var onSend: ((String) -> Void)?
   var onTalk: (() -> Void)?
   var onClose: (() -> Void)?
+  /// The person asked for a new chat. The service keeps the chat in view; work that runs goes on.
+  var onNewChat: (() -> Void)?
   var onResize: (() -> Void)?
   var maxHeight: CGFloat = 640
   private let headline = Theme.label("Talk to ClawdTime", font: Theme.display(21))
@@ -124,6 +126,8 @@ final class ChatView: NSView, SheetContent {
   private let notice = Theme.label("", font: Theme.sans(12.5), color: .warning, lines: 3)
   let input = ComposerView(placeholder: "Ask, or say what to do", height: 58, compactHeight: 38)
   private var send: IconButton!, talk: IconButton!
+  /// Starts a new chat. It stands in the header, next to Close.
+  private(set) var newChat: IconButton!
   private var scrollHeight: NSLayoutConstraint!
   private var header: NSStackView!
   private let foot = NSStackView()
@@ -140,10 +144,13 @@ final class ChatView: NSView, SheetContent {
     layer?.cornerRadius = CGFloat(DesignTokens.radiusSheet); layer?.cornerCurve = .continuous; layer?.masksToBounds = true
     layer?.borderWidth = 1
     let close = IconButton(symbol: "xmark", label: "Close the chat", target: self, action: #selector(closePressed))
-    let words = NSStackView(views: [headline, detail]); words.orientation = .vertical; words.alignment = .leading; words.spacing = 2
-    words.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    newChat = IconButton(symbol: NewChatButton.symbol, label: NewChatButton.label, target: self, action: #selector(newChatPressed))
     let gap = NSView(); gap.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
-    let header = NSStackView(views: [words, gap, close]); header.orientation = .horizontal; header.alignment = .top; header.distribution = .fill
+    // The buttons stand on the line of the headline, together, as the buttons beside the field do.
+    // The line under the headline takes the full width below them.
+    let top = NSStackView(views: [headline, gap, newChat, close]); top.orientation = .horizontal; top.alignment = .centerY; top.distribution = .fill
+    top.setCustomSpacing(2, after: newChat)
+    let header = NSStackView(views: [top, detail]); header.orientation = .vertical; header.alignment = .leading; header.spacing = 2
     self.header = header
 
     rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 12
@@ -175,6 +182,9 @@ final class ChatView: NSView, SheetContent {
     NSLayoutConstraint.activate([
       header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad), header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
       header.topAnchor.constraint(equalTo: topAnchor, constant: 18),
+      top.widthAnchor.constraint(equalTo: header.widthAnchor),
+      // The line under the headline ends where the conversation ends.
+      detail.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -pad),
       scroll.leadingAnchor.constraint(equalTo: leadingAnchor), scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
       scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12), scrollHeight,
       document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor), document.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
@@ -207,7 +217,11 @@ final class ChatView: NSView, SheetContent {
     let text = input.string.trimmingCharacters(in: .whitespacesAndNewlines)
     return (1...2000).contains(text.count) && model.pending == nil && model.connected
   }
-  private func refreshSend() { send.active = canSend ? .accentText : nil; send.alphaValue = canSend ? 1 : 0.5 }
+  private func refreshSend() {
+    send.active = canSend ? .accentText : nil; send.alphaValue = canSend ? 1 : 0.5
+    newChat.isEnabled = canStartNewChat; newChat.alphaValue = canStartNewChat ? 1 : 0.5
+  }
+  private var canStartNewChat: Bool { NewChatButton.enabled(pending: model.pending != nil || model.voice == .thinking, connected: model.connected) }
 
   /// As tall as the conversation, up to a limit; then the conversation scrolls.
   var fittingHeight: CGFloat {
@@ -270,6 +284,10 @@ final class ChatView: NSView, SheetContent {
   }
 
   @objc private func closePressed() { onClose?() }
+  @objc private func newChatPressed() {
+    guard canStartNewChat else { return }
+    onNewChat?()
+  }
   @objc private func talkPressed() { onTalk?() }
   @objc private func sendPressed() {
     guard canSend else { return }
