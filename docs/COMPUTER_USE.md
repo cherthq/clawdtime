@@ -1238,10 +1238,17 @@ question of a page names its site. A no ends the request.
   message box and your request does not ask to send. A search asks nothing.
 - **Keys that edit text go to text.** Select all (Command+A), cut, paste and
   delete a word (Option+Delete) are held back when the look just before them
-  names elements and none of them is a text field with the focus. The planner
+  names elements and none of them takes typing with the focus. The planner
   reads "No text field has the focus. Click into the text first." It counts
   as a refusal. A look that names no element cannot say where the focus is,
-  and the key goes as before.
+  and the key goes as before. A text field is not the only thing that takes
+  typing: a spreadsheet cell or its sheet (AXCell, AXTable), a grid
+  (AXGrid), the canvas of a document (AXLayoutArea), a web page that draws
+  its own editor (AXWebArea, as web sheets and slides do) and the view of a
+  document (AXScrollArea) count too, and so do they for the note "sent, but
+  no text field had the focus" after typed text. Return and Space still
+  count only a text field: a list or a sheet with the focus passes them on
+  to the default button of the window.
 - **You take over.** When the hands report that you moved the mouse or pressed
   a key, the worker pauses. Your next message goes on with it, and a stop
   stops it.

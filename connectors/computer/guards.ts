@@ -1268,6 +1268,33 @@ const textRoles = new Set([
 /** True when a field that takes text has the focus: typed text goes there. */
 export const hasTextFocus = (observation: Observation) =>
   observation.elements.some((item) => item.focused && textRoles.has(item.role));
+/**
+ * What takes typing with the focus, though it is no text field: a cell of a
+ * spreadsheet or of a table, the sheet itself, a grid, the canvas of a
+ * document (AXLayoutArea), a web page that draws its own editor (web sheets
+ * and slides do), and the view of a document, which is the only scroll area
+ * that takes the focus itself. The hands name no caret, so a web page with
+ * the focus counts.
+ */
+const typingRoles = new Set([
+  ...textRoles,
+  "AXCell",
+  "AXTable",
+  "AXGrid",
+  "AXLayoutArea",
+  "AXWebArea",
+  "AXScrollArea",
+]);
+/**
+ * True when what has the focus takes typing: a text field, a cell, a sheet,
+ * a grid, a canvas or a web editor. Typed text and the keys that edit text go
+ * there. Return and Space are judged by `hasTextFocus`: a list or a sheet
+ * with the focus passes them on to the default button of the window.
+ */
+export const hasTypingFocus = (observation: Observation) =>
+  observation.elements.some(
+    (item) => item.focused && typingRoles.has(item.role),
+  );
 const middle = (item: ScreenElement) => ({
   x: item.x + item.w / 2,
   y: item.y + item.h / 2,

@@ -122,25 +122,55 @@ describe("which keys edit text", () => {
         textKeyHold(key("cmd+a"), observation([field(role, true)])),
         role,
       ).toBeNull();
-    // The focus in a list, or on no element: held back.
-    expect(
-      textKeyHold(key("cmd+a"), observation([field("AXTable", true)])),
-    ).toBe(noTextFocusText);
+    // The focus in a list, on a button, or on no element: held back.
+    for (const role of ["AXList", "AXOutline", "AXButton"])
+      expect(
+        textKeyHold(key("cmd+a"), observation([field(role, true)])),
+        role,
+      ).toBe(noTextFocusText);
     expect(
       textKeyHold(key("cmd+v"), observation([field("AXTextArea", false)])),
+    ).toBe(noTextFocusText);
+    expect(
+      textKeyHold(key("cmd+v"), observation([field("AXCell", false)])),
     ).toBe(noTextFocusText);
     // A look with no element cannot say where the focus is: the key goes.
     expect(textKeyHold(key("cmd+a"), observation([]))).toBeNull();
     // Other keys and other actions are not touched.
     expect(
-      textKeyHold(key("return"), observation([field("AXTable", true)])),
+      textKeyHold(key("return"), observation([field("AXList", true)])),
     ).toBeNull();
     expect(
       textKeyHold(
         { kind: "type", text: "oat milk" },
-        observation([field("AXTable", true)]),
+        observation([field("AXList", true)]),
       ),
     ).toBeNull();
+  });
+
+  it("lets such a key go to a cell, a sheet, a grid, a canvas, a web editor or a document view with the focus", () => {
+    const key = (combo: string): Action => ({ kind: "key", combo });
+    // A spreadsheet cell or its sheet, a grid, the canvas of a document, a web
+    // page that draws its own editor (web sheets and slides), the view of a document.
+    for (const role of [
+      "AXCell",
+      "AXTable",
+      "AXGrid",
+      "AXLayoutArea",
+      "AXWebArea",
+      "AXScrollArea",
+    ])
+      for (const combo of ["cmd+a", "cmd+v", "cmd+x", "opt+delete"])
+        expect(
+          textKeyHold(
+            key(combo),
+            observation([
+              element(1, { role: "AXButton", title: "Bold" }),
+              element(2, { role, title: "A1", focused: true }),
+            ]),
+          ),
+          `${combo} in ${role}`,
+        ).toBeNull();
   });
 });
 

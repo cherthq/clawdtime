@@ -77,7 +77,7 @@ import {
   type BrowserCall,
   type Checked,
   type View,
-  hasTextFocus,
+  hasTypingFocus,
   closerPart,
   yesQuestion,
 } from "./guards.js";
@@ -3642,7 +3642,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       action.kind === "type" &&
       !send.focus &&
       lastLook &&
-      !hasTextFocus(lastLook)
+      !hasTypingFocus(lastLook)
     ) {
       run.tried = "sent";
       return this.note(

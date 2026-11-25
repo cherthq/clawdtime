@@ -969,6 +969,29 @@ describe("typed text and the focus", () => {
     await there.worker.idle();
     expect(there.planner.inputs[1]!.history[0]!.outcome).toBe("ok");
   });
+  it("says ok for text typed into a cell, a sheet, a canvas or a web editor with the focus", async () => {
+    for (const role of [
+      "AXCell",
+      "AXTable",
+      "AXGrid",
+      "AXLayoutArea",
+      "AXWebArea",
+      "AXScrollArea",
+    ]) {
+      const sheet = observation([
+        element(1, { title: "Name Box", role: "AXComboBox", value: "A1" }),
+        element(2, { title: "A1", role, focused: true }),
+      ]);
+      const { worker, planner, hands } = setup(
+        [{ kind: "type", text: "10" }, done],
+        { screens: [sheet] },
+      );
+      await worker.submit("r1", "Type 10 in A1");
+      await worker.idle();
+      expect(hands.sent, role).toEqual([{ kind: "type", text: "10" }]);
+      expect(planner.inputs[1]!.history[0]!.outcome, role).toBe("ok");
+    }
+  });
   it("passes the person's request to the checks: a send that was asked for needs no question", async () => {
     const screen = observation([element(1, { title: "Send" })]);
     const said = setup([{ kind: "click_element", element: 1 }, done], {
