@@ -431,6 +431,12 @@ export interface Planner {
      */
     remembered?: string[];
     history: StepRecord[];
+    /**
+     * The ways that did not work in this request, oldest first, at most 12
+     * (`failed-ways.ts`). Names from the screen and fixed words, never typed
+     * text. Absent when there are none.
+     */
+    failed?: import("./failed-ways.js").FailedWay[];
     observation: Observation | null;
     page: BrowserPage | null;
     /** False when the browser cannot be used in this request. The browser functions are then not offered. */

@@ -64,7 +64,7 @@ import {
   interpret,
 } from "../agents/call.js";
 import { looksSecret } from "../agents/memory.js";
-import { aimOf } from "./failed-ways.js";
+import { aimOf, keepFailed, type FailedWay } from "./failed-ways.js";
 import {
   actionSchema,
   againstPage,
@@ -514,6 +514,13 @@ export interface ComputerWorkerOptions {
    */
   unchangedDone?: boolean;
   /**
+   * The worker keeps the ways that did not work in a request and gives them
+   * to the planner with every turn (`failed-ways.ts`). The service turns it
+   * on; off unless asked for, so that the tests of other parts see the same
+   * input.
+   */
+  failedWays?: boolean;
+  /**
    * The owner's trust: no question before an action of the ask policy. The
    * checks still refuse what they refuse, the last look before an input still
    * runs, Stop still wins, a result that is not known is never sent again,
@@ -639,6 +646,12 @@ interface Run {
   step: number;
   state: "running" | "waiting_for_person" | "stopping";
   history: StepRecord[];
+  /**
+   * The ways that did not work in this request (`failed-ways.ts`), how many
+   * steps of the history it has read, and how many of the person's words it
+   * knows of: new words start it again.
+   */
+  failed?: { rows: FailedWay[]; read: number; heard: number };
   /** The last full look at the screen. */
   observation: Observation | null;
   /** The last reading of the page. Null after an action on the screen. */
@@ -1968,6 +1981,29 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
 
   /**
+   * The ways that did not work, for the planner: the step lines since the
+   * last turn are read into the list first. The person's new words can make
+   * an old way fit, so the list starts again with them, and the steps before
+   * them add nothing.
+   */
+  private failedWays(run: Run): { failed?: FailedWay[] } {
+    if (!this.options.failedWays) return {};
+    const heard = run.guidance.length;
+    if (run.failed?.heard !== heard)
+      run.failed = {
+        rows: [],
+        read: run.failed ? run.history.length : 0,
+        heard,
+      };
+    run.failed.rows = keepFailed(
+      run.failed.rows,
+      run.history.slice(run.failed.read),
+    );
+    run.failed.read = run.history.length;
+    return run.failed.rows.length ? { failed: run.failed.rows } : {};
+  }
+
+  /**
    * One command to the hands, with Stop checked before and after it. A
    * command with an effect whose result never comes back makes the request
    * uncertain: it is not sent again.
@@ -2320,6 +2356,7 @@ export class ComputerWorker implements DesktopExecutorPort {
               : {}),
             ...(run.remembered ? { remembered: run.remembered } : {}),
             history: run.history.slice(-shownSteps),
+            ...this.failedWays(run),
             observation: run.observation,
             page: run.page,
             ...(run.browserClosed ? { browser: false } : {}),
