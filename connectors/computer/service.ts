@@ -29,6 +29,7 @@ import {
   proactiveReachCall,
   type ProactiveReachDeps,
 } from "./reach.js";
+import { ChertReachCalls } from "./calls-api.js";
 import { Routines } from "./routines.js";
 import { computerMemory } from "./remembered.js";
 import type { Memory } from "../agents/memory.js";
@@ -333,10 +334,18 @@ export interface ReachProactive {
 
 /**
  * The reach and the routines of a worker. The reach is on when the worker is,
- * unless `CLAWDTIME_COMPUTER_REACH=off`. It calls when the line is set up for
- * proactive calls, and texts when the text settings are in the environment of
- * the service. `CLAWDTIME_COMPUTER_REACH_SECONDS` is the time that the owner
- * has to answer in the chat first, 45 by default.
+ * unless `CLAWDTIME_COMPUTER_REACH=off`, and texts when the text settings are
+ * there. It calls through one call side:
+ *
+ * - the retained proactive provider, when proactive.json names one that the
+ *   service could load;
+ * - else the Calls API of Chert (`chert-calls-api`), when the service gives
+ *   its own address: it is ready once the project API key, the line, the
+ *   owner's number with the owner's yes and the LiveKit settings of the line
+ *   agent are there, and its readiness names the first piece that is not.
+ *
+ * `CLAWDTIME_COMPUTER_REACH_SECONDS` is the time that the owner has to answer
+ * in the chat first, 45 by default.
  */
 export function buildOwnerReach(options: {
   worker: ComputerWorker;
@@ -348,7 +357,14 @@ export function buildOwnerReach(options: {
   liveCall: () => boolean;
   notify?: (text: string) => void;
   request?: typeof fetch;
-}): { reach: OwnerReach | null; routines: Routines } {
+  /** The address of this desktop service. Without it there is no Calls API path. */
+  origin?: string;
+}): {
+  reach: OwnerReach | null;
+  routines: Routines;
+  /** The Calls API path, when the reach calls through it. */
+  calls?: ChertReachCalls;
+} {
   const journal = new ComputerJournal(options.root);
   const text = ownerTextPort(options.env, options.root, options.request);
   const routines = new Routines({
@@ -363,7 +379,47 @@ export function buildOwnerReach(options: {
     return { reach: null, routines };
   const seconds = Number(options.env.CLAWDTIME_COMPUTER_REACH_SECONDS);
   const proactive = options.proactive;
-  const reach = new OwnerReach({
+  const retained = (() => {
+    try {
+      return !!proactive?.configured();
+    } catch {
+      return false;
+    }
+  })();
+  let reach: OwnerReach | null = null;
+  const calls =
+    !retained && options.origin
+      ? new ChertReachCalls({
+          root: options.root,
+          env: options.env,
+          origin: options.origin,
+          // The reach exists before the first call: these run only on a call.
+          answer: (id, words) =>
+            reach
+              ? reach.callAnswer(id, words)
+              : Promise.resolve({
+                  message:
+                    "That question no longer waits, so nothing was passed on.",
+                  done: true,
+                }),
+          stop: (id) => reach?.stopFromCall(id) ?? "Nothing runs from here.",
+          liveCall: options.liveCall,
+          ...(options.request ? { request: options.request } : {}),
+        })
+      : undefined;
+  const call = calls
+    ? calls
+    : proactive
+      ? proactiveReachCall({
+          coordinator: proactive.coordinator,
+          configured: proactive.configured,
+          projectRoot: options.projectRoot,
+          pump: proactive.pump,
+          stop: proactive.stop,
+          liveCall: options.liveCall,
+        })
+      : undefined;
+  reach = new OwnerReach({
     root: options.root,
     worker: options.worker,
     journal,
@@ -371,19 +427,8 @@ export function buildOwnerReach(options: {
     ...(Number.isFinite(seconds) && seconds >= 0 && seconds <= 600
       ? { delayMs: Math.round(seconds * 1000) }
       : {}),
-    ...(proactive
-      ? {
-          call: proactiveReachCall({
-            coordinator: proactive.coordinator,
-            configured: proactive.configured,
-            projectRoot: options.projectRoot,
-            pump: proactive.pump,
-            stop: proactive.stop,
-            liveCall: options.liveCall,
-          }),
-        }
-      : {}),
+    ...(call ? { call } : {}),
     ...(options.notify ? { notify: options.notify } : {}),
   });
-  return { reach, routines };
+  return { reach, routines, ...(calls ? { calls } : {}) };
 }

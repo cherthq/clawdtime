@@ -14,11 +14,14 @@ full path by hand, and a prompt that lets a coding agent do it, is in
 
 ## Connect ClawdTime to Chert
 
-There is no single connect command for the line. `clawdtime connect` exists,
-but it pairs a coding agent (`--agent codex|claude-code`) with a ClawdTime
-backend from a private pairing file. It does not get or connect a Chert line.
+`clawdtime connect` connects ClawdTime to Chert step by step: the sign-in, the
+project, the line, the line agent, your number, your yes to calls and texts,
+the project API key, and the call path of the reach. Each step skips what is
+done. `clawdtime connect --check` only reports. See "Connect to Chert in one
+command" in `SETUP_CLAWDTIME.md`. (`clawdtime connect --agent codex|claude-code`
+still pairs a coding agent with a ClawdTime backend.)
 
-The line path, in short (details in `SETUP_CLAWDTIME.md`):
+The line path by hand, in short (details in `SETUP_CLAWDTIME.md`):
 
 ```sh
 chert whoami                      # signed in? else: chert login (or chert, when new)
@@ -112,15 +115,31 @@ worker as an answer in the chat does.
 - It never asks for a password, a code, or a card, bank or identity number, by
   voice or by text. You enter those on the Mac yourself.
 - One call and one text at most for one question, also after a restart.
-- It calls when the line is set up for proactive calls: an outbound line in
-  `proactive.json` of the desktop service, and one active calling policy of the
-  project with the `decision` trigger and the `phone_alert` channel.
+- It calls through one of two paths. The retained provider, when
+  `proactive.json` of the desktop service names it, with one active calling
+  policy of the project (`decision` trigger, `phone_alert` channel). It runs
+  only with the pinned builds of `@trychert/facetime` and Node. In every other
+  case, the Chert Calls API (`POST /api/v1/calls`, `mode: customer_managed`),
+  which works with any chert version.
+- The Chert Calls API path needs the project API key, the line of the project
+  (`clawdtime connect` writes it to `calls.json`), your number with your yes,
+  and the LiveKit keys, `OPENAI_API_KEY` and `AGENT_NAME` in `line/.env.local`.
+  The desktop service makes a LiveKit room for the question and sends the line
+  agent into it with the job metadata `{"kind":"reach",...}`. The call goes out
+  once the agent is in the room with its audio. On `bridge_ready` the room
+  gets `chert_bridge_ready: true`, and the agent says the question. Your words
+  go to the desktop service, a "stop" stops the computer task, and the agent
+  says goodbye and leaves. One idempotency key for each question: no second
+  call, and an unknown outcome is never placed again.
+- The line agent must run the code of this checkout, with the LiveKit keys and
+  the state folder of the desktop service. Restart it after an update.
 - It texts when the text settings above, with `CHERT_LINE_ID` or a first text
   from you, are in the environment of the desktop service.
 - `CLAWDTIME_COMPUTER_REACH_SECONDS` (0 to 600) sets the wait.
   `CLAWDTIME_COMPUTER_REACH=off` turns the reach off.
 - `clawdtime computer doctor` says whether a call and a text can reach you,
-  and why not.
+  and why not: "calls to you: ready (Chert Calls API)", or the exact piece that
+  is missing.
 
 Details: "When you are not at the chat" in `docs/COMPUTER_USE.md`.
 

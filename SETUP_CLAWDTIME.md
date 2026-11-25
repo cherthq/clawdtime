@@ -44,8 +44,9 @@ and the command that does it.
 5. The line agent in `line/` is set up, as in section 3.
 6. Your own number.
 7. Your answer: may ClawdTime call and text you.
-8. The project API key, for texts.
-9. The outbound line that ClawdTime calls you on.
+8. The project API key, for texts and for calls through the Chert Calls API.
+9. The outbound line that ClawdTime calls you on: the retained provider when
+   this Mac has its pinned builds, else the Chert Calls API.
 10. What `clawdtime computer doctor` says for "calls to you" and "texts to
     you".
 
@@ -72,6 +73,7 @@ What it writes, and where:
 | `line/.env.local`                                 | Made from `.env.example`. `AGENT_NAME`, the project, the framing, LiveKit keys                                       |
 | `~/.local/share/clawdtime/owner.json`             | Your number and your answer                                                                                          |
 | `~/.local/share/clawdtime/chert-key.json`         | The project API key and its project                                                                                  |
+| `~/.local/share/clawdtime/calls.json`             | For the Chert Calls API: the project, its line, whether the line has video, and the folder of the line agent         |
 | `~/.local/share/clawdtime/desktop/proactive.json` | The outbound line, once it is ready                                                                                  |
 | `~/.local/share/clawdtime/desktop/outbound/`      | A copy of the calling policy, and the configuration of the outbound line. `native.json` holds the key and the number |
 
@@ -109,11 +111,22 @@ What to know:
   service keeps the policy in its own store. Step 9 needs it to have run once.
   When `clawdtime connect` changes `proactive.json`, it says so: start the
   desktop service again.
-- Calls to you use the line's retention guard, which keeps the records of the
-  line when ClawdTime takes it for an outbound call. That guard works only with
-  `@trychert/facetime` 0.1.0-beta.19 and its pinned Node build. Step 9 checks
-  this, says what it found, and leaves calls off when they do not match. Texts
-  to you work without it.
+- Calls to you take one of two paths. The retained provider uses the line's
+  retention guard, which keeps the records of the line when ClawdTime takes it
+  for an outbound call. That guard works only with `@trychert/facetime`
+  0.1.0-beta.19 and its pinned Node build. When this Mac does not have them,
+  step 9 sets up the Chert Calls API instead, which works with any chert
+  version: it reads the line of the project once with the project API key
+  (it places no call), and writes `calls.json`. Then start the desktop service
+  again, and restart the line agent so that it runs the code of this
+  checkout. Step 10 says "Calls to you: ready (Chert Calls API)" once the
+  service reports it. Texts to you work without either path.
+- A call through the Chert Calls API places the call from the line of the
+  project to your number. The line agent joins it in a room of the LiveKit
+  project of `line/.env.local`, says the question, takes your answer and says
+  goodbye. See "A call over the Chert Calls API" in
+  [docs/COMPUTER_USE.md](docs/COMPUTER_USE.md). On a Free or Shared line, your
+  phone must be joined for the project and the line.
 - With the outbound line in `proactive.json`, the desktop service starts only
   while the sign-in of chert lasts (30 days), and while the node that step 9
   found is still there. Step 2 and step 9 say when the sign-in ends: run

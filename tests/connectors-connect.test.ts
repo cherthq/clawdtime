@@ -389,8 +389,10 @@ describe("clawdtime connect", { timeout: 30_000 }, () => {
       /7\. Calls and texts to you: allowed now\. The desktop service has the calling policy until/,
     );
     expect(text).toContain("8. Project API key: stored in");
+    // The retained provider cannot run with this chert build: the Calls API
+    // takes its place, and waits for the OpenAI key of the line agent too.
     expect(text).toMatch(
-      /9\. Outbound calls: missing: .*@trychert\/facetime 0\.1\.0-beta\.19, and this Mac has 0\.1\.0-beta\.99/,
+      /9\. Outbound calls: the retained provider cannot run here \(it needs @trychert\/facetime 0\.1\.0-beta\.19, and this Mac has 0\.1\.0-beta\.99\), and the Chert Calls API, which works with any chert version, still needs OPENAI_API_KEY/,
     );
     expect(text).toMatch(/10\. Calls to you: /);
     expect(text).toMatch(/10\. Texts to you: /);
@@ -470,8 +472,34 @@ describe("clawdtime connect", { timeout: 30_000 }, () => {
     expect(await f.run()).toBe(3);
     expect(f.asked).toEqual([]);
     expect(f.printed.join("\n")).toContain("5. Line agent: ready");
+    expect(f.printed.join("\n")).toContain(
+      "9. Outbound calls: set up for the Chert Calls API now, because the retained provider cannot run here",
+    );
+    expect(f.printed.join("\n")).toContain("as FaceTime Audio");
+    // calls.json: the line and the folder of its agent, for the owner only. No key, no number.
+    const calls = readFileSync(join(f.state, "calls.json"), "utf8");
+    expect(mode(join(f.state, "calls.json"))).toBe(0o600);
+    expect(JSON.parse(calls)).toEqual({
+      version: 1,
+      provider: "chert-calls-api",
+      projectId: project,
+      lineId,
+      video: false,
+      lineDirectory: f.line,
+    });
+    expect(calls).not.toContain(key);
+    expect(calls).not.toContain(phone);
     expect(f.printed.at(-1)).toMatch(
-      /Your line is ready\. Still to do.*step 9, 10/,
+      /Your line is ready\. Still to do.*step 10/,
+    );
+    // Once set up, the next run keeps it and changes nothing.
+    f.printed.length = 0;
+    expect(await f.run()).toBe(3);
+    expect(f.printed.join("\n")).toContain(
+      "9. Outbound calls: the Chert Calls API is set up: calls go to your number, ends in 23, as FaceTime Audio",
+    );
+    expect(f.printed.join("\n")).not.toContain(
+      "Start the ClawdTime desktop service again",
     );
   });
 

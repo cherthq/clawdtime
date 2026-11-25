@@ -59,9 +59,12 @@ import {
   findOnPath,
   fitsReach,
   outboundFolder,
+  pinProblem,
+  pinShort,
   readProactiveConfig,
   retentionChecks,
   sendToService,
+  setUpCallsApi,
   setUpOutbound,
   writeProactiveConfig,
   type RetentionChecks,
@@ -395,7 +398,7 @@ function summary(
   ];
   if (ctx.restart)
     ctx.print(
-      "Start the ClawdTime desktop service again, so that it reads proactive.json.",
+      "Start the ClawdTime desktop service again, so that it reads its call settings (proactive.json and calls.json).",
     );
   if (needed.length) {
     ctx.print(
@@ -1135,6 +1138,32 @@ async function outbound(ctx: Context): Promise<Step> {
   const owner = readOwner(ctx.root).owner;
   if (owner?.consent?.answer !== "yes")
     return todo("off: calls to you are not allowed (step 7)");
+  const retention =
+    ctx.retention === undefined
+      ? await retentionChecks(ctx.lineDirectory)
+      : ctx.retention;
+  // The retained provider runs only with its pinned builds. Without them the
+  // reach calls through the Calls API of Chert, which needs none of them.
+  const pin = pinProblem(ctx.env, retention, ctx.lineDirectory);
+  if (pin) {
+    const key = readChertKey(ctx.root).key;
+    if (!key || key.projectId !== ctx.project!.id)
+      return todo("needs the project API key first (step 8)");
+    const result = await setUpCallsApi({
+      check: ctx.check,
+      env: ctx.env,
+      root: ctx.root,
+      request: ctx.request,
+      desktopFolder: ctx.desktopFolder,
+      projectId: ctx.project!.id,
+      apiKey: key.apiKey,
+      phone: owner.phone,
+      lineDirectory: ctx.lineDirectory,
+      pinned: pinShort(ctx.env, retention),
+    });
+    if (result.changed) ctx.restart = true;
+    return result.ready ? ready(result.text) : todo(result.text);
+  }
   const desktop = desktopDescriptor(ctx.desktopFolder);
   if (!desktop)
     return todo(
@@ -1156,10 +1185,7 @@ async function outbound(ctx: Context): Promise<Step> {
     lineDirectory: ctx.lineDirectory,
     chertHome: ctx.chertHome,
     nodeBinary: ctx.nodeBinary,
-    retention:
-      ctx.retention === undefined
-        ? await retentionChecks(ctx.lineDirectory)
-        : ctx.retention,
+    retention,
   });
   if (result.changed) ctx.restart = true;
   // The call path reads the sign-in of chert when the desktop service starts.

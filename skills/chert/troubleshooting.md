@@ -62,7 +62,7 @@ The reason of a call that ended badly is in [calls-and-video.md](calls-and-video
 | `clawdtime texts check` is refused      | Make a new project API key with read and write access. Check the project id        |
 | Texts get no answer                     | Check `CLAWDTIME_OWNER_PHONE` and `CLAWDTIME_TEXT_WORD`. Only one `texts run` runs |
 | `shared_reply_window_closed` (403)      | Free trial: your phone sends an ordinary text to the line first                    |
-| The reach never calls                   | `clawdtime computer doctor` says why: no outbound line, or no calling policy       |
+| The reach never calls                   | `clawdtime computer doctor` names the missing piece. Run `clawdtime connect`       |
 
 More: "When something fails" in `SETUP_CLAWDTIME.md`.
 

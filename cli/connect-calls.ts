@@ -43,6 +43,14 @@ import {
 } from "../src/attention/proactive-policy.js";
 import { reachSession } from "../connectors/computer/reach.js";
 import {
+  callsApiBase,
+  callsProvider,
+  lineLiveKit,
+  readCallsRecord,
+  writeCallsRecord,
+} from "../connectors/computer/calls-api.js";
+import { phoneEnding } from "../connectors/shared/owner.js";
+import {
   createProductionDelivery,
   proactiveProductionConfigSchema,
   type ProactiveProductionConfig,
@@ -441,7 +449,7 @@ export async function projectLine(input: {
   projectId: string;
   apiKey: string;
   request: typeof fetch;
-}): Promise<{ lineId: string } | { reason: string }> {
+}): Promise<{ lineId: string; video: boolean } | { reason: string }> {
   try {
     const response = await input.request(
       `${input.origin}/api/v1/lines?limit=100&offset=0`,
@@ -463,7 +471,7 @@ export async function projectLine(input: {
     if (!response.ok)
       return { reason: "the lines of the project could not be read now" };
     const body = (await response.json()) as {
-      data?: { items?: { id?: unknown }[] };
+      data?: { items?: { id?: unknown; supports_video?: unknown }[] };
     };
     const items = Array.isArray(body?.data?.items) ? body.data.items : null;
     if (!items)
@@ -478,7 +486,8 @@ export async function projectLine(input: {
       return {
         reason: `the project has ${items.length} lines; calls to you need a project with one line`,
       };
-    return { lineId: ids[0]! };
+    // Outbound video only on a line that says it has video.
+    return { lineId: ids[0]!, video: items[0]?.supports_video === true };
   } catch {
     return { reason: "the lines of the project could not be read now" };
   }
@@ -666,25 +675,9 @@ export async function setUpOutbound(
 
   // The line's retention guard: pinned to one build of the provider and of node.
   const provider = providerPackage(input.env);
-  const node = findOnPath("node", input.env);
-  let pinned = false;
-  if (!input.retention)
-    missing.push(
-      `the retention guard of the line agent (${join(lineDirectory, "provider-retention.mjs")}) cannot be read`,
-    );
-  else if (!provider)
-    missing.push(
-      "the installed @trychert/facetime package cannot be found from the chert command",
-    );
-  else if (!input.retention.provider(provider.root))
-    missing.push(
-      `the line's retention guard works only with the pinned files of @trychert/facetime ${input.retention.pin.version}, and this Mac has ${provider.version === input.retention.pin.version ? "other files of that version" : (provider.version ?? "another build")}. No command here can change that safely; calls to you stay off, and texts still reach you`,
-    );
-  else if (!node || !input.retention.node(realpathSync(node)))
-    missing.push(
-      `the line's retention guard works only with the pinned build of Node ${input.retention.pin.nodeVersion} as node on the PATH, and this Mac has another one. Calls to you stay off, and texts still reach you`,
-    );
-  else pinned = true;
+  const pin = pinProblem(input.env, input.retention, lineDirectory);
+  const pinned = pin === null;
+  if (pin) missing.push(pin);
 
   for (const [path, what] of [
     [input.chertHome, "the folder of the chert command"],
@@ -880,6 +873,154 @@ export async function setUpOutbound(
     },
   });
   return done("configured now, and proactive.json names it", true);
+}
+
+/**
+ * Why the retained provider cannot run on this Mac: its retention guard is
+ * pinned to one build of @trychert/facetime and of node. Null when it can.
+ */
+export function pinProblem(
+  env: Record<string, string | undefined>,
+  retention: RetentionChecks | null,
+  lineDirectory: string,
+): string | null {
+  const provider = providerPackage(env);
+  const node = findOnPath("node", env);
+  if (!retention)
+    return `the retention guard of the line agent (${join(lineDirectory, "provider-retention.mjs")}) cannot be read`;
+  if (!provider)
+    return "the installed @trychert/facetime package cannot be found from the chert command";
+  if (!retention.provider(provider.root))
+    return `the line's retention guard works only with the pinned files of @trychert/facetime ${retention.pin.version}, and this Mac has ${provider.version === retention.pin.version ? "other files of that version" : (provider.version ?? "another build")}. No command here can change that safely; calls to you stay off, and texts still reach you`;
+  if (!node || !retention.node(realpathSync(node)))
+    return `the line's retention guard works only with the pinned build of Node ${retention.pin.nodeVersion} as node on the PATH, and this Mac has another one. Calls to you stay off, and texts still reach you`;
+  return null;
+}
+
+/** Why the retained provider cannot run, in a short plain clause for the Calls API line. */
+export function pinShort(
+  env: Record<string, string | undefined>,
+  retention: RetentionChecks | null,
+): string {
+  if (!retention) return "its retention guard cannot be read";
+  const provider = providerPackage(env);
+  if (!provider) return "the installed chert package cannot be found";
+  if (!retention.provider(provider.root))
+    return `it needs @trychert/facetime ${retention.pin.version}, and this Mac has ${provider.version === retention.pin.version ? "other files of that version" : (provider.version ?? "another build")}`;
+  return `it needs Node ${retention.pin.nodeVersion} as node on the PATH`;
+}
+
+export interface CallsApiInput {
+  check: boolean;
+  env: Record<string, string | undefined>;
+  root: string;
+  request: typeof fetch;
+  desktopFolder: string;
+  projectId: string;
+  apiKey: string;
+  phone: string;
+  lineDirectory: string;
+  /** Why the retained provider cannot run here. */
+  pinned: string;
+}
+
+/**
+ * Sets up the Calls API path of the reach (`chert-calls-api`) when the
+ * retained provider cannot run: it keeps the line of the project, whether
+ * that line has video, and the folder of the line agent in calls.json, an
+ * owner-only file of the state folder. It reads the lines once with the
+ * project API key and places no call. The outbound line that connect put in
+ * proactive.json is taken out, because the reach uses a retained provider
+ * whenever one is named.
+ */
+export async function setUpCallsApi(
+  input: CallsApiInput,
+): Promise<OutboundResult> {
+  const why = `the retained provider cannot run here (${input.pinned})`;
+  const notYet = (text: string): OutboundResult => ({
+    ready: false,
+    changed: false,
+    text: `${why}, and the Chert Calls API, which works with any chert version, still needs ${text}`,
+  });
+  const read = readProactiveConfig(input.desktopFolder);
+  if ("problem" in read)
+    return { ready: false, changed: false, text: read.problem };
+  const own = join(outboundFolder(input.desktopFolder), "configuration.json");
+  const outbound = read.config.outbound;
+  if (
+    outbound &&
+    !(
+      outbound.provider === "chert-dev-retained-v1" &&
+      outbound.configurationFile === own
+    )
+  )
+    return {
+      ready: false,
+      changed: false,
+      text: "proactive.json names another outbound line, and the reach uses that one. clawdtime connect leaves it as it is",
+    };
+  const line = lineLiveKit(input.lineDirectory);
+  if ("missing" in line)
+    return notYet(
+      line.missing === "agent_name"
+        ? `a valid AGENT_NAME in ${join(input.lineDirectory, ".env.local")} (step 5)`
+        : line.missing === "model_key"
+          ? `OPENAI_API_KEY in ${join(input.lineDirectory, ".env.local")} (step 5)`
+          : `the LiveKit keys in ${join(input.lineDirectory, ".env.local")} (step 5)`,
+    );
+  let origin: string;
+  try {
+    const base = new URL(
+      input.env.CHERT_CALLS_API_BASE?.trim() || callsApiBase,
+    );
+    if (base.protocol !== "https:") throw Error("not encrypted");
+    origin = base.origin;
+  } catch {
+    return notYet("CHERT_CALLS_API_BASE as an https address");
+  }
+  const found = await projectLine({
+    origin,
+    projectId: input.projectId,
+    apiKey: input.apiKey,
+    request: input.request,
+  });
+  if ("reason" in found) return notYet(found.reason);
+  const record = {
+    version: 1 as const,
+    provider: callsProvider,
+    projectId: input.projectId,
+    lineId: found.lineId,
+    video: found.video,
+    lineDirectory: input.lineDirectory,
+  };
+  const stored = readCallsRecord(input.root);
+  if (stored.problem)
+    return { ready: false, changed: false, text: stored.problem };
+  const same = JSON.stringify(stored.record) === JSON.stringify(record);
+  const media = found.video ? "FaceTime Video" : "FaceTime Audio";
+  const where = `calls go to your number, ${phoneEnding(input.phone)}, as ${media}`;
+  if (input.check)
+    return same && !outbound
+      ? {
+          ready: true,
+          changed: false,
+          text: `the Chert Calls API is set up: ${where}`,
+        }
+      : {
+          ready: false,
+          changed: false,
+          text: `${why}. The Chert Calls API can take its place: run clawdtime connect to set it up`,
+        };
+  if (!same) writeCallsRecord(input.root, record);
+  if (outbound) {
+    const { outbound: _line, ...rest } = read.config;
+    writeProactiveConfig(input.desktopFolder, rest);
+  }
+  return {
+    ready: true,
+    changed: !same || !!outbound,
+    text: `${same && !outbound ? "the Chert Calls API is set up" : `set up for the Chert Calls API now, because ${why}`}: ${where}`,
+  };
 }
 
 /** Null when the provider accepts the configuration; else its fixed refusal code. */

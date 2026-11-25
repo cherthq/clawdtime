@@ -43,6 +43,7 @@ import {
   voiceOnlyCall,
   withOwnerWords,
 } from "../connectors/computer/reach.js";
+import { mountReachCalls } from "../connectors/computer/calls-api.js";
 import { ChatLog } from "../connectors/agents/brain.js";
 import { Memory } from "../connectors/agents/memory.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
@@ -631,6 +632,9 @@ const owner = chosen?.computer.worker
         : undefined,
       liveCall: lineInCall,
       notify: (text) => agentBoard?.appendExecutionResult(text),
+      // With no retained provider, the reach calls through the Calls API of
+      // Chert, and the line agent posts the owner's words to this address.
+      origin: `http://127.0.0.1:${port}`,
     })
   : undefined;
 if (proactive && owner?.reach)
@@ -702,6 +706,9 @@ const app = createTaskApp(
     : undefined,
   proactive,
 );
+// The line agent of a reach call over the Calls API: its capability for that
+// one call, then the owner's words, the stop and the end of the call.
+if (owner?.calls) mountReachCalls(app, owner.calls);
 const proactiveWatch = proactive
   ? setInterval(() => {
       void proactive.service.pump().catch(() => {

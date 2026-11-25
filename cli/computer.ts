@@ -32,6 +32,7 @@ import type { BrowserPort } from "../connectors/computer/ports.js";
 import { browserSwitch } from "../connectors/computer/browser.js";
 import { inspectDesktopReadiness } from "../connectors/agents/desktop-readiness.js";
 import { readReach } from "../connectors/computer/reach.js";
+import { callsSettings } from "../connectors/computer/calls-api.js";
 import { Routines } from "../connectors/computer/routines.js";
 
 export const computerHelp = `clawdtime computer: ClawdTime does a task on this Mac by itself
@@ -63,8 +64,36 @@ export interface ComputerCliDependencies {
   request?: typeof fetch;
 }
 
+/** The missing piece of the Calls API path, in plain words. */
+const callsPiece: Record<string, string> = {
+  project_api_key:
+    "the project API key of Chert. Run clawdtime connect (step 8)",
+  line_of_this_project:
+    "a line of the project of the stored key: calls.json names a line of another project. Run clawdtime connect",
+  line_id: "the line of the project. Run clawdtime connect (step 9)",
+  owner_number: "your number. Run clawdtime connect (step 6)",
+  consent: "your yes to calls and texts. Run clawdtime connect --consent yes",
+  line_directory:
+    "the folder of the line agent. Run clawdtime connect (step 9)",
+  livekit_settings:
+    "the LiveKit keys in line/.env.local. Run chert livekit in line/, or clawdtime connect (step 5)",
+  model_key:
+    "OPENAI_API_KEY in line/.env.local: the line agent speaks with it. Put your key there yourself",
+  agent_name:
+    "a valid AGENT_NAME in line/.env.local: letters, digits, - and _ only",
+  line_settings_unreadable:
+    "line/.env.local is not an owner-only file of this user. Run: chmod 600 line/.env.local",
+  calls_api_base: "CHERT_CALLS_API_BASE must be an https address",
+  calls_file_unreadable:
+    "calls.json in the state folder cannot be used. Look at it, then run clawdtime connect",
+  settings_unreadable: "its settings could not be read",
+};
 /** Why the reach cannot call or text, in plain words. Only fixed codes come in. */
 const reachReason = (reason: string) => {
+  if (reason.startsWith("calls_api_missing:")) {
+    const piece = reason.slice("calls_api_missing:".length);
+    return `the Chert Calls API path needs ${callsPiece[piece] ?? piece.replace(/_/g, " ")}`;
+  }
   if (reason.startsWith("missing:"))
     return `these settings are missing in the environment of the desktop service: ${reason.slice(8).split(",").join(", ")}. Run clawdtime connect, or see SETUP_CLAWDTIME.md`;
   const plain: Record<string, string> = {
@@ -81,6 +110,8 @@ const reachReason = (reason: string) => {
     earlier_call_unknown:
       "an earlier call has an unknown outcome. Reconcile it with clawdtime proactive doctor first",
     line_in_a_call: "the line is in a call now",
+    calls_api_record_unreadable:
+      "computer/reach-calls.json cannot be read, so no call is placed. Look at it, and move it away to start again",
     no_line:
       "no line is known yet. Set CHERT_LINE_ID, or text the line once while clawdtime texts run listens",
     readiness_failed: "its check failed",
@@ -97,15 +128,20 @@ function reachRows(
   const said = found?.readiness;
   const fresh = said && now - said.at < 5 * 60_000;
   const off = env.CLAWDTIME_COMPUTER_REACH === "off";
-  const side = (value: { ready: boolean; reason: string } | undefined) =>
+  const side = (
+    value: { ready: boolean; reason: string } | undefined,
+    later = "",
+  ) =>
     off
       ? "off: CLAWDTIME_COMPUTER_REACH=off"
       : !found
         ? "unknown: computer/reach.json cannot be read"
         : !value || !fresh
-          ? "not reported: start the desktop service with the computer worker on. It says this within a minute"
+          ? `not reported: start the desktop service with the computer worker on. It says this within a minute${later}`
           : value.ready
-            ? "ready. When a question waits, ClawdTime reaches you this way"
+            ? value.reason === "ready_chert_calls_api"
+              ? "ready (Chert Calls API). When a question waits, ClawdTime reaches you this way"
+              : "ready. When a question waits, ClawdTime reaches you this way"
             : `not ready: ${reachReason(value.reason)}`;
   let routines: string;
   try {
@@ -117,7 +153,22 @@ function reachRows(
   } catch {
     routines = "computer/routines.json cannot be read";
   }
-  return { calls: side(said?.calls), texts: side(said?.texts), routines };
+  // Without a report, this Mac's own files say what the Calls API path lacks.
+  const local = (() => {
+    try {
+      const settings = callsSettings(env, root);
+      return "missing" in settings
+        ? `. Without a retained provider it calls through the Chert Calls API, which needs ${callsPiece[settings.missing] ?? settings.missing.replace(/_/g, " ")}`
+        : ". Without a retained provider it calls through the Chert Calls API, which has what it needs here";
+    } catch {
+      return "";
+    }
+  })();
+  return {
+    calls: side(said?.calls, local),
+    texts: side(said?.texts),
+    routines,
+  };
 }
 
 const steps = (count: number) => `${count} ${count === 1 ? "step" : "steps"}`;
