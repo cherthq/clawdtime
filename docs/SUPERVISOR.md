@@ -1174,9 +1174,10 @@ to a private folder, read once and removed. Nothing of it is kept.
   stopping, stopped, blocked, or with an unknown result), ClawdTime says of
   the screen only what the task's engine reported. While the task is running
   or waiting (never when uncertain, blocked, completed, or canceled), the
-  exact narrow questions about the task alone ("are you stuck?", "is it
-  open?", "is it loaded?", "where are you?", "what are you doing?", "is it
-  done?", "do you need help?", with fillers) are answered directly from the
+  exact narrow questions about the task alone ("are you stuck?", "are you
+  done?", "is it open?", "is it loaded?", "where are you?", "what are you
+  doing?", "is it done?", "do you need help?", with fillers) are answered
+  directly from the
   engine's state without asking the language model only when the previous
   turn went to the screen engine or no other message stood between. Any
   follow-up after a session or job question, and anything mentioning a
@@ -1196,15 +1197,20 @@ to a private folder, read once and removed. Nothing of it is kept.
   neither, the computer task stops (it holds the Mac) and ClawdTime says
   which one stopped. When no computer task can stop, stops never call the
   computer engine's stop.
-- While a screen task is not over (running, paused, waiting, stopping), one
-  gate governs every path that submits to the engine: words are submitted
-  only when the shared `readWords` reader classifies them as an "order" (or
-  "stop" in `delegate`) and the words name no session of the board by its
-  full name. Screen orders ("Can you just hit enter?", "Uh just open it in
-  Chrome, bro.", "Bro, just open app.example.com on Google Chrome.") go
-  straight to the engine in your own words; coding holds stay off `submit`
-  and take the chat's normal path, including while a panel approval or
-  approval prompt waits.
+- While a screen task is not over (running, paused, waiting, stopping), the
+  task goes on by itself, and every message that is not a stop is guidance
+  for it. Orders, corrections, remarks and waits ("Bro, open flipkart.com, not
+  instagram.com.", "no, the other one", "that's wrong, go back", "hold on")
+  go straight to the engine in your own words, with no offer and no question
+  back. The engine reads them (see Words while a task runs in
+  COMPUTER_USE.md). A question gets its answer from the state of the task, and
+  a thanks, a greeting or a bare yes is a reply of the chat. Words for other
+  work never go to `submit`: a session of the board by its name, code by what
+  it names (a file, a repository, a branch, a commit, a test), the work of the
+  supervisor (agents, jobs, builds, deploys, logs), work to find something
+  out, and words for a session. Words with a verb of code work ("open the app
+  and add dark mode") go to the language model first, which starts a job or
+  hands them to the task through `delegate_computer_task`.
 - While the task waits for a panel approval or a non-worker answer, no
   instruction is submitted. While the native worker waits for a yes (or when
   the waiting kind is unset), an explicit yes ("yes", "yes do it", "yes
@@ -1215,11 +1221,13 @@ to a private folder, read once and removed. Nothing of it is kept.
   explicit no ("no", "nah", "nope", "don't", "deny", "cancel") refuses it
   only under the same condition (mapping "nah" and "nope" to "no"), a stop
   stops it, a strict screen order sets the waiting action aside without
-  approving, unclear approval replies repeat the approval state, and coding
-  or session messages take the chat's normal path. A waiting coding task
-  (waiting for an answer or acceptance) keeps its own answer path. At a
-  takeover pause or a planner question, a stop stops it and a takeover order
-  goes to `submit`; every other message takes the engine's `answer` path.
+  approving, unclear approval replies repeat the approval state, other
+  guidance sets the waiting action aside without approving and steers the
+  task, and coding or session messages take the chat's normal path. A waiting
+  coding task (waiting for an answer or acceptance) keeps its own answer path.
+  At a planner question, a stop stops it and every other message is its
+  answer. At a pause, a stop stops it, words for other work take their own
+  road, and every other message goes to the engine and the task goes on.
 
 ### Give it a job
 

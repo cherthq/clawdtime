@@ -651,7 +651,7 @@ describe("a direct request for a web address in the worker", () => {
     await until(() => f.worker.snapshot().state === "waiting_for_person");
     expect(f.hands.sent).toEqual([]);
     expect(f.worker.snapshot().message).toBe(
-      "You are using the Mac, so I hold. Next I wanted to open app.example.com in Fixture Browser. Say continue when your hands are off, or stop.",
+      "You are using the Mac, so I paused. Next I wanted to open app.example.com in Fixture Browser. Your next message goes on with it.",
     );
     // The model is not asked in between either.
     expect(f.planner.inputs).toHaveLength(0);
@@ -675,7 +675,7 @@ describe("a direct request for a web address in the worker", () => {
     await f.worker.submitRead("one", said, { kind: "none" });
     await until(() => f.worker.snapshot().state === "waiting_for_person");
     expect(f.worker.snapshot().message).toMatch(
-      /^You are using the Mac, so I hold/,
+      /^You are using the Mac, so I paused/,
     );
     expect(f.hands.commands.filter((c) => c.kind === "open_url")).toHaveLength(
       1,

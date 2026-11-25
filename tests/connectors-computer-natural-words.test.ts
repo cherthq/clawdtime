@@ -861,10 +861,9 @@ afterEach(() =>
 
 describe("natural words at the worker", () => {
   const taken = "Got it. I take that into the task that runs.";
-  const heldText =
-    "Got it. I hold now and take that into the task. Say continue to go on, or stop.";
+  const pausedText = "Paused. Your next message goes on with it.";
   const secretText =
-    "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.";
+    "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself.";
   /** A task whose planner is choosing its first action, until the test lets it go on. */
   const running = async () => {
     const home = mkdtempSync(join(tmpdir(), "clawdtime-natural-words-"));
@@ -917,29 +916,35 @@ describe("natural words at the worker", () => {
     expect(worker.snapshot().state).not.toBe("completed");
   });
 
-  it("holds on a hold cue with a typo", async () => {
-    const { worker, release } = await running();
-    expect((await worker.submit("g1", "wiat, clik the button")).message).toBe(
-      heldText,
-    );
-    release();
-    await until(() => worker.snapshot().state === "waiting_for_person");
-    worker.stop();
-    await worker.idle();
+  it("pauses on a wait with a typo, and steers when an order comes with it", async () => {
+    const paused = await running();
+    expect((await paused.worker.submit("g1", "wiat")).message).toBe(pausedText);
+    paused.release();
+    await until(() => paused.worker.snapshot().state === "waiting_for_person");
+    paused.worker.stop();
+    await paused.worker.idle();
+    const steered = await running();
+    expect(
+      (await steered.worker.submit("g1", "wiat, clik the button")).message,
+    ).toBe(taken);
+    steered.release();
+    await steered.worker.idle();
+    expect(steered.planner.inputs[1]).toMatchObject({
+      guidance: ["wiat, clik the button"],
+    });
   });
 
-  it("refuses a secret in an order with a typo, and holds", async () => {
-    const { worker, journal, release } = await running();
+  it("refuses a secret in an order with a typo, and goes on with no pause", async () => {
+    const { worker, journal, planner, release } = await running();
     const reply = (
       await worker.submit("g1", "type 4821 as the pin in the serch box")
     ).message;
-    expect(reply).toContain(secretText);
-    expect(reply).toMatch(/^I hold now, without taking those words/);
+    expect(reply).toBe(`${secretText} I go on with the task.`);
     expect(journal.guidance("r1")).toEqual([]);
     release();
-    await until(() => worker.snapshot().state === "waiting_for_person");
-    worker.stop();
     await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(planner.inputs[1]).not.toHaveProperty("guidance");
   });
 });
 

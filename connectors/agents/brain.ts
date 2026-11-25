@@ -33,6 +33,9 @@ import {
   asksWhatItCanDo,
   defersWork,
   latinLookalikes,
+  holdsCodeWork,
+  namesCodeWork,
+  readMidTask,
   readWords,
   spellStopWords,
 } from "../computer/orders.js";
@@ -724,7 +727,7 @@ const unclearApprovalReply = (words: string): boolean =>
   );
 /** Fixed opening lines produced by the computer engine or computer-task state answers. */
 const screenEngineReply =
-  /^(?:Got it\. I (?:take that into the task|go on with the task|hold now)|The task is already running\.|I am still paused|That was no yes:|Continuing\.|Thank you\. I go on\.|The computer task\b|A computer action is waiting:|Stopped\. An action that was already sent|Stopped the computer task\b|Queued\.|Started on the screen\.)/i;
+  /^(?:Got it\. I (?:take that into the task|go on with the task|hold now)|The task is already running\.|I am still paused|That was no yes[:,]|Continuing\.|Thank you\. I go on\.|The computer task\b|A computer action is waiting:|Stopped\. An action that was already sent|Stopped the computer task\b|Queued\.|Started on the screen\.|Paused[.,]|Still paused\.|Still working on\b|I am starting on\b|I go on with\b|It waits for your answer\.|The question that waited is set aside\b|You moved the mouse or pressed a key\b|You are using the Mac\b|No message came in\b)/i;
 /**
  * Shared mid-task order check: delegates purely to `readWords` in
  * `connectors/computer/orders.ts`.
@@ -772,7 +775,7 @@ const asksAboutComputerTask = (spoken: string): boolean => {
     clauses.every((part) => {
       if (!isQuestion(part)) return false;
       return (
-        /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:are|r)\s+(?:you|u)\s+(?:still\s+)?(?:stuck|frozen|hung)(?:\s+(?:somewhere|right\s+now|now|at\s+all))?[.?!]*$/i.test(
+        /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:are|r)\s+(?:you|u)\s+(?:(?:still|almost|already|all)\s+)?(?:stuck|frozen|hung|done|finished)(?:\s+(?:somewhere|right\s+now|now|at\s+all|yet))?[.?!]*$/i.test(
           part,
         ) ||
         /^(?:(?:hey|hi|yo|bro|bruh|dude|ok|okay|so|well|wait|and|but|uh+|um+)[,\s]+)*(?:do\s+(?:you|u)\s+(?:need|want)\s+(?:any\s+)?help|need\s+(?:any\s+)?help)(?:\s+(?:anywhere|here|with\s+(?:it|that|this)))?[.?!]*$/i.test(
@@ -5641,6 +5644,65 @@ export class Supervisor {
       return computerStopKind(text) !== null && !this.forSession(text);
     return false;
   }
+  /**
+   * While a screen task runs, every message that is not a stop is guidance
+   * for it: it steers the task, and the task goes on (`readMidTask` in
+   * `connectors/computer/orders.ts` reads it at the worker). Only words for
+   * other work keep their own road: a session of the board, code by what it
+   * names (a file, a repository, a branch, a commit, a test), the managed work
+   * of the supervisor (agents, jobs, builds, deploys) and words for a session.
+   * A verb alone is no such word: "add it to the cart" steers the task.
+   */
+  private guidesMidTask(words: string): boolean {
+    const text = clean(words, 2000);
+    if (!text) return false;
+    const kind = readWords(text);
+    if (kind === "stop") return false;
+    if (kind === "order") return !this.forSession(text);
+    // A question gets an answer from the state of the task, and steers
+    // nothing: "are you done?", "is it open?", "can you use my mac?". A
+    // thanks, a greeting or a bare yes carries nothing to steer with. At a
+    // pause the worker takes both all the same, as the chat's answer.
+    if (
+      isQuestion(text) ||
+      asksAboutComputerTask(text) ||
+      asksWhatItCanDo(text) ||
+      readMidTask(text) === "go"
+    )
+      return false;
+    return !this.namesOtherWork(text);
+  }
+  /**
+   * Guidance that the code hands to the running task by itself. Words with a
+   * verb of code work ("open the app and add dark mode", "add it to the
+   * cart") may be either, so the model reads them first: it starts a job, or
+   * hands them to the task through delegate_computer_task, whose gate is
+   * `guidesMidTask`.
+   */
+  private handsMidTask(words: string): boolean {
+    return this.guidesMidTask(words) && !holdsCodeWork(clean(words, 2000));
+  }
+  /** Words for coding, a job or a session, by what they name. See `guidesMidTask`. */
+  private namesOtherWork(words: string): boolean {
+    return (
+      this.forSession(words) ||
+      namesCodeWork(words) ||
+      /\b(?:agents?|sessions?|jobs?|builds?|branch(?:es)?|pull\s+requests?|prs?|commits?|deploys?|deployments?|repos?|repositor(?:y|ies)|codebase|worktrees?|linters?|logs?|servers?|migrations?|rebases?|patches?|git)\b/i.test(
+        words,
+      ) ||
+      // Work on code that names where it goes: "push it to origin".
+      /\b(?:push|pull|merge|rebase|ship|release)\b.*\b(?:origin|upstream|main|master|remote|prod|production|staging)\b/i.test(
+        words,
+      ) ||
+      // Work to find something out is a job: "find out why the login is slow".
+      /^(?:(?:also|and|please|just|can\s+(?:you|u)|could\s+(?:you|u)|would\s+(?:you|u)|will\s+(?:you|u))[,\s]+)*(?:find\s+out|figure\s+out|look\s+into|dig\s+into|investigate|debug)\b/i.test(
+        words,
+      ) ||
+      asksToBeTold(words) ||
+      beginsAsWordsForASession(words) ||
+      agentJob(words, "asked") !== null
+    );
+  }
   /** True when the previous turn in history was about the screen task, or no message stood between. */
   private previousTurnWasScreenTask(
     history: ChatMessage[],
@@ -10147,9 +10209,11 @@ export class Supervisor {
         "The computer task waits for your answer before taking more instructions."
       );
     // One mid-task gate: while a screen task is not over, every path submits
-    // only when readWords(spoken) is "order" or "stop" with no coding work and
-    // no board session name. Desktop/previous_app navigation readings still
-    // hit the worker's own busy fence without modifying the running run.
+    // a stop with no coding work and no board session name, and every other
+    // message that is guidance for the task (`guidesMidTask`): words for
+    // coding, a job or a session never go. Desktop/previous_app navigation
+    // readings still hit the worker's own busy fence without modifying the
+    // running run.
     const activeMidTask = computerTaskNotOver(execution);
     // "Stop" is never a goal of a new screen task. Only a message that is a
     // stop by itself counts: "open Calendar and cancel the 3pm meeting" and
@@ -10162,7 +10226,12 @@ export class Supervisor {
     if (!activeMidTask && asksWhatItCanDo(spoken)) return canDoAnswer;
     const desktopMove =
       reading?.kind === "desktop" || reading?.kind === "previous_app";
-    if (activeMidTask && !desktopMove && !this.canSubmitMidTask(spoken, true))
+    if (
+      activeMidTask &&
+      !desktopMove &&
+      !this.canSubmitMidTask(spoken, true) &&
+      !this.guidesMidTask(spoken)
+    )
       return this.forSession(spoken)
         ? "That request belongs to coding or session work. No screen task was started."
         : "That message is not a computer action request. Nothing was delegated.";
@@ -11455,8 +11524,7 @@ export class Supervisor {
       // Words that steer the running computer task go straight to submit below,
       // without a separate navigation reading that can ask a clarifying question.
       !(
-        canGuideComputerTask(this.world.execution) &&
-        this.canSubmitMidTask(words)
+        canGuideComputerTask(this.world.execution) && this.handsMidTask(words)
       ) &&
       // Questions about the live screen task get the engine's own state below.
       !(
@@ -11814,9 +11882,11 @@ export class Supervisor {
         )
       )
         return executionSnapshot.message;
-      // While the native worker runs or paused after takeover (and waits for
-      // no answer and no yes), orders read by `readWords` (with no coding work
-      // and no board session name) go straight to the engine through submit.
+      // While the native worker runs or is paused (and waits for no answer
+      // and no yes), every message that is guidance for it goes straight to
+      // the engine through submit: it steers the task, and a pause ends. No
+      // message is swallowed. Words for coding, a job or a session keep their
+      // own road.
       if (
         !turn.semantic &&
         !turn.closed &&
@@ -11824,7 +11894,7 @@ export class Supervisor {
         !taskNeedsWord &&
         this.world.desk.pending().length === 0 &&
         canGuideComputerTask(execution) &&
-        this.canSubmitMidTask(words)
+        this.handsMidTask(words)
       )
         return this.delegate(turn, words, true);
       const bothWait =
@@ -11845,8 +11915,12 @@ export class Supervisor {
         !taskNeedsWord
       ) {
         if (
-          executionSnapshot.waiting === "takeover" ||
-          executionSnapshot.waiting === "question"
+          executionSnapshot.waiting === "question" ||
+          // At a pause, words for coding, a job or a session are no words
+          // for the screen task: they keep their own road, below.
+          (executionSnapshot.waiting === "takeover" &&
+            !this.namesOtherWork(words) &&
+            !holdsCodeWork(words))
         ) {
           if (this.world.desk.pending().length) return bothWait;
           try {
@@ -11900,6 +11974,16 @@ export class Supervisor {
           if (this.world.desk.pending().length) return bothWait;
           const waitingNow = computerTaskNow(executionSnapshot);
           if (waitingNow) return waitingNow;
+        }
+        // Any other guidance for the task sets the action aside, never as a
+        // yes, and the task goes on with the words.
+        if (
+          executionSnapshot.waiting === "approval" &&
+          !turn.semantic &&
+          this.handsMidTask(words)
+        ) {
+          if (this.world.desk.pending().length) return bothWait;
+          return this.delegate(turn, words, true, undefined, true);
         }
       }
       // While a screen task is running or waiting (never uncertain, blocked,

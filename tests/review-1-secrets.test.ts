@@ -60,7 +60,7 @@ describe("review 1: a secret in words while a task runs", () => {
     // An order: it steers the task, so it goes to the planner.
     ["type hunter22 in the password field", "hunter22"],
     ["enter 4821 in the pin field", "4821"],
-    // A hold: it pauses, and the words are kept all the same.
+    // Not an order: it steers the task, and the secret in it is never kept.
     ["my pin number is 4821", "4821"],
     // The same with a common misspelling of password.
     ["my pasword is hunter22", "hunter22"],
