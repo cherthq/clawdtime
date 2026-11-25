@@ -47,8 +47,10 @@ import { rememberable } from "../connectors/agents/trove.js";
 import {
   speak,
   speechSettings,
+  speechVocabulary,
   transcribe,
 } from "../connectors/agents/speech.js";
+import { ComputerJournal } from "../connectors/computer/journal.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { connectionPath } from "../connectors/shared/state.js";
@@ -1208,7 +1210,15 @@ export async function supervisorCli(
       },
       hear: async (file) => {
         try {
-          return await transcribe(file, speech);
+          return await transcribe(
+            file,
+            speech,
+            speechVocabulary({
+              env: system.env,
+              memory: desk.memory,
+              journal: new ComputerJournal(root),
+            }),
+          );
         } finally {
           rmSync(file, { force: true });
         }

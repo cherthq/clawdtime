@@ -865,22 +865,21 @@ to the older tools where they are there. With both parts, the job starts and
 the sentence stands for the screen part. Work that no tool fits still goes to a
 coding session, as before.
 
-**A next step after a task that ended done.** When the engine reports "Done.",
-ClawdTime may offer one short, concrete next step that follows from the
-result, as one question in the chat: "Want me to reply to Sam's newest
-message?". The language model words it from your request and the report, as
-data. The code keeps only a question in that form, with one step on the
-screen. It is never a general offer, never a step that pays, buys, orders,
-deletes, signs in or touches a password, and never code work. A report or a
-request that holds a credential is never sent to the language model.
+**No offer after a task.** The report of the engine is the last word of a
+task: the chat says it in one line and stops. ClawdTime offers no next step
+after it ("Want me to reload the page?"). A result that shows a problem is for
+the worker to handle: a page that did not load goes back to the planner (see
+[computer use](COMPUTER_USE.md)).
 
-- The step starts only on your plain yes ("yes", "yeah", "go ahead", "do
-  it"), while the question is the newest message, is at most five minutes old,
-  and nothing else waits for you.
-- A no starts nothing. Any other message ends the offer, and the step never
-  starts later.
-- The offer is said in the chat only, and only while the report is still the
-  newest message there.
+**A short correction right after a task.** When the last computer request of
+the chat opened something and ended at most five minutes ago, a message of one
+to three words with no verb that names a thing ("brightwave bro", "no,
+brightwave.co", "brightwave dot co") corrects it (`correction.ts`). It starts
+a new request, "Open brightwave (the owner corrected bright5.co)", and the
+planner searches the name when it is no address. A stop, a hold, a yes or a no,
+a thanks, a question, the name of a session, words while a task runs or waits,
+and a request of an agent that waits are never read this way. A new chat drops
+it.
 
 ### Give it a task
 
@@ -1000,8 +999,8 @@ What happens:
 4. When the computer worker waits for you (a question, or a yes or no), that
    question is the first line of the new chat. A yes or a no in the new chat
    still answers it.
-5. What ClawdTime offered in the old chat and waits for a yes to (a next step,
-   a task proposal) is dropped. The new chat does not show that question.
+5. What ClawdTime offered in the old chat and waits for a yes to (a task
+   proposal) is dropped. The new chat does not show that question.
 
 A new chat does not start while ClawdTime still answers a message: the answer
 belongs with its question. ClawdTime says so, and you start the new chat after
@@ -1644,8 +1643,26 @@ or a file of the repository.
 | `CLAWDTIME_SUPERVISOR_REASONING` | not set                  | The reasoning effort that this model gets. Some models take tools only with `none`                                                        |
 | `CLAWDTIME_READER_MODEL`         | `gpt-5.4`                | Reads what a message asks of the screen: a move, work for the computer worker, or neither. A key that may not use it gets the model above |
 | `CLAWDTIME_TRANSCRIBE_MODEL`     | `gpt-4o-mini-transcribe` | Turns your speech into text                                                                                                               |
+| `CLAWDTIME_VOCABULARY`           | not set                  | Your names for speech to text, comma separated: "Brightwave, Ledgerly". See below                                                         |
 | `CLAWDTIME_SPEAK_MODEL`          | `gpt-4o-mini-tts`        | Speaks the answer                                                                                                                         |
 | `CLAWDTIME_VOICE`                | `alloy`                  | The voice                                                                                                                                 |
+
+**Your words for speech to text.** A transcription model writes a name that
+it does not know as words that it knows: "Brightwave" can come out as
+"Bright5.co", and the computer worker then opens a site that does not exist. So each recording goes
+with a short prompt of names (`speechVocabulary` in `speech.ts`):
+
+1. ClawdTime and Chert.
+2. Your own list: `CLAWDTIME_VOCABULARY`, or a memory fact that starts with
+   "Vocabulary:" (`clawdtime memory remember "Vocabulary: Brightwave"`).
+3. While memory is on, the names in your facts and preferences: capital words
+   and web addresses. A quoted request and the episodes are left out, because
+   they can hold the misheard words.
+4. The sites and apps that the last computer requests opened. A site whose
+   page did not load is left out.
+
+The prompt has at most 60 words. A word shaped like a secret, and a fact that
+speaks of one (a password, a pin, a token), is never in it.
 
 With no key ClawdTime still answers in text: it tells the state from the board,
 and it takes a clear "approve" or "deny" when exactly one request waits. Voice
@@ -1653,7 +1670,7 @@ needs the key.
 
 With a key, three things leave this Mac for the OpenAI API, and only when you
 talk to ClawdTime: what you said or typed, your recording while it is turned
-into text, and the state in words that the model asked for (session names and
+into text with its prompt of names, and the state in words that the model asked for (session names and
 the titles that sessions show in their terminals, project folder names, the
 text of waiting requests, trove entries, the request and the answer of a job,
 the text of a web page that you asked it to read, and a picture of the screen
