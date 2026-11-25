@@ -10,6 +10,7 @@ import {
   OpenAIPlanner as BaseOpenAIPlanner,
   PlannerError,
   plannerFromEnvironment,
+  toolsFor,
 } from "../connectors/computer/planner.js";
 /** These tests exercise the chat completions wire format explicitly. */
 class OpenAIPlanner extends BaseOpenAIPlanner {
@@ -116,6 +117,18 @@ const askRules = [
   "When the goal asks you to tell something, read it and finish with done: its summary is the answer. Use ask only for what you need from the person.",
 ];
 
+/** The static tail rules after the action rules: OCRText guidance and planning rules. */
+const staticTailRules = [
+  "Elements with role OCRText come from on-screen text recognition when the accessibility tree is sparse; use click_element on them as usual.",
+  "When a plan appears below the goal, work on the subgoal marked now. Only call plan_update when a plan is shown and plan_update calls are left.",
+  "plan_update changes only the plan and sends nothing to the Mac. Call it in place of an action: op done when the screen shows the check of the current subgoal, with what on the screen shows it; op skip when it is not needed, with why; op revise, with the new rest of the plan, when the screen shows that the plan was wrong.",
+  "Call plan_update together with the next action in the same answer: mark the subgoal done and take the first step of the next one at once. Never two actions in one answer.",
+  "When the screen shows something that the person will want (an order number, a name, a link), keep it in facts of plan_update. Never a password, a code or another secret.",
+  "When something that the goal does not mention blocks the way, and it is a cookie banner, a what's new or welcome sheet, an update prompt that can be postponed or a page that still loads, get past it with no question and the least harmful way: Not Now, Later, Close, Reject All, or wait. Every other dialog that the goal does not speak about stays as it is.",
+  "Carry the task to its natural end: after you post or send, see the post or the sent item; after you save or change a setting, see the saved state.",
+  "When a password, a code or another secret is needed, call ask with a question that says what is needed and where: the app or the site, the account and the field. The person types it on the Mac. A name or an email address that only the person knows is not a secret: ask for it, then type it yourself.",
+];
+
 /** The rules of the planner test of November 22, word for word, in their order. */
 const earlierRules = (browser: boolean) => [
   "You operate a Mac for its owner, one action at a time.",
@@ -123,7 +136,7 @@ const earlierRules = (browser: boolean) => [
   "Prefer an element by its number (click_element, or type with an element) over a point. Use click_at only when no element fits.",
   ...(browser
     ? [
-        "When a web page is in front, prefer the browser tools over pixels: call browser_read first, then browser_click and browser_type with the numbers of that reading.",
+        "When a web page is in front, prefer the browser tools over pixels: call browser_page with op read first, then browser_click and browser_type with the numbers of that reading.",
       ]
     : []),
   "A number names an element for this turn only. Never use a number from an earlier turn.",
@@ -154,7 +167,7 @@ describe("the planner on the chat completions API", () => {
     expect(only.headers["content-type"]).toBe("application/json");
     expect(only.body.model).toBe(defaultComputerModel);
     expect(only.body.tool_choice).toBe("required");
-    expect(only.body.parallel_tool_calls).toBe(false);
+    expect(only.body.parallel_tool_calls).toBe(true);
     expect(only.body.messages.map((message) => message.role)).toEqual([
       "system",
       "user",
@@ -198,13 +211,14 @@ describe("the planner on the chat completions API", () => {
       "give_up",
       "hover",
       "drag",
+      "plan_update",
     ]);
     for (const tool of plain.sent[0]!.body.tools) {
       expect(tool.type).toBe("function");
       // Each call says what it is for.
       expect(tool.function.parameters.required).toContain("why");
     }
-    expect(text(plain.sent[0]!)).not.toContain("browser_read");
+    expect(text(plain.sent[0]!)).not.toContain("browser_page");
     const wired = fakeFetch();
     await new OpenAIPlanner({
       key: "k",
@@ -214,12 +228,11 @@ describe("the planner on the chat completions API", () => {
     expect(
       wired.sent[0]!.body.tools.map((tool) => tool.function.name).slice(15),
     ).toEqual([
-      "browser_read",
-      "browser_open",
       "browser_click",
       "browser_type",
-      "browser_scroll",
-      "browser_back",
+      "browser_open",
+      "browser_page",
+      "plan_update",
     ]);
   });
 
@@ -232,14 +245,14 @@ describe("the planner on the chat completions API", () => {
         tool.function.name.startsWith("browser_"),
       ),
     ).toBe(false);
-    expect(text(sent[0]!)).not.toContain("browser_read");
+    expect(text(sent[0]!)).not.toContain("browser_page");
     expect(sent[0]!.body.messages[0]!.content as string).not.toContain(
-      "browser_read",
+      "browser_page",
     );
     // The next request is offered the browser again.
     await planner.next(input());
     expect(
-      sent[1]!.body.tools.some((tool) => tool.function.name === "browser_read"),
+      sent[1]!.body.tools.some((tool) => tool.function.name === "browser_page"),
     ).toBe(true);
   });
 
@@ -495,7 +508,7 @@ describe("the planner on the chat completions API", () => {
       browser: true,
     }).next(input());
     expect(text(none.sent[0]!)).toContain(
-      "No reading of a web page. When a web page is in front, call browser_read first.",
+      "No reading of a web page. When a web page is in front, call browser_page with op read first.",
     );
   });
 
@@ -956,14 +969,11 @@ describe("the direct opening of a web address", () => {
 });
 
 describe("the newer actions in the planner", () => {
-  const later = [
-    "browser_hover",
-    "browser_select",
-    "browser_key",
-    "browser_wait",
-    "browser_tabs",
-    "browser_switch_tab",
-  ];
+  const pageOpsOf = (tools: Sent["body"]["tools"]) =>
+    (
+      tools.find((tool) => tool.function.name === "browser_page")!.function
+        .parameters.properties.op as { enum: string[] }
+    ).enum;
   const offered = async (
     options: ConstructorParameters<typeof OpenAIPlanner>[0],
     values: Partial<Parameters<OpenAIPlanner["next"]>[0]> = {},
@@ -976,25 +986,72 @@ describe("the newer actions in the planner", () => {
       system: sent[0]!.body.messages[0]!.content as string,
     };
   };
-  it("offers each newer browser function only when the driver has its method", async () => {
+  it("consolidates browser actions into 4 tools and narrows ops and hover to the driver's methods", async () => {
     const all = await offered({
       key: "k",
       browser: true,
       browserMethods: [...browserMethodNames],
     });
-    expect(all.names.slice(21)).toEqual(later);
-    // A driver with no newer method: the browser functions of before, and no more.
+    expect(all.names).toHaveLength(20);
+    expect(all.names.slice(15)).toEqual([
+      "browser_click",
+      "browser_type",
+      "browser_open",
+      "browser_page",
+      "plan_update",
+    ]);
+    expect(pageOpsOf(all.tools)).toEqual([
+      "read",
+      "back",
+      "scroll_up",
+      "scroll_down",
+      "tabs",
+      "switch_tab",
+      "select",
+      "key",
+      "wait",
+    ]);
+    const allClick = all.tools.find(
+      (tool) => tool.function.name === "browser_click",
+    )!.function.parameters;
+    expect(Object.keys(allClick.properties)).toEqual(["index", "hover", "why"]);
+
+    // Memoization returns the exact same array reference for identical inputs.
+    expect(toolsFor(true, browserMethodNames)).toBe(
+      toolsFor(true, browserMethodNames),
+    );
+    expect(toolsFor(false, [])).toBe(toolsFor(false, []));
+
+    // A driver with no optional methods offers only core ops and no hover flag.
     const plain = await offered({ key: "k", browser: true });
-    expect(plain.names.filter((name) => later.includes(name))).toEqual([]);
-    expect(plain.names).toHaveLength(21);
+    expect(plain.names).toHaveLength(20);
+    expect(pageOpsOf(plain.tools)).toEqual([
+      "read",
+      "back",
+      "scroll_up",
+      "scroll_down",
+    ]);
+    const plainClick = plain.tools.find(
+      (tool) => tool.function.name === "browser_click",
+    )!.function.parameters;
+    expect(Object.keys(plainClick.properties)).toEqual(["index", "why"]);
+    const plainPage = plain.tools.find(
+      (tool) => tool.function.name === "browser_page",
+    )!.function.parameters;
+    expect(Object.keys(plainPage.properties)).toEqual(["op", "why"]);
+
     const some = await offered({
       key: "k",
       browser: true,
       browserMethods: ["key", "switchTab"],
     });
     // A switch needs the list of the tabs too.
-    expect(some.names.filter((name) => later.includes(name))).toEqual([
-      "browser_key",
+    expect(pageOpsOf(some.tools)).toEqual([
+      "read",
+      "back",
+      "scroll_up",
+      "scroll_down",
+      "key",
     ]);
     // Methods without a browser offer nothing, and nor does a request that cannot use it.
     for (const none of [
@@ -1059,35 +1116,40 @@ describe("the newer actions in the planner", () => {
     const page = (name: string) =>
       browser.tools.find((tool) => tool.function.name === name)!.function
         .parameters;
-    expect(page("browser_key").properties.combo).toEqual({
+    const bp = page("browser_page");
+    expect(bp.required).toEqual(["op", "why"]);
+    expect(Object.keys(bp.properties)).toEqual([
+      "op",
+      "index",
+      "value",
+      "ms",
+      "why",
+    ]);
+    expect(bp.properties.op).toMatchObject({
       type: "string",
       enum: [
-        "Enter",
-        "Escape",
-        "Tab",
-        "Shift+Tab",
-        "ArrowUp",
-        "ArrowDown",
-        "ArrowLeft",
-        "ArrowRight",
-        "PageUp",
-        "PageDown",
-        "Home",
-        "End",
-        "Backspace",
-        "Space",
+        "read",
+        "back",
+        "scroll_up",
+        "scroll_down",
+        "tabs",
+        "switch_tab",
+        "select",
+        "key",
+        "wait",
       ],
     });
-    expect(page("browser_wait").properties.ms).toMatchObject({
+    expect((bp.properties.op as { description: string }).description).toContain(
+      "requires both index and value",
+    );
+    expect(bp.properties.ms).toMatchObject({
       type: "integer",
       minimum: 100,
       maximum: 10000,
     });
-    expect(page("browser_wait").required).toEqual(["ms", "why"]);
-    expect(page("browser_select").required).toEqual(["index", "option", "why"]);
-    expect(page("browser_switch_tab").properties.tab).toMatchObject({
-      type: "integer",
-      minimum: 1,
+    expect(page("browser_click").required).toEqual(["index", "why"]);
+    expect(page("browser_click").properties.hover).toMatchObject({
+      type: "boolean",
     });
   });
   it("keeps every earlier rule word for word and in its order, and adds the newer lines after them", async () => {
@@ -1116,6 +1178,7 @@ describe("the newer actions in the planner", () => {
       "To open a menu or a tooltip that shows on hover, call hover first, then click what it shows.",
       "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
       ...askRules,
+      ...staticTailRules,
     ]);
     const all = (
       await offered({
@@ -1125,23 +1188,24 @@ describe("the newer actions in the planner", () => {
       })
     ).system.split("\n");
     expect(all.slice(earlierRules(true).length)).toEqual([
-      "To open a menu or a tooltip that shows on hover, call hover (on a web page, browser_hover) first, then click what it shows.",
+      "To open a menu or a tooltip that shows on hover, call hover (on a web page, browser_click with hover true) first, then click what it shows.",
       "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
-      "For a dropdown of a web page, prefer browser_select with the text of its option.",
-      "To submit a search on a web page, call browser_key with Enter once the words are in the field.",
-      "While a web page is still loading, call browser_wait.",
-      "When the web page in front is not the one the goal is about, call browser_tabs, then browser_switch_tab.",
+      "For a dropdown of a web page, prefer browser_page with op select, index, and value set to the text of its option.",
+      "To submit a search on a web page, call browser_page with op key and value Enter once the words are in the field.",
+      "While a web page is still loading, call browser_page with op wait.",
+      "When the web page in front is not the one the goal is about, call browser_page with op tabs, then op switch_tab.",
       ...askRules,
+      ...staticTailRules,
     ]);
     const listing = (
       await offered({ key: "k", browser: true, browserMethods: ["tabs"] })
     ).system;
     expect(listing).toContain(
-      "When the web page in front is not the one the goal is about, call browser_tabs.",
+      "When the web page in front is not the one the goal is about, call browser_page with op tabs.",
     );
-    expect(listing).not.toMatch(/browser_select|browser_wait|browser_key/);
+    expect(listing).not.toMatch(/op select|op wait|op key/);
   });
-  it("reads each newer function call as one action that the checks accept", async () => {
+  it("reads consolidated and legacy browser function calls as actions that the checks accept", async () => {
     for (const [name, args, action] of [
       ["hover", '{"element":3,"why":"w"}', { kind: "hover", element: 3 }],
       [
@@ -1159,6 +1223,84 @@ describe("the newer actions in the planner", () => {
         '{"direction":"down","amount":3,"why":"w"}',
         { kind: "scroll", direction: "down", amount: 3 },
       ],
+      // Consolidated browser_page and browser_click forms.
+      ["browser_page", '{"op":"read","why":"w"}', { kind: "browser_read" }],
+      [
+        "browser_page",
+        '{"op":"read","index":0,"value":"","ms":0,"why":"w"}',
+        { kind: "browser_read" },
+      ],
+      [
+        "browser_page",
+        '{"op":"back","index":0,"value":"","ms":0,"why":"w"}',
+        { kind: "browser_back" },
+      ],
+      [
+        "browser_page",
+        '{"op":"scroll_up","index":0,"value":"","ms":0,"why":"w"}',
+        { kind: "browser_scroll", direction: "up" },
+      ],
+      [
+        "browser_page",
+        '{"op":"scroll_down","index":0,"value":"","ms":0,"why":"w"}',
+        { kind: "browser_scroll", direction: "down" },
+      ],
+      [
+        "browser_page",
+        '{"op":"tabs","index":0,"value":"","ms":0,"why":"w"}',
+        { kind: "browser_tabs" },
+      ],
+      [
+        "browser_page",
+        '{"op":"switch_tab","value":"2","why":"w"}',
+        { kind: "browser_switch_tab", tab: 2 },
+      ],
+      [
+        "browser_page",
+        '{"op":"switch_tab","index":3,"why":"w"}',
+        { kind: "browser_switch_tab", tab: 3 },
+      ],
+      [
+        "browser_page",
+        '{"op":"select","index":2,"value":"Large","why":"w"}',
+        { kind: "browser_select", index: 2, option: "Large" },
+      ],
+      [
+        "browser_page",
+        '{"op":"key","value":"Enter","why":"w"}',
+        { kind: "browser_key", combo: "Enter" },
+      ],
+      [
+        "browser_page",
+        '{"op":"wait","why":"w"}',
+        { kind: "browser_wait", ms: 5000 },
+      ],
+      [
+        "browser_page",
+        '{"op":"wait","value":"Saved","why":"w"}',
+        { kind: "browser_wait", ms: 5000, text: "Saved" },
+      ],
+      [
+        "browser_page",
+        '{"op":"wait","ms":2000,"value":null,"why":"w"}',
+        { kind: "browser_wait", ms: 2000 },
+      ],
+      [
+        "browser_page",
+        '{"op":"wait","ms":2000,"value":"Saved","why":"w"}',
+        { kind: "browser_wait", ms: 2000, text: "Saved" },
+      ],
+      [
+        "browser_click",
+        '{"index":4,"hover":true,"why":"w"}',
+        { kind: "browser_hover", index: 4 },
+      ],
+      [
+        "browser_click",
+        '{"index":4,"hover":false,"why":"w"}',
+        { kind: "browser_click", index: 4 },
+      ],
+      // Legacy individual browser tool names remain accepted.
       [
         "browser_select",
         '{"index":2,"option":"Large","why":"w"}',
@@ -1197,6 +1339,45 @@ describe("the newer actions in the planner", () => {
       expect(actionSchema.safeParse(planned.action).success).toBe(true);
       expect(planned.why).toBe("w");
     }
+    // An unavailable browser_page op or hover flag is rejected with repair.
+    const unavailable = fakeFetch(
+      toolCall(
+        "browser_page",
+        '{"op":"select","index":1,"value":"A","why":"w"}',
+      ),
+    );
+    await expect(
+      new OpenAIPlanner({
+        key: "k",
+        request: unavailable.request,
+        browser: true,
+        browserMethods: [],
+      }).next(input()),
+    ).rejects.toMatchObject({ trouble: "malformed" });
+    const unavailableHover = fakeFetch(
+      toolCall("browser_click", '{"index":1,"hover":true,"why":"w"}'),
+    );
+    await expect(
+      new OpenAIPlanner({
+        key: "k",
+        request: unavailableHover.request,
+        browser: true,
+        browserMethods: [],
+      }).next(input()),
+    ).rejects.toMatchObject({ trouble: "malformed" });
+    // An unsupported key name in browser_page op key is rejected immediately.
+    const invalidKey = fakeFetch(
+      toolCall("browser_page", '{"op":"key","value":"Cmd+Q","why":"w"}'),
+    );
+    await expect(
+      new OpenAIPlanner({
+        key: "k",
+        request: invalidKey.request,
+        browser: true,
+        browserMethods: [...browserMethodNames],
+      }).next(input()),
+    ).rejects.toMatchObject({ trouble: "malformed" });
+    expect(invalidKey.sent).toHaveLength(2);
   });
   it("says in fixed words when a call is out of shape, and passes it on unchanged for the checks to refuse", () => {
     for (const [name, args] of [
@@ -1216,6 +1397,32 @@ describe("the newer actions in the planner", () => {
       expect(read.problem).toBe(`The arguments of ${name} are not valid.`);
       expect(read.action).toEqual({ ...args, kind: name });
     }
+    for (const args of [
+      { op: "unknown" },
+      { op: "switch_tab", value: "0" },
+      { op: "switch_tab", value: "abc" },
+      { op: "wait", ms: 50 },
+      { op: "select", index: 1 },
+      { op: "key", value: "Cmd+Q" },
+      { op: "key", value: "F13" },
+      { op: "key" },
+    ]) {
+      expect(actionFromCall("browser_page", args).problem).toBe(
+        "The arguments of browser_page are not valid.",
+      );
+    }
+    expect(
+      actionFromCall("browser_page", {
+        op: "read",
+        index: 0,
+        value: "",
+        ms: 0,
+      }),
+    ).toEqual({ action: { kind: "browser_read" }, problem: null });
+    expect(actionFromCall("browser_page", { op: "wait" })).toEqual({
+      action: { kind: "browser_wait", ms: 5000 },
+      problem: null,
+    });
     const secret = actionFromCall("send_secret", { text: "hunter2" });
     expect(secret.problem).toBe("That function does not exist.");
     expect(secret.problem).not.toContain("hunter2");
@@ -1315,11 +1522,13 @@ describe("the newer actions in the planner", () => {
       { OPENAI_API_KEY: "k", CLAWDTIME_OPENAI_API: "chat" },
       { request, browser: true, browserMethods: ["waitFor"] },
     )!.next(input());
-    expect(
-      sent[0]!.body.tools
-        .map((tool) => tool.function.name)
-        .filter((name) => later.includes(name)),
-    ).toEqual(["browser_wait"]);
+    expect(pageOpsOf(sent[0]!.body.tools)).toEqual([
+      "read",
+      "back",
+      "scroll_up",
+      "scroll_down",
+      "wait",
+    ]);
   });
 });
 
