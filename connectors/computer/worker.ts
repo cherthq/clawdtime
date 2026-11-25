@@ -73,6 +73,7 @@ import {
   closerPart,
 } from "./guards.js";
 import { closerHold, closerSecureText, closerShowsSecure } from "./closer.js";
+import { textKeyHold } from "./text-keys.js";
 import {
   guidanceLimit,
   looksSecretStrict,
@@ -3114,8 +3115,11 @@ export class ComputerWorker implements DesktopExecutorPort {
     const send = ready.send;
     if (send.via !== "hands") return;
     // Checks that only the worker can make, just before the command: a few
-    // closer looks for each request (closer.ts). Nothing goes out.
-    const withheld = closerHold(action, run.closerLooks ?? 0);
+    // closer looks for each request (closer.ts), and a key that edits text
+    // only where a text field has the focus (text-keys.ts). Nothing goes out.
+    const withheld =
+      closerHold(action, run.closerLooks ?? 0) ??
+      textKeyHold(action, lastLook ?? before);
     if (withheld)
       return this.withheld(run, action, why, ready, withheld, refused);
     if (action.kind === "look_closer")

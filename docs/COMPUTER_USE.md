@@ -766,6 +766,12 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
   keys of the mail app. Return or Space while a button, a menu item or a
   focused element with one of the words above could take it, unless a text
   field has the focus. The power key and the media keys are never sent.
+- **Keys that edit text go to text.** Select all (Command+A), cut, paste and
+  delete a word (Option+Delete) are held back when the look just before them
+  names elements and none of them is a text field with the focus. The planner
+  reads "No text field has the focus. Click into the text first." It counts
+  as a refusal. A look that names no element cannot say where the focus is,
+  and the key goes as before.
 - **Your yes before a form is submitted** in the browser, unless the field is a
   search field.
 - **You take over.** When the hands report that you moved the mouse or pressed
@@ -899,6 +905,15 @@ was sent after the first key in an address bar.
 Text for a field that has the focus goes in with no click before it. A click
 moves the caret and drops a selection, so "select all, then type" added the
 text in place of replacing what was selected.
+
+The other way round, a key that edits text needs a text field with the focus.
+With the closer look in the planner, the request test "replace the text of a
+note" clicked the note in the list and then pressed Command+A before a click
+into the note, in 2 of 3 runs: in a list, Command+A selects the rows, and the
+text typed next goes nowhere. The worker now holds such a key back
+(`text-keys.ts`) and tells the planner to click into the text first. A unit
+test with a scripted planner covers it. The request test has not run again
+since.
 
 `clawdtime computer timing` also says why a step was held back, in the
 worker's own fixed words: "Not sent: Another app or window came to the front."
