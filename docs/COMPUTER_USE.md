@@ -130,6 +130,41 @@ whichever comes first. A request with a plan of 3 subgoals or more may take 80
 actions (see [Plans and multi-step tasks](#plans-and-multi-step-tasks)). The 15
 minutes hold the time that it waits for you.
 
+### What you hear first, and on the way
+
+No request opens with a fixed sentence. The code is in
+`connectors/computer/opening.ts`.
+
+- The start answers with no words (`submit` gives an empty message). The
+  outline that the planner writes after the first look also holds `say`: one
+  line in your language, in the first person and the present tense, about what
+  it does first for this request on the screen it sees, such as "Opening Notes
+  and searching for the budget note.". The worker sends that line through the
+  chat once, as soon as the outline is there. It is the first message that you
+  see or hear.
+- When the outline fails, or has no line within 4 seconds, the line is made
+  from the planner's own reason for its first action: "Open Notes to find the
+  note" becomes "Opening Notes to find the note.". A reason that does not read
+  as an act on the screen gives no line; the reasons of the first three
+  actions are tried. A question or the end that comes first is the first
+  message, and no start line follows it.
+- A line has at most 120 characters (a longer one is cut to its first
+  sentence, or dropped). A line that looks like a secret, that opens with
+  "Done." or that names subgoals, steps or the planner is dropped.
+- On the way there is no message for each step. When the planner revises its
+  plan, the first revision of a request that can be said gives one line in
+  the planner's own words. The end is the planner's own summary, as before.
+- The chat of the panel, a spoken reply and a phone call have one answer for
+  the message that started the request. That answer is the worker's first
+  words: the supervisor waits up to 8 seconds for them (`firstWords`). The
+  line is in the chat once: a reply that repeats the line that the worker
+  already wrote there is not written again. On a call the phone adapter
+  (`src/control/phone-desktop.ts`) reads the first words of the request that
+  the call started, and the line speaks them. When no words came in time, the
+  chat writes no answer, and the line comes a moment later by itself.
+- The state when nothing runs is a fact, not an invitation: "Computer use is
+  on. No computer task runs now.".
+
 What you say while a request runs is for that request: "open it in the
 browser", "use the other tab", "just press return". It starts no second
 request. The worker keeps your words in order and gives them to the planner
@@ -391,7 +426,8 @@ confirm it, report it. The code is in `connectors/computer/plan.ts`.
    beside the first turn, so nothing waits for it: the plan comes with the
    first turn after it arrived. It goes through the same retries, repair and
    abort as every other call to the model. It gets a small picture: the
-   elements carry the names.
+   elements carry the names. The outline also holds `say`, the first line for
+   the person (see [What you hear first, and on the way](#what-you-hear-first-and-on-the-way)).
 2. With every turn after that, the planner gets the plan: each subgoal as
    open, done with what the screen showed, or skipped with why, and the one to
    work on now.
@@ -429,6 +465,11 @@ The planner's rules for the outline and for each turn with a plan say:
   address that only the person knows is no secret: the planner asks for it
   and types it itself. The rule that made the person type every part of a
   sign-in left the request test asking 7 times in a row for a work email.
+
+The outline alone also reads two lines on `say`: one line in the language of
+the goal, in the first person and the present tense, about what the planner
+does first, in at most 120 characters, with no promise of success, no secret
+and no word about subgoals, steps, checks or how it works.
 
 A turn with no plan reads the rules as before, so the planner test measures
 the same rules.
@@ -1805,6 +1846,13 @@ the real screen, draws the cursor or calls a language model.
   that sends nothing, a done that is taken at once, a failed outline, Stop
   during the outline, facts that never reach the journal, and 80 actions only
   with a plan of 3 subgoals or more.
+- `opening` (14): the line for the person and the line from a reason, with
+  secrets, long text and words of the machinery; `say` in the outline's
+  function and rules; and in the worker: the outline's line once as the first
+  message, the reason when the outline fails or is late, a secret dropped, a
+  question first, no fixed start sentence, one line on a revision; the chat
+  that writes the line once, and the call that speaks it through the phone
+  adapter.
 - `reach` (37): no call for a question answered in the chat in time; one
   call for an unanswered one; the spoken yes, no, stop and unclear words that
   the worker reads itself; one text after a call that failed, rang out, had

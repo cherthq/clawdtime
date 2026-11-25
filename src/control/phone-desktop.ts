@@ -29,6 +29,8 @@ type NativeExecution = DesktopExecutorPort & {
   ): Promise<Result>;
   answer?(text: string): Promise<Result>;
   clear?(): Result;
+  /** The first words of a request that started with no words: what the call speaks. */
+  firstWords?(id: string, withinMs: number): Promise<string>;
 };
 interface Receipt {
   fingerprint: string;
@@ -55,7 +57,7 @@ interface Context extends Omit<PhoneDesktopContext, "isLive"> {
   call: Call;
   finished: boolean;
   generation: number;
-  submitted?: { fingerprint: string; result: Promise<Result> };
+  submitted?: { fingerprint: string; result: Promise<Result>; id?: string };
   answered?: Promise<Result>;
 }
 export interface PhoneDesktopOptions {
@@ -142,6 +144,21 @@ export class PhoneDesktop {
               )
                 throw new DomainError(403, "phone_request_not_owned");
               return (context.answered ??= runtime.answer!(text));
+            },
+          }
+        : {}),
+      ...(runtime.firstWords
+        ? {
+            // In a call, the words of the request that this call started,
+            // under its own id. Nothing of another request is read, and a
+            // read starts and stops nothing.
+            firstWords: (id: string, withinMs: number) => {
+              const context = this.contexts.getStore();
+              if (!context) return runtime.firstWords!(id, withinMs);
+              const own = context.submitted?.id;
+              return own
+                ? runtime.firstWords!(own, withinMs)
+                : Promise.resolve("");
             },
           }
         : {}),
@@ -352,7 +369,7 @@ export class PhoneDesktop {
         )
           this.stopOwned(context.call);
       });
-    context.submitted = { fingerprint, result };
+    context.submitted = { fingerprint, result, id };
     return result;
   }
 

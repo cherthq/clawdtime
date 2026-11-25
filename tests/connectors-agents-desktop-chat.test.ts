@@ -307,7 +307,7 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       json(response, 200, {
         reply: {
           role: "assistant",
-          text: "  Started. I look at the screen.  ",
+          text: "  Opening Mail and clicking the blue Send button.  ",
           at: now,
           via: "chat",
         },
@@ -321,7 +321,7 @@ describe("clawdtime chat TEXT with a desktop service", () => {
       },
       ["click", "the", "blue", "Send", "button"],
     );
-    expect(lines).toEqual(["Started. I look at the screen."]);
+    expect(lines).toEqual(["Opening Mail and clicking the blue Send button."]);
     expect(paths(service.requests)).toEqual([
       "GET /desktop/state",
       "GET /desktop/chat",

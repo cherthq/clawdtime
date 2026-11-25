@@ -963,7 +963,7 @@ describe("natural words at the hand-off", () => {
         message:
           state === "running"
             ? "Got it. I take that into the task that runs."
-            : "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+            : "Opening the editor to finish the draft.",
       })),
       answer: vi.fn(async (_text: string) => ({ message: "Answered." })),
       stop: vi.fn(() => ({

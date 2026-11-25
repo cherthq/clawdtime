@@ -365,9 +365,7 @@ describe("explicit directional navigation", () => {
         "I could not finish. No app with the name Notesy is here. Tell me another way to try, or do this step yourself.",
     });
     expect(f.journal.unresolved()).toBeNull();
-    expect((await worker.submit("two", "Open Notes")).message).toMatch(
-      /^Started/,
-    );
+    expect((await worker.submit("two", "Open Notes")).message).toBe("");
   });
   it("counts the refused app of the person's request in the row of three", async () => {
     const f = setup({ kind: "app", name: "Notesy" });
@@ -535,9 +533,7 @@ describe("explicit directional navigation", () => {
     expect(f.journal.unresolved()).toBeNull();
     expect(f.hands.sent).toEqual([{ kind: "switch_previous_app" }]);
     expect(f.planner.inputs).toHaveLength(0);
-    expect((await f.worker.submit("two", "Open Notes")).message).toMatch(
-      /^Started/,
-    );
+    expect((await f.worker.submit("two", "Open Notes")).message).toBe("");
     await f.worker.idle();
   });
   it.each([

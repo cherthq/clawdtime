@@ -360,7 +360,7 @@ describe("the outline of the planner", () => {
       observation: screen,
       page: null,
     });
-    expect(made).toEqual(three);
+    expect(made).toEqual({ subgoals: three });
     expect(net.sent).toHaveLength(1);
     const [body] = net.sent;
     expect(body!.tools.map((tool) => tool.function.name)).toEqual(["outline"]);
@@ -396,7 +396,7 @@ describe("the outline of the planner", () => {
         observation: screen,
         page: null,
       }),
-    ).toEqual([three[0]]);
+    ).toEqual({ subgoals: [three[0]] });
     expect(net.sent).toHaveLength(2);
     const repair = net.sent[1]!.messages.at(-1)!;
     expect(repair.role).toBe("user");

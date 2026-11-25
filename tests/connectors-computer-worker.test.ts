@@ -112,7 +112,7 @@ describe("a task", () => {
       canStop: false,
     });
     const started = await worker.submit("talk_1_execution", "Save the note");
-    expect(started.message).toMatch(/^Started\./);
+    expect(started.message).toBe("");
     await worker.idle();
     // A full look, a look just before the click, the click, and a full look after it.
     expect(kinds(hands.commands)).toEqual([
@@ -4945,7 +4945,7 @@ describe("a missing permission", () => {
       });
       // Nothing is unknown, so the next request can start.
       hands.answer = () => undefined;
-      expect((await worker.submit("r2", "Again")).message).toMatch(/^Started/);
+      expect((await worker.submit("r2", "Again")).message).toBe("");
       await worker.idle();
     },
   );
@@ -4989,9 +4989,9 @@ describe("what is not known", () => {
     expect(second.worker.snapshot().state).toBe("idle");
     expect(
       (await second.worker.submit("r1", "Pay the invoice")).message,
-    ).not.toMatch(/^Started/);
-    expect((await second.worker.submit("r3", "Something new")).message).toMatch(
-      /^Started/,
+    ).not.toBe("");
+    expect((await second.worker.submit("r3", "Something new")).message).toBe(
+      "",
     );
     await second.worker.idle();
     expect(second.worker.snapshot().state).toBe("completed");
@@ -5053,13 +5053,11 @@ describe("what is not known", () => {
     });
     expect(journal.unresolved()).toBeNull();
     // The cleared request itself never starts again, under its own id.
-    expect((await worker.submit("r1", "Click it")).message).not.toMatch(
-      /^Started/,
-    );
+    expect((await worker.submit("r1", "Click it")).message).not.toBe("");
     expect(hands.sent).toHaveLength(1);
     expect(worker.clear()).toEqual({ message: "Nothing to clear." });
     hands.answer = () => undefined;
-    expect((await worker.submit("r2", "Other")).message).toMatch(/^Started/);
+    expect((await worker.submit("r2", "Other")).message).toBe("");
     await worker.idle();
   });
 
@@ -5148,7 +5146,7 @@ describe("what is not known", () => {
     expect(worker.snapshot().message).toMatch(/nothing was sent/);
     expect(planner.inputs).toHaveLength(0);
     hands.answer = () => undefined;
-    expect((await worker.submit("r2", "Again")).message).toMatch(/^Started/);
+    expect((await worker.submit("r2", "Again")).message).toBe("");
     await worker.idle();
   });
 });
@@ -5652,8 +5650,7 @@ describe("what the panel shows", () => {
       version: 1,
       enabled: true,
       state: "idle",
-      message:
-        "Computer use is on. Ask me to do something on this Mac, and I take one checked action at a time.",
+      message: "Computer use is on. No computer task runs now.",
       step: 0,
       goal: "",
       question: null,

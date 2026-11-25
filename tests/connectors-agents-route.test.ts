@@ -254,8 +254,8 @@ function scripted(steps: (string | ToolCall[])[], nextStep = "NONE") {
   return { model, seen, results };
 }
 
-const startedText =
-  "Started. I look at the screen and take one checked action at a time. Say stop to stop me.";
+/** The made-up engine starts with no words, as the app-owned worker does; this is its first line. */
+const startedText = "Opening Mail and finding the newest message from Sam.";
 const jobSaid =
   "Requested a new Claude Code terminal session. Its launch has not been verified yet.";
 
@@ -308,12 +308,13 @@ function mac(
             snapshot: () => state,
             submit: async (_id: string, text: string) => {
               events.push(`engine: ${text}`);
-              return { message: startedText };
+              return { message: "" };
             },
             submitRead: async (_id: string, text: string) => {
               events.push(`engine: ${text}`);
-              return { message: startedText };
+              return { message: "" };
             },
+            firstWords: async () => startedText,
             stop: () => state,
             answer: async () => ({ message: "No question waits." }),
           },
@@ -1063,9 +1064,14 @@ describe("a next step after a computer task ended done", () => {
     // The offer started nothing on the worker.
     expect(planner.inputs).toHaveLength(1);
     const reply = await feed.say("yes");
-    expect(reply.text).toMatch(/^Started\./);
+    // No fixed start sentence: the answer is the worker's first words, here its end.
+    expect(reply.text).toBe("Done. The reply is written.");
     await worker.idle();
     expect(planner.inputs.at(-1)!.goal).toBe("reply to Sam's newest message");
+    // The end is in the chat once.
+    expect(
+      feed.chat().messages.filter((message) => message.text === reply.text),
+    ).toHaveLength(1);
     feed.close();
   });
 

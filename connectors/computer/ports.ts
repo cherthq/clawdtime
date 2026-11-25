@@ -428,8 +428,12 @@ export interface Planner {
     /** The closer look that the planner asked for in its last turn. It comes with this turn only. */
     closer?: Closer;
   }): Promise<{ action: Action; why: string } | import("./plan.js").PlanChoice>;
-  /** Splits the goal into ordered subgoals, after the first look and before the first action. */
+  /**
+   * Splits the goal into ordered subgoals, after the first look and before
+   * the first action, with one line for the person (`opening.ts`). A bare
+   * list is an outline with no line.
+   */
   outline?(
     input: import("./plan.js").OutlineInput,
-  ): Promise<import("./plan.js").Subgoal[]>;
+  ): Promise<import("./plan.js").Outline | import("./plan.js").Subgoal[]>;
 }

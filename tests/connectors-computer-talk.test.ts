@@ -72,12 +72,13 @@ describe("the person talks to a computer worker that waits", () => {
   it("starts the work from the person's own words, and their next message answers its question", async () => {
     const f = setup();
     const model = f.model as ReturnType<typeof delegating>;
+    // No fixed sentence: the answer is the worker's first words, its question here.
     expect(
       await f.supervisor.reply([], "Open the draft and finish it", "chat"),
-    ).toMatch(/^Started\./);
+    ).toMatch(/^Click "Send" in Notes\?/);
     expect(model.complete).toHaveBeenCalledTimes(1);
     await f.waiting();
-    // The question came to the chat by itself.
+    // The question came to the chat by itself too.
     expect(f.said).toHaveLength(1);
     expect(f.said[0]).toMatch(/^Click "Send" in Notes\?/);
     expect(f.hands.sent).toEqual([]);
@@ -358,7 +359,7 @@ describe("a spoken or typed UI request reaches the computer worker", () => {
     const model = f.model as ReturnType<typeof delegating>;
     expect(
       await f.supervisor.reply([], "click the blue Send button", "voice"),
-    ).toMatch(/^Started\./);
+    ).toMatch(/^Click "Send" in Notes\?/);
     expect(model.complete).not.toHaveBeenCalled();
     await f.waiting();
     expect(f.worker.run()).toMatchObject({

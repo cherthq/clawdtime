@@ -1173,7 +1173,7 @@ describe("the merged planner features through every provider", () => {
         observation: observation(),
         page: null,
       }),
-    ).toEqual(subgoals);
+    ).toEqual({ subgoals });
     const parts = chat.sent[0]!.body.messages[1]!.content as {
       type: string;
       image_url?: { detail?: string };
@@ -1189,7 +1189,7 @@ describe("the merged planner features through every provider", () => {
         observation: observation(),
         page: null,
       }),
-    ).toEqual(subgoals);
+    ).toEqual({ subgoals });
     const body = messages.sent[0]!.body;
     expect(
       (body.tools as { name: string; strict?: boolean }[]).map((tool) => [
