@@ -4,8 +4,9 @@
  * The planner is the replaceable part. This one gives a language model the
  * goal, what the person said after it, its own last steps, the useful
  * elements of the screen and the image, and takes back exactly one function
- * call: the next action. The model can be one of OpenAI, of Anthropic, or of
- * any provider that speaks the chat completions interface
+ * call: the next action. The model can be one of OpenAI (on chat
+ * completions, or on its Responses route for its newest models), of
+ * Anthropic, or of any provider that speaks the chat completions interface
  * (`providers.ts`). The request and the reading of the answer are the same
  * for all of them.
  *
@@ -64,8 +65,11 @@ import {
   ChatTransport,
   fallbackComputerModel,
   MessagesTransport,
+  openaiWire,
   providerById,
+  ResponsesTransport,
   type Effort,
+  type OpenAIApi,
   type FunctionTool,
   type ModelAnswer,
   type PlannerRequest,
@@ -916,6 +920,8 @@ export interface PlannerOptions {
   effort?: Effort;
   /** Fast mode, on the models that take it (`sentFast`). */
   speed?: Speed;
+  /** The route of OpenAI. Left out: the name of the model chooses (`openaiWire`). */
+  api?: OpenAIApi;
 }
 
 export class ModelPlanner implements Planner {
@@ -956,7 +962,11 @@ export class ModelPlanner implements Planner {
     this.onAttempt = options.onAttempt;
     this.onUsage = options.onUsage;
     const now = () => this.clock.now();
-    if (provider.wire === "messages")
+    // The fallback is only for the default of OpenAI, never for a chosen model.
+    const fallback =
+      provider.id === "openai" && !options.model ? fallbackComputerModel : null;
+    const wire = openaiWire(provider, model, options.api);
+    if (wire === "messages")
       this.transport = new MessagesTransport({
         key: options.key,
         model,
@@ -965,6 +975,15 @@ export class ModelPlanner implements Planner {
         timeoutMs: attemptTimeoutMs,
         now,
         request: options.request,
+      });
+    else if (wire === "responses")
+      this.transport = new ResponsesTransport({
+        key: options.key,
+        model,
+        fallback,
+        effort: options.effort ?? null,
+        request: options.request ?? fetch,
+        now,
       });
     else {
       const endpoint = options.endpoint ?? provider.endpoint;
@@ -975,11 +994,7 @@ export class ModelPlanner implements Planner {
         endpoint,
         key: options.key,
         model,
-        // The fallback is only for the default of OpenAI, never for a chosen model.
-        fallback:
-          provider.id === "openai" && !options.model
-            ? fallbackComputerModel
-            : null,
+        fallback,
         effort: options.effort ?? null,
         request: options.request ?? fetch,
         now,
@@ -1121,6 +1136,9 @@ export class ModelPlanner implements Planner {
           // the names. A provider that takes a detail reads it small.
           detail: "low",
         },
+        // A plan is worth more thought than a step, where the route always
+        // names an effort (Responses).
+        defaultEffort: "medium",
       },
       input.signal,
     );
@@ -1256,6 +1274,7 @@ export function plannerOptions(settings: PlannerSettings): PlannerOptions {
     ...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
     ...(settings.effort ? { effort: settings.effort } : {}),
     ...(settings.speed === "fast" ? { speed: "fast" as const } : {}),
+    ...(settings.api ? { api: settings.api } : {}),
   };
 }
 

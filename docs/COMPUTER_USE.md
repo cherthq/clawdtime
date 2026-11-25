@@ -616,7 +616,14 @@ the environment of the service wins over a stored key.
 | DeepSeek      | `deepseek`   | `CLAWDTIME_DEEPSEEK_API_KEY`, `DEEPSEEK_API_KEY`               | `https://api.deepseek.com`                                | you choose        |
 | Custom        | `custom`     | `CLAWDTIME_CUSTOM_API_KEY`, which it may also go without       | the base address that you give                            | you choose        |
 
-Every provider but Anthropic gets the chat completions route of its address.
+Every provider but Anthropic gets the chat completions route of its address,
+with one exception: the newest models of OpenAI, whose name starts with
+`gpt-6` or `gpt-5.6` (such as `gpt-6.2-astra` and `gpt-6.2-sol`), get its
+Responses route, `https://api.openai.com/v1/responses`. On chat completions
+those two answer 400 to functions with a reasoning effort, and refuse the
+effort `none` (measured 26 Nov 2026). `CLAWDTIME_OPENAI_API=responses` or
+`chat` chooses the route for any model of OpenAI, the chat's model too. Any
+other value stops the planner, and the doctor says why.
 
 **Set a key.**
 
@@ -661,11 +668,16 @@ it. `CLAWDTIME_CUSTOM_BASE_URL` wins over the stored address. With no key, the
 request goes with no key header.
 
 Run the planner test before you rely on a new model. Both tests take
-`provider/model`:
+`provider/model`, and `@effort` after it for a reasoning effort. On the
+Responses route the effort goes out as `reasoning.effort`, on chat
+completions as `reasoning_effort`, and Anthropic takes `@low`, `@medium` or
+`@high`:
 
 ```sh
 npm run eval:computer:planner -- anthropic/claude-opus-5-5 together/MODEL
-npm run eval:computer:request -- anthropic/claude-opus-5-5
+npm run eval:computer:planner -- gpt-6.2-astra gpt-6.2-astra@medium gpt-6.2-sol
+npm run eval:computer:request -- anthropic/claude-opus-5-5 gpt-6.2-astra@low
+CLAWDTIME_OPENAI_API=chat npm run eval:computer:planner -- gpt-6.1-terra@none
 ```
 
 **What each provider gets.**
@@ -673,8 +685,37 @@ npm run eval:computer:request -- anthropic/claude-opus-5-5
 - **OpenAI**, as before: one forced function call and the large picture,
   the small picture for the outline. It
   gets `reasoning_effort` only when you set an effort, and only on a model
-  that takes it: the `gpt-5` models that are not chat models, and the `o`
-  models.
+  that takes it: the `gpt-5` and `gpt-6` models that are not chat models,
+  and the `o` models.
+- **OpenAI on its Responses route**, for the `gpt-6` and `gpt-5.6` models or
+  with `CLAWDTIME_OPENAI_API=responses`. It takes the same request in its own
+  form. The rules are `instructions`. The turn is one `input` item of the
+  person: the text as `input_text`, and each picture as `input_image` with a
+  base64 data address and its `detail` (large for a step, small for the
+  outline). Each function has `type: "function"`, its `name`, `description`
+  and `parameters` at the top, and `strict: false`: not strict, as on chat
+  completions, because the schemas have optional fields. The model, the rules
+  and the functions come first, the same bytes in every step. The tool choice
+  is `required` with `parallel_tool_calls` as on chat completions (two calls
+  only with a plan). When the service refuses a forced choice (a 400 that
+  names `tool_choice`), the choice is `auto` from then on, and the repair
+  handles an answer with no call. On a model that reasons, the effort always
+  goes out as `reasoning: {effort}`: yours, or `low` for a step and `medium`
+  for the outline and the chat. Nothing is stored on the service (`store` is
+  `false`), so the reasoning of an answer comes back encrypted (`include`
+  names `reasoning.encrypted_content`), only for its repair. The repair sends
+  the answer back as it came, then a `function_call_output` for each of its calls
+  that says what was wrong, or those words as a message of the person when it
+  had no call. A reasoning item with no encrypted content does not go back,
+  and then neither do the ids of the service. The answer is read from the
+  `output` items: `function_call` (its name and its arguments as JSON) and
+  `message` (its words, and `refusal`, which is `refused`). A status
+  `incomplete` for `max_output_tokens` is an answer cut at its limit, and gets
+  the repair; one for `content_filter` is `refused`. A status `failed` with
+  `server_error` or `rate_limit_exceeded` is asked again. The statuses of a
+  failure mean what they mean on chat completions, and the fallback from
+  `gpt-5.4` to `gpt-4.1` works there too. The use of tokens comes with the
+  ones from the cache.
 - **Anthropic**, through its official library (`@anthropic-ai/sdk`) and its
   Messages interface. Each picture is a base64 image block: the screen, and
   the closer look as a second one when there is one. Each function is a tool
@@ -710,20 +751,22 @@ npm run eval:computer:request -- anthropic/claude-opus-5-5
 - `CLAWDTIME_COMPUTER_EFFORT` is `low`, `medium` or `high`. Anthropic gets it
   as `output_config.effort`, and `low` when you set none, on the models that
   take it. OpenAI gets it as `reasoning_effort` when you set one. With none,
-  the request of OpenAI stays as it was measured above. Any other value stops
-  the planner, and the doctor says why. An effort is no speed lever for
-  `gpt-5.4`: on the planner test of 26 Nov 2026 it was right 76 of 76 times
-  with no effort (median 1893 ms), 75 of 76 with `none` (1864 ms), and the
-  service refused `low` with the functions (400). When the service refuses
-  an effort, the same request goes out once more with none, and the planner
-  sends none after that.
+  the request of OpenAI stays as it was measured above. On the Responses route
+  it is `reasoning.effort`, with `low` for a step and `medium` for the outline
+  when you set none. Any other value stops the planner, and the doctor says
+  why. An effort is no speed lever for `gpt-5.4`: on the planner test of 26
+  Nov 2026 it was right 76 of 76 times with no effort (median 1893 ms), 75 of
+  76 with `none` (1864 ms), and the service refused `low` with the functions
+  (400). When the service refuses an effort, the same request goes out once
+  more with none, and the planner sends none after that.
 - `CLAWDTIME_COMPUTER_SPEED=fast` turns on fast mode (`speed: "fast"`) on
   `claude-opus-5-5`, `claude-fable-5-2` and `claude-mythos-5-2`. It costs more
   for each token. On any other model it does nothing, and the doctor says so.
 
 The command that starts the desktop service passes every key variable of the
 table, `CLAWDTIME_COMPUTER_MODEL`, `CLAWDTIME_COMPUTER_EFFORT`,
-`CLAWDTIME_COMPUTER_SPEED` and `CLAWDTIME_CUSTOM_BASE_URL` to it.
+`CLAWDTIME_COMPUTER_SPEED`, `CLAWDTIME_CUSTOM_BASE_URL` and
+`CLAWDTIME_OPENAI_API` to it.
 
 ### The planner test
 

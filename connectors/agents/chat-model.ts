@@ -6,7 +6,9 @@
  * `provider/model` for any provider of the computer engine. The key comes
  * from the same places as the planner's: the environment first, then the key
  * store of the state folder. The request goes over the providers' own
- * transports (`connectors/computer/providers.ts`), with the retry layer of
+ * transports (`connectors/computer/providers.ts`): the newest models of
+ * OpenAI go to its Responses route, and `CLAWDTIME_OPENAI_API` can choose the
+ * route for any model of OpenAI. Each has the retry layer of
  * `model-call.ts`: a request of the model changes nothing on the Mac, so it
  * is the one thing that may be asked again.
  *
@@ -26,7 +28,10 @@ import {
   efforts,
   MessagesTransport,
   modelName,
+  openaiApiSetting,
+  openaiWire,
   parseModel,
+  ResponsesTransport,
   type ConversationMessage,
   type Effort,
   type FunctionTool,
@@ -163,9 +168,17 @@ export function chatModelSetup(
   const effort = efforts.includes(effortText as Effort)
     ? (effortText as Effort)
     : null;
+  const api = openaiApiSetting(env.CLAWDTIME_OPENAI_API);
+  if (api === "invalid")
+    return {
+      ok: false,
+      problem:
+        "CLAWDTIME_OPENAI_API is not responses or chat. Fix it or remove it.",
+    };
   const now = () => Date.now();
   let transport: Transport;
-  if (provider.wire === "messages")
+  const wire = openaiWire(provider, model, api);
+  if (wire === "messages")
     transport = new MessagesTransport({
       key: found!.key,
       model,
@@ -174,6 +187,17 @@ export function chatModelSetup(
       timeoutMs: chatRetryPolicy.attemptTimeoutMs,
       now,
       ...(request !== fetch ? { request } : {}),
+    });
+  else if (wire === "responses")
+    // The newest models of OpenAI, or CLAWDTIME_OPENAI_API=responses. With no
+    // effort set, a turn of the chat gets `medium`.
+    transport = new ResponsesTransport({
+      key: found!.key,
+      model,
+      fallback: null,
+      effort,
+      request,
+      now,
     });
   else {
     const endpoint =

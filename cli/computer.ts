@@ -21,8 +21,10 @@ import {
   defaultComputerModel,
   fallbackComputerModel,
   modelName,
+  openaiWire,
   parseModel,
   refusalFallback,
+  responsesEffort,
   sentEffort,
   sentFast,
   type PlannerSettings,
@@ -426,6 +428,14 @@ function modelLine(setup: Selection, root: string) {
 
 function effortLine(settings: PlannerSettings) {
   const { provider, model, effort } = settings;
+  if (openaiWire(provider, model, settings.api) === "responses") {
+    const route = `${settings.api ? "CLAWDTIME_OPENAI_API chose" : `${model} goes to`} the Responses route`;
+    if (!responsesEffort(model, effort, "low"))
+      return `not sent: ${model} takes no reasoning effort. ${route}.`;
+    return effort
+      ? `${effort}, set by CLAWDTIME_COMPUTER_EFFORT, as reasoning.effort. ${route}.`
+      : `low for a step and medium for the plan, as reasoning.effort. ${route}. CLAWDTIME_COMPUTER_EFFORT (low, medium, high) changes it.`;
+  }
   const sent = sentEffort(provider.id, model, effort);
   if (sent)
     return `${sent}${effort ? ", set by CLAWDTIME_COMPUTER_EFFORT" : ", the default of the planner. CLAWDTIME_COMPUTER_EFFORT (low, medium, high) changes it"}.`;

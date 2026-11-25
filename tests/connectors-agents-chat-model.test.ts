@@ -8,6 +8,7 @@ import {
   ChatTransport,
   MessagesTransport,
   providerById,
+  ResponsesTransport,
 } from "../connectors/computer/providers.js";
 
 const key = "fixture-chat-key-0123456789abcdef";
@@ -277,7 +278,172 @@ describe("a conversation over the Messages transport", () => {
   });
 });
 
+describe("a conversation over the Responses transport", () => {
+  it("sends the rules as instructions, the calls and their results as input items, medium effort, and reads words and calls", async () => {
+    const net = network({
+      status: "completed",
+      output: [
+        { type: "reasoning", id: "rs_1", summary: [] },
+        {
+          type: "message",
+          id: "msg_1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Checking the price too." }],
+        },
+        {
+          type: "function_call",
+          id: "fc_b",
+          call_id: "call_b",
+          name: "computer_steer",
+          arguments: '{"words":"check the price"}',
+        },
+      ],
+      usage: {
+        input_tokens: 900,
+        input_tokens_details: { cached_tokens: 512 },
+        output_tokens: 40,
+      },
+    });
+    const transport = new ResponsesTransport({
+      key,
+      model: "gpt-6.2-sol",
+      fallback: null,
+      effort: null,
+      request: net.request,
+      now: () => 0,
+    });
+    const answer = await transport.converse(
+      { system: "Rules.", tools, messages: toConversation(conversation) },
+      new AbortController().signal,
+    );
+    expect(answer).toEqual({
+      ok: true,
+      value: {
+        text: "Checking the price too.",
+        calls: [
+          {
+            id: "call_b",
+            name: "computer_steer",
+            arguments: '{"words":"check the price"}',
+          },
+        ],
+        refused: false,
+        cut: false,
+        usage: {
+          provider: "openai",
+          model: "gpt-6.2-sol",
+          inputTokens: 900,
+          cachedTokens: 512,
+          cacheWriteTokens: null,
+          outputTokens: 40,
+        },
+      },
+    });
+    const sent = net.sent[0]!;
+    expect(sent.url).toBe("https://api.openai.com/v1/responses");
+    expect(sent.body).toEqual({
+      model: "gpt-6.2-sol",
+      instructions: "Rules.",
+      tools: [
+        {
+          type: "function",
+          name: "computer_do",
+          description: "Start a task.",
+          parameters: tools[0]!.function.parameters,
+          strict: false,
+        },
+      ],
+      parallel_tool_calls: true,
+      input: [
+        { role: "user", content: "search Aero 7 headphones" },
+        {
+          type: "function_call",
+          call_id: "call_a",
+          name: "computer_do",
+          arguments: '{"goal":"search Aero 7 headphones"}',
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_a",
+          output: "Started on the screen.",
+        },
+        { role: "user", content: "and check the price" },
+      ],
+      reasoning: { effort: "medium" },
+      store: false,
+    });
+    // No forced choice in a conversation, and no tool list when none is offered.
+    await transport.converse(
+      { system: "R", tools: [], messages: [{ role: "user", content: "hi" }] },
+      new AbortController().signal,
+    );
+    expect(net.sent[1]!.body).not.toHaveProperty("tools");
+    expect(net.sent[1]!.body).not.toHaveProperty("tool_choice");
+    expect(net.sent[1]!.body).not.toHaveProperty("parallel_tool_calls");
+  });
+});
+
 describe("the chat's model setting", () => {
+  it("sends the newest models of OpenAI to the Responses route, and CLAWDTIME_OPENAI_API chooses the route for any", async () => {
+    const reply = {
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Hi." }],
+        },
+      ],
+    };
+    const net = network(reply);
+    const setup = chatModelSetup(
+      {
+        CLAWDTIME_SUPERVISOR_MODEL: "gpt-6.2-sol",
+        CLAWDTIME_SUPERVISOR_REASONING: "high",
+        OPENAI_API_KEY: key,
+      },
+      undefined,
+      net.request,
+    );
+    expect(setup).toMatchObject({ ok: true, name: "gpt-6.2-sol" });
+    if (!setup.ok) return;
+    expect(
+      await setup.model.next(
+        { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+        new AbortController().signal,
+      ),
+    ).toEqual({ text: "Hi.", calls: [] });
+    expect(net.sent[0]!.url).toBe("https://api.openai.com/v1/responses");
+    expect(net.sent[0]!.body.reasoning).toEqual({ effort: "high" });
+    const chat = network({
+      choices: [{ message: { content: "Hi." }, finish_reason: "stop" }],
+    });
+    const back = chatModelSetup(
+      {
+        CLAWDTIME_SUPERVISOR_MODEL: "gpt-6.2-sol",
+        CLAWDTIME_OPENAI_API: "chat",
+        OPENAI_API_KEY: key,
+      },
+      undefined,
+      chat.request,
+    );
+    if (!back.ok) throw new Error(back.problem);
+    await back.model.next(
+      { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+      new AbortController().signal,
+    );
+    expect(chat.sent[0]!.url).toBe(
+      "https://api.openai.com/v1/chat/completions",
+    );
+    expect(
+      chatModelSetup({ OPENAI_API_KEY: key, CLAWDTIME_OPENAI_API: "fast" }),
+    ).toEqual({
+      ok: false,
+      problem:
+        "CLAWDTIME_OPENAI_API is not responses or chat. Fix it or remove it.",
+    });
+  });
+
   it("uses the chat's own setting through the providers layer, with the key of that provider", async () => {
     const net = network({
       choices: [{ message: { content: "Hi." }, finish_reason: "stop" }],

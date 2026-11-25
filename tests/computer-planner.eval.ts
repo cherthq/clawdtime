@@ -17,8 +17,11 @@
  *   npx tsx tests/computer-planner.eval.ts --check --new-actions
  *
  * Each argument is provider/model, or a bare model of OpenAI, with ":low" for
- * a small picture. With no argument it measures the model that the service
- * would use. REPEATS (default 2) is how often each task runs; ONLY names a
+ * a small picture and "@effort" for a reasoning effort (`gpt-6.2-astra@low`).
+ * The effort goes out as `reasoning_effort` on chat completions and as
+ * `reasoning.effort` on the Responses route of OpenAI, which its newest
+ * models take (CLAWDTIME_OPENAI_API chooses the route for any of its
+ * models). With no argument it measures the model that the service would use. REPEATS (default 2) is how often each task runs; ONLY names a
  * part of a task's name; OUT names a file for every answer.
  *
  * A task can come with a closer picture, as after look_closer: one part of
@@ -72,7 +75,7 @@ import {
   offeredTools,
   type DragEnd,
 } from "./computer-eval-actions.js";
-import { readAsk, toolAnswer } from "./computer-eval-model.js";
+import { readAsk, toolAnswer, withEvalRequest } from "./computer-eval-model.js";
 import { screens } from "./computer-planner-screens.js";
 
 const words = process.argv.slice(2);
@@ -1299,26 +1302,11 @@ async function measure(
   const rows: Row[] = [];
   async function one(config: Config) {
     // The planner asks for the large picture. For ":low" the request is changed on its way out,
-    // and for "@effort" it gets that reasoning effort.
-    const request: typeof fetch = async (url, init) => {
-      if (config.detail === "high" && !config.effort) return fetch(url, init);
-      const body = JSON.parse(String(init?.body)) as {
-        messages: { content: unknown }[];
-        reasoning_effort?: string;
-      };
-      if (config.effort) body.reasoning_effort = config.effort;
-      if (config.detail === "high")
-        return fetch(url, { ...init, body: JSON.stringify(body) });
-      for (const message of body.messages)
-        if (Array.isArray(message.content))
-          for (const part of message.content as {
-            type?: string;
-            image_url?: { detail?: string };
-          }[])
-            if (part.type === "image_url" && part.image_url)
-              part.image_url.detail = "low";
-      return fetch(url, { ...init, body: JSON.stringify(body) });
-    };
+    // and for "@effort" it gets that reasoning effort, on either route of OpenAI.
+    const request = withEvalRequest(fetch, {
+      effort: config.effort,
+      detail: config.detail,
+    });
     const planners = {
       screen: new ModelPlanner({ ...config.planner!, request }),
       browser: new ModelPlanner({

@@ -129,7 +129,44 @@ export type ModelFault =
   /** A function call whose arguments are not JSON. */
   | { call: number; kind: "bad_json" };
 
-const faultAnswer = (fault: ModelFault): Response => {
+/** Whether a request of the planner went to the Responses route of OpenAI: its turn is `input`, not `messages`. */
+const responsesBody = (init: RequestInit | undefined) => {
+  try {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { input?: unknown };
+    return Array.isArray(body.input);
+  } catch {
+    return false;
+  }
+};
+
+/** The malformed answers in the form of the Responses route. */
+const responsesFault = (kind: "no_tool_call" | "bad_json") =>
+  json(200, {
+    status: "completed",
+    output:
+      kind === "no_tool_call"
+        ? [
+            {
+              type: "message",
+              role: "assistant",
+              content: [
+                { type: "output_text", text: "I will click the button next." },
+              ],
+            },
+          ]
+        : [
+            {
+              type: "function_call",
+              call_id: "call_broken",
+              name: "click_element",
+              arguments: '{"element": 3, "why": "open the',
+            },
+          ],
+  });
+
+const faultAnswer = (fault: ModelFault, responses: boolean): Response => {
+  if (responses && (fault.kind === "no_tool_call" || fault.kind === "bad_json"))
+    return responsesFault(fault.kind);
   switch (fault.kind) {
     case "429":
       return json(
@@ -201,7 +238,52 @@ export function withModelFaults(
     const fault = faults.find((item) => item.call === calls);
     if (!fault) return inner(url, init);
     applied.push(`${fault.kind} at call ${calls}`);
-    return faultAnswer(fault);
+    return faultAnswer(fault, responsesBody(init));
+  };
+}
+
+/**
+ * The network `inner`, with a request of the planner changed on its way out
+ * as an eval asks: a reasoning effort of any word (`model@effort`) and the
+ * small picture (`model:low`). Both routes of OpenAI are known:
+ * `reasoning.effort` and `input_image` on Responses, `reasoning_effort` and
+ * `image_url` on chat completions. Any other body goes out unchanged.
+ */
+export function withEvalRequest(
+  inner: typeof fetch,
+  change: { effort?: string | undefined; detail?: "low" | "high" },
+): typeof fetch {
+  if (!change.effort && change.detail !== "low") return inner;
+  return async (url, init) => {
+    const body = JSON.parse(String(init?.body)) as {
+      input?: { content?: unknown }[];
+      messages?: { content?: unknown }[];
+      reasoning?: Record<string, unknown>;
+      reasoning_effort?: string;
+    };
+    const responses = Array.isArray(body.input);
+    if (change.effort) {
+      if (responses)
+        body.reasoning = { ...body.reasoning, effort: change.effort };
+      else body.reasoning_effort = change.effort;
+    }
+    if (change.detail === "low")
+      for (const item of (responses ? body.input : body.messages) ?? [])
+        if (Array.isArray(item.content))
+          for (const part of item.content as {
+            type?: string;
+            detail?: string;
+            image_url?: { detail?: string } | string;
+          }[]) {
+            if (part.type === "input_image") part.detail = "low";
+            if (
+              part.type === "image_url" &&
+              part.image_url &&
+              typeof part.image_url === "object"
+            )
+              part.image_url.detail = "low";
+          }
+    return inner(url, { ...init, body: JSON.stringify(body) });
   };
 }
 
