@@ -1,6 +1,6 @@
 <h1 align="center">ClawdTime</h1>
 
-<p align="center"><strong>Your Agent for Long-Running Work</strong></p>
+<p align="center"><strong>A computer use agent for your Mac</strong></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="Version 0.2.0">
@@ -8,84 +8,79 @@
   <img src="https://img.shields.io/badge/status-internal_pilot-orange" alt="Internal pilot">
 </p>
 
-ClawdTime is your agent for long-running work. Give it a task and it runs it end to end, delegating to specialist agents and tools such as Codex, Claude Code, and other apps as needed. When it needs your judgment or has a result to review, it prepares a walkthrough and FaceTimes you.
+ClawdTime is a computer use agent that works on your Mac: it uses your apps,
+web pages and accounts for you, and checks each action in code before it acts.
+You reach it in its chat, by voice, by iMessage and on a FaceTime call through
+a Chert line.
 
-You don't babysit Codex. You hand the job to ClawdTime, and it calls you when it matters.
+## What it does
 
-## How people would use it
+- **Computer and browser use.** It clicks, types, scrolls and reads the screen
+  in any app, and can drive a web page by its elements. A visible cursor glides
+  to each place before it acts.
+- **Plans for long tasks.** It splits a task into a few subgoals and checks
+  each one on the screen.
+- **A chat that acts.** Say what you want in the chat, by voice or on a call.
+  It starts at once, and your next words steer the task.
+- **Calls you back for a sign-in.** When it needs you, it calls you on your
+  line, or texts you. You type passwords on the Mac yourself: it never asks
+  for one.
+- **Zoom on a call.** The call video follows its clicks. Say "zoom on the
+  address bar" or "show the whole screen".
+- **Routines.** "Every morning at 9, check my inbox and tell me" runs every
+  day at 9.
+- **Memory.** It keeps what you tell it about you and your work, when you turn
+  memory on.
+- **Any model provider.** OpenAI, Anthropic, Google Gemini, Mistral, Groq,
+  OpenRouter and more, or your own endpoint.
+- **Coding agents.** It lists the coding agent sessions on your Mac, answers
+  their permission requests for you, and hands code work to a new session.
 
-Setup: Install one desktop app → connect models and tools (essentially need to give Clawdtime context on the tools that it has access to via CUA, CLIs and APIs where available, computer use for the rest) → grant Mac permissions → pair your phone via OTP texting.
+## Quick start
 
-The goal is a simple, one-click installation followed by guided setup.
+You need macOS 14 or later, Node 24 or later, Swift (the Xcode command line
+tools) and an iPhone.
 
-To put ClawdTime on a FaceTime line today, follow [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md).
+1. **Install** ClawdTime and the `chert` command:
 
-1. **Chat from the desktop or phone.** A floating companion or command bar lives on your desktop. Click it to open chat, assign a task, and answer clarifying questions through selectable options. You can also text it a task.
-2. **Let it work.** ClawdTime plans the task, chooses tools or agents, and tracks progress. It drives workers through APIs and command-line tools by default, with computer use for apps that need it. You can request a call to watch it perform a task.
-3. **Resolve issues together.** When it needs human input, it diagnoses the problem and prepares the walkthrough before calling. During FaceTime, it shares the live screen, zooms in on the relevant area, and explains the decision. You discuss the fix while it coordinates edits or computer actions and verifies the result.
-4. **Continue and review.** Once the issue is resolved, it ends the call and continues working. When the task is finished, it prepares a final walkthrough and calls for your review and confirmation. Text remains available for questions, updates, and requesting another walkthrough.
+   ```sh
+   npm install -g @trychert/facetime@beta
+   git clone https://github.com/cherthq/clawdtime.git ~/clawdtime
+   cd ~/clawdtime && npm ci && npm run build && npm link
+   (cd line && npm install)
+   ```
 
-During a call, the voice layer handles conversation while the task engine coordinates the work. Ending the call does not have to end the task.
+2. **Connect** to Chert and get a line: `clawdtime connect`
+3. **Turn on** computer use: `clawdtime computer on`
+4. **Add a model key**: `clawdtime keys set openai`. It reads the key from a
+   hidden prompt. For another provider, see
+   [Models and keys](INSTRUCTIONS.md#5-models-and-keys).
+5. **Start the desktop**, with `--project` set to the folder for code work:
 
-## Technical details
+   ```sh
+   (cd mac && swift build --product ClawdTimeTaskPanel)
+   CLAWDTIME_CHAT=agent npm run task:desktop -- \
+     --state ~/.local/share/clawdtime/desktop --project ~/code/my-project
+   ```
 
-The [long-running task and review guide](docs/TASK_REVIEW_LIFECYCLE.md) describes
-semantic task admission, coding runs without an overall timer, independent
-verification, durable review callbacks, exact-result acceptance and exclusive
-capture handoff. Phone setup and fresh authorized result views are required before
-delivery; missing setup is reported when work is admitted. The installed pilot
-has not yet been upgraded, and handset capture continuity remains unqualified.
+   The mascot appears. Click it to open the chat. In System Settings, Privacy
+   & Security, give the panel Accessibility and Screen & System Audio
+   Recording. Then run `clawdtime connect` once more, so that the desktop gets
+   its calling policy.
 
-Coding-demo implementation: the [native desktop panel guide](docs/CODING_DEMO_DESKTOP.md)
-documents the runnable local task workflow, explicit Codex setup and current
-handset acceptance limits.
+`clawdtime computer doctor` says what is ready and what is missing.
 
-Agent board: `clawdtime agents` lists every coding-agent session on this Mac
-(Claude Code, Codex, pi and more), shows which ones wait for you, and brings a
-session's terminal forward. The desktop panel lists no sessions: a click on its
-mascot opens the chat, and its bubble names a session that waits for you. It reads state only and never sends
-input to a session. `clawdtime hosts add NAME SSH_TARGET` adds the sessions of
-another Mac, such as a Mac mini, over ssh. See the
-[agent board guide](docs/AGENT_BOARD.md).
+## Read more
 
-Supervisor: ClawdTime can also answer an agent for you. Approve or deny a
-permission request from the mascot's bubble, the chat, a command, or a FaceTime
-call when you are away. It keeps each decision in a trove, repeats an answer only
-where you made a rule, types into a session's terminal on request, and reports
-the agent commands you use as a slide deck. You can also talk to it: in a chat
-screen, by voice on the Mac, where it answers aloud, or on a FaceTime call. It has a memory for what you tell it about
-yourself and your work, which is off until you turn it on. Its watcher follows
-every session and tells you when one has waited for you too long, hangs, ended
-badly or is done. See the
-[supervisor guide](docs/SUPERVISOR.md).
-
-Desktop computer tasks have an opt-in app-owned runtime that works without an
-open Codex chat. It bundles an isolated browser adapter, a local Mac adapter,
-exact-action approvals, result verification and **Stop**. The standalone
-browser fixture and a native two-app activation/type/save/Stop flow are verified
-on the qualification Mac. This is bounded internal acceptance, not a claim that
-every application or computer is supported.
-Native mode now includes a focus-preserving approval panel and explicit activation
-of allowlisted existing app windows. The standalone package uses a separate
-Local Control helper so it does not overwrite an installed call companion.
-See [bundled runtime setup and limitations](docs/BUNDLED_CUA.md). An
-[existing-chat adapter](docs/DESKTOP_EXECUTOR.md) remains available separately.
-
-During an authorized visual call, keep the current prepared window shared through
-spoken requests, coding, verification and acceptance. If another prepared view is
-requested, replace it mid-call when its first fresh frame is ready; do not blank
-or end sharing between views. Sharing ends on explicit **Stop sharing**, call
-end, or loss of capture permission, source freshness or call authority. Changed
-work stays visible, but outdated result narration and verification labels are
-suppressed. New desktop calls use call-scoped sharing; historical grants keep
-their original limits. See the [implementation plan](docs/CODING_DEMO_IMPLEMENTATION_PLAN.md)
-for scope and the remaining handset continuity test.
-
-### Technical implementation
-
-Long-running work should continue without depending on an existing Codex chat staying active.
-
-The opt-in app-owned runtime uses a replaceable model planner, isolated Chromium
-and the Mac companion. Agent-S remains a candidate, not an installed dependency.
-The presentation layer renders walkthrough zooms. Shared-screen actions retain
-explicit permissions, exclusive control, fresh-screen checks and visible Stop.
+| Page                                                       | What it covers                                                  |
+| ---------------------------------------------------------- | --------------------------------------------------------------- |
+| [INSTRUCTIONS.md](INSTRUCTIONS.md)                         | The full user guide: every command, setting and phrase          |
+| [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md)                   | The Chert line step by step: calls, texts and the line agent    |
+| [AGENTS.md](AGENTS.md)                                     | Rules for coding agents that work in this repository            |
+| [docs/COMPUTER_USE.md](docs/COMPUTER_USE.md)               | How computer use works: the planner, the checks and the limits  |
+| [docs/SUPERVISOR.md](docs/SUPERVISOR.md)                   | The chat, voice, memory, the trove and answers to coding agents |
+| [docs/AUTOMATIC_CALL_ZOOM.md](docs/AUTOMATIC_CALL_ZOOM.md) | Zoom on the call video                                          |
+| [docs/AGENT_BOARD.md](docs/AGENT_BOARD.md)                 | The coding agent sessions on this Mac                           |
+| [docs/DESKTOP_SPACES.md](docs/DESKTOP_SPACES.md)           | Moves between desktops and apps                                 |
+| [docs/CODING_DEMO_DESKTOP.md](docs/CODING_DEMO_DESKTOP.md) | The desktop service and the panel: options, recovery and limits |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)               | The parts and how they connect                                  |
