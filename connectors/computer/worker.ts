@@ -120,6 +120,7 @@ import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import { directAddress, webAddress } from "./navigation.js";
 import { directOpening } from "./planner.js";
 import { supportedBrowsers } from "./browser.js";
+import { errorPage, notLoadedNote } from "./error-page.js";
 import { BrowserInputUnknown } from "./own-browser.js";
 import {
   giveUpNote,
@@ -681,6 +682,8 @@ interface Run {
   stillAfter?: string;
   /** A done after an input that changed nothing was sent back once. */
   stillNoted?: boolean;
+  /** A done while the browser showed an error page was sent back once. */
+  errorPageNoted?: boolean;
   /** Finds steps that go in circles. One for each request. */
   progress: ProgressGuard;
   /** How many of the person's additions the progress guard knows of. */
@@ -1727,6 +1730,10 @@ export class ComputerWorker implements DesktopExecutorPort {
   private spoken(run: Run) {
     return run.guidance.length || defersWork(run.goal) ? "" : run.goal;
   }
+  /** All that the person said for the request: its goal and their words after it. */
+  private saidAll(run: Run) {
+    return [run.goal, ...run.guidance.map((said) => said.text)].join("\n");
+  }
   /**
    * True when the person said more since the planner chose the action that
    * is on its way. It was chosen without their newest words, so it is not
@@ -2260,6 +2267,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         const judged = await this.judge(run);
         if (judged === "over") return;
         if (judged === "again") continue;
+        this.notLoaded(run);
         this.remind(run);
         const planFrom = this.now();
         // How many times the person had added words when the planner began.
@@ -2632,6 +2640,23 @@ export class ComputerWorker implements DesktopExecutorPort {
             "done_unchanged",
           );
         }
+        // A done while the browser shows its own error page goes back once:
+        // the page did not load, and spoken words are often misheard, so the
+        // address may be wrong. A second done is taken.
+        const shows = run.errorPageNoted
+          ? null
+          : errorPage(run.observation, run.page, this.saidAll(run));
+        if (shows) {
+          run.errorPageNoted = true;
+          return this.note(
+            run,
+            action,
+            why,
+            "",
+            `not taken yet: ${notLoadedNote(shows)} Only when the goal is to see this page, call done again.`,
+            "done_error_page",
+          );
+        }
         this.note(run, action, why, "", "ok", "ok");
         return this.finish(
           run,
@@ -2948,6 +2973,42 @@ export class ComputerWorker implements DesktopExecutorPort {
         }),
       ),
     };
+  }
+  /**
+   * After open_url or browser_open, when the look or the reading after it
+   * shows an error page of the browser: the line of that step says that the
+   * page did not load, and that the address may be misheard. Once for a step.
+   */
+  private notLoaded(run: Run) {
+    const index = run.history.length - 1;
+    const record = run.history[index];
+    if (
+      !record ||
+      (record.action.kind !== "open_url" &&
+        record.action.kind !== "browser_open") ||
+      record.outcome !== "ok"
+    )
+      return;
+    const shows = errorPage(run.observation, run.page, this.saidAll(run));
+    if (!shows) return;
+    run.history[index] = {
+      ...record,
+      outcome: `ok, the address went to the browser, but ${notLoadedNote(shows)}`,
+    };
+    // The record says that this site did not load, so that nothing takes
+    // its name for a site that the owner uses (the words for speech to text).
+    let host = "";
+    try {
+      host = new URL(record.action.url).hostname;
+    } catch {
+      host = "";
+    }
+    if (host)
+      this.journal.step(run.id, {
+        kind: record.action.kind,
+        target: host,
+        outcome: "not_loaded",
+      });
   }
   /** A note for the planner, at the end of the line of its last step. */
   private tell(run: Run, note: string) {

@@ -413,6 +413,21 @@ through all the checks.
   and the same action again and again asks nothing: after three tries that
   changed nothing the planner reads that in its last step, and the same
   action once more ends the request.
+- **A page that did not load.** Spoken words are often misheard: a name
+  such as "Brightwave" can come out as "Bright5", and the browser then shows its own error page.
+  That page is never a result (`error-page.ts`). The worker knows it by the
+  browser's own words, on the page that it read or on the screen while a
+  browser is in front: "This site can't be reached", `ERR_NAME_NOT_RESOLVED`,
+  `DNS_PROBE`, "server IP address could not be found", "Safari Can't Find the
+  Server", "This page isn't working", a 404 or "Not Found" title, Chrome's
+  error address and an empty tab at a web address. After an `open_url` or a
+  `browser_open`, the line of that step says that the page did not load and
+  that the address may be misheard: search the web for the name, open the
+  site that fits, then check that it loaded. A done while such a page is in
+  front goes back to the planner once with the same note; a second done is
+  taken. A goal about an error itself ("why does the shop show a 404?") is
+  not read this way. The planner reads only a fixed label, never the text of
+  the page.
 - **A give_up.** The first give_up of a request goes back to the planner
   with the ways that it did not try, and the planner chooses again. A
   give_up about you, an account, a permission, a password, a secret, money
@@ -947,9 +962,9 @@ forward, tabs, read a page) and one that reads the screen from a picture.
 While the worker is on, neither is offered to its language model, and a call
 of one goes to the worker. They stay for when the worker is off.
 
-After a task ends done, ClawdTime may offer one next step that follows from
-the result, as a question in the chat. Only your plain yes to it starts the
-step. See [the supervisor page](SUPERVISOR.md).
+The result of a task is the last word: the chat says it in one line and
+offers no next step after it. A result that shows a problem, such as a page
+that did not load, is for the worker to handle before it ends.
 
 **From a phone call.** A call asks through `clawdtime chat TEXT`. That command
 now hands the text to the running desktop service, so a caller's request
@@ -2052,8 +2067,6 @@ Not tested, and so not proven:
   screen from a picture.
 - A message with code work and screen work starts the screen part right after
   the job starts. It does not wait for the answer of the job.
-- The offer of a next step is said in the chat only. On a phone call nothing
-  says it by itself.
 - The route before the language model has no check for a request of an agent
   that waits at the desk. "Click the Approve button" goes to the worker. The
   worker then asks for your yes before the click, because of the name.

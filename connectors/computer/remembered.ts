@@ -81,8 +81,13 @@ const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 function placesOf(history: StepRecord[]): string[] {
   const places: string[] = [];
   for (const { action, outcome } of history) {
-    // "ok", or "sent, ..." when the screen did not move after it.
-    if (!/^(?:ok|sent)\b/.test(outcome)) continue;
+    // "ok", or "sent, ..." when the screen did not move after it. A site
+    // whose page did not load was not opened: its name may be misheard.
+    if (
+      !/^(?:ok|sent)\b/.test(outcome) ||
+      outcome.includes("the page did not load")
+    )
+      continue;
     let place = "";
     if (action.kind === "open_url" || action.kind === "browser_open")
       try {

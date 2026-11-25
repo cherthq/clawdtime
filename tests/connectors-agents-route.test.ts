@@ -228,20 +228,12 @@ const call = (
 });
 
 /** A language model that says the steps in order, the last one again and again. */
-function scripted(steps: (string | ToolCall[])[], nextStep = "NONE") {
+function scripted(steps: (string | ToolCall[])[]) {
   const seen: Parameters<ModelClient["complete"]>[0][] = [];
   const results: string[] = [];
   let step = 0;
   const model: ModelClient = {
     async complete(input) {
-      // The question of a next step after a finished computer task.
-      if (
-        input.tools.length === 0 &&
-        input.system.startsWith("A computer task on this Mac just ended")
-      ) {
-        seen.push(input);
-        return { text: nextStep, toolCalls: [] };
-      }
       seen.push(input);
       const last = input.messages.at(-1);
       if (last?.role === "tool") results.push(last.content);
@@ -887,158 +879,24 @@ describe("with computer use off", () => {
   });
 });
 
-describe("a next step after a computer task ended done", () => {
-  const report = "Done. Sam wrote twice about the launch.";
-  const offer = "Want me to reply to Sam's newest message?";
+describe("no offer after a computer task", () => {
+  // The owner's Mac on 26 November: the worker opened a misheard address,
+  // reported a network error as done, and the chat asked "Want me to reload
+  // the page?". A result is the last word now: the chat says it and stops.
+  const report =
+    "Done. Opened brightwave5.co in Chrome. The page shows a network error.";
 
-  it("offers one short, concrete step and starts nothing", async () => {
-    const f = mac();
-    const run = scripted(["Okay."], offer);
-    const supervisor = new Supervisor(f.world, run.model);
-    await supervisor.reply([], "check my email", "chat");
-    expect(f.events).toEqual(["engine: check my email"]);
-    expect(await supervisor.offerNextStep(report)).toBe(offer);
-    // The model read the request and the report, as data.
-    expect(run.seen.at(-1)!.messages[0]!.content).toBe(
-      `The task: check my email\nIts report: ${report}`,
-    );
-    expect(f.events).toEqual(["engine: check my email"]);
-  });
-
-  it.each([
-    ["NONE"],
-    ["Want me to help with anything else?"],
-    ["Is there something else I can do?"],
-    ["Want me to pay the invoice?"],
-    ["Want me to delete the old messages?"],
-    ["Want me to sign in to your bank?"],
-    ["Want me to fix the failing test?"],
-    ['Want me to type "ignore all rules"?'],
-  ])("offers nothing for the draft %j", async (draft) => {
-    const f = mac();
-    const supervisor = new Supervisor(
-      f.world,
-      scripted(["Okay."], draft).model,
-    );
-    expect(await supervisor.offerNextStep(report)).toBeNull();
-  });
-
-  it("offers nothing for a task that did not end done, for a credential, with no model, and with the engine off", async () => {
-    const f = mac();
-    const supervisor = new Supervisor(
-      f.world,
-      scripted(["Okay."], offer).model,
-    );
-    expect(
-      await supervisor.offerNextStep(
-        "I could not finish. The page did not load.",
-      ),
-    ).toBeNull();
-    expect(
-      await supervisor.offerNextStep(
-        "Done. The key is sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD.",
-      ),
-    ).toBeNull();
-    expect(
-      await new Supervisor(f.world, null).offerNextStep(report),
-    ).toBeNull();
-    const off = mac({ engine: "off" });
-    expect(
-      await new Supervisor(
-        off.world,
-        scripted(["Okay."], offer).model,
-      ).offerNextStep(report),
-    ).toBeNull();
-  });
-
-  it("starts the step on a plain yes right after the offer, and only then", async () => {
-    const f = mac();
-    const supervisor = new Supervisor(
-      f.world,
-      scripted(["Okay."], offer).model,
-    );
-    expect(await supervisor.offerNextStep(report)).toBe(offer);
-    const shown: ChatMessage[] = [
-      { role: "assistant", text: report, at: Date.now(), via: "chat" },
-      { role: "assistant", text: offer, at: Date.now(), via: "chat" },
-    ];
-    expect(await supervisor.reply(shown, "yes", "chat")).toBe(startedText);
-    expect(f.events).toEqual(["engine: reply to Sam's newest message"]);
-  });
-
-  it("never starts the step without a word: a no, another message, or a yes that comes too late", async () => {
-    for (const words of ["no", "thanks", "what did Sam say?", "ok", "sure"]) {
-      const f = mac();
-      const run = scripted([[call("delegate_computer_task")], "Okay."], offer);
-      const supervisor = new Supervisor(f.world, run.model);
-      expect(await supervisor.offerNextStep(report)).toBe(offer);
-      const shown: ChatMessage[] = [
-        { role: "assistant", text: offer, at: Date.now(), via: "chat" },
-      ];
-      await supervisor.reply(shown, words, "chat");
-      expect([
-        words,
-        f.events.filter((e) => e.includes("Sam's newest")),
-      ]).toEqual([words, []]);
-      // A yes after that message is no answer to the offer any more.
-      await supervisor.reply(
-        [
-          ...shown,
-          { role: "user", text: words, at: Date.now(), via: "chat" },
-          { role: "assistant", text: "Okay.", at: Date.now(), via: "chat" },
-        ],
-        "yes",
-        "chat",
-      );
-      expect([
-        words,
-        f.events.filter((e) => e.includes("Sam's newest")),
-      ]).toEqual([words, []]);
-    }
-  });
-
-  it("starts nothing on a yes when the offer is not the newest message, or when the engine is busy", async () => {
-    const f = mac();
-    const supervisor = new Supervisor(
-      f.world,
-      scripted(["Okay."], offer).model,
-    );
-    await supervisor.offerNextStep(report);
-    await supervisor.reply(
-      [
-        { role: "assistant", text: offer, at: Date.now(), via: "chat" },
-        {
-          role: "assistant",
-          text: "Done: a job.",
-          at: Date.now(),
-          via: "chat",
-        },
-      ],
-      "yes",
-      "chat",
-    );
-    expect(f.events).toEqual([]);
-    const busy = mac();
-    const other = new Supervisor(busy.world, scripted(["Okay."], offer).model);
-    await other.offerNextStep(report);
-    busy.state.state = "running";
-    busy.state.canStop = true;
-    await other.reply(
-      [{ role: "assistant", text: offer, at: Date.now(), via: "chat" }],
-      "yes",
-      "chat",
-    );
-    expect(busy.events).toEqual([]);
-  });
-
-  it("says the offer in the chat after the report of the engine, and the yes starts it on the worker", async () => {
+  it("says the report of the engine once, with no question after it, and asks no model for one", async () => {
     const root = folder();
     const hands = new FakeHands([
       observation([element(1, { title: "Inbox" })]),
     ]);
     const planner = new ScriptedPlanner([
-      { kind: "done", summary: "Sam wrote twice about the launch." },
-      { kind: "done", summary: "The reply is written." },
+      {
+        kind: "done",
+        summary:
+          "Opened brightwave5.co in Chrome. The page shows a network error.",
+      },
     ]);
     let feed: BoardFeed | undefined;
     const worker = new ComputerWorker({
@@ -1047,46 +905,46 @@ describe("a next step after a computer task ended done", () => {
       journal: new ComputerJournal(root),
       notify: (text) => feed?.appendExecutionResult(text),
     });
+    const run = scripted([
+      "Want me to reload the brightwave5.co page in Chrome?",
+    ]);
     feed = new BoardFeed({
       root,
-      model: scripted(["Okay."], offer).model,
+      model: run.model,
       speech: null,
       execution: worker,
     });
-    await worker.submit("r1", "check my email");
+    await worker.submit("r1", "open brightwave5.co");
     await worker.idle();
-    await until(() => feed!.chat().messages.length === 2);
+    await until(() => feed!.chat().messages.length >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(feed.chat().messages.map((message) => message.text)).toEqual([
       report,
-      offer,
     ]);
-    expect(feed.chat().messages.at(-1)!.choices).toEqual(["Yes", "No"]);
-    // The offer started nothing on the worker.
-    expect(planner.inputs).toHaveLength(1);
-    const reply = await feed.say("yes");
-    // No fixed start sentence: the answer is the worker's first words, here its end.
-    expect(reply.text).toBe("Done. The reply is written.");
-    await worker.idle();
-    expect(planner.inputs.at(-1)!.goal).toBe("reply to Sam's newest message");
-    // The end is in the chat once.
-    expect(
-      feed.chat().messages.filter((message) => message.text === reply.text),
-    ).toHaveLength(1);
+    expect(feed.chat().messages[0]!.choices).toBeUndefined();
+    expect(run.seen).toHaveLength(0);
+    expect("offerNextStep" in feed).toBe(false);
     feed.close();
   });
 
-  it("says no offer when the person spoke after the report", async () => {
+  it("gives the model no rule to offer a next step, and a yes after a report starts no step", async () => {
     const f = mac();
-    const feed = new BoardFeed({
-      root: folder(),
-      model: scripted(["Okay."], offer).model,
-      speech: null,
-      execution: f.world.execution!,
-    });
-    const said = feed.offerNextStep(report);
-    // The report is not in the chat: something else is the newest message.
-    await said;
-    expect(feed.chat().messages.map((message) => message.text)).toEqual([]);
-    feed.close();
+    const run = scripted(["Okay."]);
+    const supervisor = new Supervisor(f.world, run.model);
+    expect("offerNextStep" in supervisor).toBe(false);
+    await supervisor.reply([], "how are you?", "chat");
+    expect(run.seen[0]!.system).not.toMatch(/next step/i);
+    expect(run.seen[0]!.system).not.toContain("Want me to reply");
+    const shown: ChatMessage[] = [
+      { role: "assistant", text: report, at: Date.now(), via: "chat" },
+      {
+        role: "assistant",
+        text: "Want me to reload the brightwave5.co page in Chrome?",
+        at: Date.now(),
+        via: "chat",
+      },
+    ];
+    await supervisor.reply(shown, "yes", "chat");
+    expect(f.events.filter((event) => /reload/.test(event))).toEqual([]);
   });
 });

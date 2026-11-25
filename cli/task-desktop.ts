@@ -150,6 +150,8 @@ export function childEnvironment(panel = false): NodeJS.ProcessEnv {
           // The program of ClawdTime's own browser, when it is not found by itself.
           "CLAWDTIME_OWN_BROWSER_PATH",
           "CLAWDTIME_TRANSCRIBE_MODEL",
+          // The owner's names for speech to text, comma separated.
+          "CLAWDTIME_VOCABULARY",
           "CLAWDTIME_SPEAK_MODEL",
           "CLAWDTIME_VOICE",
           // Jobs and applications from the panel's chat: the coding agent, the

@@ -27,9 +27,11 @@ import { SessionNews } from "./sessionnews.js";
 import {
   speak,
   speechSettings,
+  speechVocabulary,
   transcribe,
   type SpeechSettings,
 } from "./speech.js";
+import { ComputerJournal } from "../computer/journal.js";
 import { answerByCall, loadCallLink, openCall, sayByCall } from "./call.js";
 import { agentLabel } from "./catalog.js";
 import { DecisionDesk, type DecisionRequest } from "./decisions.js";
@@ -493,7 +495,9 @@ export class BoardFeed implements AgentBoardPort {
    * What the computer engine says by itself: its first words, a question,
    * its result. A durable bridge invokes this once after it records a
    * terminal result. A line said while the task runs (what the engine does
-   * first, a change of its plan) is marked as the engine's own.
+   * first, a change of its plan) is marked as the engine's own. The result
+   * is the last word: no offer of a next step follows it. A result that
+   * shows a problem is for the worker to handle, not a question to the person.
    */
   appendExecutionResult(text: string) {
     const now = this.options.now ?? Date.now;
@@ -511,33 +515,8 @@ export class BoardFeed implements AgentBoardPort {
       via: "chat",
       ...(working ? { engine: true as const } : {}),
     });
-    this.offerNextStep(text);
-  }
-  /**
-   * After a computer task ended done, ClawdTime may offer one next step that
-   * follows from its result, as a question in the chat. It starts nothing:
-   * only the person's yes to it does. The question is said only while the
-   * report is still the newest message. Public for tests: it resolves when
-   * the offer is said or dropped.
-   */
-  offerNextStep(text: string): Promise<void> {
-    const now = this.options.now ?? Date.now;
-    return this.supervisor
-      .offerNextStep(text)
-      .then((question) => {
-        if (!question) return;
-        const last = this.log.recent(1)[0];
-        if (last?.role !== "assistant" || last.text !== text) return;
-        // The panel shows the two answers as buttons under the question.
-        this.log.append({
-          role: "assistant",
-          text: question,
-          at: now(),
-          via: "chat",
-          choices: ["Yes", "No"],
-        });
-      })
-      .catch(() => {});
+    // The request is over: a short name right after it can correct it.
+    if (!working) this.supervisor.computerEnded(now());
   }
   /**
    * Says in the chat the answer of each job that finished, once. ClawdTime
@@ -645,7 +624,7 @@ export class BoardFeed implements AgentBoardPort {
     const file = join(this.voiceDirectory, recording);
     let heard = "";
     try {
-      heard = await transcribe(file, this.speech);
+      heard = await transcribe(file, this.speech, this.vocabulary());
     } catch {
       heard = "";
     } finally {
@@ -668,6 +647,19 @@ export class BoardFeed implements AgentBoardPort {
       audio = null;
     }
     return { heard, reply, audio };
+  }
+
+  /**
+   * The owner's words for speech to text: their list, the names in their
+   * memory while it is on, and the sites and apps of recent computer
+   * requests (`speechVocabulary`).
+   */
+  private vocabulary() {
+    return speechVocabulary({
+      env: process.env,
+      memory: this.desk.memory,
+      journal: new ComputerJournal(this.root),
+    });
   }
 
   private get intervalMs() {
