@@ -1,7 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Supervisor, type ModelClient } from "../connectors/agents/brain.js";
+import { DecisionDesk } from "../connectors/agents/decisions.js";
 import {
   ComputerJournal,
   looksSecretStrict,
@@ -922,5 +924,147 @@ describe("natural words at the worker", () => {
     await until(() => worker.snapshot().state === "waiting_for_person");
     worker.stop();
     await worker.idle();
+  });
+});
+
+describe("natural words at the hand-off", () => {
+  const canDo =
+    "Nothing started: that asks what I can do. I can work on this Mac's screen: open apps, click, type and scroll. Tell me what to do, and in which app.";
+  function executor(state: "idle" | "running") {
+    const snapshot = {
+      configured: true,
+      mode: "native" as const,
+      state,
+      canStop: state === "running",
+      message:
+        state === "running"
+          ? 'Working on: "open the editor". Step 2 of at most 40.'
+          : "No computer task runs.",
+    };
+    return {
+      snapshot: () => snapshot,
+      submit: vi.fn(async (_id: string, _text: string) => ({
+        message:
+          state === "running"
+            ? "Got it. I take that into the task that runs."
+            : "Started. I look at the screen and take one checked action at a time. Say stop to stop me.",
+      })),
+      answer: vi.fn(async (_text: string) => ({ message: "Answered." })),
+      stop: vi.fn(() => ({
+        ...snapshot,
+        state: "stopping",
+        canStop: false,
+        message: stoppedText,
+      })),
+    };
+  }
+  function supervisor(
+    execution: ReturnType<typeof executor>,
+    model: ModelClient | null = null,
+  ) {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-natural-hand-off-"));
+    roots.push(home);
+    return new Supervisor(
+      {
+        now: () => 1000,
+        board: () => null,
+        desk: new DecisionDesk(home, () => 1000),
+        focus: async () => ({ ok: false }),
+        send: async () => ({ ok: false, route: "none" }),
+        clis: () => [],
+        execution,
+      },
+      model,
+    );
+  }
+  /** A model that reads every message as work for the screen and hands it over. */
+  function eagerModel() {
+    const reading = vi.fn(async () => ({
+      intent: { kind: "none" as const },
+      work: true,
+    }));
+    const complete = vi.fn(async () => ({
+      text: "Yes, I can work on your screen.",
+      toolCalls: [{ id: "a", name: "delegate_computer_task", arguments: "{}" }],
+    }));
+    return { reading, complete };
+  }
+
+  it.each([
+    "Can you click buttons on my screen?",
+    "can u use my mac?",
+    "are you able to open apps",
+    "could you click things on my computer?",
+  ])("answers %j as a question and starts no task", async (words) => {
+    const execution = executor("idle");
+    const model = eagerModel();
+    const reply = await supervisor(execution, model).reply([], words, "chat");
+    expect(execution.submit).not.toHaveBeenCalled();
+    expect(model.reading).not.toHaveBeenCalled();
+    expect(reply).not.toMatch(/^Started\./);
+    const bare = executor("idle");
+    expect(await supervisor(bare).reply([], words, "chat")).not.toMatch(
+      /^Started\./,
+    );
+    expect(bare.submit).not.toHaveBeenCalled();
+  });
+
+  it("answers the question in fixed words on the road before the language model", async () => {
+    const execution = executor("idle");
+    expect(
+      await supervisor(execution).reply(
+        [],
+        "Can you click buttons on my screen?",
+        "chat",
+      ),
+    ).toBe(canDo);
+    expect(execution.submit).not.toHaveBeenCalled();
+  });
+
+  it("still starts a task for a request with a named target", async () => {
+    const execution = executor("idle");
+    const words = "Can you click the Send button?";
+    await supervisor(execution).reply([], words, "chat");
+    expect(execution.submit).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      words,
+    );
+  });
+
+  it.each(["stpo", "cancle", "stooop", "pls stpo"])(
+    "stops the running task on %j",
+    async (words) => {
+      const execution = executor("running");
+      expect(await supervisor(execution).reply([], words, "chat")).toBe(
+        stoppedText,
+      );
+      expect(execution.stop).toHaveBeenCalledTimes(1);
+      expect(execution.submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "click the shop button",
+    "clik the blue button",
+    "opne it in chrome",
+  ])("steers the running task with %j and does not stop it", async (words) => {
+    const execution = executor("running");
+    await supervisor(execution).reply([], words, "chat");
+    expect(execution.stop).not.toHaveBeenCalled();
+    expect(execution.submit).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      words,
+    );
+  });
+
+  it("does not steer the running task with a question about what it can do", async () => {
+    const execution = executor("running");
+    await supervisor(execution).reply(
+      [],
+      "Can you click buttons on my screen?",
+      "chat",
+    );
+    expect(execution.submit).not.toHaveBeenCalled();
+    expect(execution.stop).not.toHaveBeenCalled();
   });
 });

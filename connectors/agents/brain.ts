@@ -29,7 +29,11 @@ import {
   navigationIntentSchema,
   type NavigationIntent,
 } from "../computer/navigation.js";
-import { readWords } from "../computer/orders.js";
+import {
+  asksWhatItCanDo,
+  readWords,
+  spellStopWords,
+} from "../computer/orders.js";
 import {
   appendFileSync,
   chmodSync,
@@ -393,7 +397,9 @@ const stopHoldsCodingWork = (words: string): boolean =>
  * task.
  */
 const computerStopKind = (spoken: string): "explicit" | "general" | null => {
-  const text = clean(spoken, 400);
+  // A stop word with a typo ("stpo", "cancle", "stooop") is read as that
+  // stop word. Nothing else of the message changes.
+  const text = spellStopWords(clean(spoken, 400));
   if (!text || readWords(text) !== "stop") return null;
   // The stop word opens a clause (after fillers): "stop, don't click that",
   // "no stop", "never mind, stop", "ok cancel". As a noun inside a request
@@ -445,6 +451,12 @@ const computerStopKind = (spoken: string): "explicit" | "general" | null => {
     return "explicit";
   return "general";
 };
+/**
+ * The answer to a question about what ClawdTime can do on the screen ("Can
+ * you click buttons on my screen?"). It starts nothing.
+ */
+const canDoAnswer =
+  "Nothing started: that asks what I can do. I can work on this Mac's screen: open apps, click, type and scroll. Tell me what to do, and in which app.";
 /** Explicit yes for a waiting computer-action approval (never bare ok/okay/sure/yeah/yep, never a question). */
 const explicitApprovalYes =
   /^(?:(?:please|pls|plz)[,\s]+)?(?:yes(?:[,\s]+(?:please|pls|plz))?(?:[,\s]+(?:do\s+it|go\s+ahead(?:\s+and\s+do\s+it)?|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|proceed|confirm(?:\s+(?:it|that))?|send\s+(?:it|that)|click\s+(?:it|that)|submit\s+(?:it|that)))?|i\s+approve|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|confirm(?:\s+(?:it|that))?|go\s+ahead(?:\s+and\s+do\s+it)?|do\s+it)(?:[,\s]+(?:please|pls|plz))?[.!]*$/i;
@@ -9593,6 +9605,10 @@ export class Supervisor {
     // "click the Cancel button" are screen requests.
     if (!activeMidTask && computerStopKind(spoken) !== null)
       return execution.stop().message;
+    // A question about what ClawdTime can do, with a generic object and no
+    // target ("Can you click buttons on my screen?", "can u use my mac?"),
+    // starts no task on any road. "Can you click the Send button?" starts.
+    if (!activeMidTask && asksWhatItCanDo(spoken)) return canDoAnswer;
     const desktopMove =
       reading?.kind === "desktop" || reading?.kind === "previous_app";
     if (activeMidTask && !desktopMove && !this.canSubmitMidTask(spoken, true))
@@ -10805,6 +10821,8 @@ export class Supervisor {
     if (
       spoken.length <= userMessageLimit &&
       !asksPlainly(words) &&
+      // A question about what ClawdTime can do is no move and no work.
+      !asksWhatItCanDo(words) &&
       // A bare yes, no, approve or deny is an answer, never a move: the
       // reader took "approve it" for "back to the previous app" once.
       !bareDecision.test(words) &&

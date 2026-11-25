@@ -652,7 +652,12 @@ own words are the task. Two ways lead to the worker, and both are code in
   go this way. The supervisor needs its own language model for this.
 
 A question, a bare yes or no, a request for the state and a sentence about a
-session or an agent are never handed over, whatever the model asks.
+session or an agent are never handed over, whatever the model asks. A question
+about what ClawdTime can do, in the form of a polite request with a generic
+object and no target ("Can you click buttons on my screen?", "can u use my
+mac?", "are you able to open apps"), is answered and starts nothing, on every
+road to the worker (`asksWhatItCanDo` in `orders.ts`). "Can you click the Send
+button?" names a target and starts a task.
 
 The supervisor also has a tool for the browser that runs (reload, back,
 forward, tabs, read a page) and one that reads the screen from a picture. For
@@ -1284,12 +1289,9 @@ Not tested, and so not proven:
 - Two tools of the supervisor overlap with the worker: the browser tool and
   the tool that reads the screen from a picture. Which one its language model
   picks for "refresh the browser" is not fixed in code.
-- A question about what ClawdTime can do, in the form of a polite request, is
-  read as a request: "Can you click buttons on my screen?" starts a task with
-  those words. The route before the language model cannot tell the two apart.
-- That route has no check for a request of an agent that waits at the desk.
-  "Click the Approve button" goes to the worker. The worker then asks for your
-  yes before the click, because of the name.
+- The route before the language model has no check for a request of an agent
+  that waits at the desk. "Click the Approve button" goes to the worker. The
+  worker then asks for your yes before the click, because of the name.
 - The words refresh, reload and press pass the hand-off with any object, when
   the language model picks the tool: "refresh the board" can go to the worker.
 - A second desktop service of the same user builds a second worker. The switch
