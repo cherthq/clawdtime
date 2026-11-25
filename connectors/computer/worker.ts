@@ -543,6 +543,15 @@ export interface ComputerWorkerOptions {
    */
   trust?: boolean;
   /**
+   * One line about the process of the app in front (`connectors/system/fact.ts`),
+   * for the planner's note when its inputs change nothing on the screen: at
+   * full CPU, idle, stuck or gone. It runs no model. Absent: no such line.
+   */
+  processFact?: (app: {
+    name: string;
+    bundleId: string;
+  }) => Promise<string | null>;
+  /**
    * With the owner's trust, a pause with no message from the person ends by
    * itself after this time, and the task goes on. Without trust a pause waits
    * for the next message. Read against `now`. 60 seconds unless set.
@@ -3319,6 +3328,20 @@ export class ComputerWorker implements DesktopExecutorPort {
       });
   }
   /** A note for the planner, at the end of the line of its last step. */
+  /** The process fact of the app in front, or null. It never throws. */
+  private async appFact(run: Run) {
+    const app = run.observation?.app;
+    if (!this.options.processFact || !app?.bundleId) return null;
+    try {
+      const fact = await this.options.processFact({
+        name: app.name,
+        bundleId: app.bundleId,
+      });
+      return fact ? fact.slice(0, 300) : null;
+    } catch {
+      return null;
+    }
+  }
   private tell(run: Run, note: string) {
     const index = run.history.length - 1;
     const record = run.history[index];
@@ -3382,7 +3405,9 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (verdict.kind === "allow") return "go";
     this.mark(run, `${verdict.kind}_${verdict.pattern}`);
     if (verdict.kind === "nudge") {
-      this.tell(run, verdict.note);
+      // Inputs that change nothing: the process of the app may say why.
+      const fact = verdict.pattern === "still" ? await this.appFact(run) : null;
+      this.tell(run, fact ? `${verdict.note} ${fact}` : verdict.note);
       return "go";
     }
     if (verdict.kind === "end") {

@@ -50,6 +50,8 @@ import {
   callerZoom,
 } from "./phone-turn.js";
 import { userMessageLimit, userMessageTooLong } from "./request-text.js";
+import { realSystemDesk } from "./system-tools.js";
+import type { ProcessDesk } from "../system/act.js";
 import { TaskGraph } from "./task-graph.js";
 import { clean } from "../computer/guards.js";
 import {
@@ -106,6 +108,7 @@ Ask only for what only the owner knows: which of their accounts, a choice that i
 While a computer task runs: words that add to it or correct it ("no, the Pro Max", "use Safari", "also check the reviews") go to computer_steer in the owner's words; the task goes on with them. A question about progress ("how's it going?", "is it done?") is read with computer_status or tasks. A new, unrelated task waits until this one ends; say so, or stop it if the owner asks.
 When a computer task or an agent asks the owner a question, give their answer with answer_question. Code checks a yes or no against the owner's own words.
 Code (a repository, a bug, a test, a build, a script, a pull request, a server) goes to start_job, never to the computer. A question about a job is read with job_status.
+Debugging this Mac (it is slow, an app froze or crashed, what is on a port, what eats memory, whether a build or a server still runs) is read with system_look first, never with computer_do; answer from what it returns. process_act quits, force quits or restarts an app at once; for a force quit it returns a question: say it, and after the owner's yes call process_act again with the same target.
 A schedule ("every morning at 9, ...") goes to routine_add. When the owner states a fact about themselves to keep, and the memory tools are offered, keep it with remember.
 When the owner asks to zoom in on an open application window or coding session on a call, or to show the whole screen again, and call_view is offered, call call_view.
 Status: for any question about what runs, what you did or what came out ("what are you working on?", "what was the last thing?", "did it work?"), call tasks or computer_status first and answer only from what they return; never invent a result, a price or a page.
@@ -181,6 +184,8 @@ export interface ChatAgentOptions {
   maxSteps?: number | undefined;
   /** A shared graph. The default is the one in the state folder. */
   graph?: TaskGraph | undefined;
+  /** The process level of the Mac, for debugging. Absent: no such tools. */
+  system?: ProcessDesk | undefined;
 }
 
 /** One answer of a turn. `joined`: another call of the same turn says it. */
@@ -238,6 +243,7 @@ export class ChatAgent implements ChatBrain {
       callView: world.callView,
       graph: this.graph,
       refresh: () => this.refresh(),
+      system: this.options.system,
     };
   }
 
@@ -730,6 +736,8 @@ export function chatBrain(input: {
   listener?: ChatAgentOptions["listener"];
   /** The fetch of the agent's own model. Tests replace it. */
   request?: typeof fetch;
+  /** Undefined: the process level of this Mac. Null: none. */
+  system?: ProcessDesk | null;
 }): ChatBrain {
   if (chatMode(input.env) === "agent") {
     let model: LoopModel | null;
@@ -751,6 +759,10 @@ export function chatBrain(input: {
       journal: input.journal,
       reach: input.reach,
       listener: input.listener,
+      system:
+        input.system === undefined
+          ? realSystemDesk(input.env)
+          : (input.system ?? undefined),
     });
   }
   const key = input.env.CLAWDTIME_OPENAI_API_KEY || input.env.OPENAI_API_KEY;

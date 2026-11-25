@@ -1,0 +1,19 @@
+    0 kernel_task
+    1 /sbin/launchd
+  152 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+  410 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow console
+  671 /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+  980 /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+ 4242 /Applications/Stonepad.app/Contents/MacOS/Stonepad -NSDocumentRevisionsDebugMode YES
+ 4250 /Applications/Stonepad.app/Contents/Frameworks/Stonepad Helper.app/Contents/MacOS/Stonepad Helper --type=renderer
+ 5100 -zsh
+ 5150 /usr/local/bin/node /Users/sam/code/shop-site/node_modules/.bin/vite build --watch
+ 5160 (esbuild)
+ 6001 /Applications/Riverchat.app/Contents/MacOS/Riverchat
+ 7000 /usr/local/bin/syncd --password=hunter22x --api-key fake0value0123 --dir /Users/sam/Sync
+ 7100 /usr/libexec/backupd
+ 8700 /usr/local/bin/node /Users/sam/code/clawdtime/node_modules/.bin/tsx scripts/task-server.ts
+ 8800 /usr/local/bin/node /Users/sam/code/clawdtime/scripts/task-server.ts
+ 8810 /Users/sam/Library/Caches/ms-playwright/chromium-1200/chrome-mac/Chromium.app/Contents/MacOS/Chromium --user-data-dir=/Users/sam/Library/Application Support/ClawdTime/browser
+ 8900 /Applications/ClawdTime.app/Contents/MacOS/ClawdTimeTaskPanel
+ 9100 /Applications/Ledgerly.app/Contents/MacOS/Ledgerly

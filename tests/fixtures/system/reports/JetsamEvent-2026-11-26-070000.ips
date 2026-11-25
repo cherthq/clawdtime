@@ -1,0 +1,2 @@
+{"bug_type": "298", "timestamp": "2026-11-26 07:00:00.00 -0800", "os_version": "macOS 26.1 (25B78)", "roots_installed": 0, "incident_id": "00000000-0000-4000-8000-000000000003"}
+{"bug_type": "298", "date": "2026-11-26 07:00:00.00 -0800", "largestProcess": "Stonepad", "memoryStatus": {"compressorSize": 100}, "processes": [{"name": "Stonepad", "pid": 4242}]}

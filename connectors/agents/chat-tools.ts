@@ -34,6 +34,8 @@ import { clean } from "../computer/guards.js";
 import { looksSecretStrict } from "../computer/journal.js";
 import { readMidTask } from "../computer/orders.js";
 import type { Routine } from "../computer/routines.js";
+import type { ProcessDesk } from "../system/act.js";
+import { systemTools } from "./system-tools.js";
 import {
   graphText,
   isActive,
@@ -64,6 +66,8 @@ export interface ChatToolWorld {
   graph: TaskGraph;
   /** Feeds the graph from the real sources. */
   refresh(): void;
+  /** The process level of the Mac, for debugging (`system-tools.ts`). Absent: no such tools. */
+  system?: ProcessDesk | undefined;
 }
 
 /** What one turn knows while it runs. */
@@ -156,6 +160,7 @@ export const effectTools = new Set([
   "routine_pause",
   "routine_remove",
   "call_view",
+  "process_act",
 ]);
 
 /**
@@ -950,6 +955,12 @@ export function chatTools(
       },
     });
   }
+  if (world.system)
+    tools.push(
+      ...systemTools(world.system, turn, {
+        computerBusy: () => runningTask(world) !== null,
+      }),
+    );
   return tools;
 }
 
