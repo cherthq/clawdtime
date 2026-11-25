@@ -2821,6 +2821,17 @@ export class ComputerWorker implements DesktopExecutorPort {
       pending.before === after
         ? pending.kind
         : undefined;
+    // The planner reads it at once: a click or a key that changed nothing is
+    // no success, so its next turn can try another way before it types on.
+    const last = run.history.at(-1);
+    if (
+      this.options.unchangedDone &&
+      run.stillAfter &&
+      last &&
+      last.outcome === "ok"
+    )
+      last.outcome =
+        "sent, but the screen looks the same after it, so it may not have worked. Look again; if nothing new shows, try another way (a menu item or a keyboard shortcut).";
     const verdict = run.progress.step({ ...pending, after }, this.context(run));
     if (verdict.kind === "allow") return "go";
     this.mark(run, `${verdict.kind}_${verdict.pattern}`);

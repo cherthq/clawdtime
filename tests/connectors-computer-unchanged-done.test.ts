@@ -59,6 +59,15 @@ describe("a done after an input that changed nothing", () => {
     expect(said.at(-1)).toBe("Done. Saved.");
   });
 
+  it("tells the planner at once that a click changed nothing", async () => {
+    const { worker, planner } = setup([click, done, done], [save]);
+    await worker.submit("still_told", "Save the note");
+    await worker.idle();
+    expect(planner.inputs[1]!.history.at(-1)?.outcome).toMatch(
+      /^sent, but the screen looks the same after it/,
+    );
+  });
+
   it("lets the planner act again after the note, as a person would retry", async () => {
     const { worker, hands, said } = setup(
       [click, done, click, done],
