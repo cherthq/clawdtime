@@ -428,6 +428,15 @@ through all the checks.
   taken. A goal about an error itself ("why does the shop show a 404?") is
   not read this way. The planner reads only a fixed label, never the text of
   the page.
+- **A quit at the end of the goal.** A request that ends with "Then quit
+  Tips." often ended with done while the app was still open. A done while
+  the app that the end of the goal asks to quit is in front goes back to the
+  planner once: "The goal also asks to quit Tips; it is still open." The app
+  is known by the name that it shows, by its bundle identifier, or as the
+  app that `open_app` found for that name, so "Colour" in the language of the
+  Mac is the "Color" that you said. Only the app in front is seen; a second
+  done is taken. The same option as the check of a done after an input that
+  changed nothing turns it on (`quit-done.ts`).
 - **A give_up.** The first give_up of a request goes back to the planner
   with the ways that it did not try, and the planner chooses again. A
   give_up about you, an account, a permission, a password, a secret, money
