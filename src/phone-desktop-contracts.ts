@@ -12,7 +12,8 @@ export const phonePresentationSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("zoom"),
-      action: z.enum(["overview", "enable", "disable", "resume"]),
+      // zoom: the caller moved the video onto a part of the screen.
+      action: z.enum(["overview", "enable", "disable", "resume", "zoom"]),
       applied: z.boolean(),
     })
     .strict(),

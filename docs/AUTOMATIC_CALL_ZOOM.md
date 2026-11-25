@@ -74,6 +74,97 @@ native worker running, the manual terminal view is a fixed crop of the
 screen: it is not a window tracking API. No app title or terminal content
 enters presentation metadata.
 
+## Caller zoom by voice
+
+November 26, 2026. At any time on the call, the caller can move the video onto
+any part of the shared screen. The voice model calls `call_zoom` with action
+`zoom` and the caller's words in its arguments: `target` (what to show),
+`level` (`in` or `out`), `times` (an exact level), `move` (`left`, `right`,
+`up`, `down`) and `bit` (a small step). One call can carry several of them;
+they apply in that order: target, then level, then move. The agent says one
+short line, for example "Zooming on the address bar."
+
+| Request on the call                                                    | Result                                                                           |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| "Zoom on the top right", "the bottom left corner"                      | That quarter of the screen                                                       |
+| "The left half", "the right side", "the top half"                      | That half of the screen                                                          |
+| "The middle", "the top middle", "middle left"                          | A half-size part around that place                                               |
+| "The bottom bar", "the dock", "the top bar", "the menu bar"            | The middle of that edge at 2x; a move goes along it                              |
+| "Zoom on Stonepad", "the Riverchat window", "this window"              | The frontmost window of that app (or the front window), shown alone              |
+| "The address bar", "the Send button", "the error message", "the chart" | That thing, from the hands' last look, with room around it, at most 3x           |
+| "The Send button in Riverchat"                                         | That thing, only when the last look is of that app                               |
+| "Closer", "zoom in more", "bigger"                                     | 1.5 times the current level, at most 4x                                          |
+| "A bit closer"                                                         | 1.25 times the current level                                                     |
+| "2x", "zoom to 3x"                                                     | Exactly that level, from 1x to 4x                                                |
+| "Zoom out", "zoom out a bit"                                           | The level divided by 1.5, or by 1.25; near 1x the whole screen, still held       |
+| "Move right", "a bit up"                                               | Half of the shown part that way, or a quarter for "a bit", inside the screen     |
+| "Zoom on the address bar and move a bit right"                         | Both, in one call                                                                |
+| "Follow", "follow what you do"                                         | `resume`: releases the held view and follows ClawdTime's clicks and typing again |
+| "Show everything", "show the whole screen"                             | `overview`: releases the held view and keeps the whole screen until resume       |
+
+The names are examples. Stonepad and Riverchat stand for any app on the Mac.
+A level is the magnification against the whole screen in the same picture. On
+the narrow "fill" framing the crop is tall: at 2x it is half of the screen
+from top to bottom, so it fills the upright strip above the mascot.
+
+Rules:
+
+- A caller zoom is the same manual view as the one-window view of a session.
+  It holds until the caller says follow or show everything, or uses a local
+  control. Automatic zoom does not move it: agent clicks, typing, desktop
+  transitions, Stop, hide and show and capture gaps all keep it. It is not
+  saved, so a new call starts without it. It never releases the persistent
+  overview latch by itself.
+- Area words ("top right", "the middle", "bottom bar") are resolved in the line
+  and never go to the Mac. A part that cannot be shown larger in this picture
+  shape (a half on the wide picture) shows alone. Any other part shows as large
+  as it fits, with what is around it in place of dark bands.
+- Apps, windows and things on the screen go to the desktop service. A window
+  shows alone, like the one-window view. A thing gets room around it and at
+  most 3x; "closer" goes up to 4x.
+- A thing is found by its name or its words in the hands' last look: the
+  Accessibility names of the front window, the words of the texts on the
+  screen and the contents of fields. A secure field is never a target, by any
+  name. A word for the same thing ("url" for "address", "failed" for "error")
+  counts, but less than the word itself. A word of a kind ("button", "field",
+  "link", "tab", "menu", "text", "message", "image") must fit the thing, unless
+  the name is exact. Only a kind with no name ("the button", "the picture")
+  takes the largest thing of that kind; "the chart" with no chart named on the
+  screen is not found. An app name wins over a thing that only carries the
+  same word. "In" with an app name ("the Send button in Riverchat") needs a
+  look of that app.
+- The look is used for 60 seconds after it arrived, and only while its app has
+  the front window in the system's window list. ClawdTime's own windows float
+  above that list. When the window list cannot be read, the look is not used.
+  With no usable look, things are not found; parts, apps, "this window",
+  levels and moves still work. Without a match the tool says so and the view
+  does not change.
+- When the capture is not the main display (a custom
+  `CLAWDTIME_LINE_SCREEN_DEVICE`), places from the Mac do not apply: only
+  parts, levels and moves work.
+- If the screen is not shown, a zoom that applied also shows it, in the same
+  caller turn. The supervisor gets the caller's words with the presentation
+  result `{kind: "zoom", action: "zoom", applied}`. Found or not, a caller zoom
+  is call video only: the supervisor classifies the whole turn, answers with
+  the result, and acts on the Mac only for other work in the same words.
+
+`POST /desktop/presentation/region` answers where a named thing is. It takes
+`{"name": "<the caller's words, 1 to 120 characters>"}` and the existing panel
+credential, which is checked before the body is read. It rejects browser
+origins, other content types and any other field. The answer is
+`{version: 1, code, match, region}`: `code` is `found`, `no_look` or
+`no_match`; `match` is `element` or `window`; `region` is a rectangle in
+shares of the main display. It carries no label, title, value or app name.
+The route only reads: the hands' last look, kept in service memory without its
+picture when a hands result arrives, and the system's window list (owner and
+place, no title, no permission needed). It queues no command for the hands,
+sends no input, takes no picture and logs no name. The line verifies the
+service instance first, as presentation polling does, and gives up after
+3 seconds. Coverage: `line/manual-zoom.test.mjs`, the `call_zoom` cases in
+`line/desktop-intent.test.mjs` and
+`tests/connectors-computer-zoom-region.test.ts`. A physical call test of this
+feature has not been run.
+
 ## Capture, geometry and privacy
 
 `line/call-video.mjs` owns one continuous ffmpeg process per sharing interval.

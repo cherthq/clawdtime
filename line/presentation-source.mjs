@@ -346,3 +346,90 @@ export function startPresentation({
     },
   };
 }
+
+const share = (r) =>
+  keys(r, ["x", "y", "w", "h"]) &&
+  [r.x, r.y, r.w, r.h].every(
+    (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1,
+  ) &&
+  r.w > 0 &&
+  r.h > 0 &&
+  r.x + r.w <= 1.0001 &&
+  r.y + r.h <= 1.0001;
+
+/** The answer of `POST /desktop/presentation/region`, or null for anything else. */
+export function validRegionAnswer(answer) {
+  if (
+    !keys(answer, ["version", "code", "match", "region"]) ||
+    answer.version !== 1
+  )
+    return null;
+  if (answer.code === "found")
+    return ["element", "window"].includes(answer.match) && share(answer.region)
+      ? {
+          code: "found",
+          match: answer.match,
+          region: {
+            x: answer.region.x,
+            y: answer.region.y,
+            w: answer.region.w,
+            h: answer.region.h,
+          },
+        }
+      : null;
+  return ["no_look", "no_match"].includes(answer.code) &&
+    answer.match === null &&
+    answer.region === null
+    ? { code: answer.code }
+    : null;
+}
+
+/**
+ * Where a thing that the caller names is on the main display, from the desktop service: its hands' last look
+ * and the window list. The service only reads; it sends no input and takes no picture. The answer has no
+ * label of the screen. Any failure is `unavailable`, never a guess.
+ */
+export async function requestRegion(
+  name,
+  {
+    env = process.env,
+    home = homedir(),
+    timeoutMs = 3000,
+    request = fetch,
+    discover = () => presentationService({ env, home }),
+  } = {},
+) {
+  if (typeof name !== "string" || !name.trim() || name.length > 120)
+    return { code: "unavailable" };
+  const service = discover();
+  if (!service) return { code: "unavailable" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const call = (path, body) =>
+    request(service.origin + path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${service.token}`,
+        "cache-control": "no-store",
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      redirect: "error",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  try {
+    const state = await boundedJSON(await call("/desktop/state"), 262144);
+    if (state?.instanceId !== service.instanceId)
+      return { code: "unavailable" };
+    const answer = await boundedJSON(
+      await call("/desktop/presentation/region", { name }),
+      4096,
+    );
+    return validRegionAnswer(answer) ?? { code: "unavailable" };
+  } catch {
+    return { code: "unavailable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}

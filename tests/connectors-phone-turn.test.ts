@@ -115,6 +115,36 @@ it.each(["unclear", "malformed", "failure"])(
     expect(f.openApp).not.toHaveBeenCalled();
   },
 );
+it("a caller zoom that found nothing stays call video: it opens no app and starts no job", async () => {
+  const complete = vi.fn<ModelClient["complete"]>(async () => ({
+    text: JSON.stringify({ intent: "presentation_only" }),
+    toolCalls: [],
+  }));
+  const f = fixture(complete);
+  expect(
+    await f.supervisor.reply(
+      [],
+      "Zoom on the Send button in Stonepad",
+      "voice",
+      {
+        phonePresentation: { kind: "zoom", action: "zoom", applied: false },
+      },
+    ),
+  ).toMatch(/did not find what the caller named/);
+  expect(f.start).not.toHaveBeenCalled();
+  expect(f.openApp).not.toHaveBeenCalled();
+  expect(complete).toHaveBeenCalledTimes(1);
+  expect(complete.mock.calls[0]?.[0]?.tools).toEqual([]);
+  // Another presentation that was not applied keeps its earlier meaning.
+  const g = fixture(complete);
+  await g.supervisor.reply([], "Hello", "voice", {
+    phonePresentation: { kind: "sharing", action: "show", applied: false },
+  });
+  expect(complete).toHaveBeenCalledTimes(2);
+  expect(complete.mock.calls[1]?.[0]?.system).not.toContain(
+    "Classify the user's entire",
+  );
+});
 it("does not classify ordinary turns", async () => {
   const complete = vi.fn<ModelClient["complete"]>(async () => ({
       text: "Hello.",

@@ -24,6 +24,7 @@ function runtime(options = {}) {
     replies = [],
     sharing = [],
     zoom = [],
+    zooms = [],
     shapes = [],
     requests = [];
   const microtasks = [],
@@ -87,6 +88,12 @@ function runtime(options = {}) {
       return true;
     },
     zoomStatus: () => ({ overview: true }),
+    zoomTo: async (request) => {
+      zooms.push(request);
+      return options.zoomTo
+        ? options.zoomTo(request)
+        : { applied: true, message: "zoomed" };
+    },
     reshape: (wide) => {
       shapes.push(wide);
       return "shape changed";
@@ -159,6 +166,7 @@ function runtime(options = {}) {
     codes,
     sharing,
     zoom,
+    zooms,
     shapes,
     timers,
     advance: (ms) => {
@@ -453,6 +461,94 @@ test("presentation tools use provider provenance without zoom/shape keyword matc
   await r.invoke("picture_shape", { wide: false }, ctx);
   assert.deepEqual(r.shapes, [true]);
   r.end();
+});
+
+test("call_zoom zoom carries a bounded target, level, times and move, and forwards the caller's words", async () => {
+  const r = runtime();
+  r.turn("Zoom on the address bar, a bit closer, and move right.");
+  const answer = JSON.parse(
+    await r.invoke("call_zoom", {
+      action: "zoom",
+      target: "  the address bar ",
+      level: "in",
+      times: null,
+      move: "right",
+      bit: true,
+    }),
+  );
+  assert.deepEqual(r.zooms, [
+    { target: "the address bar", level: "in", move: "right", bit: true },
+  ]);
+  assert.deepEqual(answer, { presentation: "zoomed", supervisor: "accepted" });
+  assert.deepEqual(r.requests[0], {
+    text: "Zoom on the address bar, a bit closer, and move right.",
+    context: {
+      requestId: r.requests[0].context.requestId,
+      presentation: { kind: "zoom", action: "zoom", applied: true },
+    },
+  });
+  // One zoom for one caller turn.
+  assert.match(
+    await r.invoke("call_zoom", { action: "zoom", level: "in" }),
+    /could not use that caller turn/,
+  );
+  assert.equal(r.zooms.length, 1);
+  assert.ok(r.codes.includes("request_already_used"));
+  r.turn("Zoom on the\ttop\nright.", "three");
+  await r.invoke("call_zoom", { action: "zoom", target: "the\ttop\nright" });
+  assert.deepEqual(r.zooms.at(-1), { target: "the top right" });
+  r.turn("2x please.", "two");
+  await r.invoke("call_zoom", { action: "zoom", times: 2 });
+  assert.deepEqual(r.zooms.at(-1), { times: 2 });
+  r.end();
+});
+
+test("call_zoom refuses mixed or empty zoom arguments before it claims the turn", async () => {
+  const r = runtime();
+  r.turn("Follow what you do.");
+  assert.match(
+    await r.invoke("call_zoom", { action: "resume", target: "Stonepad" }),
+    /only with action zoom/,
+  );
+  assert.match(
+    await r.invoke("call_zoom", { action: "zoom", target: "  ", bit: true }),
+    /needs a target/,
+  );
+  assert.deepEqual(r.zooms, []);
+  // The corrected call still has the turn.
+  await r.invoke("call_zoom", { action: "resume" });
+  assert.deepEqual(r.zoom, ["resume"]);
+  const schema = r.tools.find((tool) => tool.name === "call_zoom").parameters;
+  for (const bad of [
+    { action: "zoom", target: "x".repeat(121) },
+    { action: "zoom", level: "closer" },
+    { action: "zoom", move: "around" },
+    { action: "zoom", times: 0 },
+    { action: "zoom", target: "Stonepad", label: "private" },
+  ])
+    assert.equal(schema.safeParse(bad).success, false, JSON.stringify(bad));
+  r.end();
+});
+
+test("a zoom that found nothing says so and tells the supervisor that nothing was applied", async () => {
+  const r = runtime({
+    zoomTo: async () => ({ applied: false, message: "Nothing matches." }),
+  });
+  r.turn("Zoom on the chart.");
+  const answer = JSON.parse(
+    await r.invoke("call_zoom", { action: "zoom", target: "the chart" }),
+  );
+  assert.equal(answer.presentation, "Nothing matches.");
+  assert.deepEqual(r.requests[0].context.presentation, {
+    kind: "zoom",
+    action: "zoom",
+    applied: false,
+  });
+  r.end();
+  assert.equal(
+    await r.invoke("call_zoom", { action: "zoom", target: "the chart" }),
+    "The call has ended.",
+  );
 });
 
 test("oversized original request is preserved for downstream rejection, never truncated", async () => {

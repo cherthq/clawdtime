@@ -26,6 +26,7 @@ import {
   type ProactiveLineSessions,
 } from "./proactive-line.js";
 import type { PhoneTurnContext } from "../phone-desktop-contracts.js";
+import { regionRequestSchema } from "../../connectors/computer/zoom-region.js";
 
 /**
  * Computer use as the panel routes see it. The hands that see the screen and
@@ -44,6 +45,8 @@ export interface ComputerPort {
   /** Transient presentation metadata, separate from observations and action receipts. */
   present?(raw: unknown): boolean;
   presentation?(): unknown;
+  /** Where a named thing is on the main display, for the call video only. Read only. */
+  region?(name: string): Promise<unknown>;
   /** Stop. Absent where no worker runs. */
   stop?(): DesktopExecutionSnapshot;
 }
@@ -408,6 +411,17 @@ export function createTaskApp(
         desktop.authorizePanel(credential(c));
         return c.json(computer.presentation?.() ?? { version: 1, event: null });
       });
+      // Call video only: the place of a thing that the caller names, from the
+      // hands' last look and the window list. It reads: no input, no picture,
+      // no command for the hands, and no name in the answer.
+      if (computer.region) {
+        const region = computer.region.bind(computer);
+        app.post("/desktop/presentation/region", async (c) => {
+          desktop.authorizePanel(credential(c));
+          const { name } = regionRequestSchema.parse(await c.req.json());
+          return c.json(await region(name));
+        });
+      }
       app.get("/desktop/computer", (c) => {
         desktop.authorizePanel(credential(c));
         return c.json(computer.status());
