@@ -29,6 +29,7 @@ import {
 } from "../connectors/computer/devtools.js";
 import { pageError } from "../connectors/computer/error-page.js";
 import {
+  BrowserInputUnknown,
   OwnBrowser,
   keyEvents,
   ownTiming,
@@ -172,6 +173,12 @@ class PaperBrowser {
   focusByContext = new Map<number, Record<string, unknown>>();
   /** Optional custom reply for `{ do: "type" }` calls. */
   typeReply: (() => Record<string, unknown>) | null = null;
+  /** Optional custom reply for `{ do: "extract" }` calls. */
+  extractReply:
+    ((offset: number, maxChars: number) => Record<string, unknown>) | null =
+    null;
+  /** Optional custom reply for `{ do: "scroll_to" }` calls. */
+  scrollToReply: ((index: number) => Record<string, unknown>) | null = null;
   /** Optional focused child frameId reported by activeElement + DOM.describeNode per parent contextId. */
   focusedChildByContext = new Map<number, string | null>();
   /** Optional frameHitCheck override keyed by iframe owner backendNodeId. */
@@ -330,6 +337,14 @@ class PaperBrowser {
         });
         return { targetId };
       }
+      case "Target.closeTarget": {
+        const targetId = String(params.targetId ?? "");
+        const before = this.targets.length;
+        this.targets = this.targets.filter(
+          (item) => item.targetId !== targetId,
+        );
+        return { success: this.targets.length < before };
+      }
       case "Page.navigate":
         this.page = { ...this.page, url: String(params.url) };
         return { frameId: "F", loaderId: "L" };
@@ -403,9 +418,26 @@ class PaperBrowser {
                 ? (this.focusByContext.get(ctx) ?? { ok: true })
                 : call.do === "type" && this.typeReply
                   ? this.typeReply()
-                  : call.do === "settle"
-                    ? this.settle()
-                    : { ok: true };
+                  : call.do === "extract"
+                    ? this.extractReply
+                      ? this.extractReply(
+                          Number(call.offset ?? 0),
+                          Number(call.maxChars ?? 8000),
+                        )
+                      : {
+                          ok: true,
+                          url: String(ctxPage.url ?? ""),
+                          title: String(ctxPage.title ?? ""),
+                          text: String(ctxPage.text ?? ""),
+                          offset: 0,
+                          totalChars: String(ctxPage.text ?? "").length,
+                          hasMore: false,
+                        }
+                    : call.do === "scroll_to" && this.scrollToReply
+                      ? this.scrollToReply(Number(call.index))
+                      : call.do === "settle"
+                        ? this.settle()
+                        : { ok: true };
         return { result: { type: "string", value: JSON.stringify(value) } };
       }
       // A browser of the family names the private world of the page script.
@@ -423,7 +455,13 @@ class PaperBrowser {
   }
 }
 
-function setup(values: { executable?: string; headless?: boolean } = {}) {
+function setup(
+  values: {
+    executable?: string;
+    headless?: boolean;
+    backgroundFocus?: boolean;
+  } = {},
+) {
   const root = folder();
   const profile = join(root, "computer", "browser-profile");
   const paper = new PaperBrowser(profile);
@@ -2080,5 +2118,869 @@ describe("ClawdTime's own browser: fast settle, nav errors, popups, iframes and 
       .of("Input.dispatchMouseEvent")
       .find((cmd) => cmd.params.type === "mousePressed");
     expect(pressed?.params).toMatchObject({ x: 140, y: 160 });
+  });
+});
+
+describe("ClawdTime's own browser: Wave 2 CDP capabilities", () => {
+  it("keeps read() and tabs() throwing dialogText when a dialog is open, while handleDialog() answers it", async () => {
+    const { paper, browser } = setup();
+    // Before the browser is open, handleDialog refuses with nothing sent.
+    await expect(browser.handleDialog!(true)).rejects.toThrow(
+      /is not open\. Nothing was sent\./,
+    );
+    await browser.read();
+
+    // No dialog open yet -> refuses cleanly without sending Page.handleJavaScriptDialog.
+    await expect(browser.handleDialog!(true)).rejects.toThrow(
+      /no open dialog/i,
+    );
+    expect(paper.of("Page.handleJavaScriptDialog")).toEqual([]);
+
+    // Trigger a prompt dialog during click -> click still reports the dialog.
+    paper.before = (sent) => {
+      if (sent.params.type === "mouseReleased") {
+        paper.emit("Page.javascriptDialogOpening", {
+          message: "Enter confirmation code",
+          type: "prompt",
+        });
+      }
+    };
+    await expect(browser.click(1)).rejects.toThrow(
+      /The page shows a dialog: "Enter confirmation code"\./,
+    );
+    paper.before = () => {};
+
+    // read() and tabs() still throw dialogText so live planners never mistake a dialog for an empty page.
+    paper.sent.length = 0;
+    await expect(browser.read()).rejects.toThrow(
+      /The page shows a dialog: "Enter confirmation code"\./,
+    );
+    await expect(browser.tabs!()).rejects.toThrow(
+      /The page shows a dialog: "Enter confirmation code"\./,
+    );
+    expect(paper.of("Runtime.evaluate")).toEqual([]);
+
+    // handleDialog sends Page.handleJavaScriptDialog, clears tab.dialog, settles, and returns fresh page.
+    paper.page = { ...shop, text: "Code accepted." };
+    paper.sent.length = 0;
+    const after = await browser.handleDialog!(true, "ORDER-42");
+    expect(paper.of("Page.handleJavaScriptDialog")).toEqual([
+      expect.objectContaining({
+        params: { accept: true, promptText: "ORDER-42" },
+        session: "S-T1",
+      }),
+    ]);
+    expect(after.dialog).toBeUndefined();
+    expect(after.text).toBe("Code accepted.");
+
+    // Dismissing a beforeunload dialog passes accept: false with no promptText.
+    paper.emit("Page.javascriptDialogOpening", {
+      message: "Leave page?",
+      type: "beforeunload",
+    });
+    await expect(browser.read()).rejects.toThrow(
+      /The page shows a dialog: "Leave page\?"\./,
+    );
+    paper.sent.length = 0;
+    await browser.handleDialog!(false);
+    expect(paper.of("Page.handleJavaScriptDialog")).toEqual([
+      expect.objectContaining({
+        params: { accept: false },
+        session: "S-T1",
+      }),
+    ]);
+
+    // Refuses handleDialog on chrome-error: pages and never echoes overly long promptText in errors.
+    paper.page = {
+      title: "Privacy error",
+      url: "chrome-error://chromewebdata/",
+      text: "",
+      elements: [],
+    };
+    await browser.read();
+    paper.emit("Page.javascriptDialogOpening", {
+      message: "Alert on error page",
+      type: "alert",
+    });
+    paper.sent.length = 0;
+    await expect(browser.handleDialog!(true)).rejects.toThrow(
+      /one of its own pages/,
+    );
+    expect(paper.of("Page.handleJavaScriptDialog")).toEqual([]);
+
+    const longSecret = "s".repeat(25_000);
+    try {
+      await browser.handleDialog!(true, longSecret);
+      expect.unreachable("should reject long promptText");
+    } catch (error) {
+      expect(String(error)).toMatch(/too long/i);
+      expect(String(error)).not.toContain("sssss");
+    }
+  });
+
+  it("routes OOPIF Page.javascriptDialogOpening to the parent tab and sends Page.handleJavaScriptDialog to the OOPIF session", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+
+    // Attach an OOPIF under S-T1 and a nested OOPIF under that OOPIF.
+    paper.emit(
+      "Target.attachedToTarget",
+      {
+        sessionId: "S-OOPIF-1",
+        targetInfo: {
+          targetId: "F_OOPIF_1",
+          type: "iframe",
+          url: "https://pay.test/frame",
+        },
+      },
+      "S-T1",
+    );
+    paper.emit(
+      "Target.attachedToTarget",
+      {
+        sessionId: "S-OOPIF-2",
+        targetInfo: {
+          targetId: "F_OOPIF_2",
+          type: "iframe",
+          url: "https://verify.test/frame",
+        },
+      },
+      "S-OOPIF-1",
+    );
+
+    // Direct OOPIF dialog blocks read() on parent tab and handleDialog targets S-OOPIF-1.
+    paper.emit(
+      "Page.javascriptDialogOpening",
+      { message: "Confirm payment?", type: "confirm" },
+      "S-OOPIF-1",
+    );
+    await expect(browser.read()).rejects.toThrow(
+      /The page shows a dialog: "Confirm payment\?"\./,
+    );
+    paper.sent.length = 0;
+    const afterDirect = await browser.handleDialog!(true);
+    expect(paper.of("Page.handleJavaScriptDialog")).toEqual([
+      expect.objectContaining({
+        params: { accept: true },
+        session: "S-OOPIF-1",
+      }),
+    ]);
+    expect(afterDirect.title).toBe("Shop");
+
+    // Nested OOPIF dialog also resolves to parent tab and routes to S-OOPIF-2.
+    paper.emit(
+      "Page.javascriptDialogOpening",
+      { message: "Enter PIN", type: "prompt" },
+      "S-OOPIF-2",
+    );
+    await expect(browser.read()).rejects.toThrow(
+      /The page shows a dialog: "Enter PIN"\./,
+    );
+    paper.sent.length = 0;
+    await browser.handleDialog!(true, "4321");
+    expect(paper.of("Page.handleJavaScriptDialog")).toEqual([
+      expect.objectContaining({
+        params: { accept: true, promptText: "4321" },
+        session: "S-OOPIF-2",
+      }),
+    ]);
+
+    // External close event on OOPIF session clears the tab dialog cleanly.
+    paper.emit(
+      "Page.javascriptDialogOpening",
+      { message: "Wait", type: "alert" },
+      "S-OOPIF-1",
+    );
+    paper.emit("Page.javascriptDialogClosed", {}, "S-OOPIF-1");
+    const recovered = await browser.read();
+    expect(recovered.title).toBe("Shop");
+  });
+
+  it("opens new tabs with URL validation via newTab() and closes tabs safely via closeTab()", async () => {
+    const { paper, browser } = setup();
+    // Refuses non-web URLs before launching the browser.
+    await expect(browser.newTab!("file:///etc/hosts")).rejects.toThrow(
+      /Only http and https/,
+    );
+    await expect(browser.newTab!("javascript:alert(1)")).rejects.toThrow(
+      /Only http and https/,
+    );
+    expect(paper.launches).toEqual([]);
+
+    // Opening a blank new tab starts the browser, creates about:blank target, switches current, settles.
+    const blankPage = await browser.newTab!();
+    expect(paper.of("Target.createTarget")[0]!.params).toEqual({
+      url: "about:blank",
+    });
+    expect(blankPage.browser).toBe("own");
+
+    // Opening a URL new tab passes the validated URL to Target.createTarget and activates it.
+    paper.page = { ...shop, title: "Catalog", url: "https://shop.test/items" };
+    const itemPage = await browser.newTab!("https://shop.test/items");
+    expect(paper.of("Target.createTarget")[1]!.params).toEqual({
+      url: "https://shop.test/items",
+    });
+    expect(itemPage.title).toBe("Catalog");
+
+    // closeTab() closes the current tab and switches to a remaining tab.
+    paper.sent.length = 0;
+    paper.page = { ...shop, title: "Shop", url: "https://shop.test/" };
+    const afterClose = await browser.closeTab!();
+    expect(paper.of("Target.closeTarget")).toHaveLength(1);
+    expect(paper.of("Target.closeTarget")[0]!.params).toEqual({
+      targetId: "T3",
+    });
+    expect(afterClose.title).toBe("Shop");
+
+    // closeTab(tabId) closes a specific tab by targetId.
+    paper.sent.length = 0;
+    await browser.closeTab!("T1");
+    expect(paper.of("Target.closeTarget")[0]!.params).toEqual({
+      targetId: "T1",
+    });
+
+    // Only one tab left (T2) -> refuses closing the very last open tab and sends nothing.
+    paper.sent.length = 0;
+    await expect(browser.closeTab!()).rejects.toThrow(
+      /Cannot close the last open tab/,
+    );
+    expect(paper.of("Target.closeTarget")).toEqual([]);
+  });
+
+  it("fills multiple form fields in one batch via fillForm(), failing closed before any input on password or hidden fields", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+
+    // Bounds check: 0 or >20 fields refused before any CDP call.
+    paper.sent.length = 0;
+    await expect(browser.fillForm!([])).rejects.toThrow(/between 1 and 20/i);
+    await expect(
+      browser.fillForm!(
+        Array.from({ length: 21 }, (_, i) => ({ index: i + 1, text: "x" })),
+      ),
+    ).rejects.toThrow(/between 1 and 20/i);
+    expect(paper.sent).toEqual([]);
+
+    // Fail closed BEFORE any input when field #2 is a password field!
+    paper.locate = (index) =>
+      index === 2
+        ? box({
+            tag: "input",
+            role: "textbox",
+            kind: "text",
+            name: 'Number 2, "Name",',
+            focused: true,
+          })
+        : box({
+            tag: "input",
+            role: "textbox",
+            kind: "text",
+            name: 'Number 3, "Password",',
+            password: true,
+          });
+    paper.sent.length = 0;
+    await expect(
+      browser.fillForm!([
+        { index: 2, text: "Ada Brook" },
+        { index: 3, text: "never-type-this" },
+      ]),
+    ).rejects.toThrow(/password field/);
+    // Zero mouse, key, or insertText events went out for field #1!
+    expect(paper.inputs()).toEqual([]);
+    expect(JSON.stringify(paper.sent)).not.toContain("never-type-this");
+
+    // Fail closed BEFORE any input when a later field is covered/hidden!
+    paper.locate = (index) =>
+      index === 2
+        ? box({
+            tag: "input",
+            role: "textbox",
+            kind: "text",
+            name: 'Number 2, "Name",',
+            focused: true,
+          })
+        : box({
+            tag: "input",
+            role: "textbox",
+            kind: "text",
+            name: 'Number 4, "Email",',
+            hit: false,
+            cover: "div",
+          });
+    paper.sent.length = 0;
+    await expect(
+      browser.fillForm!([
+        { index: 2, text: "Ada Brook" },
+        { index: 4, text: "ada@shop.example" },
+      ]),
+    ).rejects.toThrow(/under another element/);
+    expect(paper.inputs()).toEqual([]);
+
+    // Successful 3-field batch fill (input + select + textarea with newline) settles ONCE!
+    paper.locate = (index) => {
+      if (index === 2)
+        return box({
+          tag: "input",
+          role: "textbox",
+          kind: "text",
+          name: 'Number 2, "Name",',
+          focused: true,
+        });
+      if (index === 3)
+        return box({
+          tag: "select",
+          role: "combobox",
+          kind: "choice",
+          name: 'Number 3, "Role",',
+        });
+      return box({
+        tag: "textarea",
+        role: "textbox",
+        kind: "text",
+        name: 'Number 4, "Bio",',
+        focused: true,
+      });
+    };
+    paper.page = {
+      ...shop,
+      elements: [
+        element(2, "Name", { tag: "input", role: "textbox", value: "Ada" }),
+        element(3, "Role", { tag: "select", role: "combobox", value: "Admin" }),
+        element(4, "Bio", {
+          tag: "textarea",
+          role: "textbox",
+          value: "Line one Line two",
+        }),
+      ],
+    };
+    paper.sent.length = 0;
+    const after = await browser.fillForm!([
+      { index: 2, text: "Ada" },
+      { index: 3, text: "Admin" },
+      { index: 4, text: "Line one\nLine two" },
+    ]);
+    expect(after.elements[0]!.value).toBe("Ada");
+    expect(paper.of("Input.insertText").map((cmd) => cmd.params.text)).toEqual([
+      "Ada",
+      "Line one\nLine two",
+    ]);
+    // Only ONE settle probe + ONE full read at the end!
+    expect(paper.calls().filter((c) => c.do === "settle")).toHaveLength(1);
+    expect(paper.calls().filter((c) => c.do === "read")).toHaveLength(1);
+
+    // Stops immediately if navigation occurs mid-batch and throws BrowserInputUnknown (never silent partial success).
+    paper.before = (sent) => {
+      if (sent.method === "Input.insertText" && sent.params.text === "First") {
+        paper.emit("Page.frameNavigated", {
+          frame: { id: "F_MAIN", url: "https://shop.test/redirected" },
+        });
+      }
+    };
+    paper.sent.length = 0;
+    try {
+      await browser.fillForm!([
+        { index: 2, text: "First" },
+        { index: 4, text: "ShouldNotType" },
+      ]);
+      expect.unreachable("should throw BrowserInputUnknown on partial fill");
+    } catch (error) {
+      expect(error).toBeInstanceOf(BrowserInputUnknown);
+      expect(String(error)).toMatch(/1 of 2 field\(s\)/);
+      expect(String(error)).toMatch(/skipped field\(s\): 4/);
+    }
+    expect(paper.of("Input.insertText").map((cmd) => cmd.params.text)).toEqual([
+      "First",
+    ]);
+    paper.before = () => {};
+
+    // Early stop on popup mid-batch also throws BrowserInputUnknown.
+    paper.before = (sent) => {
+      if (sent.method === "Input.insertText" && sent.params.text === "Pop") {
+        paper.emit("Target.targetCreated", {
+          targetInfo: {
+            targetId: "T_MID_POPUP",
+            type: "page",
+            title: "Popup",
+            url: "https://shop.test/popup",
+            openerId: "T1",
+          },
+        });
+      }
+    };
+    paper.sent.length = 0;
+    await expect(
+      browser.fillForm!([
+        { index: 2, text: "Pop" },
+        { index: 4, text: "Skipped" },
+      ]),
+    ).rejects.toBeInstanceOf(BrowserInputUnknown);
+    paper.before = () => {};
+
+    // Mid-form error on field 2 (e.g. takesText disabled after field 1 filled) wraps in BrowserInputUnknown naming filled field(s).
+    let locateCount4 = 0;
+    paper.locate = (index) => {
+      if (index === 2)
+        return box({
+          tag: "div",
+          role: "textbox",
+          kind: "region",
+          name: 'Number 2, "Note",',
+          focused: true,
+        });
+      locateCount4 += 1;
+      // Phase 1 passes; Phase 2 sees field 4 turned disabled after field 2 was filled.
+      return box({
+        tag: "textarea",
+        role: "textbox",
+        kind: "text",
+        name: 'Number 4, "Bio",',
+        focused: true,
+        disabled: locateCount4 >= 2,
+      });
+    };
+    paper.sent.length = 0;
+    try {
+      await browser.fillForm!([
+        { index: 2, text: "Already written" },
+        { index: 4, text: "Second field" },
+      ]);
+      expect.unreachable("should throw BrowserInputUnknown on field 2 error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(BrowserInputUnknown);
+      expect(String(error)).toMatch(
+        /already filling 1 field\(s\) \(number\(s\) 2\)/,
+      );
+      expect(String(error)).toMatch(/is disabled now/);
+    }
+
+    // Mid-form focus loss on field 2 after field 1 filled also wraps in BrowserInputUnknown.
+    let locateCount5 = 0;
+    paper.locate = (index) => {
+      if (index === 2)
+        return box({
+          tag: "div",
+          role: "textbox",
+          kind: "region",
+          name: 'Number 2, "Note",',
+          focused: true,
+        });
+      locateCount5 += 1;
+      // Phase 1 and Phase 2 pre-click see unfocused; post-click locate still sees focused: false.
+      return box({
+        tag: "input",
+        role: "textbox",
+        kind: "text",
+        name: 'Number 5, "Code",',
+        focused: false,
+      });
+    };
+    try {
+      await browser.fillForm!([
+        { index: 2, text: "Contenteditable text" },
+        { index: 5, text: "ABC" },
+      ]);
+      expect.unreachable("should throw BrowserInputUnknown on focus loss");
+    } catch (error) {
+      expect(error).toBeInstanceOf(BrowserInputUnknown);
+      expect(String(error)).toMatch(
+        /already filling 1 field\(s\) \(number\(s\) 2\)/,
+      );
+      expect(String(error)).toMatch(/did not take the focus/);
+    }
+    expect(locateCount5).toBeGreaterThanOrEqual(2);
+  });
+
+  it("closeTab() clears stale tab listing and removes OOPIF entries belonging to the closed tab", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+
+    // Attach an OOPIF on T1 (kept) and a nested OOPIF tree on T2 (to be closed).
+    paper.emit(
+      "Target.attachedToTarget",
+      {
+        sessionId: "S-OOPIF-T1",
+        targetInfo: {
+          targetId: "F_OOPIF_T1",
+          type: "iframe",
+          url: "https://keep.test/",
+        },
+      },
+      "S-T1",
+    );
+    await browser.newTab!("https://shop.test/second");
+    paper.emit(
+      "Target.attachedToTarget",
+      {
+        sessionId: "S-OOPIF-T2",
+        targetInfo: {
+          targetId: "F_OOPIF_T2",
+          type: "iframe",
+          url: "https://drop.test/",
+        },
+      },
+      "S-T2",
+    );
+    paper.emit(
+      "Target.attachedToTarget",
+      {
+        sessionId: "S-OOPIF-T2-CHILD",
+        targetInfo: {
+          targetId: "F_OOPIF_T2_CHILD",
+          type: "iframe",
+          url: "https://drop-child.test/",
+        },
+      },
+      "S-OOPIF-T2",
+    );
+
+    // Populate listing via tabs(), then close T2.
+    await browser.tabs!();
+    await browser.closeTab!("T2");
+
+    // Stale listing is cleared so switchTab(1) refuses until tabs() is called again.
+    await expect(browser.switchTab!(1)).rejects.toThrow(
+      /from the last list of tabs/,
+    );
+
+    // Closed tab's OOPIFs are gone, while T1's OOPIF remains intact.
+    const internal = browser as unknown as {
+      oopifsByFrameId: Map<string, unknown>;
+      oopifsBySession: Map<string, unknown>;
+    };
+    expect(internal.oopifsByFrameId.has("F_OOPIF_T2")).toBe(false);
+    expect(internal.oopifsByFrameId.has("F_OOPIF_T2_CHILD")).toBe(false);
+    expect(internal.oopifsBySession.has("S-OOPIF-T2")).toBe(false);
+    expect(internal.oopifsBySession.has("S-OOPIF-T2-CHILD")).toBe(false);
+    expect(internal.oopifsByFrameId.has("F_OOPIF_T1")).toBe(true);
+    expect(internal.oopifsBySession.has("S-OOPIF-T1")).toBe(true);
+  });
+
+  it("newTab() resets pendingPopup so a stale popup is never adopted instead of the new tab", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+
+    // Simulate a stale popup target created earlier with openerId T1.
+    paper.emit("Target.targetCreated", {
+      targetInfo: {
+        targetId: "T_STALE_POPUP",
+        type: "page",
+        title: "Stale Popup",
+        url: "https://stale.test/",
+        openerId: "T1",
+      },
+    });
+
+    paper.page = {
+      ...shop,
+      title: "Fresh Tab",
+      url: "https://shop.test/fresh",
+    };
+    const opened = await browser.newTab!("https://shop.test/fresh");
+    expect(opened.title).toBe("Fresh Tab");
+    expect(opened.url).toBe("https://shop.test/fresh");
+    // Must attach and activate T2, never T_STALE_POPUP.
+    const attachedIds = paper
+      .of("Target.attachToTarget")
+      .map((cmd) => cmd.params.targetId);
+    expect(attachedIds).toContain("T2");
+    expect(attachedIds).not.toContain("T_STALE_POPUP");
+  });
+
+  it("updates tab.url when a tab genuinely navigates to about:blank while preserving known URL on switchTab/closeTab", async () => {
+    const { paper, browser } = setup();
+    const internal = browser as unknown as {
+      tabsById: Map<string, { url: string }>;
+    };
+    await browser.read();
+    expect(internal.tabsById.get("T1")?.url).toBe("https://shop.test/");
+
+    // When Target.getTargets reports T1 genuinely navigated to about:blank, tab() -> attach() updates tab.url immediately (before look()).
+    paper.targets[0]!.url = "about:blank";
+    let urlAtEvaluate = "";
+    paper.before = (sent) => {
+      if (sent.method === "Runtime.evaluate" && !urlAtEvaluate) {
+        urlAtEvaluate = internal.tabsById.get("T1")?.url ?? "";
+      }
+    };
+    paper.page = { title: "", url: "about:blank", text: "", elements: [] };
+    await browser.read();
+    paper.before = () => {};
+    expect(urlAtEvaluate).toBe("about:blank");
+
+    // On switchTab() (preserveUrl: true), a stale about:blank from Target.getTargets does not overwrite the target tab's known URL before settle/look.
+    paper.targets[0]!.url = "https://shop.test/";
+    paper.page = { ...shop };
+    await browser.read();
+    expect(internal.tabsById.get("T1")?.url).toBe("https://shop.test/");
+    paper.page = { ...shop, url: "https://shop.test/second" };
+    await browser.newTab!("https://shop.test/second");
+    expect(internal.tabsById.get("T2")?.url).toBe("https://shop.test/second");
+    await browser.tabs!();
+    paper.targets[0]!.url = "about:blank";
+    let urlAtSwitchSettle = "";
+    paper.before = (sent) => {
+      if (sent.method === "Runtime.evaluate" && !urlAtSwitchSettle) {
+        urlAtSwitchSettle = internal.tabsById.get("T1")?.url ?? "";
+      }
+    };
+    paper.page = { ...shop };
+    await browser.switchTab!(1);
+    paper.before = () => {};
+    expect(urlAtSwitchSettle).toBe("https://shop.test/");
+  });
+
+  it("allows newlines in textarea and contenteditable, while blocking newlines in single-line inputs", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+
+    // Single-line <input> rejects newlines BEFORE sending any input.
+    paper.locate = () =>
+      box({
+        tag: "input",
+        role: "textbox",
+        kind: "text",
+        name: 'Number 2, "Name",',
+        focused: true,
+      });
+    paper.sent.length = 0;
+    await expect(browser.type(2, "Ada\nBrook", false)).rejects.toThrow(
+      /single-line field and does not take line breaks/,
+    );
+    expect(paper.inputs()).toEqual([]);
+
+    // <textarea> accepts newlines and normalizes CRLF to LF.
+    paper.locate = () =>
+      box({
+        tag: "textarea",
+        role: "textbox",
+        kind: "text",
+        name: 'Number 4, "Notes",',
+        focused: true,
+      });
+    paper.page = {
+      ...shop,
+      elements: [
+        element(4, "Notes", {
+          tag: "textarea",
+          role: "textbox",
+          value: "First Second",
+        }),
+      ],
+    };
+    paper.sent.length = 0;
+    await browser.type(4, "First\r\nSecond", false);
+    expect(paper.of("Input.insertText")[0]!.params).toEqual({
+      text: "First\nSecond",
+    });
+
+    // contenteditable region (kind: "region") also accepts newlines.
+    paper.locate = () =>
+      box({
+        tag: "div",
+        role: "textbox",
+        kind: "region",
+        name: 'Number 5, "Message",',
+        focused: true,
+      });
+    paper.sent.length = 0;
+    await browser.type(5, "Hello\nWorld", false);
+    expect(paper.of("Input.insertText")[0]!.params).toEqual({
+      text: "Hello\nWorld",
+    });
+  });
+
+  it("extracts paginated visible text with bounded maxChars and refuses non-web pages", async () => {
+    const { paper, browser } = setup();
+    const big = "A".repeat(10_500);
+    paper.extractReply = (offset, maxChars) => {
+      const start = Math.min(offset, big.length);
+      const chunk = big.slice(start, start + maxChars);
+      return {
+        ok: true,
+        url: "https://shop.test/terms",
+        title: "Terms",
+        text: chunk,
+        offset: start,
+        totalChars: big.length,
+        hasMore: start + chunk.length < big.length,
+      };
+    };
+
+    // Default maxChars is 8000, offset 0.
+    const first = await browser.extract!();
+    expect(first).toEqual({
+      url: "https://shop.test/terms",
+      title: "Terms",
+      text: "A".repeat(8000),
+      offset: 0,
+      totalChars: 10_500,
+      hasMore: true,
+    });
+    expect(paper.calls().at(-1)).toMatchObject({
+      do: "extract",
+      offset: 0,
+      maxChars: 8000,
+    });
+
+    // Paginate from offset 8000 -> remaining 2500 chars, hasMore false.
+    const rest = await browser.extract!({ offset: 8000, maxChars: 8000 });
+    expect(rest.offset).toBe(8000);
+    expect(rest.text).toHaveLength(2500);
+    expect(rest.hasMore).toBe(false);
+
+    // maxChars above 16000 is clamped to 16000.
+    await browser.extract!({ offset: 0, maxChars: 99_999 });
+    expect(paper.calls().at(-1)).toMatchObject({
+      do: "extract",
+      offset: 0,
+      maxChars: 16_000,
+    });
+
+    // Refuses browser internal pages.
+    paper.extractReply = () => ({
+      ok: true,
+      url: "chrome://settings/",
+      title: "Settings",
+      text: "Settings",
+      offset: 0,
+      totalChars: 8,
+      hasMore: false,
+    });
+    await expect(browser.extract!()).rejects.toThrow(/one of its own pages/);
+  });
+
+  it("scrolls an element into view inside its owning frame via scrollToElement()", async () => {
+    const { paper, browser } = setup();
+    paper.frameTree = {
+      frameTree: {
+        frame: { id: "F_MAIN", url: "https://shop.test/" },
+        childFrames: [
+          {
+            frame: {
+              id: "F_CHILD",
+              parentId: "F_MAIN",
+              url: "https://shop.test/embed",
+            },
+          },
+        ],
+      },
+    };
+    paper.worldByFrame.set("F_MAIN", 7);
+    paper.worldByFrame.set("F_CHILD", 8);
+    paper.frameOwners.set("F_CHILD", 77);
+    paper.boxModels.set(77, [0, 500, 300, 500, 300, 700, 0, 700]);
+    paper.pageByContext.set(8, {
+      title: "Embed",
+      url: "https://shop.test/embed",
+      text: "Child frame",
+      elements: [element(3, "Bottom CTA")],
+    });
+    await browser.read();
+
+    // Main-frame element scroll_to.
+    paper.sent.length = 0;
+    await browser.scrollToElement!(1);
+    expect(paper.calls().find((c) => c.do === "scroll_to")).toMatchObject({
+      do: "scroll_to",
+      index: 1,
+    });
+
+    // Child-frame element scroll_to runs in the child frame's isolated world.
+    paper.sent.length = 0;
+    await browser.scrollToElement!(3);
+    const childScrollEval = paper
+      .of("Runtime.evaluate")
+      .find(
+        (cmd) =>
+          cmd.params.contextId === 8 &&
+          String(cmd.params.expression).includes('"do":"scroll_to"'),
+      );
+    expect(childScrollEval).toBeTruthy();
+  });
+
+  it("tracks Browser.downloadWillBegin and Browser.downloadProgress with sanitized basenames only", async () => {
+    const { paper, browser } = setup();
+    const before = await browser.read();
+    expect(before.downloads).toBeUndefined();
+    expect(paper.of("Browser.setDownloadBehavior")).toEqual([
+      expect.objectContaining({
+        params: { behavior: "default", eventsEnabled: true },
+      }),
+    ]);
+
+    // POSIX and Windows full paths are stripped to sanitized basenames.
+    paper.emit("Browser.downloadWillBegin", {
+      guid: "dl-1",
+      suggestedFilename: "/Users/alice/Downloads/invoice-2026.pdf",
+    });
+    paper.emit("Browser.downloadWillBegin", {
+      guid: "dl-2",
+      suggestedFilename: "C:\\Users\\alice\\Desktop\\..\\report.csv",
+    });
+    const inFlight = await browser.read();
+    expect(inFlight.downloads).toEqual([
+      { filename: "invoice-2026.pdf", state: "in_progress" },
+      { filename: "report.csv", state: "in_progress" },
+    ]);
+    expect(JSON.stringify(inFlight.downloads)).not.toContain("alice");
+
+    // Progress updates map inProgress -> in_progress, completed, canceled.
+    paper.emit("Browser.downloadProgress", {
+      guid: "dl-1",
+      state: "completed",
+    });
+    paper.emit("Browser.downloadProgress", {
+      guid: "dl-2",
+      state: "canceled",
+    });
+    const finished = await browser.read();
+    expect(finished.downloads).toEqual([
+      { filename: "invoice-2026.pdf", state: "completed" },
+      { filename: "report.csv", state: "canceled" },
+    ]);
+
+    // Bounded list keeps at most 20 recent downloads.
+    for (let i = 0; i < 25; i++) {
+      paper.emit("Browser.downloadWillBegin", {
+        guid: `bulk-${i}`,
+        suggestedFilename: `file-${i}.txt`,
+      });
+    }
+    const capped = await browser.read();
+    expect(capped.downloads).toHaveLength(20);
+    expect(capped.downloads![0]!.filename).toBe("file-5.txt");
+    expect(capped.downloads!.at(-1)!.filename).toBe("file-24.txt");
+  });
+
+  it("enables Emulation.setFocusEmulationEnabled on attach only when backgroundFocus is true", async () => {
+    // Default (omitted): never sends Emulation.setFocusEmulationEnabled.
+    const plain = setup();
+    await plain.browser.read();
+    expect(plain.paper.of("Emulation.setFocusEmulationEnabled")).toEqual([]);
+
+    // backgroundFocus: true enables focus emulation on main tab and OOPIFs.
+    const bg = setup({ backgroundFocus: true });
+    await bg.browser.read();
+    expect(bg.paper.of("Emulation.setFocusEmulationEnabled")).toEqual([
+      expect.objectContaining({
+        params: { enabled: true },
+        session: "S-T1",
+      }),
+    ]);
+    bg.paper.emit("Target.attachedToTarget", {
+      sessionId: "S-OOPIF-BG",
+      targetInfo: {
+        targetId: "F_OOPIF_BG",
+        type: "iframe",
+        url: "https://x.test/",
+      },
+    });
+    await Promise.resolve();
+    expect(bg.paper.of("Emulation.setFocusEmulationEnabled")).toContainEqual(
+      expect.objectContaining({
+        params: { enabled: true },
+        session: "S-OOPIF-BG",
+      }),
+    );
   });
 });

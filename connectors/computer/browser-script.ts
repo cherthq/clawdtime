@@ -44,7 +44,11 @@ export type PageCall =
   /** Whether the focus may take a real key: not in a password field, not in a frame. It sends no event. */
   | { do: "focus"; child?: boolean }
   /** Lightweight readiness and DOM mutation quiescence check in the isolated world. */
-  | { do: "settle" };
+  | { do: "settle" }
+  /** Paginated visible text extraction without script, style, or password values. */
+  | { do: "extract"; offset: number; maxChars: number }
+  /** Scrolls element N into view inside its document. */
+  | { do: "scroll_to"; index: number };
 
 /** The keys that a page takes, as the planner names them. */
 export const pageKeys = [
@@ -1347,6 +1351,213 @@ function settleCheck() {
     url: oneLine(win.location.href, ${pageLimits.address})
   };
 }
+var SKIP_TEXT_TAGS = {
+  script: 1,
+  style: 1,
+  noscript: 1,
+  template: 1,
+  svg: 1,
+  iframe: 1,
+  frame: 1,
+  object: 1,
+  embed: 1
+};
+var BLOCK_TEXT_TAGS = {
+  address: 1,
+  article: 1,
+  aside: 1,
+  blockquote: 1,
+  dd: 1,
+  details: 1,
+  dialog: 1,
+  div: 1,
+  dl: 1,
+  dt: 1,
+  fieldset: 1,
+  figcaption: 1,
+  figure: 1,
+  footer: 1,
+  form: 1,
+  h1: 1,
+  h2: 1,
+  h3: 1,
+  h4: 1,
+  h5: 1,
+  h6: 1,
+  header: 1,
+  hgroup: 1,
+  hr: 1,
+  li: 1,
+  main: 1,
+  nav: 1,
+  ol: 1,
+  p: 1,
+  pre: 1,
+  section: 1,
+  summary: 1,
+  table: 1,
+  tbody: 1,
+  td: 1,
+  tfoot: 1,
+  th: 1,
+  thead: 1,
+  tr: 1,
+  ul: 1
+};
+var MAX_EXTRACT_NODES = 50000;
+var MAX_EXTRACT_DEPTH = 256;
+var MAX_EXTRACT_TOTAL_CHARS = 500000;
+function isOpacityZero(style) {
+  if (!style) return false;
+  var op = style.opacity;
+  return op === "0" || (typeof op === "string" && op !== "" && parseFloat(op) === 0);
+}
+function collectVisibleText(root, startReq, limit) {
+  var needEnd = startReq + limit;
+  var chunkParts = [];
+  var lineBuf = "";
+  var total = 0;
+  function flushLine() {
+    if (!lineBuf) return;
+    var row = lineBuf.replace(/[\p{C}\s]+/gu, " ").replace(/^ | $/g, "");
+    lineBuf = "";
+    if (!row || total >= MAX_EXTRACT_TOTAL_CHARS) return;
+    var piece = total > 0 ? "\n" + row : row;
+    var remaining = MAX_EXTRACT_TOTAL_CHARS - total;
+    if (piece.length > remaining) piece = cut(piece, remaining);
+    if (!piece) return;
+    var pieceStart = total;
+    var pieceEnd = total + piece.length;
+    if (pieceStart < needEnd && pieceEnd > startReq) {
+      var from = pieceStart < startReq ? startReq - pieceStart : 0;
+      var to = pieceEnd > needEnd ? needEnd - pieceStart : piece.length;
+      chunkParts.push(piece.slice(from, to));
+    }
+    total = pieceEnd;
+  }
+  function appendText(raw) {
+    if (!raw || total >= MAX_EXTRACT_TOTAL_CHARS) return;
+    var parts = String(raw).split(/\r\n|\r|\n|\u2028|\u2029/);
+    for (var p = 0; p < parts.length; p++) {
+      if (p > 0) flushLine();
+      if (total >= MAX_EXTRACT_TOTAL_CHARS) break;
+      var part = parts[p];
+      if (!part) continue;
+      lineBuf += part;
+      if (lineBuf.length > 100000) {
+        lineBuf = lineBuf.replace(/[\p{C}\s]+/gu, " ");
+        if (lineBuf.length > MAX_EXTRACT_TOTAL_CHARS) {
+          lineBuf = lineBuf.slice(0, MAX_EXTRACT_TOTAL_CHARS);
+        }
+      }
+    }
+  }
+  var stack = [{ node: root, depth: 0 }];
+  var visited = 0;
+  while (stack.length > 0 && visited < MAX_EXTRACT_NODES && total < MAX_EXTRACT_TOTAL_CHARS) {
+    var item = stack.pop();
+    if (item.br === true) {
+      flushLine();
+      continue;
+    }
+    if (typeof item.text === "string") {
+      appendText(item.text);
+      continue;
+    }
+    var node = item.node;
+    if (!node) continue;
+    visited += 1;
+    if (node.nodeType === 3) {
+      if (node.nodeValue) appendText(node.nodeValue);
+      continue;
+    }
+    if (node.nodeType !== undefined && node.nodeType !== 1 && node.nodeType !== 11) continue;
+    var isEl = node.nodeType === 1 || (node.nodeType === undefined && typeof node.localName === "string");
+    if (isEl) {
+      var tag = tagOf(node);
+      if (SKIP_TEXT_TAGS[tag] === 1) continue;
+      if (tag === "input" || tag === "textarea" || secret(node)) continue;
+      if (attr(node, "aria-hidden").toLowerCase() === "true") continue;
+      if (typeof node.hasAttribute === "function" && node.hasAttribute("inert")) continue;
+      var style = styleOf(node);
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || isOpacityZero(style))) continue;
+      if (tag === "br") {
+        flushLine();
+        continue;
+      }
+      if (BLOCK_TEXT_TAGS[tag] === 1) {
+        flushLine();
+        stack.push({ br: true });
+      }
+    }
+    var depth = item.depth;
+    if (depth >= MAX_EXTRACT_DEPTH) continue;
+    var kids = node.childNodes;
+    if (kids && kids.length) {
+      for (var i = kids.length - 1; i >= 0; i--) {
+        stack.push({ node: kids[i], depth: depth + 1 });
+      }
+    } else if (!kids && isEl) {
+      var ch = node.children;
+      if (ch && ch.length) {
+        for (var j = ch.length - 1; j >= 0; j--) {
+          stack.push({ node: ch[j], depth: depth + 1 });
+        }
+      }
+      if (typeof node.ownText === "string" && node.ownText) {
+        stack.push({ text: node.ownText, depth: depth + 1 });
+      }
+    }
+    if (node.shadowRoot) {
+      stack.push({ node: node.shadowRoot, depth: depth + 1 });
+    }
+  }
+  flushLine();
+  var start = Math.min(startReq, total);
+  var chunk = chunkParts.join("");
+  var end = start + chunk.length;
+  if (chunk.length > 0 && end < total) {
+    var last = chunk.charCodeAt(chunk.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) {
+      chunk = chunk.slice(0, -1);
+      end -= 1;
+    }
+  }
+  return { text: chunk, offset: start, totalChars: total, hasMore: end < total };
+}
+function extractText(offset, maxChars) {
+  var limit = typeof maxChars === "number" && isFinite(maxChars) ? Math.min(16000, Math.max(1, Math.floor(maxChars))) : 8000;
+  var startReq = typeof offset === "number" && isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+  var result = doc.body
+    ? collectVisibleText(doc.body, startReq, limit)
+    : { text: "", offset: 0, totalChars: 0, hasMore: false };
+  return {
+    ok: true,
+    url: oneLine(win.location.href, ${pageLimits.address}),
+    title: oneLine(doc.title, ${pageLimits.title}),
+    text: result.text,
+    offset: result.offset,
+    totalChars: result.totalChars,
+    hasMore: result.hasMore
+  };
+}
+function scrollToEl(index) {
+  checkOperablePage();
+  var state = held();
+  var el = find(index);
+  var name = nameOf(index, el);
+  var target = el;
+  var rect = el.getBoundingClientRect();
+  if (isChoiceInput(el) && !(rect.width > 0 && rect.height > 0)) {
+    var lab = visibleLabelOf(el);
+    if (lab) target = lab;
+  }
+  bring(target);
+  rect = el.getBoundingClientRect();
+  if (!shown(el, rect)) fail(name + " is hidden now. Read the page again.");
+  state.leaving = false;
+  return { ok: true };
+}
 // Focus: for a driver that sends real keys. A key goes to the element that
 // has the focus, so the step says no when that is a password field, or a
 // frame, whose inside this script cannot see.
@@ -1377,6 +1588,8 @@ try {
   else if (call.do === "locate") answer = locate(call.index);
   else if (call.do === "focus") answer = focusCheck(call.child === true);
   else if (call.do === "settle") answer = settleCheck();
+  else if (call.do === "extract") answer = extractText(call.offset, call.maxChars);
+  else if (call.do === "scroll_to") answer = scrollToEl(call.index);
   else fail("The page was asked for a step that it does not know.");
 } catch (problem) {
   if (problem && typeof problem.told === "string") answer = { ok: false, error: problem.told };

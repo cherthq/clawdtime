@@ -75,6 +75,9 @@ import {
 import { computerDirectory } from "./journal.js";
 import {
   BrowserClosed,
+  type BrowserDialog,
+  type BrowserDownload,
+  type BrowserExtract,
   type BrowserPage,
   type BrowserPort,
   type BrowserTab,
@@ -192,6 +195,13 @@ const mostText = 20_000;
 const mostTabs = 50;
 /** At most this many child frames are traversed per page read. */
 const maxChildFrames = 16;
+/** At most this many fields may be filled in one batch form fill. */
+const maxFormFields = 20;
+/** Default and upper bound for paginated text extraction. */
+const defaultExtractChars = 8_000;
+const maxExtractChars = 16_000;
+/** At most this many recent downloads are kept on the driver. */
+const maxDownloads = 20;
 /** Network request types that never gate page settle. */
 const ignoredNetworkTypes = new Set([
   "EventSource",
@@ -411,6 +421,18 @@ const settleSchema = z.object({
   url: z.string().optional(),
 });
 
+const extractSchema = z
+  .object({
+    ok: z.literal(true),
+    url: z.string().max(pageLimits.address),
+    title: z.string().max(pageLimits.title),
+    text: z.string().max(maxExtractChars),
+    offset: z.number().int().nonnegative(),
+    totalChars: z.number().int().nonnegative(),
+    hasMore: z.boolean(),
+  })
+  .strict();
+
 const targetSchema = z.object({
   targetId: z.string().min(1).max(200),
   type: z.string(),
@@ -486,6 +508,8 @@ export interface OwnBrowserOptions {
   executable?: string;
   /** Starts the browser with no window. Only tests do. The real start shows its window. */
   headless?: boolean;
+  /** Enables CDP focus emulation on attach so background flows do not steal OS window focus. */
+  backgroundFocus?: boolean;
   /** For tests: how the program starts, how the connection opens, the clock, and which processes run. */
   launch?: BrowserLauncher;
   dial?: DevToolsDial;
@@ -530,17 +554,22 @@ interface FrameBox {
   right: number;
   bottom: number;
 }
+/** An open JavaScript dialog on a tab, with the CDP session that owns it. */
+interface TabDialog extends BrowserDialog {
+  dialogSession: string;
+}
 /** One page that the driver is attached to. */
 interface Tab {
   targetId: string;
   session: string;
   url: string;
+  title: string;
   /** When a network request of the page last started or ended. */
   lastRequestAt: number;
   /** Requests that are open: whether each is a document, when it started, and its frame. */
   open: Map<string, OpenRequest>;
-  /** The words of a dialog that the page shows, or null. */
-  dialog: string | null;
+  /** The open JavaScript dialog on the page, or null. */
+  dialog: TabDialog | null;
   /** Called when a dialog opens. */
   dialogWatch: Set<() => void>;
   /** The id of the main frame of the tab, once known. */
@@ -597,6 +626,7 @@ export class OwnBrowser implements BrowserPort {
   >();
   private readonly oopifsBySession = new Map<string, string>();
   private readonly discoveredTargets = new Map<string, Target>();
+  private readonly downloads = new Map<string, BrowserDownload>();
   private pendingPopup: { targetId: string; openerId: string } | null = null;
   /** The tabs of the last listing, by their number. */
   private listing: string[] | null = null;
@@ -746,6 +776,107 @@ export class OwnBrowser implements BrowserPort {
     return this.reading(async (tab) => (await this.look(tab)).page);
   }
 
+  /** Reads clean visible page text in bounded chunks, stripping script, style and password values. */
+  async extract(
+    options: { offset?: number; maxChars?: number } = {},
+  ): Promise<BrowserExtract> {
+    const offset =
+      options.offset === undefined
+        ? 0
+        : Math.max(
+            0,
+            Number.isFinite(options.offset) ? Math.floor(options.offset) : 0,
+          );
+    const maxChars =
+      options.maxChars === undefined
+        ? defaultExtractChars
+        : Math.min(
+            maxExtractChars,
+            Math.max(
+              1,
+              Number.isFinite(options.maxChars)
+                ? Math.floor(options.maxChars)
+                : defaultExtractChars,
+            ),
+          );
+    return this.reading(async (tab) => {
+      const raw = await this.evaluate(tab, {
+        do: "extract",
+        offset,
+        maxChars,
+      });
+      const refused = parsePageAnswer(raw);
+      if (refused && !refused.ok) throw new Error(oneLine(refused.error, 300));
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error(unreadable);
+      }
+      const checked = extractSchema.safeParse(parsed);
+      if (!checked.success) throw new Error(unreadable);
+      if (
+        !web(checked.data.url) &&
+        !blank(checked.data.url) &&
+        !chromeError(checked.data.url)
+      )
+        throw new Error(ownPage);
+      return {
+        url: checked.data.url,
+        title: checked.data.title,
+        text: checked.data.text,
+        offset: checked.data.offset,
+        totalChars: checked.data.totalChars,
+        hasMore: checked.data.hasMore,
+      };
+    });
+  }
+
+  /** Answers an open JavaScript dialog (alert, confirm, prompt or beforeunload) and reads the page. */
+  async handleDialog(
+    accept: boolean,
+    promptText?: string,
+  ): Promise<BrowserPage> {
+    if (promptText !== undefined && String(promptText).length > mostText)
+      throw new Error(
+        "The text is too long for one step: send it in smaller parts.",
+      );
+    return this.input(async (tab, step) => {
+      this.assertOperable(tab);
+      const handling = tab.dialog;
+      if (handling === null)
+        throw new Error("There is no open dialog on the page.");
+      step.sent = true;
+      const params: Record<string, unknown> = {
+        accept: Boolean(accept),
+        ...(promptText !== undefined ? { promptText: String(promptText) } : {}),
+      };
+      const targetSession = handling.dialogSession || tab.session;
+      try {
+        await this.commandSession(
+          targetSession,
+          "Page.handleJavaScriptDialog",
+          params,
+          ownTiming.inputMs,
+        );
+      } catch (error) {
+        if (error instanceof DevToolsTimeout)
+          throw new BrowserInputUnknown(
+            `${me} did not answer an input in time. Its result is not known, and it is not sent again. Read the page to see what happened.`,
+          );
+        throw error;
+      }
+      if (tab.dialog === handling) tab.dialog = null;
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
+    });
+  }
+
   async click(index: number): Promise<BrowserPage> {
     numbered(index);
     return this.input(async (tab, step) => {
@@ -792,45 +923,17 @@ export class OwnBrowser implements BrowserPort {
     return this.input(async (tab, step) => {
       this.assertOperable(tab);
       const frameRef = tab.elementFrames.get(index);
-      const askTarget = (call: PageCall) =>
-        frameRef
-          ? this.askInFrame(tab, frameRef.session, frameRef.frameId, call)
-          : this.ask(tab, call);
-      let box = await this.located(tab, index);
+      const box = await this.located(tab, index);
       takesText(box);
-      const isNativePicker =
-        box.tag === "input" &&
-        box.inputType !== undefined &&
-        nativePickerTypes.has(box.inputType);
-      if (box.kind === "choice" || isNativePicker) {
-        step.sent = true;
-        await askTarget({ do: "type", index, text: said, submit: false });
-        if (submit) await this.keys(tab, step, keyEvents("Enter"));
-        return this.settled(
-          tab,
-          ownTiming.waitMs,
-          () => true,
-          false,
-          step.startedAt,
-        );
-      }
-      if (!box.focused) {
-        reachable(box);
-        await this.press(tab, step, box);
-        box = await this.located(tab, index);
-        // The field may have changed under the click.
-        takesText(box);
-        if (!box.focused)
-          throw new Error(
-            `${box.name} did not take the focus after a click. No text was typed. Read the page again.`,
-          );
-      }
-      if (box.kind === "text") {
-        await this.keys(tab, step, selectAll);
-        if (said === "") await this.keys(tab, step, keyEvents("Backspace"));
-      } else await this.keys(tab, step, toTheEnd);
-      if (said !== "")
-        await this.effect(step, tab, "Input.insertText", { text: said });
+      checkNewlines(box, said);
+      const usedInsertText = await this.fillField(
+        tab,
+        step,
+        index,
+        said,
+        box,
+        frameRef,
+      );
       if (submit) await this.keys(tab, step, keyEvents("Enter"));
       let page = await this.settled(
         tab,
@@ -839,13 +942,24 @@ export class OwnBrowser implements BrowserPort {
         false,
         step.startedAt,
       );
-      if (!submit && box.kind === "text" && !box.password && said.length > 0) {
+      if (
+        usedInsertText &&
+        !submit &&
+        box.kind === "text" &&
+        !box.password &&
+        said.length > 0
+      ) {
         let field = page.elements.find((item) => item.index === index);
         if (field && !field.password && field.value === "") {
           // React/Vue controlled input fallback: only when Input.insertText left
           // the field empty, so masked/formatted fields are never clobbered.
           try {
-            await askTarget({ do: "type", index, text: said, submit: false });
+            await this.askTarget(tab, frameRef, {
+              do: "type",
+              index,
+              text: said,
+              submit: false,
+            });
             page = await this.settled(
               tab,
               ownTiming.waitMs,
@@ -865,6 +979,207 @@ export class OwnBrowser implements BrowserPort {
           );
       }
       return page;
+    });
+  }
+
+  /**
+   * Validates every field up front (failing closed before any input if any
+   * field is a password field, hidden, missing, disabled, read only, or
+   * rejects newlines), fills each field sequentially, and settles once at the
+   * end.
+   */
+  async fillForm(
+    fields: readonly { index: number; text: string }[],
+  ): Promise<BrowserPage> {
+    if (
+      !Array.isArray(fields) ||
+      fields.length < 1 ||
+      fields.length > maxFormFields
+    )
+      throw new Error(`Give between 1 and ${maxFormFields} form fields.`);
+    const entries = fields.map((field) => {
+      const index = numbered(field.index);
+      const text = String(field.text);
+      if (text.length > mostText)
+        throw new Error(
+          "The text is too long for one step: send it in smaller parts.",
+        );
+      return { index, text };
+    });
+    return this.input(async (tab, step) => {
+      this.assertOperable(tab);
+      // Phase 1: validate every target before sending any input.
+      const validated: Located[] = [];
+      for (const entry of entries) {
+        const box = await this.located(tab, entry.index);
+        takesText(box);
+        checkNewlines(box, entry.text);
+        const isNativePicker =
+          box.tag === "input" &&
+          box.inputType !== undefined &&
+          nativePickerTypes.has(box.inputType);
+        if (box.kind !== "choice" && !isNativePicker && !box.focused) {
+          reachable(box);
+        }
+        validated.push(box);
+      }
+      // Phase 2: fill sequentially, stopping immediately on error or navigation.
+      const docsBefore = tab.documents;
+      const filledIndexes: number[] = [];
+      const filledText = new Map<
+        number,
+        {
+          box: Located;
+          text: string;
+          frameRef: ElementFrameRef | undefined;
+        }
+      >();
+      for (let i = 0; i < entries.length; i++) {
+        if (
+          i > 0 &&
+          (tab.documents > docsBefore ||
+            tab.frameLoading ||
+            this.hasOpenDocument(tab) ||
+            this.pendingPopup !== null)
+        ) {
+          const skipped = entries.slice(i).map((item) => item.index);
+          throw new BrowserInputUnknown(
+            `Stopped filling the form after ${filledIndexes.length} of ${entries.length} field(s) (number(s) ${filledIndexes.join(", ")}) because the page changed; skipped field(s): ${skipped.join(", ")}. It is not sent again. Read the page to see what happened.`,
+          );
+        }
+        const entry = entries[i]!;
+        const frameRef = tab.elementFrames.get(entry.index);
+        try {
+          const box =
+            entries.length === 1
+              ? validated[0]!
+              : await this.located(tab, entry.index);
+          if (entries.length > 1) {
+            takesText(box);
+            checkNewlines(box, entry.text);
+          }
+          const usedInsertText = await this.fillField(
+            tab,
+            step,
+            entry.index,
+            entry.text,
+            box,
+            frameRef,
+          );
+          filledIndexes.push(entry.index);
+          if (
+            usedInsertText &&
+            box.kind === "text" &&
+            !box.password &&
+            entry.text.length > 0
+          ) {
+            filledText.set(entry.index, { box, text: entry.text, frameRef });
+          } else {
+            filledText.delete(entry.index);
+          }
+        } catch (error) {
+          if (filledIndexes.length > 0) {
+            if (error instanceof DevToolsClosed) throw error;
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            const remaining = entries.slice(i).map((item) => item.index);
+            throw new BrowserInputUnknown(
+              `Form fill stopped at field ${entry.index} after already filling ${filledIndexes.length} field(s) (number(s) ${filledIndexes.join(", ")}); remaining field(s): ${remaining.join(", ")}. ${detail} Do not retry blindly: read the page to see what happened.`,
+            );
+          }
+          throw error;
+        }
+      }
+      // Phase 3: settle once after all fields are filled.
+      let page = await this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
+      if (
+        filledText.size > 0 &&
+        tab.documents === docsBefore &&
+        !tab.frameLoading &&
+        !this.hasOpenDocument(tab)
+      ) {
+        let ranFallback = false;
+        for (const [index, info] of filledText) {
+          const field = page.elements.find((item) => item.index === index);
+          if (field && !field.password && field.value === "") {
+            try {
+              await this.askTarget(tab, info.frameRef, {
+                do: "type",
+                index,
+                text: info.text,
+                submit: false,
+              });
+              ranFallback = true;
+            } catch (fallbackError) {
+              if (fallbackError instanceof DevToolsClosed) throw fallbackError;
+            }
+          }
+        }
+        if (ranFallback) {
+          page = await this.settled(
+            tab,
+            ownTiming.waitMs,
+            () => true,
+            false,
+            step.startedAt,
+          );
+        }
+        for (const [index, info] of filledText) {
+          const field = page.elements.find((item) => item.index === index);
+          if (field && !field.password && field.value === "") {
+            const msg = `${info.box.name} did not take that text. A number or a date field takes only its own form.`;
+            if (filledIndexes.length > 1) {
+              const others = filledIndexes.filter((n) => n !== index);
+              throw new BrowserInputUnknown(
+                `${msg} Earlier field(s) (number(s) ${others.join(", ")}) were already filled. Do not retry blindly: read the page to see what happened.`,
+              );
+            }
+            throw new Error(msg);
+          }
+        }
+      }
+      return page;
+    });
+  }
+
+  /** Scrolls a numbered element into view inside its owning frame, settles, and reads the page. */
+  async scrollToElement(index: number): Promise<BrowserPage> {
+    numbered(index);
+    return this.input(async (tab, step) => {
+      this.assertOperable(tab);
+      const frameRef = tab.elementFrames.get(index);
+      if (frameRef) {
+        for (let i = 1; i < frameRef.chain.length; i++) {
+          await this.childFrameGeometry(
+            tab,
+            frameRef.sessions[i - 1]!,
+            frameRef.chain[i - 1]!,
+            frameRef.chain[i]!,
+            true,
+          );
+        }
+        step.sent = true;
+        await this.askInFrame(tab, frameRef.session, frameRef.frameId, {
+          do: "scroll_to",
+          index,
+        });
+      } else {
+        step.sent = true;
+        await this.ask(tab, { do: "scroll_to", index });
+      }
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
     });
   }
 
@@ -1107,9 +1422,123 @@ export class OwnBrowser implements BrowserPort {
       step.sent = true;
       await this.activate(live, targetId);
       this.current = targetId;
-      const tab = await this.attach(live, targetId, target.url);
+      const tab = await this.attach(live, targetId, target.url, {
+        preserveUrl: true,
+      });
       return this.settled(
         tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
+    });
+  }
+
+  /** Opens a new tab at `url` (or an empty tab), switches to it, settles, and reads it. */
+  async newTab(url?: string): Promise<BrowserPage> {
+    let address: string | null = null;
+    if (url !== undefined) {
+      address = webAddress(url);
+      if (address.length > pageLimits.address)
+        throw new Error("The address is too long to open.");
+    }
+    const step: Step = { sent: false, startedAt: this.clock.now() };
+    this.pendingPopup = null;
+    try {
+      const live = await this.started(true);
+      this.pendingPopup = null;
+      const targetUrl = address ?? "about:blank";
+      step.sent = true;
+      const made = await live.connection.send<{ targetId?: unknown }>(
+        "Target.createTarget",
+        { url: targetUrl },
+        { timeoutMs: ownTiming.callMs },
+      );
+      if (typeof made.targetId !== "string") throw new Error(unreadable);
+      const tab = await this.attach(live, made.targetId, targetUrl);
+      this.current = tab.targetId;
+      tab.navError = null;
+      await this.activate(live, tab.targetId);
+      return await this.settled(
+        tab,
+        address ? ownTiming.openWaitMs : ownTiming.waitMs,
+        address ? (page) => web(page.url) || chromeError(page.url) : () => true,
+        address !== null,
+        step.startedAt,
+      );
+    } catch (error) {
+      throw this.lost(step, error);
+    }
+  }
+
+  /**
+   * Closes the requested tab (or the current tab) and switches to a remaining
+   * tab. Refuses to close the very last open tab so the browser does not exit.
+   */
+  async closeTab(tabId?: string): Promise<BrowserPage> {
+    return this.input(async (tab, step) => {
+      const live = this.live!;
+      const pages = await this.targets(live);
+      let targetId: string | undefined;
+      if (tabId === undefined || tabId === "") {
+        targetId = tab.targetId;
+      } else {
+        const direct = pages.find((item) => item.targetId === tabId);
+        if (direct) {
+          targetId = direct.targetId;
+        } else if (/^[1-9]\d*$/.test(tabId.trim())) {
+          const fromListing = this.listing?.[Number(tabId.trim()) - 1];
+          if (
+            fromListing &&
+            pages.some((item) => item.targetId === fromListing)
+          ) {
+            targetId = fromListing;
+          }
+        }
+        if (!targetId)
+          throw new Error(
+            `Tab ${oneLine(tabId, 60)} is not open any more. List the tabs again.`,
+          );
+      }
+      const remaining = pages.filter((item) => item.targetId !== targetId);
+      if (remaining.length === 0)
+        throw new Error(`Cannot close the last open tab in ${me}.`);
+      const closedIndex = pages.findIndex((item) => item.targetId === targetId);
+      const nextTarget =
+        targetId !== tab.targetId
+          ? (remaining.find((item) => item.targetId === tab.targetId) ??
+            remaining[0]!)
+          : remaining[
+              Math.min(Math.max(0, closedIndex), remaining.length - 1)
+            ]!;
+      step.sent = true;
+      const closed = await live.connection.send<{ success?: unknown }>(
+        "Target.closeTarget",
+        { targetId },
+        { timeoutMs: ownTiming.callMs },
+      );
+      if (closed.success === false)
+        throw new Error("Could not close that tab.");
+      this.listing = null;
+      this.discoveredTargets.delete(targetId);
+      if (this.pendingPopup?.targetId === targetId) this.pendingPopup = null;
+      const closedTab = this.tabsById.get(targetId);
+      if (closedTab) {
+        this.tabsById.delete(closedTab.targetId);
+        this.tabsBySession.delete(closedTab.session);
+        this.cleanupTabOopifs(closedTab.session);
+      }
+      this.current = nextTarget.targetId;
+      await this.activate(live, nextTarget.targetId);
+      const nextTab = await this.attach(
+        live,
+        nextTarget.targetId,
+        nextTarget.url,
+        { preserveUrl: true },
+      );
+      return this.settled(
+        nextTab,
         ownTiming.waitMs,
         () => true,
         false,
@@ -1395,14 +1824,37 @@ export class OwnBrowser implements BrowserPort {
       if (frameId) tab.childWorlds.delete(frameId);
     });
     connection.on("Page.javascriptDialogOpening", (params, session) => {
-      const tab = tabOf(session);
+      const tab = this.tabForSession(session);
       if (!tab) return;
-      tab.dialog = oneLine(params.message, 200);
+      tab.dialog = {
+        type: dialogKind(params.type),
+        message: oneLine(params.message, 200),
+        dialogSession: session ?? tab.session,
+      };
       for (const watch of [...tab.dialogWatch]) watch();
     });
     connection.on("Page.javascriptDialogClosed", (_params, session) => {
-      const tab = tabOf(session);
+      const tab = this.tabForSession(session);
       if (tab) tab.dialog = null;
+    });
+    connection.on("Browser.downloadWillBegin", (params) => {
+      const guid = typeof params.guid === "string" ? params.guid : "";
+      if (!guid) return;
+      this.recordDownload(
+        guid,
+        sanitizeDownloadName(params.suggestedFilename),
+        "in_progress",
+      );
+    });
+    connection.on("Browser.downloadProgress", (params) => {
+      const guid = typeof params.guid === "string" ? params.guid : "";
+      if (!guid) return;
+      const state = parseDownloadState(params.state);
+      if (!state) return;
+      const existing = this.downloads.get(guid);
+      const filename =
+        existing?.filename ?? sanitizeDownloadName(params.filePath);
+      this.recordDownload(guid, filename, state);
     });
     // A new document in the main frame: the private world went with the old one.
     connection.on("Page.frameNavigated", (params, session) => {
@@ -1461,8 +1913,11 @@ export class OwnBrowser implements BrowserPort {
         this.discoveredTargets.set(info.targetId, info);
       }
       const existing = this.tabsById.get(info.targetId);
-      if (existing && (!chromeError(existing.url) || chromeError(info.url)))
-        existing.url = info.url;
+      if (existing) {
+        if (!chromeError(existing.url) || chromeError(info.url))
+          existing.url = info.url;
+        if (info.title) existing.title = oneLine(info.title, pageLimits.title);
+      }
     });
     connection.on("Target.targetDestroyed", (params) => {
       if (typeof params.targetId !== "string") return;
@@ -1474,6 +1929,7 @@ export class OwnBrowser implements BrowserPort {
       if (tab) {
         this.tabsById.delete(tab.targetId);
         this.tabsBySession.delete(tab.session);
+        this.cleanupTabOopifs(tab.session);
       }
     });
     connection.on("Target.attachedToTarget", (params, parentSession) => {
@@ -1506,10 +1962,24 @@ export class OwnBrowser implements BrowserPort {
             { session: sessionId, timeoutMs: ownTiming.callMs },
           )
           .catch(() => {});
+        if (this.options.backgroundFocus) {
+          void connection
+            .send(
+              "Emulation.setFocusEmulationEnabled",
+              { enabled: true },
+              { session: sessionId, timeoutMs: ownTiming.callMs },
+            )
+            .catch(() => {});
+        }
       }
     });
     connection.on("Target.detachedFromTarget", (params) => {
       if (typeof params.sessionId !== "string") return;
+      const owningTab = this.tabForSession(params.sessionId);
+      if (owningTab && owningTab.dialog?.dialogSession === params.sessionId) {
+        owningTab.dialog = null;
+      }
+      this.cleanupTabOopifs(params.sessionId);
       const oopifFrame = this.oopifsBySession.get(params.sessionId);
       if (oopifFrame) {
         this.oopifsBySession.delete(params.sessionId);
@@ -1534,6 +2004,13 @@ export class OwnBrowser implements BrowserPort {
         { timeoutMs: ownTiming.callMs },
       )
       .catch(() => {});
+    void connection
+      .send(
+        "Browser.setDownloadBehavior",
+        { behavior: "default", eventsEnabled: true },
+        { timeoutMs: ownTiming.callMs },
+      )
+      .catch(() => {});
     return live;
   }
 
@@ -1549,6 +2026,7 @@ export class OwnBrowser implements BrowserPort {
     this.oopifsByFrameId.clear();
     this.oopifsBySession.clear();
     this.discoveredTargets.clear();
+    this.downloads.clear();
   }
 
   /** The process that holds the lock of this profile, on this computer, when it runs. */
@@ -1713,10 +2191,15 @@ export class OwnBrowser implements BrowserPort {
     live: Live,
     targetId: string,
     url: string,
+    options: { preserveUrl?: boolean } = {},
   ): Promise<Tab> {
     const known = this.tabsById.get(targetId);
     if (known) {
-      if (!chromeError(known.url) || chromeError(url)) known.url = url;
+      if (
+        (!chromeError(known.url) && (!options.preserveUrl || !blank(url))) ||
+        chromeError(url)
+      )
+        known.url = url;
       return known;
     }
     const attached = await live.connection.send<{ sessionId?: unknown }>(
@@ -1729,6 +2212,7 @@ export class OwnBrowser implements BrowserPort {
       targetId,
       session: attached.sessionId,
       url,
+      title: "",
       lastRequestAt: Number.NEGATIVE_INFINITY,
       open: new Map(),
       dialog: null,
@@ -1746,6 +2230,13 @@ export class OwnBrowser implements BrowserPort {
     await Promise.all([
       this.command(tab, "Page.enable"),
       this.command(tab, "Network.enable"),
+      ...(this.options.backgroundFocus
+        ? [
+            this.command(tab, "Emulation.setFocusEmulationEnabled", {
+              enabled: true,
+            }).catch(() => {}),
+          ]
+        : []),
     ]);
     await this.mainFrame(tab).catch(() => {});
     await this.command(tab, "Target.setAutoAttach", {
@@ -1846,19 +2337,19 @@ export class OwnBrowser implements BrowserPort {
     method: string,
     params: Record<string, unknown>,
   ): Promise<T> {
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
     step.sent = true;
     let stop = () => {};
     const dialog = new Promise<never>((_resolve, reject) => {
-      const watch = () => reject(new Error(dialogText(tab.dialog ?? "")));
+      const watch = () =>
+        reject(new Error(dialogText(tab.dialog?.message ?? "")));
       tab.dialogWatch.add(watch);
       stop = () => tab.dialogWatch.delete(watch);
     });
+    const pending = this.command<T>(tab, method, params, ownTiming.inputMs);
+    pending.catch(() => {});
     try {
-      return await Promise.race([
-        this.command<T>(tab, method, params, ownTiming.inputMs),
-        dialog,
-      ]);
+      return await Promise.race([pending, dialog]);
     } catch (error) {
       // The command went out and no answer came: it may have happened.
       if (error instanceof DevToolsTimeout)
@@ -1868,6 +2359,125 @@ export class OwnBrowser implements BrowserPort {
       throw error;
     } finally {
       stop();
+    }
+  }
+
+  private askTarget(
+    tab: Tab,
+    frameRef: ElementFrameRef | undefined,
+    call: PageCall,
+  ) {
+    return frameRef
+      ? this.askInFrame(tab, frameRef.session, frameRef.frameId, call)
+      : this.ask(tab, call);
+  }
+
+  /**
+   * Fills a single already-validated field. Returns true when Input.insertText
+   * was used (eligible for controlled-input fallback check), false otherwise.
+   */
+  private async fillField(
+    tab: Tab,
+    step: Step,
+    index: number,
+    said: string,
+    initialBox: Located,
+    frameRef: ElementFrameRef | undefined,
+  ): Promise<boolean> {
+    let box = initialBox;
+    const isNativePicker =
+      box.tag === "input" &&
+      box.inputType !== undefined &&
+      nativePickerTypes.has(box.inputType);
+    if (box.kind === "choice" || isNativePicker) {
+      step.sent = true;
+      await this.askTarget(tab, frameRef, {
+        do: "type",
+        index,
+        text: said,
+        submit: false,
+      });
+      return false;
+    }
+    if (!box.focused) {
+      reachable(box);
+      await this.press(tab, step, box);
+      box = await this.located(tab, index);
+      // The field may have changed under the click.
+      takesText(box);
+      checkNewlines(box, said);
+      if (!box.focused)
+        throw new Error(
+          `${box.name} did not take the focus after a click. No text was typed. Read the page again.`,
+        );
+    }
+    if (box.kind === "text") {
+      await this.keys(tab, step, selectAll);
+      if (said === "") await this.keys(tab, step, keyEvents("Backspace"));
+    } else await this.keys(tab, step, toTheEnd);
+    if (said !== "") {
+      const normalized = said.replace(/\r\n?/g, "\n");
+      await this.effect(step, tab, "Input.insertText", { text: normalized });
+    }
+    return true;
+  }
+
+  private recordDownload(
+    guid: string,
+    filename: string,
+    state: BrowserDownload["state"],
+  ) {
+    if (!this.downloads.has(guid) && this.downloads.size >= maxDownloads) {
+      const oldest = this.downloads.keys().next().value;
+      if (oldest !== undefined) this.downloads.delete(oldest);
+    }
+    this.downloads.set(guid, { filename, state });
+  }
+
+  private recentDownloads(): BrowserDownload[] | undefined {
+    if (this.downloads.size === 0) return undefined;
+    return [...this.downloads.values()].map((item) => ({ ...item }));
+  }
+
+  /** Resolves a tab session or any nested OOPIF session to its owning Tab. */
+  private tabForSession(session?: string): Tab | undefined {
+    let current = session;
+    const seen = new Set<string>();
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const direct = this.tabsBySession.get(current);
+      if (direct) return direct;
+      const frameId = this.oopifsBySession.get(current);
+      if (!frameId) return undefined;
+      current = this.oopifsByFrameId.get(frameId)?.parentSession ?? undefined;
+    }
+    return undefined;
+  }
+
+  /** Removes all tracked OOPIF entries rooted beneath `rootSession`. */
+  private cleanupTabOopifs(rootSession: string) {
+    const doomedSessions = new Set<string>([rootSession]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const entry of this.oopifsByFrameId.values()) {
+        if (
+          entry.parentSession !== null &&
+          doomedSessions.has(entry.parentSession) &&
+          !doomedSessions.has(entry.session)
+        ) {
+          doomedSessions.add(entry.session);
+          grew = true;
+        }
+      }
+    }
+    doomedSessions.delete(rootSession);
+    for (const session of doomedSessions) {
+      const frameId = this.oopifsBySession.get(session);
+      this.oopifsBySession.delete(session);
+      if (frameId && this.oopifsByFrameId.get(frameId)?.session === session) {
+        this.oopifsByFrameId.delete(frameId);
+      }
     }
   }
 
@@ -1940,7 +2550,7 @@ export class OwnBrowser implements BrowserPort {
 
   /** Runs the page script once and gives back its answer as text. */
   private async evaluate(tab: Tab, call: PageCall): Promise<string> {
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
     const expression = pageScript(call, {
       session: this.session,
       start: this.next,
@@ -2034,7 +2644,7 @@ export class OwnBrowser implements BrowserPort {
     frameId: string,
     call: PageCall,
   ): Promise<string> {
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
     const expression = pageScript(call, {
       session: this.session,
       start: this.next,
@@ -2688,6 +3298,7 @@ export class OwnBrowser implements BrowserPort {
     )
       throw new Error(ownPage);
     tab.url = answer.page.url;
+    tab.title = answer.page.title;
     tab.elementFrames.clear();
     const page = pageOfReading("own", answer.page);
     if (chromeError(answer.page.url)) {
@@ -2695,6 +3306,8 @@ export class OwnBrowser implements BrowserPort {
     } else {
       await this.readChildFrames(tab, page);
     }
+    const downloads = this.recentDownloads();
+    if (downloads) page.downloads = downloads;
     if (
       tab.navError &&
       (chromeError(answer.page.url) || blank(answer.page.url))
@@ -2941,7 +3554,7 @@ export class OwnBrowser implements BrowserPort {
         navigation = true;
         effectiveCap = Math.max(effectiveCap, ownTiming.openWaitMs);
       }
-      if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+      if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
       if (
         !navigation &&
         (tab.documents > docsBefore ||
@@ -2991,7 +3604,7 @@ export class OwnBrowser implements BrowserPort {
     }
     const popup = await this.adoptPendingPopup(tab);
     if (popup) tab = popup;
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
     try {
       return (await this.look(tab)).page;
     } catch (error) {
@@ -3044,4 +3657,42 @@ function takesText(box: Located) {
   if (box.kind === "press" || box.kind === "check")
     throw new Error(`${box.name} does not take text. Click it instead.`);
   if (box.readOnly) throw new Error(`${box.name} is read only.`);
+}
+
+/** Single-line inputs refuse line breaks; textareas and contenteditable regions allow them. */
+function checkNewlines(box: Located, text: string) {
+  if (/[\r\n]/.test(text) && box.tag !== "textarea" && box.kind !== "region") {
+    throw new Error(
+      `${box.name} is a single-line field and does not take line breaks.`,
+    );
+  }
+}
+
+function dialogKind(raw: unknown): string {
+  const kind = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (
+    kind === "alert" ||
+    kind === "confirm" ||
+    kind === "prompt" ||
+    kind === "beforeunload"
+  ) {
+    return kind;
+  }
+  return "alert";
+}
+
+function parseDownloadState(raw: unknown): BrowserDownload["state"] | null {
+  if (raw === "inProgress" || raw === "in_progress") return "in_progress";
+  if (raw === "completed") return "completed";
+  if (raw === "canceled" || raw === "cancelled") return "canceled";
+  return null;
+}
+
+/** Keeps only a sanitized basename so local filesystem paths never leak into page state. */
+function sanitizeDownloadName(raw: unknown): string {
+  if (typeof raw !== "string") return "download";
+  const parts = raw.split(/[\\/]+/).filter(Boolean);
+  const base = parts[parts.length - 1] ?? "";
+  const clean = oneLine(base.replace(/^\.+/, ""), 200);
+  return clean || "download";
 }
