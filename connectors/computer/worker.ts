@@ -73,7 +73,15 @@ import {
   closerPart,
   yesQuestion,
 } from "./guards.js";
-import { closerHold, closerSecureText, closerShowsSecure } from "./closer.js";
+import {
+  closerChangedText,
+  closerHold,
+  closerOutOfDate,
+  closerScene,
+  closerSecureText,
+  closerShowsSecure,
+  type CloserScene,
+} from "./closer.js";
 import { textKeyHold } from "./text-keys.js";
 import {
   guidanceLimit,
@@ -556,6 +564,8 @@ interface Run {
   authority?: DesktopExecutionAuthority;
   /** The closer look that the planner asked for, for its next turn only. */
   closer?: Closer;
+  /** What the closer picture was taken of: it goes only with a look of that scene. */
+  closerScene?: CloserScene;
   /** The closer looks sent in this request (closer.ts). */
   closerLooks?: number;
   /** Why the step of this turn was not sent, for the timing record. */
@@ -2913,17 +2923,24 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
   /**
    * The closer picture for this turn, once. It stays back when the look of
-   * this turn has a password field in its part, or cannot say (closer.ts):
-   * the planner then reads why.
+   * this turn has a password field in its part, or cannot say, and when that
+   * look shows another app, window or display than the one the picture was
+   * taken of (closer.ts): the planner then reads why.
    */
   private closerFor(run: Run): { closer?: Closer } {
     const closer = run.closer;
+    const scene = run.closerScene;
     delete run.closer;
+    delete run.closerScene;
     if (!closer) return {};
-    if (!closerShowsSecure(closer, run.observation)) return { closer };
+    const why = closerShowsSecure(closer, run.observation)
+      ? closerSecureText
+      : !scene || closerOutOfDate(scene, run.observation)
+        ? closerChangedText
+        : null;
+    if (why === null) return { closer };
     const last = run.history.at(-1);
-    if (last?.action.kind === "look_closer")
-      last.outcome = `not shown: ${closerSecureText}`;
+    if (last?.action.kind === "look_closer") last.outcome = `not shown: ${why}`;
     return {};
   }
   /**
@@ -3303,13 +3320,22 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (send.command.kind === "zoom" && action.kind === "look_closer") {
       const seen = handed.result?.ok ? handed.result.observation : undefined;
       const part = closerPart(action, before);
-      if (seen?.image && seen.imageWidth && seen.imageHeight && part) {
+      if (
+        seen?.image &&
+        seen.imageWidth &&
+        seen.imageHeight &&
+        part &&
+        before
+      ) {
         run.closer = {
           image: seen.image,
           imageWidth: seen.imageWidth,
           imageHeight: seen.imageHeight,
           region: part.region,
         };
+        // The part is a part of the look before the zoom: the picture fits
+        // only a look of that same scene.
+        run.closerScene = closerScene(before);
         return this.note(
           run,
           action,

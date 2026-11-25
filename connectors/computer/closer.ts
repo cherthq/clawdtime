@@ -9,6 +9,10 @@
  * - A part of the screen with a password field in it is never shown larger:
  *   the check before the zoom refuses it, and a closer picture whose part has
  *   a password field in the look after it never reaches the planner.
+ * - A closer picture goes to the planner only with a look of the same
+ *   screen: the same app and window in front, the same display and the same
+ *   size of picture. When another app came to the front since the zoom, the
+ *   planner would aim at a thing that is no longer there.
  * - A click in the closer picture is turned into a click in the first
  *   picture, so that every check of a click runs on it as on any click.
  */
@@ -19,6 +23,51 @@ export const closerLimit = 6;
 export const closerLimitText = `This request had ${closerLimit} closer looks already. Use the pictures that you have, or choose another way.`;
 export const closerSecureText =
   "A password field is in that part of the screen. A closer look never shows one.";
+export const closerChangedText =
+  "The screen changed after the closer look: another app, window or display is in front now. Use the new picture, or look closer again.";
+
+/** What a closer picture was taken of: the app and the window in front, the display and the size of the first picture. */
+export interface CloserScene {
+  app: { name: string; bundleId: string; window: string };
+  screen: { width: number; height: number; scale: number };
+  surfaceEpoch?: number;
+  imageWidth?: number;
+  imageHeight?: number;
+}
+
+/** The scene of the look that a closer picture is a part of. */
+export function closerScene(seen: Observation): CloserScene {
+  return {
+    app: { ...seen.app },
+    screen: { ...seen.screen },
+    surfaceEpoch: seen.surfaceEpoch,
+    imageWidth: seen.imageWidth,
+    imageHeight: seen.imageHeight,
+  };
+}
+
+/**
+ * True when the look of this turn is not of the scene that the closer
+ * picture was taken of: another app or window in front, another display or
+ * surface, or a first picture of another size. No look is a change too.
+ */
+export function closerOutOfDate(
+  taken: CloserScene,
+  seen: Observation | null,
+): boolean {
+  if (!seen) return true;
+  return (
+    seen.app.bundleId !== taken.app.bundleId ||
+    seen.app.name !== taken.app.name ||
+    seen.app.window !== taken.app.window ||
+    seen.screen.width !== taken.screen.width ||
+    seen.screen.height !== taken.screen.height ||
+    seen.screen.scale !== taken.screen.scale ||
+    seen.surfaceEpoch !== taken.surfaceEpoch ||
+    seen.imageWidth !== taken.imageWidth ||
+    seen.imageHeight !== taken.imageHeight
+  );
+}
 
 /** A part of the screen, in screen points. */
 interface Area {

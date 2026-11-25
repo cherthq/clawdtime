@@ -944,6 +944,10 @@ point of the picture. The code is in `connectors/computer/closer.ts`.
   points of one, is refused before the zoom. When the look after the zoom
   finds a password field in the part, the closer picture never goes to the
   planner, and the planner reads why.
+- **The same screen.** The closer picture goes to the planner only with a
+  look of the screen it was taken of: the same app and window in front, the
+  same display and the same size of picture. When another app came to the
+  front, the picture stays back, and the planner reads why.
 
 The panel scales the part to the asked size (`scalesToFit`): without it, the
 part stays at its own size in a corner and the rest of the picture is empty.
