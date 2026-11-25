@@ -327,6 +327,8 @@ const progressSignature = (action: Action, checked: Checked) =>
         action.kind,
         "direction" in action ? action.direction : null,
       ]);
+/** Inputs after which a screen that looks the same means that they may not have worked. */
+const stillKinds = new Set(["click_element", "click_at", "key", "type"]);
 /** The same action is tried this many times with no result before the planner is told. It is the limit of the refusals. */
 const repeatLimit = 3;
 const repeatNote = (times: number) =>
@@ -488,6 +490,12 @@ export interface ComputerWorkerOptions {
   maxSteps?: number;
   /** The most actions for a request whose plan had 3 subgoals or more (`plan.ts`). */
   plannedMaxSteps?: number;
+  /**
+   * A done right after a click, a key or typed text that left the screen as
+   * it was goes back to the planner once. The service turns it on; made-up
+   * hands of tests show one screen, so it is off unless asked for.
+   */
+  unchangedDone?: boolean;
   /** The most time for one request, with the time it waits for the person. */
   maxMs?: number;
   /** How long one call to the browser may take. */
@@ -624,6 +632,10 @@ interface Run {
   signed?: string;
   /** The step of the last turn, until the next look says what came of it. */
   pending?: Omit<ProgressStep, "after">;
+  /** The kind of the last input, when the look after it showed the same screen as before it. */
+  stillAfter?: string;
+  /** A done after an input that changed nothing was sent back once. */
+  stillNoted?: boolean;
   /** Finds steps that go in circles. One for each request. */
   progress: ProgressGuard;
   /** How many of the person's additions the progress guard knows of. */
@@ -2382,6 +2394,20 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.refusals = 0;
     switch (checked.verdict) {
       case "done": {
+        // A done right after an input that changed nothing on the screen goes
+        // back once: a click that an app did not take looks like a click that
+        // worked. It costs no turn in a request whose last input moved the screen.
+        if (this.options.unchangedDone && run.stillAfter && !run.stillNoted) {
+          run.stillNoted = true;
+          return this.note(
+            run,
+            action,
+            why,
+            "",
+            `not taken yet: the screen looks the same as before your last action (${run.stillAfter}), so it may not have worked. Look again: if the goal is met, call done again.`,
+            "done_unchanged",
+          );
+        }
         this.note(run, action, why, "", "ok", "ok");
         return this.finish(
           run,
@@ -2742,10 +2768,17 @@ export class ComputerWorker implements DesktopExecutorPort {
     const pending = run.pending;
     delete run.pending;
     if (!pending) return "go";
-    const verdict = run.progress.step(
-      { ...pending, after: progressPrint(run.observation) },
-      this.context(run),
-    );
+    const after = progressPrint(run.observation);
+    // An input after which the screen is the same: a done now rests on nothing that was seen.
+    run.stillAfter =
+      pending.input &&
+      stillKinds.has(pending.kind) &&
+      pending.before !== null &&
+      after !== null &&
+      pending.before === after
+        ? pending.kind
+        : undefined;
+    const verdict = run.progress.step({ ...pending, after }, this.context(run));
     if (verdict.kind === "allow") return "go";
     this.mark(run, `${verdict.kind}_${verdict.pattern}`);
     if (verdict.kind === "nudge") {

@@ -1157,6 +1157,7 @@ async function one(
     const said: string[] = [];
     const timed: StepTiming[] = [];
     const worker = new ComputerWorker({
+      unchangedDone: true,
       hands,
       planner,
       journal,

@@ -211,6 +211,7 @@ export function buildComputer(options: ComputerOptions): {
   });
   const hands = new PanelHands();
   const worker = new ComputerWorker({
+    unchangedDone: true,
     hands,
     planner: options.planner ?? planner,
     journal: new ComputerJournal(options.root),
