@@ -112,7 +112,7 @@ function privateJSON(path: string, project: string): unknown {
     );
   }
 }
-function childEnvironment(panel = false): NodeJS.ProcessEnv {
+export function childEnvironment(panel = false): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) =>
@@ -142,6 +142,13 @@ function childEnvironment(panel = false): NodeJS.ProcessEnv {
           "CLAWDTIME_COMPUTER_BROWSER",
           // One log line with the time of each step of computer use, when it is "on".
           "CLAWDTIME_COMPUTER_TIMING",
+          // The owner's trust: no question before an action of the ask policy.
+          "CLAWDTIME_COMPUTER_TRUST",
+          // The call and the text to the owner for a question that waits.
+          "CLAWDTIME_COMPUTER_REACH",
+          "CLAWDTIME_COMPUTER_REACH_SECONDS",
+          // The program of ClawdTime's own browser, when it is not found by itself.
+          "CLAWDTIME_OWN_BROWSER_PATH",
           "CLAWDTIME_TRANSCRIBE_MODEL",
           "CLAWDTIME_SPEAK_MODEL",
           "CLAWDTIME_VOICE",
