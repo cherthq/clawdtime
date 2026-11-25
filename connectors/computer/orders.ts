@@ -1355,7 +1355,16 @@ function stopTypo(word: string): string | null {
  * "layer" of a drawing is no "later". Any other such word holds: a hold is
  * the safe reading.
  */
-const holdTypoDenyList = new Set(["layer"]);
+const holdTypoDenyList = new Set([
+  "layer",
+  // Ordinary words one letter from a hold cue: "running late" is no "later".
+  "late",
+  "laser",
+  "lager",
+  "bait",
+  "wail",
+  "hole",
+]);
 
 /**
  * The hold cue that a typed word of 4 letters or more stands for, or null:
