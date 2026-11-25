@@ -78,6 +78,74 @@ public enum DesktopArrival {
     let title = ElementCleaner.line(one)
     return !title.isEmpty && title == ElementCleaner.line(other)
   }
+
+  private static let dynamicPatterns: [(regex: NSRegularExpression, replacement: String)] = [
+    // Unread counts in brackets/parens bounded by whitespace, separators or string edges (never `.ext`).
+    (try! NSRegularExpression(pattern: #"(?:^|(?<=[\s\-–—|]))(?:\(\s*(?:\d{1,3}|\d+\+)\s*\)|\[\s*(?:\d{1,3}|\d+\+)\s*\])(?=$|[\s\-–—|])"#), " "),
+    // Elapsed timers in brackets/parens, or bare at the start/end edges of the title.
+    (try! NSRegularExpression(pattern: #"(?:^|(?<=[\s\-–—|]))(?:\(\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)|\[\s*\d{1,2}:\d{2}(?::\d{2})?\s*\])(?=$|[\s\-–—|])"#), " "),
+    (try! NSRegularExpression(pattern: #"^\d{1,2}:\d{2}(?::\d{2})?(?=$|[\s\-–—|])"#), " "),
+    (try! NSRegularExpression(pattern: #"(?:^|(?<=[\s\-–—|]))\d{1,2}:\d{2}(?::\d{2})?$"#), " "),
+    // Progress percentages in brackets/parens, at title edges, or at the end of a title segment before a separator.
+    (try! NSRegularExpression(pattern: #"(?:^|(?<=[\s\-–—|]))(?:\(\s*\d{1,3}(?:\.\d+)?%\s*\)|\[\s*\d{1,3}(?:\.\d+)?%\s*\])(?=$|[\s\-–—|])"#), " "),
+    (try! NSRegularExpression(pattern: #"^\d{1,3}(?:\.\d+)?%(?=$|[\s\-–—|])"#), " "),
+    (try! NSRegularExpression(pattern: #"(?:^|(?<=[\s\-–—|]))\d{1,3}(?:\.\d+)?%(?=$|\s+[-–—|](?:\s|$))"#), " "),
+    // Tab counts in brackets/parens or at the start/end edges of the title.
+    (try! NSRegularExpression(pattern: #"(?i)(?:^|(?<=[\s\-–—|]))(?:\(\s*\d+\s+tabs?\s*\)|\[\s*\d+\s+tabs?\s*\])(?=$|[\s\-–—|])"#), " "),
+    (try! NSRegularExpression(pattern: #"(?i)^\d+\s+tabs?(?=$|[\s\-–—|])"#), " "),
+    (try! NSRegularExpression(pattern: #"(?i)(?:(?:^|\s+)[-–—|]\s*|(?:^|(?<=\s)))\d+\s+tabs?$"#), " "),
+  ]
+  private static let dirtyDotPatterns: [(regex: NSRegularExpression, replacement: String)] = [
+    (try! NSRegularExpression(pattern: #"^(?:[•●◦]\s+)+"#), ""),
+    (try! NSRegularExpression(pattern: #"(\s[-–—|]\s+)[•●◦]\s+"#), "$1"),
+    (try! NSRegularExpression(pattern: #"(?:\s+[•●◦])+$"#), ""),
+  ]
+  private static let danglingSeparators: [(regex: NSRegularExpression, replacement: String)] = [
+    (try! NSRegularExpression(pattern: #"^[-–—|]+(?:\s+|$)"#), ""),
+    (try! NSRegularExpression(pattern: #"(?:^|\s+)[-–—|]+$"#), ""),
+    (try! NSRegularExpression(pattern: #"\s+([-–—|])(?:\s+[-–—|])+\s+"#), " $1 "),
+  ]
+
+  /// Strips volatile live-window decorations (unread counts like `(3)` or `[12+]`, dirty dots `• `,
+  /// edge/bracketed elapsed timers like `04:12`, percentages like `45%`, and tab counts like `- 4 tabs`)
+  /// while preserving mid-title timestamps and numbered filenames (e.g. `Report (1).pdf`) and refusing
+  /// empty collapse: if stripping would leave nothing, the cleaned title is returned intact.
+  public static func normalizeDynamicTitle(_ title: String) -> String {
+    let cleaned = ElementCleaner.line(title)
+    guard !cleaned.isEmpty else { return "" }
+    var working = cleaned
+    for _ in 0..<4 {
+      let before = working
+      for entry in dirtyDotPatterns {
+        let range = NSRange(working.startIndex..., in: working)
+        working = entry.regex.stringByReplacingMatches(in: working, range: range, withTemplate: entry.replacement)
+      }
+      working = ElementCleaner.line(working)
+      for entry in dynamicPatterns {
+        let range = NSRange(working.startIndex..., in: working)
+        working = entry.regex.stringByReplacingMatches(in: working, range: range, withTemplate: entry.replacement)
+      }
+      working = ElementCleaner.line(working)
+      if working != cleaned {
+        for entry in danglingSeparators {
+          let range = NSRange(working.startIndex..., in: working)
+          working = entry.regex.stringByReplacingMatches(in: working, range: range, withTemplate: entry.replacement)
+        }
+        working = ElementCleaner.line(working)
+      }
+      if working == before || working.isEmpty { break }
+    }
+    return working.isEmpty ? cleaned : working
+  }
+
+  /// True when two titles name the same live window (same `CGWindowID`), tolerating ticking clocks,
+  /// unread counters, dirty dots, progress percentages and tab counts. Two distinct titles that collapse
+  /// to empty (e.g. `"(3)"` and `"45%"`) never match.
+  public static func sameLiveTitle(_ one: String, _ other: String) -> Bool {
+    if one == other { return true }
+    let a = normalizeDynamicTitle(one), b = normalizeDynamicTitle(other)
+    return !a.isEmpty && a == b
+  }
 }
 
 /// What must hold before the hands try to bring an app forward. A request that

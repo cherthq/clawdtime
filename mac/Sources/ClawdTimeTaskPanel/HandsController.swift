@@ -40,6 +40,9 @@ import TaskPanelCore
   private var label = ""
   /// When the bar came into view.
   private var barUp: Date?
+  /// Short per-command cache for the remote service check inside `lastCheck()`, coalescing redundant
+  /// loopback polls within 80 ms while keeping all synchronous local safety checks unconditional.
+  private var remoteCheckAt: Date?
   private var typingMark = 0
   /// The time that the guided cursor took before the inputs of this command. Nil when it did not go out.
   private var glided: Double?
@@ -162,6 +165,7 @@ import TaskPanelCore
   }
   func shutdown() {
     loop?.cancel(); loop = nil
+    remoteCheckAt = nil
     input.halted = true
     desktop.invalidate()
     input.letGo()
@@ -195,6 +199,7 @@ import TaskPanelCore
   }
   /// Nothing runs: the bar, the guided cursor and the tap go, and the windows show in captures again.
   private func quiet() {
+    remoteCheckAt = nil
     presentation.reset()
     guard live || bar.isShown else { return }
     live = false; label = ""
@@ -220,6 +225,7 @@ import TaskPanelCore
   /// runs here, whatever the service answers. The request to the worker goes once.
   private func stopByPerson() {
     guard live, !stop.stopped else { return }
+    remoteCheckAt = nil
     stop.press()
     presentation.reset()
     desktop.invalidate()
@@ -237,8 +243,15 @@ import TaskPanelCore
     let seq = pending.seq, command = pending.command
     // What this command costs counts from zero, also when it ends before it begins.
     observer.spent = HandsCost(); glided = nil
-    // The bar with Stop is in view for a moment before the first action of a run.
-    if let since = barUp {
+    remoteCheckAt = nil
+    defer { remoteCheckAt = nil }
+    // The bar with Stop is in view for a moment before the first mutating action of a run.
+    let mutates: Bool
+    switch command {
+    case .observe, .zoom, .wait: mutates = false
+    default: mutates = true
+    }
+    if mutates, let since = barUp {
       let age = Date().timeIntervalSince(since)
       if age < 0.25 { await pause(0.25 - age) }
     }
@@ -293,6 +306,7 @@ import TaskPanelCore
     case .zoom(let x, let y, let w, let h, let width, let height):
       // A picture only: no app gets input, the Accessibility tree is not read, and the look of the hands stays.
       shield(true)
+      presentation.point(CGRect(x: x, y: y, width: w, height: h))
       return await observer.closer(x: x, y: y, w: w, h: h, width: width, height: height, pointer: input.pointer).map { Optional($0) }
     case .move, .click, .drag, .scroll:
       return await point(command, label: label)
@@ -395,6 +409,7 @@ import TaskPanelCore
       defer { guide.rest() }
       await say(label)
       if let refusal = await lastCheck() { return .failure(refusal) }
+      presentationTransition()
       desktop.invalidate()
       // The polite quit, as the app's own Quit: no key goes out, and nothing is forced. An app that asks
       // about work that is not saved stays, and the worker then looks at what it asks.
@@ -432,12 +447,16 @@ import TaskPanelCore
     // Stop at this Mac and the person's own input need no read of the service.
     if let refusal = HandsGate.refusal(stopped: stop.stopped, watching: input.watching, personActed: input.personActed,
                                        run: .init(active: true, goal: "", step: 0, state: "running")) { return refusal }
+    // Coalesce redundant loopback service polls within 80 ms inside the same command.
+    if let checkedAt = remoteCheckAt, Date().timeIntervalSince(checkedAt) < 0.08 { return nil }
     // The number of this command is taken already, so this read gives no command: only what the worker does now.
     let now = try? await client?.handsNext(after: ledger.last)
-    guard sessionOpen, input.watching else { return .refused }
-    guard AXIsProcessTrusted() else { return .noAccessibility }
-    guard CGPreflightScreenCaptureAccess() else { return .noScreenRecording }
-    return HandsGate.refusal(stopped: stop.stopped || Task.isCancelled, watching: input.watching, personActed: input.personActed, run: now?.run)
+    guard sessionOpen, input.watching else { remoteCheckAt = nil; return .refused }
+    guard AXIsProcessTrusted() else { remoteCheckAt = nil; return .noAccessibility }
+    guard CGPreflightScreenCaptureAccess() else { remoteCheckAt = nil; return .noScreenRecording }
+    let refusal = HandsGate.refusal(stopped: stop.stopped || Task.isCancelled, watching: input.watching, personActed: input.personActed, run: now?.run)
+    remoteCheckAt = refusal == nil ? Date() : nil
+    return refusal
   }
 
   /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,
@@ -448,7 +467,8 @@ import TaskPanelCore
     let surface = presentTyping ? presentation.currentSurface : nil
     // The Accessibility tree is read off the main thread, as everywhere here. It counts from the top.
     let field = await Task.detached(priority: .userInitiated) {
-      (frame: HandsTree.focusFrame(), safeForPresentation: !presentTyping || HandsTree.focusIsSecure() == false)
+      let info = HandsTree.focusInfo()
+      return (frame: info.frame, safeForPresentation: !presentTyping || info.secure == false)
     }.value
     let focus = field.frame
     let screen = CGRect(x: 0, y: 0, width: map.width, height: map.height)
@@ -482,21 +502,23 @@ import TaskPanelCore
     presentation.point(action.union(overlay))
     await travel(to: map.flip(places[0]), label: label)
     if let refusal = await lastCheck() { return .failure(refusal) }
+    let allowCover: Bool
+    if case .click(_, _, _, _, let allow) = command { allowCover = allow == true } else { allowCover = false }
     // ClawdTime's windows are not in the picture that the worker saw. A click on
     // one of them goes through to what is behind it, which is what the worker meant.
     // They let clicks through only from here: during the glide the bar keeps its Stop.
-    guard await desktop.beginInput(steady: true, places: places) else { return .failure(.staleObservation) }
+    guard await desktop.beginInput(steady: true, places: places, allowCover: allowCover) else { return .failure(.staleObservation) }
     defer { desktop.endInput() }
-    // A place under a small window of the app in front (a list of suggestions, a card) gets no click: the look
-    // does not say what is there.
-    guard !desktop.inputHides(places) else { return .failure(.targetNotVisible) }
+    // A place under a small window of the app in front (a list of suggestions, a card) gets no click unless
+    // the command explicitly targets an observed cover that has not changed.
+    guard !desktop.inputHides(places, allowCover: allowCover) else { return .failure(.targetNotVisible) }
     restore = passThrough(places.map(map.flip))
     guard await input.move(to: places[0]) else { return .failure(inputFailure()) }
     // A window of ClawdTime that came up on the way, for example a request with Approve on it, gets no click either.
     restore += passThrough(places.map(map.flip))
     let done: Bool
     switch command {
-    case .click(_, _, let button, let count):
+    case .click(_, _, let button, let count, _):
       guide.pulse()
       done = await input.click(at: places[0], button: button, count: count)
     case .drag:

@@ -45,7 +45,7 @@ import TaskPanelCore
     struct Look: Equatable { let surface: Surface; let covers: [DesktopCover] }
     var look: Look { Look(surface: self, covers: covers) }
     static func == (lhs: Self, rhs: Self) -> Bool {
-      lhs.pid == rhs.pid && CFEqual(lhs.window, rhs.window) && lhs.title == rhs.title && lhs.frame == rhs.frame
+      lhs.pid == rhs.pid && CFEqual(lhs.window, rhs.window) && DesktopArrival.sameLiveTitle(lhs.title, rhs.title) && lhs.frame == rhs.frame
         && lhs.windowID == rhs.windowID && lhs.displayID == rhs.displayID && lhs.map == rhs.map && lhs.ordinary == rhs.ordinary && lhs.fullScreen == rhs.fullScreen && lhs.fullScreenConfirmed == rhs.fullScreenConfirmed
     }
   }
@@ -78,6 +78,8 @@ import TaskPanelCore
   /// ones that show nothing among them, and the places of a pointing command.
   private var inputFront: (covers: [DesktopCover], unseen: [DesktopUnseen])?
   private var inputPlaces: [CGPoint] = []
+  private var inputAllowCover = false
+  private var inputObservedCovers: [DesktopCover] = []
   private var tokens: [(NotificationCenter, NSObjectProtocol)] = []
   private var inputSurface: Surface?
   private var inputEpoch: Int?
@@ -120,7 +122,7 @@ import TaskPanelCore
   func invalidate() { lease.invalidate(); history.invalidate(); environmentChanges += 1 }
   /// Idle/run completion consumes input evidence but retains a verified previous
   /// desktop in this panel session. External Space/session/display changes do not.
-  func retireObservation() { lease.consume(); inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = [] }
+  func retireObservation() { lease.consume(); inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; inputAllowCover = false; inputObservedCovers = [] }
   private func phase(_ value: DesktopTransitionPhase) { onTransition?(value, epoch) }
   private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
   /// Zero when the list of displays cannot be read: then nothing that needs one display runs.
@@ -269,7 +271,8 @@ import TaskPanelCore
   func observe(observer: HandsObserver, image: Bool, elements: Bool, accessibility: Bool, pointer: CGPoint) async -> Result<Observation, HandError> {
     let beforeEpoch = epoch
     let before = accessibility ? await surface() : nil
-    let read = await observer.observe(image: image, elements: elements, accessibility: accessibility, pointer: pointer)
+    let coverFrames = before?.covers.map(\.frame) ?? []
+    let read = await observer.observe(image: image, elements: elements, accessibility: accessibility, pointer: pointer, coverFrames: coverFrames)
     let after = accessibility ? await surface() : nil
     guard beforeEpoch == epoch, before?.look == after?.look else { invalidate(); return .failure(.staleObservation) }
     guard case .success(let seen) = read else { invalidate(); return read }
@@ -295,20 +298,26 @@ import TaskPanelCore
   /// every few typed characters: a window in front that took the keyboard would be the focused window, and the
   /// surface would not be the same. `places` are the places of a pointing command, from the top left of the
   /// main display.
-  func beginInput(steady: Bool = false, places: [CGPoint] = []) async -> Bool {
+  func beginInput(steady: Bool = false, places: [CGPoint] = [], allowCover: Bool = false) async -> Bool {
     let expected = epoch
     let current = await surface()
     guard expected == epoch, lease.permits(current?.look, at: now) else { invalidate(); return false }
     inputSurface = current; inputEpoch = epoch
     inputFront = steady ? current.map { ($0.covers, $0.unseen) } : nil
     inputPlaces = places
+    inputAllowCover = allowCover
+    inputObservedCovers = current?.covers ?? []
     return true
   }
   /// One of the places is under a window of the app that lies in front of the surface. The look does not say
-  /// what is there, so no click goes to it.
-  func inputHides(_ places: [CGPoint]) -> Bool {
+  /// what is there, so no click goes to it unless the command explicitly targets an observed cover that has not changed.
+  func inputHides(_ places: [CGPoint], allowCover: Bool = false) -> Bool {
     guard let covers = inputSurface?.covers else { return false }
-    return places.contains { DesktopFocusedWindow.hides(covers, $0) }
+    let allow = allowCover || inputAllowCover
+    return places.contains { place in
+      guard DesktopFocusedWindow.hides(covers, place) else { return false }
+      return !(allow && DesktopFocusedWindow.permitsObservedCover(place, observed: inputObservedCovers, current: covers))
+    }
   }
   /// Cheap event-loop guard between await points; geometry is checked again just
   /// before a click/key and periodically during typing.
@@ -319,12 +328,21 @@ import TaskPanelCore
     guard inputGenerationCurrent, let current, current == expected else { invalidate(); return false }
     // Before the first event of a steady input the windows in front must be as they were, also the ones that
     // show nothing: one that starts to show could take the click. After it they may change, because the first
-    // press of a double click can open a list. Even then no place of the command may lie under one.
+    // press of a double click can open a list. Even then no place of the command may lie under an unobserved
+    // or changed cover.
     if steady, let held = inputFront, held.covers != current.covers || held.unseen != current.unseen { invalidate(); return false }
-    if inputPlaces.contains(where: { DesktopFocusedWindow.hides(current.covers, $0) }) { invalidate(); return false }
+    for place in inputPlaces {
+      if inputAllowCover && DesktopFocusedWindow.hides(inputObservedCovers, place) {
+        guard DesktopFocusedWindow.permitsObservedCover(place, observed: inputObservedCovers, current: current.covers) else {
+          invalidate(); return false
+        }
+      } else if DesktopFocusedWindow.hides(current.covers, place) {
+        invalidate(); return false
+      }
+    }
     return true
   }
-  func endInput() { inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; lease.consume() }
+  func endInput() { inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; inputAllowCover = false; inputObservedCovers = []; lease.consume() }
 
   /// One activation attempt. Every effect is preceded by the controller's Stop,
   /// takeover, permission and session checks. Once anything is dispatched, failure

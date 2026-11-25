@@ -103,6 +103,42 @@ final class HandsInputTests: XCTestCase {
     XCTAssertEqual(joined(TypingPlan.steps(text, perStep: 7)), text)
   }
 
+  func testBatchedTypingPerStep8PreservesGraphemesEmojiCJKKeysAndUTF16Limit() {
+    // Plain ASCII splits cleanly into 8-character chunks.
+    XCTAssertEqual(TypingPlan.steps("abcdefghijklmnopq", perStep: 8), [.text("abcdefgh"), .text("ijklmnop"), .text("q")])
+    // Newlines and tabs always flush before and emit dedicated key events.
+    XCTAssertEqual(TypingPlan.steps("first line\nsecond\tthird", perStep: 8),
+      [.text("first li"), .text("ne"), .key(KeyCombo.returnKey), .text("second"), .key(KeyCombo.tabKey), .text("third")])
+    // CJK text (1 UTF-16 unit per BMP character) batches at 8 characters per step.
+    let cjk = "你好世界测试文本一二三"
+    let cjkSteps = TypingPlan.steps(cjk, perStep: 8)
+    XCTAssertEqual(cjkSteps, [.text("你好世界测试文本"), .text("一二三")])
+    // Surrogate-pair emoji (2 UTF-16 units each): 8 emoji = 16 UTF-16 units <= 20, fits in one step.
+    let eightWaves = String(repeating: "👋", count: 8)
+    XCTAssertEqual(TypingPlan.steps(eightWaves + "!", perStep: 8), [.text(eightWaves), .text("!")])
+    // Multi-code-point ZWJ grapheme cluster (11 UTF-16 units each): never split across events, bounded by 20 UTF-16 units.
+    let family = "👨‍👩‍👧‍👦"
+    XCTAssertEqual(family.utf16.count, 11)
+    let families = TypingPlan.steps(family + family + family, perStep: 8)
+    XCTAssertEqual(families, [.text(family), .text(family), .text(family)])
+    // Mixed combining accents, emoji, CJK, and line breaks round-trip with every chunk <= 20 UTF-16 units.
+    let mixed = "Café e\u{301} \(family) 👋世界\n\t다음줄 1234567890"
+    let mixedSteps = TypingPlan.steps(mixed, perStep: 8)
+    var rebuilt = ""
+    for step in mixedSteps {
+      switch step {
+      case .text(let piece):
+        XCTAssertLessThanOrEqual(piece.utf16.count, TypingPlan.unitsPerEvent)
+        XCTAssertLessThanOrEqual(piece.count, 8)
+        rebuilt += piece
+      case .key(KeyCombo.returnKey): rebuilt += "\n"
+      case .key(KeyCombo.tabKey): rebuilt += "\t"
+      case .key(let other): XCTFail("Unexpected key code \(other)")
+      }
+    }
+    XCTAssertEqual(rebuilt, mixed)
+  }
+
   func testAScrollInLinesBecomesWheelTurnsOfTheOtherSign() {
     typealias Tick = ScrollPlan.Tick
     // A positive dy moves the content up: a wheel event counts that as negative.

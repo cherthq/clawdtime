@@ -34,6 +34,7 @@ final class HandsContractTests: XCTestCase {
       (#"{"kind":"move","x":120.5,"y":64}"#, .move(x: 120.5, y: 64)),
       (#"{"kind":"click","x":10,"y":20,"button":"left","count":1}"#, .click(x: 10, y: 20, button: .left, count: 1)),
       (#"{"kind":"click","x":10,"y":20,"button":"right","count":2}"#, .click(x: 10, y: 20, button: .right, count: 2)),
+      (#"{"kind":"click","x":10,"y":20,"button":"left","count":1,"allowCover":true}"#, .click(x: 10, y: 20, button: .left, count: 1, allowCover: true)),
       (#"{"kind":"drag","fromX":1,"fromY":2,"toX":300,"toY":400.25}"#, .drag(fromX: 1, fromY: 2, toX: 300, toY: 400.25)),
       (#"{"kind":"scroll","x":500,"y":400,"dx":0,"dy":-3}"#, .scroll(x: 500, y: 400, dx: 0, dy: -3)),
       (#"{"kind":"type","text":"Grüße, 世界 👋\nline two"}"#, .type(text: "Grüße, 世界 👋\nline two")),
@@ -84,6 +85,7 @@ final class HandsContractTests: XCTestCase {
       #"{"kind":"click","x":1,"y":2,"button":"middle","count":1}"#,
       #"{"kind":"click","x":1,"y":2,"button":"left","count":3}"#,
       #"{"kind":"click","x":1,"y":2,"button":"left","count":0}"#,
+      #"{"kind":"click","x":1,"y":2,"button":"left","count":1,"allowCover":"yes"}"#,
       #"{"kind":"click","x":1,"y":2,"button":"left"}"#,
       #"{"kind":"drag","fromX":1,"fromY":2,"toX":3}"#,
       #"{"kind":"scroll","x":1,"y":2,"dy":3}"#,
@@ -313,7 +315,16 @@ final class HandsContractTests: XCTestCase {
     // A second look of the same command adds to the first. A part that neither had stays out.
     cost.add(HandsCost(walkMs: 40, glideMs: 0))
     XCTAssertEqual(cost.headerValue, "capture=93;encode=21;bytes=183422;walk=452;glide=0")
+    cost.add(HandsCost(ocrMs: 28))
+    XCTAssertEqual(cost.headerValue, "capture=93;encode=21;bytes=183422;walk=452;ocr=28;glide=0")
     XCTAssertEqual(HandsCost(glideMs: 360).headerValue, "glide=360")
+    // Click with allowCover false omits allowCover from wire JSON.
+    let encodedFalse = try? JSONEncoder().encode(HandCommand.click(x: 10, y: 20, button: .left, count: 1, allowCover: false))
+    if let encodedFalse, let dict = try? JSONSerialization.jsonObject(with: encodedFalse) as? [String: Any] {
+      XCTAssertNil(dict["allowCover"])
+    } else {
+      XCTFail("Failed to encode click command")
+    }
     // Seconds as whole milliseconds, never below zero and never more than a day.
     XCTAssertEqual(HandsCost.milliseconds(0.2404), 240)
     XCTAssertEqual(HandsCost.milliseconds(-1), 0)

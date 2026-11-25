@@ -51,6 +51,33 @@ final class OwnWindowsInFrontTests: XCTestCase {
     XCTAssertFalse(unseenOnly.hides(CGPoint(x: 500, y: 300)))
   }
 
+  func testObservedCoverClickIsPermittedOnlyForTheSameUnchangedTopmostCover() {
+    let inside = CGPoint(x: 500, y: 300)
+    let outside = CGPoint(x: 500, y: 600)
+    let seen = [cover(7, suggestions)]
+    // Exact same topmost cover (same ID and frame) at the click point is permitted.
+    XCTAssertTrue(DesktopFocusedWindow.permitsObservedCover(inside, observed: seen, current: [cover(7, suggestions)]))
+    // Existing hides() remains true for the point regardless of permitsObservedCover.
+    XCTAssertTrue(DesktopFocusedWindow.hides(seen, inside))
+    // A point outside covers is not an observed cover click.
+    XCTAssertFalse(DesktopFocusedWindow.permitsObservedCover(outside, observed: seen, current: seen))
+    // A cover that appeared after observation is refused.
+    XCTAssertFalse(DesktopFocusedWindow.permitsObservedCover(inside, observed: [], current: [cover(7, suggestions)]))
+    // A cover that vanished before the click is refused (would click through to the window behind).
+    XCTAssertFalse(DesktopFocusedWindow.permitsObservedCover(inside, observed: seen, current: []))
+    // A different window ID at the same frame is refused.
+    XCTAssertFalse(DesktopFocusedWindow.permitsObservedCover(inside, observed: seen, current: [cover(8, suggestions)]))
+    // The same window ID with a moved or resized frame is refused.
+    let resized = CGRect(x: 240, y: 112, width: 820, height: 220)
+    XCTAssertFalse(DesktopFocusedWindow.permitsObservedCover(inside, observed: seen, current: [cover(7, resized)]))
+    // Another cover appearing on top of the observed cover at the click point is refused.
+    let overlay = CGRect(x: 450, y: 260, width: 200, height: 100)
+    XCTAssertFalse(DesktopFocusedWindow.permitsObservedCover(inside, observed: seen, current: [cover(9, overlay), cover(7, suggestions)]))
+    // An unrelated cover elsewhere that does not overlap the point leaves the observed cover topmost and valid.
+    let elsewhere = CGRect(x: 1100, y: 700, width: 120, height: 40)
+    XCTAssertTrue(DesktopFocusedWindow.permitsObservedCover(inside, observed: seen, current: [cover(9, elsewhere), cover(7, suggestions)]))
+  }
+
   func testAnotherWindowAtTheSamePlaceIsAnotherCover() {
     let first = match([row(7, title: nil, frame: suggestions), row(3, frame: browser)], standalone: [browser])
     let second = match([row(8, title: nil, frame: suggestions), row(3, frame: browser)], standalone: [browser])

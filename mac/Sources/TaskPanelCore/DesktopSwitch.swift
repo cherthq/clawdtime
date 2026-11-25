@@ -198,6 +198,14 @@ public struct DesktopFocusedWindow: Equatable, Sendable {
   public func hides(_ point: CGPoint) -> Bool { Self.hides(covers, point) }
   /// The same rule for covers that the panel holds.
   public static func hides(_ covers: [DesktopCover], _ point: CGPoint) -> Bool { covers.contains { $0.frame.contains(point) } }
+  /// True when `point` lies inside the exact same topmost same-app cover (same window ID and frame)
+  /// that was already present when the screen was observed. Any new, moved, resized, replaced,
+  /// vanished or higher cover at `point` returns false.
+  public static func permitsObservedCover(_ point: CGPoint, observed: [DesktopCover], current: [DesktopCover]) -> Bool {
+    guard let seen = observed.first(where: { $0.frame.contains(point) }),
+          let now = current.first(where: { $0.frame.contains(point) }) else { return false }
+    return seen == now
+  }
 }
 
 /// App switching can stay within a Space or enter another. A changed PID and
