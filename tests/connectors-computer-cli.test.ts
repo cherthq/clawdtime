@@ -17,6 +17,7 @@ import {
   readComputerSwitch,
 } from "../connectors/computer/journal.js";
 import { recordTiming } from "../connectors/computer/timing.js";
+import { Memory } from "../connectors/agents/memory.js";
 import { FakeBrowser } from "./connectors-computer-fixture.js";
 
 const roots: string[] = [];
@@ -153,6 +154,9 @@ describe("clawdtime computer", () => {
     );
     expect(missing).toMatch(/journal +no request yet/);
     expect(missing).toMatch(/unknown result +none/);
+    expect(missing).toMatch(
+      /memory +off, so computer use reads nothing from it and keeps nothing in it\. Turn it on when you need it: clawdtime memory on/,
+    );
     expect(missing).toMatch(/hands +in the ClawdTime panel/);
     expect(missing).toMatch(/Accessibility/);
     expect(missing).toMatch(/Screen & System Audio Recording/);
@@ -181,6 +185,11 @@ describe("clawdtime computer", () => {
       /unknown result +"Pay the invoice"\. Look at the screen, then run: clawdtime computer clear/,
     );
     expect(text).not.toContain("sk-own");
+    // Memory turned on feeds computer use, and the doctor says so.
+    new Memory(ready.root).setEnabled(true);
+    expect(await ready.run("doctor")).toMatch(
+      /memory +on, so it feeds computer use\. Before a request the planner gets up to 5 notes that fit the goal, as data\./,
+    );
     // A folder that others can read is named.
     chmodSync(computerDirectory(ready.root), 0o755);
     expect(await ready.run("doctor")).toMatch(
