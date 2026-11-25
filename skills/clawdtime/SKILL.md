@@ -9,6 +9,8 @@ ClawdTime carries calls, speech and screen sharing. **This existing coding sessi
 owns the conversation, reasoning and tools.** Never start a replacement coding
 agent or let a separate ClawdTime model take over an agent-owned conversation.
 
+For the Chert line (get a line, `chert dev`, calls, texts, fixes), read `skills/chert/SKILL.md` in https://github.com/cherthq/clawdtime.
+
 ## Check the exact session
 
 Use `connection_status` (MCP) or `status` (foreground bridge). New connections use
