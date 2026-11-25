@@ -54,6 +54,43 @@ built-in functions to forge the answer.
 Without the switch, or when the browser does not answer, the worker uses the
 screen for web pages.
 
+### ClawdTime's own browser
+
+`CLAWDTIME_COMPUTER_BROWSER=own` drives a browser that ClawdTime starts
+itself, in place of the browser in front. It needs no setting in your browser
+and no Automation right of macOS.
+
+- It is Google Chrome, or else Chromium, Brave or Edge, from `/Applications`
+  or `~/Applications`. `CLAWDTIME_OWN_BROWSER_PATH` names another program of
+  that family.
+- It has its own profile, in `computer/browser-profile` of the state folder,
+  for its owner only. Your usual browser and its profile are not touched. Sign
+  in to your sites in this browser once. The profile keeps you signed in.
+- It starts at the first browser step, with its window, and closes when the
+  desktop service stops.
+- It reads a page with the same page script and the same numbers as the other
+  driver. It clicks, types and presses keys with the browser's own input, so
+  the page sees trusted events. Before a click, the page says whether the
+  element is the topmost one at its centre. When something covers it, nothing
+  is sent.
+- After an open, a click, a key or back, it waits until the page has loaded
+  and the network is quiet, for at most 5 seconds, or 10 after an open.
+- It can also hover, pick an option by its label, press one key, wait for a
+  text, list the tabs and switch to one.
+- It connects only to the port that this browser wrote in its profile, on
+  127.0.0.1. Then it checks that the browser on that port is the process that
+  it started, or, after a restart of the service, the process that holds the
+  profile. It refuses any other program.
+- A read may start the browser again after it closed. An input never does, and
+  an input whose answer did not come back is never sent again.
+- It never types into a password field and never reads one.
+
+`clawdtime computer doctor`, run with the same variable, says whether a
+browser program is there, whether the profile folder can be written, and
+whether a running own browser answers. `npm run test:computer:own-browser`
+runs the driver in Chromium with no window, against pages of a server on this
+computer.
+
 ## One request, one action at a time
 
 1. The worker asks the hands for a look: an image of the screen and the
@@ -962,7 +999,7 @@ Tested, with made-up hands, a scripted planner, a scripted language model and
 a made-up browser. No test moves the real mouse, presses a real key, captures
 the real screen, draws the cursor or calls a language model.
 
-316 tests in `tests/connectors-computer-*.test.ts`:
+347 tests in `tests/connectors-computer-*.test.ts`:
 
 - `guards` (88): every check above, one by one.
 - `worker` (56): a task that completes; Stop before, during and after an
@@ -977,6 +1014,11 @@ the real screen, draws the cursor or calls a language model.
   end, and the other ways that fit what is in front.
 - `browser-script` (49) and `browser` (30): the page script in a made-up page,
   and the driver over a scripted command runner.
+- `own-browser` (31): ClawdTime's own browser over a made-up launcher and
+  DevTools pipe: the start and the port from the profile, the refusal of any
+  other address and of a process that it did not start, reuse, a new start for
+  a read and never for an input, no input sent twice, a covered click, the
+  keys, the password field, the waits, the tabs, the doctor and the close.
 - `talk` (26): the person's next message answers the worker; and each of
   "click the blue Send button", "type hello in the search field", "refresh the
   browser", "scroll down in Slack" and "read my Slack messages" reaches the
@@ -1032,6 +1074,9 @@ Not tested, and so not proven:
   it is not connected.
 - The retries against the real service. No test shows which headers and
   error codes the real service sends when it is busy or out of quota.
+- ClawdTime's own browser with its window, in Google Chrome, Brave or Edge,
+  and with your sign-ins. `npm run test:computer:own-browser` runs it with no
+  window, in the Chromium of Playwright only, and `npm test` does not run it.
 - The planner against the real language model. Its request has the shape that
   the tests check. No test shows that the model picks good actions.
 - The supervisor's language model. No test shows which tool the real model
