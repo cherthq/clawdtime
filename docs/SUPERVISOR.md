@@ -153,6 +153,9 @@ How it works:
 - "Forget ..." removes a fact only when you ask for it yourself.
 - A waiting request shows what you said before about it ("You said: Never force
   push to main."): in `clawdtime agents pending` and in the question on a call.
+- Computer use reads notes from memory before a request and keeps what you
+  taught after it. See
+  [what it remembers](COMPUTER_USE.md#what-it-remembers).
 
 Memory is a set of plain files on this Mac. It has no service of its own. With
 an OpenAI key, the step that keeps facts after an answer sends your message to

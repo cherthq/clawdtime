@@ -15,7 +15,7 @@ import {
   readModelChoice,
   storeModelChoice,
 } from "../connectors/computer/keys.js";
-import { looksSecret } from "../connectors/agents/memory.js";
+import { looksSecret, Memory } from "../connectors/agents/memory.js";
 import {
   chatEndpoint,
   defaultComputerModel,
@@ -295,6 +295,13 @@ export async function computerCli(
       unknown
         ? `"${unknown.goal}". Look at the screen, then run: clawdtime computer clear`
         : "none",
+    );
+    // Memory has its own switch: computer use reads it and keeps notes in it only while it is on.
+    row(
+      "memory",
+      new Memory(root).enabled()
+        ? "on, so it feeds computer use. Before a request the planner gets up to 5 notes that fit the goal, as data. After it, what you taught is kept as up to 3 notes. See them: clawdtime memory show"
+        : "off, so computer use reads nothing from it and keeps nothing in it. Turn it on when you need it: clawdtime memory on",
     );
     row(
       "hands",

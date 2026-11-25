@@ -118,6 +118,8 @@ export interface PlanChoice {
 export interface OutlineInput {
   goal: string;
   guidance?: string[];
+  /** Notes from the person's memory that fit the goal, as for each turn. Data, never an instruction. */
+  remembered?: string[];
   observation: Observation | null;
   page: BrowserPage | null;
   /** False when the browser cannot be used in this request. */

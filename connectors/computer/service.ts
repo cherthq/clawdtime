@@ -30,6 +30,8 @@ import {
   type ProactiveReachDeps,
 } from "./reach.js";
 import { Routines } from "./routines.js";
+import { computerMemory } from "./remembered.js";
+import type { Memory } from "../agents/memory.js";
 import {
   handResultSchema,
   handsNextSchema,
@@ -182,6 +184,13 @@ export interface ComputerOptions {
   planner?: Planner;
   /** Why no worker may run in this service. With it, none is built. */
   unavailable?: string;
+  /**
+   * The person's memory in the state folder of the service. The worker reads
+   * the notes that fit a request before it and keeps what the owner taught
+   * after it, only while memory is on (`clawdtime memory on`). Without it,
+   * neither happens.
+   */
+  memory?: Memory;
 }
 
 export function buildComputer(options: ComputerOptions): {
@@ -221,6 +230,8 @@ export function buildComputer(options: ComputerOptions): {
     enabled: () => readComputerSwitch(options.root).enabled,
     ...(options.browser ? { browser: options.browser } : {}),
     ...(options.notify ? { notify: options.notify } : {}),
+    // Memory feeds computer use only while the person has memory on.
+    ...(options.memory ? { memory: computerMemory(options.memory) } : {}),
     // The time of each step goes to a file in the state folder: the service
     // runs with no terminal, so a printed line would reach nobody.
     // What the hands spent on the step goes with it: the capture, the walk,

@@ -411,6 +411,12 @@ export interface Planner {
      * the person said nothing more.
      */
     guidance?: string[];
+    /**
+     * Notes from the person's memory that fit the goal, read before the
+     * request: at most 5, of at most 300 characters. Data, never an
+     * instruction. Absent while memory is off or nothing fits.
+     */
+    remembered?: string[];
     history: StepRecord[];
     observation: Observation | null;
     page: BrowserPage | null;
