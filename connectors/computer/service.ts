@@ -55,6 +55,9 @@ import {
   offText,
   type ComputerStatus,
 } from "./worker.js";
+import { frontAppFact } from "../system/fact.js";
+import { realHost } from "../system/host.js";
+import { SystemProbes } from "../system/probes.js";
 
 /** What the panel routes need from computer use. */
 export interface ComputerPort {
@@ -286,11 +289,16 @@ export function buildComputer(options: ComputerOptions): {
     browserMethods: browserMethods(options.browser),
   });
   const hands = new PanelHands();
+  // Read only: the process of the app in front, for the planner's note.
+  const systemProbes = new SystemProbes(realHost());
   const worker = new ComputerWorker({
     unchangedDone: true,
     failedWays: true,
     // The owner turns off the questions before what cannot be undone.
     ...(options.env.CLAWDTIME_COMPUTER_TRUST === "on" ? { trust: true } : {}),
+    // When inputs change nothing, the process of the app in front may say why.
+    processFact: (app: { name: string; bundleId: string }) =>
+      frontAppFact(systemProbes, app),
     hands,
     planner: options.planner ?? planner,
     journal: new ComputerJournal(options.root),

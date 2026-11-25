@@ -169,7 +169,8 @@ function logsText(look: LogLook) {
     .join("\n");
 }
 
-function reportText(report: Report, now: number) {
+/** One report as a sentence: what happened to which process, and when. */
+export function reportText(report: Report, now: number) {
   const when = ago(now, report.at);
   switch (report.kind) {
     case "crash":
