@@ -41,10 +41,11 @@ struct HandsDisplay {
   /// What the screen shows now. The caller has checked the rights that `image` and `elements` need.
   /// The picture and the walk of the tree run at the same time: neither waits for the other. A look
   /// with no image takes no picture at all.
-  func observe(image: Bool, elements: Bool, accessibility: Bool, pointer: CGPoint, coverFrames: [CGRect] = []) async -> Result<Observation, HandError> {
+  func observe(image: Bool, elements: Bool, accessibility: Bool, pointer: CGPoint,
+               coverFrames: [CGRect] = [], appOverride: NSRunningApplication? = nil) async -> Result<Observation, HandError> {
     guard let display = HandsDisplay.main else { return .failure(.failed) }
     let map = display.map
-    let app = frontApp
+    let app = appOverride ?? frontApp
     let pid = accessibility ? app?.processIdentifier : nil
     let bounds = CGRect(x: 0, y: 0, width: map.width, height: map.height)
     async let taken: Picture? = image ? capture(display, keepImage: elements) : nil
@@ -78,10 +79,12 @@ struct HandsDisplay {
         found = ElementCleaner.clean(rawElements + ocrRaw, within: readFrame)
       }
     }
+    let rawName = app?.localizedName ?? ""
+    let appName = !rawName.isEmpty ? rawName : (appOverride != nil ? (app?.bundleIdentifier ?? "") : "")
     let seen = Observation(at: (Date().timeIntervalSince1970 * 1000).rounded(),
       screen: .init(width: map.width, height: map.height, scale: map.scale),
       cursor: .init(x: Double(pointer.x), y: Double(pointer.y)),
-      app: .init(name: ElementCleaner.line(app?.localizedName ?? "", limit: 120), bundleId: ElementCleaner.line(app?.bundleIdentifier ?? "", limit: 200),
+      app: .init(name: ElementCleaner.line(appName, limit: 120), bundleId: ElementCleaner.line(app?.bundleIdentifier ?? "", limit: 200),
                  window: ElementCleaner.line(window)),
       elements: found, image: picture?.base64, imageWidth: picture?.width, imageHeight: picture?.height)
     return .success(seen)

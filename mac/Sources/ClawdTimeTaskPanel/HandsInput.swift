@@ -226,10 +226,20 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     return true
   }
   /// Inventory is read immediately before dispatch, on the main thread as
-  /// Carbon requires. It identifies combinations, never Mission Control actions.
+  /// Carbon requires. Only Mission Control, Space and Desktop switching hotkeys
+  /// are reserved so system shortcuts such as Spotlight and Screenshot remain permitted.
   func keyIsPermitted(_ combo: KeyCombo) -> Bool {
     let code = combo.character.flatMap(Self.keyCode(printing:)) ?? combo.keyCode
-    return DesktopShortcuts.permits(combo, resolvedCode: code, configured: Self.enabledHotKeys())
+    let reserved = DesktopShortcuts.reservedHotKeys(
+      appleSymbolicHotKeys: Self.appleSymbolicHotKeys(),
+      enabled: Self.enabledHotKeys(),
+      configuredPair: desktopShortcuts())
+    return DesktopShortcuts.permits(combo, resolvedCode: code, configured: reserved)
+  }
+  private static func appleSymbolicHotKeys() -> [String: Any]? {
+    let domain = "com.apple.symbolichotkeys" as CFString
+    CFPreferencesAppSynchronize(domain)
+    return CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, domain) as? [String: Any]
   }
   private static func enabledHotKeys() -> [DesktopHotKey]? {
     var array: Unmanaged<CFArray>?

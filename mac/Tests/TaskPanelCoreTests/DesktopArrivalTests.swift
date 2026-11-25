@@ -127,4 +127,121 @@ final class DesktopArrivalTests: XCTestCase {
     XCTAssertTrue(DesktopArrival.sameLiveTitle("", ""))
     XCTAssertTrue(DesktopArrival.sameLiveTitle("04:12", "04:12"))
   }
+
+  func testScreenshotOverlayArrivalSucceedsWhenToolbarWindowIsVisible() {
+    let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    let toolbar = DesktopArrival.OverlayWindow(
+      pid: 4321,
+      ownerName: "Screenshot",
+      layer: 1002,
+      frame: CGRect(x: 420, y: 860, width: 672, height: 64),
+      alpha: 1.0,
+      onScreen: true
+    )
+    let evidence = DesktopArrival.AppArrivalEvidence(
+      frontBundleID: "com.apple.finder",
+      overlayPIDs: [4321],
+      overlayWindows: [toolbar],
+      display: display
+    )
+    // Both Screenshot.app (launcher bundle ID) and screencaptureui arrive via the visible overlay toolbar.
+    for bundleID in [DesktopArrival.screenshotLauncherBundleID, DesktopArrival.screenshotOverlayBundleID, "COM.APPLE.SCREENSHOT.LAUNCHER"] {
+      XCTAssertTrue(DesktopArrival.usesScreenshotOverlay(bundleID: bundleID), bundleID)
+      XCTAssertEqual(
+        DesktopArrival.match(resolved: bundleID, evidence: evidence),
+        .overlayApp(bundleID: DesktopArrival.screenshotOverlayBundleID, pid: 4321),
+        bundleID
+      )
+    }
+    // Layer 0 visible toolbar window is also accepted.
+    let layerZero = DesktopArrival.OverlayWindow(pid: 4321, ownerName: "screencaptureui", layer: 0, frame: toolbar.frame, alpha: 1.0, onScreen: true)
+    let layerZeroEvidence = DesktopArrival.AppArrivalEvidence(
+      frontBundleID: "com.apple.Safari",
+      overlayPIDs: [4321],
+      overlayWindows: [layerZero],
+      display: display
+    )
+    XCTAssertEqual(
+      DesktopArrival.match(resolved: DesktopArrival.screenshotLauncherBundleID, evidence: layerZeroEvidence),
+      .overlayApp(bundleID: DesktopArrival.screenshotOverlayBundleID, pid: 4321)
+    )
+  }
+
+  func testScreenshotOverlayArrivalFailsWithoutAVisibleOnScreenToolbarWindow() {
+    let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    let goodFrame = CGRect(x: 420, y: 860, width: 672, height: 64)
+    let cases: [(String, DesktopArrival.AppArrivalEvidence)] = [
+      ("no windows", .init(frontBundleID: "com.apple.finder", overlayPIDs: [4321], overlayWindows: [], display: display)),
+      ("no running screencaptureui PID", .init(frontBundleID: "com.apple.finder", overlayPIDs: [], overlayWindows: [
+        .init(pid: 4321, ownerName: "Screenshot", layer: 1002, frame: goodFrame, alpha: 1.0, onScreen: true),
+      ], display: display)),
+      ("window owned by another process", .init(frontBundleID: "com.apple.finder", overlayPIDs: [4321], overlayWindows: [
+        .init(pid: 9999, ownerName: "Screenshot", layer: 1002, frame: goodFrame, alpha: 1.0, onScreen: true),
+      ], display: display)),
+      ("transparent alpha 0 helper", .init(frontBundleID: "com.apple.finder", overlayPIDs: [4321], overlayWindows: [
+        .init(pid: 4321, ownerName: "screencaptureui", layer: 1002, frame: goodFrame, alpha: 0.0, onScreen: true),
+      ], display: display)),
+      ("off-screen flag false", .init(frontBundleID: "com.apple.finder", overlayPIDs: [4321], overlayWindows: [
+        .init(pid: 4321, ownerName: "screencaptureui", layer: 1002, frame: goodFrame, alpha: 1.0, onScreen: false),
+      ], display: display)),
+      ("negative desktop layer", .init(frontBundleID: "com.apple.finder", overlayPIDs: [4321], overlayWindows: [
+        .init(pid: 4321, ownerName: "screencaptureui", layer: -1, frame: goodFrame, alpha: 1.0, onScreen: true),
+      ], display: display)),
+      ("tiny 1x1 helper window", .init(frontBundleID: "com.apple.finder", overlayPIDs: [4321], overlayWindows: [
+        .init(pid: 4321, ownerName: "screencaptureui", layer: 1002, frame: CGRect(x: 100, y: 100, width: 1, height: 1), alpha: 1.0, onScreen: true),
+      ], display: display)),
+      ("window outside display bounds", .init(frontBundleID: "com.apple.finder", overlayPIDs: [4321], overlayWindows: [
+        .init(pid: 4321, ownerName: "screencaptureui", layer: 1002, frame: CGRect(x: 3000, y: 860, width: 672, height: 64), alpha: 1.0, onScreen: true),
+      ], display: display)),
+      ("launcher bundle frontmost without toolbar window", .init(frontBundleID: DesktopArrival.screenshotLauncherBundleID, overlayPIDs: [4321], overlayWindows: [], display: display)),
+    ]
+    for (label, evidence) in cases {
+      XCTAssertEqual(
+        DesktopArrival.match(resolved: DesktopArrival.screenshotLauncherBundleID, evidence: evidence),
+        .notArrived,
+        label
+      )
+      XCTAssertEqual(
+        DesktopArrival.match(resolved: DesktopArrival.screenshotOverlayBundleID, evidence: evidence),
+        .notArrived,
+        label
+      )
+    }
+
+    // With DesktopAppWait, waiting without a toolbar expires instead of claiming arrival.
+    let wait = DesktopAppWait(at: 10)
+    XCTAssertEqual(wait.sample(inFront: false, at: 11), .waiting)
+    XCTAssertEqual(wait.sample(inFront: false, at: 16), .expired)
+    XCTAssertEqual(DesktopEffectOutcome.failure(.targetNotVisible, dispatched: true), .transitionUnknown)
+  }
+
+  func testNormalAppsStillRequireFrontmostApplicationEvenWhenScreenshotOverlayIsVisible() {
+    let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    let toolbar = DesktopArrival.OverlayWindow(
+      pid: 4321,
+      ownerName: "Screenshot",
+      layer: 1002,
+      frame: CGRect(x: 420, y: 860, width: 672, height: 64),
+      alpha: 1.0,
+      onScreen: true
+    )
+    for normal in ["com.apple.Safari", "com.apple.Notes", "com.googlecode.iterm2"] {
+      XCTAssertFalse(DesktopArrival.usesScreenshotOverlay(bundleID: normal), normal)
+      let wrongFront = DesktopArrival.AppArrivalEvidence(
+        frontBundleID: "com.apple.finder",
+        overlayPIDs: [4321],
+        overlayWindows: [toolbar],
+        display: display
+      )
+      XCTAssertEqual(DesktopArrival.match(resolved: normal, evidence: wrongFront), .notArrived, normal)
+
+      let rightFront = DesktopArrival.AppArrivalEvidence(
+        frontBundleID: normal,
+        overlayPIDs: [4321],
+        overlayWindows: [toolbar],
+        display: display
+      )
+      XCTAssertEqual(DesktopArrival.match(resolved: normal, evidence: rightFront), .frontApp(bundleID: normal), normal)
+    }
+  }
 }
