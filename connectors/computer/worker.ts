@@ -78,7 +78,7 @@ import {
   type JournalRequest,
   type RequestState,
 } from "./journal.js";
-import { readWords } from "./orders.js";
+import { casualWords, readWords } from "./orders.js";
 import { HandsTimeout } from "./panel-hands.js";
 import {
   activationRefusal,
@@ -1391,7 +1391,11 @@ export class ComputerWorker implements DesktopExecutorPort {
         return { kept: false, why: atEndText };
       }
       // A credential goes neither to the planner nor into the record.
-      if (looksSecretStrict(words) || looksSecretStrict(text)) {
+      if (
+        looksSecretStrict(words) ||
+        looksSecretStrict(text) ||
+        looksSecretStrict(casualWords(text))
+      ) {
         recordSeen();
         return { kept: false, why: secretText };
       }
@@ -1463,7 +1467,11 @@ export class ComputerWorker implements DesktopExecutorPort {
         return resumedText;
       }
       recordSeen();
-      if (looksSecretStrict(words) || looksSecretStrict(text))
+      if (
+        looksSecretStrict(words) ||
+        looksSecretStrict(text) ||
+        looksSecretStrict(casualWords(text))
+      )
         return `${secretText} ${stillPausedText(question.pause)}`;
       return stillPausedText(question.pause);
     }

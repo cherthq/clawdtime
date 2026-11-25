@@ -1068,3 +1068,13 @@ describe("natural words at the hand-off", () => {
     expect(execution.stop).not.toHaveBeenCalled();
   });
 });
+
+describe("a secret in casual words, while a task runs", () => {
+  it("is not kept when only the casual reading shows it", async () => {
+    const { looksSecretStrict } =
+      await import("../connectors/computer/journal.js");
+    const { casualWords } = await import("../connectors/computer/orders.js");
+    const text = "tpye 4821 as the pin";
+    expect(looksSecretStrict(casualWords(text))).toBe(true);
+  });
+});
