@@ -21,6 +21,7 @@ import type {
 } from "./ports.js";
 import { parsePageKey, type PageKey } from "./browser-script.js";
 import { closerSecureText, secureInArea } from "./closer.js";
+import { sameWindowTitle } from "./desktop.js";
 
 const finite = z.number().finite();
 const number = z.number().int().nonnegative();
@@ -2296,11 +2297,15 @@ const sameKind = (left: ScreenElement, right: ScreenElement) =>
   left.role === right.role &&
   left.title === right.title &&
   left.secure === right.secure;
-const samePlace = (left: ScreenElement, right: ScreenElement) =>
-  Math.abs(left.x - right.x) <= 2 &&
-  Math.abs(left.y - right.y) <= 2 &&
-  Math.abs(left.w - right.w) <= 2 &&
-  Math.abs(left.h - right.h) <= 2;
+const samePlace = (left: ScreenElement, right: ScreenElement) => {
+  const tol = left.role === "OCRText" ? 6 : 2;
+  return (
+    Math.abs(left.x - right.x) <= tol &&
+    Math.abs(left.y - right.y) <= tol &&
+    Math.abs(left.w - right.w) <= tol &&
+    Math.abs(left.h - right.h) <= tol
+  );
+};
 
 /**
  * The same action against a newer look at the screen. The number of an element
@@ -2329,7 +2334,7 @@ export function retarget(
     };
   if (
     before.app.bundleId !== after.app.bundleId ||
-    before.app.window !== after.app.window
+    !sameWindowTitle(before.app.window, after.app.window)
   )
     return {
       ok: false,

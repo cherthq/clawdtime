@@ -112,11 +112,17 @@ import {
   verifiedDesktopSwitch,
   inputUnknownText,
   sameSurface,
+  sameWindowTitle,
   transitionUnknownText,
   verifiedActivation,
   coveredText,
   coversThePlace,
 } from "./desktop.js";
+import {
+  luminanceGridOf,
+  visuallyChanged,
+  type FocusRect,
+} from "./visual-diff.js";
 import { BrowserClosed, handErrors } from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import { directAddress, webAddress } from "./navigation.js";
@@ -291,6 +297,14 @@ const settleLooks = 8;
 const settlePauseMs = 400;
 /** The most time of one wait for the screen to settle, whatever the looks. */
 const settleBoundMs = 6_000;
+/** Hand commands that trigger bounded post-action visual settle when enabled. */
+const postSettleKinds = new Set(["click", "type", "key", "drag", "open_url"]);
+/** Hard cap on total post-action visual settle wait (initial + follow-up). */
+const postActionSettleCapMs = 450;
+/** Bounded follow-up pause when the first post-action look is visually unchanged. */
+const postActionFollowUpMs = 180;
+/** Maximum age (ms) of an observation eligible for fast visual pre-action re-verify. */
+const fastReverifyMaxAgeMs = 8_000;
 /** What the planner reads in the line of the last held step, after the screen settled. */
 const settledNote =
   "Then the worker waited with no input until the screen was still. Choose again from the new look: the target may be in another place now.";
@@ -545,6 +559,17 @@ export interface ComputerWorkerOptions {
   /** The pause after a planner call that failed for a short time. */
   transientMs?: number;
   /**
+   * Fast pre-action visual re-verify using an image-only observe when the
+   * prior observation carries a real JPEG. Default true.
+   */
+  fastReverify?: boolean;
+  /**
+   * Bounded pause (in ms) after a successful screen effect (click, type, key,
+   * drag, open_url) before taking the next look, plus at most one bounded
+   * visual follow-up check if unchanged. Hard-capped at 450ms total. Default 0.
+   */
+  postActionSettleMs?: number;
+  /**
    * The person's memory (`remembered.ts`). Before a request the planner gets
    * the few notes that fit its goal, and after it what the owner taught is
    * kept. It does nothing while memory is off. Without it the worker reads
@@ -654,6 +679,8 @@ interface Run {
   failed?: { rows: FailedWay[]; read: number; heard: number };
   /** The last full look at the screen. */
   observation: Observation | null;
+  /** Worker clock timestamp when `observation` was captured with a fresh AX tree. */
+  observedAt?: number;
   /** The last reading of the page. Null after an action on the screen. */
   page: BrowserPage | null;
   /** The observation came after the last action that was sent. */
@@ -692,7 +719,12 @@ interface Run {
   /** The signature of the action of this turn, for the progress guard. */
   signed?: string;
   /** The step of the last turn, until the next look says what came of it. */
-  pending?: Omit<ProgressStep, "after">;
+  pending?: Omit<ProgressStep, "after"> & {
+    beforeObs?: Observation | null;
+    beforeAx?: string | null;
+  };
+  /** Pending post-action visual settle after a successful screen effect. */
+  postSettle?: { before: Observation | null };
   /** The kind of the last input, when the look after it showed the same screen as before it. */
   stillAfter?: string;
   /** A done after an input that changed nothing was sent back once. */
@@ -824,7 +856,7 @@ interface FocusClicks {
 const focusMovedToField = (seen: Observation | null, focus: FocusClicks) =>
   seen !== null &&
   seen.app.bundleId === focus.bundleId &&
-  seen.app.window === focus.window &&
+  sameWindowTitle(seen.app.window, focus.window) &&
   seen.elements.some(
     (item) =>
       item.focused && item.role === focus.role && item.title === focus.title,
@@ -896,7 +928,7 @@ const screenPrint = (
         ],
       ]),
     )
-    .update((picture && seen.image) || "")
+    .update((picture && (luminanceGridOf(seen)?.digest ?? seen.image)) || "")
     .digest("hex");
 /** Digest of a browser page reading alone, to detect whether a page command changed it. */
 const pagePrint = (page: BrowserPage | null) =>
@@ -1091,6 +1123,8 @@ export class ComputerWorker implements DesktopExecutorPort {
   private readonly settleLimit: number;
   private readonly transientMs: number;
   private readonly resumeMs: number;
+  private readonly fastReverify: boolean;
+  private readonly postActionSettleMs: number;
   /** How many answers came at a pause, to give each one an id of its own. */
   private answers = 0;
 
@@ -1110,6 +1144,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.settleLimit = options.settleLimit ?? settleLimit;
     this.transientMs = options.transientMs ?? transientPauseMs;
     this.resumeMs = Math.max(0, options.resumeMs ?? resumePauseMs);
+    this.fastReverify = options.fastReverify ?? true;
+    this.postActionSettleMs = Math.max(0, options.postActionSettleMs ?? 0);
     this.timing = options.timing;
     // A request that was running when the service stopped has an unknown
     // result. It becomes uncertain here, and nothing runs it again.
@@ -2031,8 +2067,10 @@ export class ComputerWorker implements DesktopExecutorPort {
         command.kind === "open_app" ||
         command.kind === "switch_desktop" ||
         command.kind === "switch_previous_app"
-      )
+      ) {
         run.observation = null;
+        delete run.observedAt;
+      }
     }
     let result: HandResult;
     if (effect) run.inFlight = true;
@@ -2148,6 +2186,114 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (handed.over) return "over";
     return handed.result?.ok ? (handed.result.observation ?? null) : null;
   }
+  /**
+   * Screen-coordinate target rectangle(s) checked strictly (zero cursor mask,
+   * zero clock-strip exemption) during fast visual pre-action re-verify.
+   */
+  private focusRectFor(
+    action: Action,
+    before: Observation,
+    command: HandCommand,
+  ): FocusRect | FocusRect[] | null {
+    const pad = 24;
+    const pointRect = (x: number, y: number): FocusRect => ({
+      x: x - pad,
+      y: y - pad,
+      w: pad * 2,
+      h: pad * 2,
+    });
+    const elementRect = (id: number): FocusRect | null => {
+      const found = before.elements.find((item) => item.id === id);
+      return found ? { x: found.x, y: found.y, w: found.w, h: found.h } : null;
+    };
+    switch (action.kind) {
+      case "click_element":
+        return (
+          elementRect(action.element) ??
+          (command.kind === "click" ? pointRect(command.x, command.y) : null)
+        );
+      case "click_at":
+        return command.kind === "click"
+          ? pointRect(command.x, command.y)
+          : null;
+      case "hover":
+        return (
+          (action.element !== undefined ? elementRect(action.element) : null) ??
+          (command.kind === "move" ? pointRect(command.x, command.y) : null)
+        );
+      case "scroll":
+        return command.kind === "scroll"
+          ? pointRect(command.x, command.y)
+          : null;
+      case "drag": {
+        if (command.kind !== "drag") return null;
+        const from =
+          "element" in action.from
+            ? elementRect(action.from.element)
+            : pointRect(command.fromX, command.fromY);
+        const to =
+          "element" in action.to
+            ? elementRect(action.to.element)
+            : pointRect(command.toX, command.toY);
+        const rects = [from, to].filter((r): r is FocusRect => r !== null);
+        return rects.length ? rects : null;
+      }
+      default:
+        return null;
+    }
+  }
+  /**
+   * Fast pre-action visual re-verify: when eligible (non-typing/non-key, did
+   * not pause for user approval, observation is <= 8s old, no secure elements
+   * on screen, and prior look carried a real JPEG), take an image-only observe
+   * first and skip the AX walk only when surface and pixels (with zero cursor
+   * mask and strict target focusRect) are unchanged. Otherwise run a full AX
+   * look.
+   */
+  private async reverify(
+    run: Run,
+    action: Action,
+    before: Observation | null,
+    command: HandCommand,
+    approved: boolean,
+  ): Promise<Observation | null | "over"> {
+    const canFastReverify =
+      this.fastReverify &&
+      !approved &&
+      action.kind !== "type" &&
+      action.kind !== "key" &&
+      before !== null &&
+      run.observedAt !== undefined &&
+      this.now() - run.observedAt <= fastReverifyMaxAgeMs &&
+      !before.elements.some((el) => el.secure) &&
+      luminanceGridOf(before) !== null;
+    if (canFastReverify) {
+      const handed = await this.hand(
+        run,
+        { kind: "observe", image: true, elements: false },
+        "Check the screen",
+      );
+      if (handed.over) return "over";
+      if (run.hold || run.takeover || this.outdated(run)) return null;
+      const fast = handed.result?.ok
+        ? (handed.result.observation ?? null)
+        : null;
+      const focusRect = this.focusRectFor(action, before, command);
+      if (
+        fast &&
+        fast.at >= before.at &&
+        fast.at - before.at <= fastReverifyMaxAgeMs &&
+        sameSurface(before, fast) &&
+        visuallyChanged(before, fast, {
+          maskCursor: false,
+          focusRect,
+        }) === false
+      ) {
+        return { ...fast, elements: before.elements };
+      }
+    }
+    return this.look(run);
+  }
 
   private async loop(run: Run) {
     try {
@@ -2232,6 +2378,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           delete run.pauseText;
           delete run.heldRow;
           delete run.settle;
+          delete run.postSettle;
           delete run.approval;
           const reply = await this.ask(
             run,
@@ -2258,6 +2405,20 @@ export class ComputerWorker implements DesktopExecutorPort {
         }
         const lookFrom = this.now();
         if (!run.fresh || !run.observation) {
+          const postSettle = run.postSettle;
+          delete run.postSettle;
+          let settleStart = 0;
+          let initialSettleWait = 0;
+          if (postSettle && this.postActionSettleMs > 0) {
+            settleStart = this.now();
+            initialSettleWait = Math.min(
+              this.postActionSettleMs,
+              postActionSettleCapMs,
+            );
+            const rested = await this.rest(run, initialSettleWait);
+            if (rested === "over") return;
+            if (rested === "held") continue;
+          }
           const look = () =>
             this.hand(
               run,
@@ -2288,8 +2449,68 @@ export class ComputerWorker implements DesktopExecutorPort {
           run.observation = handed.result?.ok
             ? (handed.result.observation ?? null)
             : null;
+          run.observedAt = run.observation ? this.now() : undefined;
           run.fresh = run.observation !== null;
           run.firstLookDone = true;
+          if (
+            postSettle &&
+            this.postActionSettleMs > 0 &&
+            run.observation &&
+            visuallyChanged(postSettle.before, run.observation, {
+              maskCursor: false,
+            }) === false
+          ) {
+            const waitedSoFar = Math.max(
+              initialSettleWait,
+              this.now() - settleStart,
+            );
+            const followUpMs = Math.min(
+              postActionFollowUpMs,
+              postActionSettleCapMs - waitedSoFar,
+            );
+            if (followUpMs > 0) {
+              const rested = await this.rest(run, followUpMs);
+              if (rested === "over") return;
+              if (rested === "held") {
+                run.fresh = false;
+                continue;
+              }
+              const probe = await this.hand(
+                run,
+                { kind: "observe", image: true, elements: false },
+                "Wait for the screen",
+                true,
+              );
+              if (probe.over) return;
+              if (run.takeover || run.hold) {
+                run.fresh = false;
+                continue;
+              }
+              const probed = probe.result?.ok
+                ? (probe.result.observation ?? null)
+                : null;
+              if (
+                probed &&
+                (visuallyChanged(postSettle.before, probed, {
+                  maskCursor: false,
+                }) === true ||
+                  (postSettle.before !== null &&
+                    !sameSurface(postSettle.before, probed)))
+              ) {
+                const refreshed = await look();
+                if (refreshed.over) return;
+                if (run.takeover || run.hold) {
+                  run.fresh = false;
+                  continue;
+                }
+                if (refreshed.result?.ok && refreshed.result.observation) {
+                  run.observation = refreshed.result.observation;
+                  run.observedAt = this.now();
+                  run.fresh = true;
+                }
+              }
+            }
+          }
           if (run.heldRow?.sentBefore !== undefined) {
             if (
               !sameScreen(
@@ -2453,6 +2674,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         const chosen = (planned as { action?: unknown }).action;
         const kind = (chosen as { kind?: unknown } | null)?.kind;
         const before = progressPrint(run.observation);
+        const beforeObs = run.observation;
+        const beforeAx = settlePrint(run.observation);
         run.stepInput = false;
         delete run.signed;
         const why = clean(
@@ -2473,6 +2696,8 @@ export class ComputerWorker implements DesktopExecutorPort {
             kind: typeof kind === "string" ? clean(kind, 40) : "none",
             before,
             input: run.stepInput,
+            beforeObs,
+            beforeAx,
           };
         this.timed(run, {
           step: run.step,
@@ -2567,6 +2792,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         "The initial observation did not include a verified desktop surface epoch. No switch was attempted. Check that the panel supports desktop verification, then ask again.",
       );
     run.observation = before;
+    run.observedAt = this.now();
     run.step++;
     const command: HandCommand =
       intent.kind === "desktop"
@@ -2631,6 +2857,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     // Do not carry the old action target or start another planned action. A later
     // user request always obtains its own full observation and native input lease.
     run.observation = null;
+    delete run.observedAt;
     run.page = null;
     run.fresh = false;
     return this.finish(
@@ -2891,6 +3118,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     // nothing, and the progress guard, answer a loop.
     // The owner's trust: the action goes with no question, and the record
     // keeps which row of the policy it passed.
+    let approved = false;
     if (checked.risk && this.options.trust)
       this.mark(run, `trusted_${checked.policy ?? "risk"}`);
     else if (checked.risk) {
@@ -2904,12 +3132,14 @@ export class ComputerWorker implements DesktopExecutorPort {
         );
         if (reply.kind !== "yes") return;
       }
+      approved = true;
       answered.push(question);
     }
     delete run.held;
     if (checked.send.via === "browser")
       await this.viaBrowser(run, action, why, checked);
-    else await this.viaHands(run, action, why, checked, before, refused);
+    else
+      await this.viaHands(run, action, why, checked, before, refused, approved);
     this.tally(run, checked.signature, screen, viaPage);
     // The question itself changes what is in front, so the look just before
     // the action can differ from the planner's look, and the action is then
@@ -3110,13 +3340,23 @@ export class ComputerWorker implements DesktopExecutorPort {
     delete run.pending;
     if (!pending) return "go";
     const after = progressPrint(run.observation);
+    const afterAx = settlePrint(run.observation);
+    const vis = visuallyChanged(pending.beforeObs ?? null, run.observation, {
+      maskCursor: false,
+      minCells: 1,
+    });
+    const axSame =
+      pending.beforeAx !== null &&
+      pending.beforeAx !== undefined &&
+      afterAx !== null &&
+      pending.beforeAx === afterAx;
+    const unchanged =
+      vis !== null
+        ? axSame && !vis
+        : pending.before !== null && after !== null && pending.before === after;
     // An input after which the screen is the same: a done now rests on nothing that was seen.
     run.stillAfter =
-      pending.input &&
-      stillKinds.has(pending.kind) &&
-      pending.before !== null &&
-      after !== null &&
-      pending.before === after
+      pending.input && stillKinds.has(pending.kind) && unchanged
         ? pending.kind
         : undefined;
     // The planner reads it at once: a click or a key that changed nothing is
@@ -3130,7 +3370,15 @@ export class ComputerWorker implements DesktopExecutorPort {
     )
       last.outcome =
         "sent, but the screen looks the same after it, so it may not have worked. Look again; if nothing new shows, try another way (a menu item or a keyboard shortcut).";
-    const verdict = run.progress.step({ ...pending, after }, this.context(run));
+    const { beforeObs: _beforeObs, beforeAx: _beforeAx, ...step } = pending;
+    const verdict = run.progress.step(
+      {
+        ...step,
+        after,
+        ...(vis !== null ? { visualUnchanged: unchanged } : {}),
+      },
+      this.context(run),
+    );
     if (verdict.kind === "allow") return "go";
     this.mark(run, `${verdict.kind}_${verdict.pattern}`);
     if (verdict.kind === "nudge") {
@@ -3208,7 +3456,12 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.recoveries++;
     const from = this.now();
     const withPage = due.surface !== "window" && this.drives(run);
+    const visual =
+      !withPage &&
+      run.observation !== null &&
+      luminanceGridOf(run.observation) !== null;
     let last: string | null = null;
+    let lastObs: Observation | null = null;
     let settled = false;
     for (let looks = 0; looks < settleLooks; looks++) {
       if (looks > 0) {
@@ -3217,26 +3470,42 @@ export class ComputerWorker implements DesktopExecutorPort {
       }
       const handed = await this.hand(
         run,
-        { kind: "observe", image: false, elements: true },
+        visual
+          ? { kind: "observe", image: true, elements: false }
+          : { kind: "observe", image: false, elements: true },
         "Wait for the screen to settle",
         true,
       );
       if (handed.over) return "over";
       if (run.hold || run.takeover) return "held";
-      let print = settlePrint(
-        handed.result?.ok ? (handed.result.observation ?? null) : null,
-      );
-      if (print !== null && withPage) {
-        const read = await this.readQuietly(run);
-        if (read === "over") return "over";
-        if (run.hold) return "held";
-        if (read) print = `${print}|${pagePrint(read)}`;
+      const obs = handed.result?.ok
+        ? (handed.result.observation ?? null)
+        : null;
+      if (visual) {
+        if (
+          obs !== null &&
+          lastObs !== null &&
+          sameSurface(lastObs, obs) &&
+          visuallyChanged(lastObs, obs) === false
+        ) {
+          settled = true;
+          break;
+        }
+        lastObs = obs;
+      } else {
+        let print = settlePrint(obs);
+        if (print !== null && withPage) {
+          const read = await this.readQuietly(run);
+          if (read === "over") return "over";
+          if (run.hold) return "held";
+          if (read) print = `${print}|${pagePrint(read)}`;
+        }
+        if (print !== null && print === last) {
+          settled = true;
+          break;
+        }
+        last = print;
       }
-      if (print !== null && print === last) {
-        settled = true;
-        break;
-      }
-      last = print;
       if (this.now() - from >= settleBoundMs) break;
     }
     this.mark(run, settled ? "settled" : "unsettled", this.now() - from);
@@ -3439,6 +3708,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     before: Observation | null,
     /** The refusals in a row before this action. */
     refused: number,
+    /** True when the step required / paused for user approval. */
+    approved = false,
   ) {
     let ready = first;
     if (first.send.via !== "hands") return;
@@ -3452,7 +3723,13 @@ export class ComputerWorker implements DesktopExecutorPort {
       // Just before the input: look again, and check the same action against
       // that look. The planner took seconds to choose, and the person may
       // have taken minutes to say yes. The screen can be another one now.
-      const seen = await this.look(run);
+      const seen = await this.reverify(
+        run,
+        action,
+        before,
+        first.send.command,
+        approved,
+      );
       if (seen === "over") return;
       if (run.hold || this.outdated(run))
         return this.changed(
@@ -3671,6 +3948,12 @@ export class ComputerWorker implements DesktopExecutorPort {
       this.wentOut(run);
       delete run.grace;
       if (ready.signature !== null) delete run.focusClicks;
+      if (
+        this.postActionSettleMs > 0 &&
+        postSettleKinds.has(send.command.kind)
+      ) {
+        run.postSettle = { before: lastLook?.image ? lastLook : before };
+      }
       if (run.heldRow) {
         if (send.command.kind === "open_app") {
           const sameFront = sameScreen(

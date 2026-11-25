@@ -2334,3 +2334,198 @@ describe("the look just before a hover or a drag", () => {
       });
   });
 });
+
+describe("dynamic window-title retarget, OCRText jitter, and click wire compatibility", () => {
+  it("retargets across dynamic window-title updates without false front-changed refusals", () => {
+    const cases: [string, string][] = [
+      ["(3) Inbox - Mail", "(4) Inbox - Mail"],
+      ["[12+] Slack - #eng", "[13+] Slack - #eng"],
+      ["• notes.md", "notes.md"],
+      ["FaceTime 04:12", "FaceTime 04:13"],
+      ["Safari - Downloading 45%", "Safari - Downloading 88%"],
+      ["Google Chrome - 4 tabs", "Google Chrome - 5 tabs"],
+    ];
+    for (const [beforeTitle, afterTitle] of cases) {
+      const before = observation(
+        [element(1, { title: "Save", x: 300, y: 400 })],
+        {
+          app: {
+            name: "App",
+            bundleId: "com.example.app",
+            window: beforeTitle,
+          },
+        },
+      );
+      const after = observation(
+        [element(1, { title: "Save", x: 300, y: 400 })],
+        {
+          app: { name: "App", bundleId: "com.example.app", window: afterTitle },
+        },
+      );
+      expect(
+        retarget({ kind: "click_element", element: 1 }, before, after),
+      ).toMatchObject({ ok: true, action: { element: 1 } });
+    }
+  });
+
+  it("allows up to 6pt jitter for OCRText elements while keeping 2pt for AX elements", () => {
+    // Two identical twins force retarget() to disambiguate via samePlace().
+    const ocrBefore = observation([
+      element(1, {
+        role: "OCRText",
+        title: "Send",
+        x: 100,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+      element(2, {
+        role: "OCRText",
+        title: "Send",
+        x: 500,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+    ]);
+    const ocrJitter5 = observation([
+      element(10, {
+        role: "OCRText",
+        title: "Send",
+        x: 105,
+        y: 206,
+        w: 64,
+        h: 22,
+      }),
+      element(11, {
+        role: "OCRText",
+        title: "Send",
+        x: 500,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+    ]);
+    const ocrJitter7 = observation([
+      element(10, {
+        role: "OCRText",
+        title: "Send",
+        x: 107,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+      element(11, {
+        role: "OCRText",
+        title: "Send",
+        x: 500,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+    ]);
+    expect(
+      retarget({ kind: "click_element", element: 1 }, ocrBefore, ocrJitter5),
+    ).toMatchObject({ ok: true, action: { element: 10 } });
+    expect(
+      retarget({ kind: "click_element", element: 1 }, ocrBefore, ocrJitter7),
+    ).toMatchObject({ ok: false });
+
+    const axBefore = observation([
+      element(1, {
+        role: "AXButton",
+        title: "OK",
+        x: 100,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+      element(2, {
+        role: "AXButton",
+        title: "OK",
+        x: 500,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+    ]);
+    const axJitter2 = observation([
+      element(10, {
+        role: "AXButton",
+        title: "OK",
+        x: 102,
+        y: 198,
+        w: 60,
+        h: 20,
+      }),
+      element(11, {
+        role: "AXButton",
+        title: "OK",
+        x: 500,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+    ]);
+    const axJitter5 = observation([
+      element(10, {
+        role: "AXButton",
+        title: "OK",
+        x: 105,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+      element(11, {
+        role: "AXButton",
+        title: "OK",
+        x: 500,
+        y: 200,
+        w: 60,
+        h: 20,
+      }),
+    ]);
+    expect(
+      retarget({ kind: "click_element", element: 1 }, axBefore, axJitter2),
+    ).toMatchObject({ ok: true, action: { element: 10 } });
+    expect(
+      retarget({ kind: "click_element", element: 1 }, axBefore, axJitter5),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("never emits allowCover on click_element (AX or OCRText) or click_at", () => {
+    const seen = observation([
+      element(1, { role: "AXButton", title: "Save", x: 100, y: 200 }),
+      element(2, { role: "OCRText", title: "Continue", x: 300, y: 200 }),
+    ]);
+    const axClick = run({ kind: "click_element", element: 1 }, view(seen));
+    expect(axClick.send).toEqual({
+      via: "hands",
+      look: true,
+      command: { kind: "click", x: 140, y: 212, button: "left", count: 1 },
+    });
+    expect("allowCover" in (axClick.send as { command: object }).command).toBe(
+      false,
+    );
+
+    const ocrClick = run({ kind: "click_element", element: 2 }, view(seen));
+    expect(ocrClick.send).toEqual({
+      via: "hands",
+      look: true,
+      command: { kind: "click", x: 340, y: 212, button: "left", count: 1 },
+    });
+    expect("allowCover" in (ocrClick.send as { command: object }).command).toBe(
+      false,
+    );
+
+    const pointClick = run({ kind: "click_at", x: 640, y: 400 }, view(seen));
+    expect(pointClick.send).toEqual({
+      via: "hands",
+      look: true,
+      command: { kind: "click", x: 720, y: 450, button: "left", count: 1 },
+    });
+    expect(
+      "allowCover" in (pointClick.send as { command: object }).command,
+    ).toBe(false);
+  });
+});

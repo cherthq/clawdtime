@@ -309,3 +309,57 @@ describe("the other ways", () => {
     ).toBeLessThan(290);
   });
 });
+
+describe("perceptual visualUnchanged signal", () => {
+  it("treats visually unchanged frames as non-fresh even when raw digest strings differ", () => {
+    const guard = new ProgressGuard();
+    const verdicts = [
+      guard.step(
+        {
+          signature: "click|A",
+          kind: "click_element",
+          before: "d0",
+          after: "d1",
+          input: true,
+          visualUnchanged: true,
+        },
+        plain,
+      ),
+      guard.step(
+        {
+          signature: "click|B",
+          kind: "click_element",
+          before: "d1",
+          after: "d2",
+          input: true,
+          visualUnchanged: true,
+        },
+        plain,
+      ),
+      guard.step(
+        {
+          signature: "click|C",
+          kind: "click_element",
+          before: "d2",
+          after: "d3",
+          input: true,
+          visualUnchanged: true,
+        },
+        plain,
+      ),
+      guard.step(
+        {
+          signature: "click|D",
+          kind: "click_element",
+          before: "d3",
+          after: "d4",
+          input: true,
+          visualUnchanged: true,
+        },
+        plain,
+      ),
+    ];
+    expect(kinds(verdicts)).toEqual(["allow", "allow", "allow", "nudge"]);
+    expect(verdicts[3]).toMatchObject({ kind: "nudge", pattern: "still" });
+  });
+});
