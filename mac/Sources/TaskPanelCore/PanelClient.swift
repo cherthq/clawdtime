@@ -28,7 +28,7 @@ public final class PanelClient {
                         headers: [String: String] = [:]) async throws -> (data: Data, response: HTTPURLResponse) {
     guard path == "/desktop/state" || path == "/desktop/operations" ||
       path == "/desktop/agents" || path == "/desktop/agents/focus" || path == "/desktop/agents/send" ||
-      path == "/desktop/chat" || path == "/desktop/execution/stop" || path == "/desktop/execution/decision" || path == "/desktop/voice" || path == "/desktop/memory" ||
+      path == "/desktop/chat" || path == "/desktop/chat/new" || path == "/desktop/execution/stop" || path == "/desktop/execution/decision" || path == "/desktop/voice" || path == "/desktop/memory" ||
       path == "/desktop/decisions" || path == "/desktop/decisions/answer" || path == "/desktop/decisions/away" ||
       path == "/desktop/incidents" || path == "/desktop/incidents/dismiss" ||
       path == "/desktop/computer" || path == "/desktop/hands/result" || path == "/desktop/hands/presentation" || path.range(of: "^/desktop/hands/next\\?after=[0-9]{1,15}(&wait=[0-9]{1,4})?$", options: .regularExpression) != nil ||
@@ -119,6 +119,14 @@ public final class PanelClient {
   /// The conversation with ClawdTime.
   public func chat() async throws -> ChatTranscript {
     let result = try JSONDecoder().decode(ChatTranscript.self, from: await request(path: "/desktop/chat"))
+    try result.validate()
+    return result
+  }
+  /// A new chat. The service puts the chat aside, never deletes it, and starts an empty one; work
+  /// that runs goes on. Exactly one POST: a failure is never sent again, and the next chat read shows
+  /// what is true.
+  public func newChat() async throws -> NewChatResult {
+    let result = try JSONDecoder().decode(NewChatResult.self, from: await request(path: "/desktop/chat/new", body: Data("{}".utf8)))
     try result.validate()
     return result
   }

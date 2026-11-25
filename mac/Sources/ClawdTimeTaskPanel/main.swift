@@ -268,6 +268,7 @@ import TaskPanelCore
     chat.onSend = { [weak self] text in self?.sendChat(text) }
     chat.onTalk = { [weak self] in self?.toggleTalk(nil) }
     chat.onClose = { [weak self] in self?.chatPanel.close() }
+    chat.onNewChat = { [weak self] in self?.newChat() }
     askPanel.onAnswer = { [weak self] key, approve in self?.answerAsk(key, approve: approve) }
     workBar.onStop = { [weak self] in self?.stopExecution() }
   }
@@ -405,6 +406,21 @@ import TaskPanelCore
       // It may have answered a request or changed away mode.
       decisions = try? await client.decisions()
       render()
+    }
+  }
+  /// A new chat. The service keeps the chat in view and starts an empty one. Work that runs goes on,
+  /// and a question of the worker that waits is the first line of the new chat. One POST, never sent
+  /// again: the chat read after it shows what is true.
+  private func newChat() {
+    guard let client, chatPending == nil else { return }
+    chatNotice = ""; renderChat()
+    Task {
+      let result = try? await client.newChat()
+      await readChat(client)
+      if let result { if !result.ok { chatNotice = result.text } }
+      else { chatNotice = "The chat could not be changed now. Nothing was deleted." }
+      renderChat()
+      chatPanel.view.focus()
     }
   }
   /// One spoken sentence: its words and the answer join the chat. Returns the answer as sound.

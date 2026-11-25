@@ -351,6 +351,37 @@ final class PanelTransportTests: XCTestCase {
       XCTAssertEqual(server.requests().count, 1)
     }
   }
+  func testANewChatIsOnePostWithThePanelCredentialAndIsNeverSentAgain() async throws {
+    let server = try FixtureHTTP { request, _ in
+      request.hasPrefix("POST /desktop/chat/new ")
+        ? (200, ["Content-Type": "application/json"],
+           Data(#"{"ok":true,"archived":"20261126T101530Z","text":"A new chat started. Work that runs goes on."}"#.utf8))
+        : (500, [:], Data())
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let result = try await client.newChat()
+    XCTAssertEqual(result, NewChatResult(ok: true, text: "A new chat started. Work that runs goes on.", archived: "20261126T101530Z"))
+    let requests = server.requests()
+    XCTAssertEqual(requests.count, 1)
+    XCTAssertTrue(requests[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    // The body is exactly {}: 2 bytes.
+    XCTAssertTrue(requests[0].contains("Content-Length: 2\r\n"))
+    // A refusal of the service comes back as it is: the chat did not change.
+    let busy = try JSONDecoder().decode(NewChatResult.self,
+      from: Data(#"{"ok":false,"archived":null,"text":"ClawdTime is still answering a message."}"#.utf8))
+    XCTAssertNoThrow(try busy.validate()); XCTAssertFalse(busy.ok)
+  }
+  func testAFailedNewChatIsNotRetriedAndAnAnswerOutsideTheContractIsRejected() async throws {
+    for (status, body) in [(500, "{}"), (200, #"{"ok":true,"archived":"../chat","text":"x"}"#),
+                           (200, #"{"ok":true,"archived":null,"text":""}"#), (200, #"{"ok":true}"#)] {
+      let server = try FixtureHTTP { _, _ in (status, ["Content-Type": "application/json"], Data(body.utf8)) }
+      try await server.start(); defer { server.close() }
+      let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+      do { _ = try await client.newChat(); XCTFail("Accepted: " + body) } catch {}
+      XCTAssertEqual(server.requests().count, 1)
+    }
+  }
   func testMemoryIsSwitchedWithThePanelCredential() async throws {
     let server = try FixtureHTTP { _, _ in (200, ["Content-Type": "application/json"], Data(#"{"enabled":true}"#.utf8)) }
     try await server.start(); defer { server.close() }
