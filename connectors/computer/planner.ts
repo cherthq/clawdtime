@@ -1303,7 +1303,7 @@ type Chosen = {
 const proactiveRules = [
   "When something that the goal does not mention blocks the way, and it is a cookie banner, a what's new or welcome sheet, an update prompt that can be postponed or a page that still loads, get past it with no question and the least harmful way: Not Now, Later, Close, Reject All, or wait. Every other dialog that the goal does not speak about stays as it is.",
   "Carry the task to its natural end: after you post or send, see the post or the sent item; after you save or change a setting, see the saved state.",
-  "When a sign-in or a code is needed, call ask with a question that says what is needed and where: the app or the site, the account and the field. The person types it on the Mac.",
+  "When a password, a code or another secret is needed, call ask with a question that says what is needed and where: the app or the site, the account and the field. The person types it on the Mac. A name or an email address that only the person knows is not a secret: ask for it, then type it yourself.",
 ];
 
 const outlineRules = [

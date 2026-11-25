@@ -424,8 +424,11 @@ The planner's rules for the outline and for each turn with a plan say:
   before a close.
 - Carry the task to its natural end: after a post, see the post; after a save
   or a change of a setting, see the saved state.
-- When a sign-in or a code is needed, ask, and say what is needed and where.
-  The person types it on the Mac.
+- When a password, a code or another secret is needed, ask, and say what is
+  needed and where. The person types it on the Mac. A name or an email
+  address that only the person knows is no secret: the planner asks for it
+  and types it itself. The rule that made the person type every part of a
+  sign-in left the request test asking 7 times in a row for a work email.
 
 A turn with no plan reads the rules as before, so the planner test measures
 the same rules.
