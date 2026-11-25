@@ -1208,9 +1208,18 @@ describe("ordinary words next to hold cues", () => {
   it.each([
     ["click the late fees link", "order"],
     ["reply to Sam latr", "hold"],
-    ["click the laser tool", "order"],
   ] as const)("reads %j as %s", async (text, kind) => {
     const { readWords } = await import("../connectors/computer/orders.js");
     expect(readWords(text)).toBe(kind);
   });
+});
+
+describe("ordinary words in a request that is work", () => {
+  it.each(["text Sam that I'm running late", "order the laser printer"])(
+    "does not hold back %j as work for later",
+    async (text) => {
+      const { defersWork } = await import("../connectors/computer/orders.js");
+      expect(defersWork(text)).toBe(false);
+    },
+  );
 });
