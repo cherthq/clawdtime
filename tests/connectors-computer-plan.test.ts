@@ -441,6 +441,58 @@ describe("a turn of the planner with a plan", () => {
     ...(plan ? { plan } : {}),
   });
 
+  it("takes a plan_update and one action in the same answer: the action, with the update", async () => {
+    const both = (calls: { name: string; args: unknown }[]) => ({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: calls.map((call, at) => ({
+              id: `call_${at + 1}`,
+              type: "function",
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.args),
+              },
+            })),
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    });
+    const net = network(
+      both([
+        {
+          name: "plan_update",
+          args: { op: "done", evidence: "The note is open", why: "Part one" },
+        },
+        { name: "click_element", args: { element: 1, why: "Part two" } },
+      ]),
+    );
+    const chosen = await turned(net.request).next(turn(view()));
+    expect(chosen).toMatchObject({
+      action: { kind: "click_element", element: 1 },
+      update: { op: "done", evidence: "The note is open" },
+    });
+    // With a plan, two calls are allowed: one plan_update and one action.
+    expect(
+      (net.sent[0] as { parallel_tool_calls?: boolean }).parallel_tool_calls,
+    ).toBe(true);
+    // Two actions in one answer are never taken: the repair asks again.
+    const twice = network(
+      both([
+        { name: "click_element", args: { element: 1, why: "a" } },
+        { name: "click_element", args: { element: 2, why: "b" } },
+      ]),
+      called("click_element", { element: 1, why: "one" }),
+    );
+    const again = await turned(twice.request).next(turn(view()));
+    expect(again).toMatchObject({
+      action: { kind: "click_element", element: 1 },
+    });
+    expect(twice.sent).toHaveLength(2);
+  });
+
   it("reads the plan and may call plan_update, which comes back as no action", async () => {
     const net = network(
       called("plan_update", {
@@ -543,7 +595,7 @@ afterEach(() =>
 );
 
 type NextInput = Parameters<Planner["next"]>[0];
-type Turn = Action | { update: unknown };
+type Turn = Action | { update: unknown; with?: Action };
 /** A planner with an outline. It reads its turns from a list, and gives up after the list. */
 class PlanningPlanner implements Planner {
   readonly inputs: NextInput[] = [];
@@ -567,7 +619,10 @@ class PlanningPlanner implements Planner {
       reason: "The script ended.",
     };
     const why = `turn ${this.inputs.length}`;
-    if ("update" in turn) return { update: turn.update as PlanUpdate, why };
+    if ("update" in turn)
+      return turn.with
+        ? { action: turn.with, why, update: turn.update }
+        : { update: turn.update as PlanUpdate, why };
     return { action: turn, why };
   }
 }
@@ -682,6 +737,21 @@ describe("the worker with a plan", () => {
       [1, "click_element"],
       [2, "done"],
     ]);
+    expect(said.at(-1)).toBe("Done. The note is saved.");
+  });
+
+  it("marks the plan and acts in one turn when an update comes with an action", async () => {
+    const { worker, hands, planner, said } = setup(
+      [{ update: { op: "done", evidence: "Open" }, with: click }, done],
+      async () => three.slice(0, 2),
+    );
+    await worker.submit("plan_pair", "Copy the number into Call list");
+    await worker.idle();
+    expect(hands.sent).toHaveLength(1);
+    expect(planner.inputs).toHaveLength(2);
+    // The second turn reads the plan with the first subgoal done.
+    expect(planner.inputs[1]!.plan?.subgoals[0]?.state).toBe("done");
+    expect(planner.inputs[1]!.plan?.current).toBe(1);
     expect(said.at(-1)).toBe("Done. The note is saved.");
   });
 

@@ -1111,9 +1111,10 @@ describe("the merged planner features through every provider", () => {
     await openai.next({ ...input("Shopping"), plan });
     await openai.next({ ...input("Groceries"), plan });
     const [a, b] = chat.sent.map((item) => item.body);
-    // The default request of OpenAI keeps its forced single call.
+    // The default request of OpenAI keeps its forced call. With a plan, a
+    // plan_update may come with one action, so two calls are allowed.
     expect(a!.tool_choice).toBe("required");
-    expect(a!.parallel_tool_calls).toBe(false);
+    expect(a!.parallel_tool_calls).toBe(true);
     expect(
       (a!.tools as { function: { name: string } }[]).map(
         (tool) => tool.function.name,

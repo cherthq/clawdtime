@@ -366,11 +366,14 @@ confirm it, report it. The code is in `connectors/computer/plan.ts`.
 2. With every turn after that, the planner gets the plan: each subgoal as
    open, done with what the screen showed, or skipped with why, and the one to
    work on now.
-3. In place of an action the planner may call `plan_update`. It marks the
-   current subgoal done, with what on the screen shows it, or skipped, with
-   why. Or it replaces the rest of the plan, when the screen shows that the
-   plan was wrong. Nothing goes to the Mac, and it is not one of the 40
-   actions.
+3. The planner calls `plan_update` alone, or together with its next action
+   in the same answer. It marks the current subgoal done, with what on the
+   screen shows it, or skipped, with why. Or it replaces the rest of the plan,
+   when the screen shows that the plan was wrong. Nothing goes to the Mac for
+   it, and it is not one of the 40 actions. With the action in the same
+   answer, the plan is marked first and the action goes on in the same turn:
+   alone, it cost one more turn of the model for each subgoal. Two actions in
+   one answer are never taken.
 4. `plan_update` can also keep up to 3 short facts that the planner found: an
    order number, a name, a link. A fact has at most 200 characters. A fact that
    looks like a password, a code or a key is dropped, with the same check that

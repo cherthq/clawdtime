@@ -2159,12 +2159,15 @@ export class ComputerWorker implements DesktopExecutorPort {
         if (run.guidance.length !== heard) continue;
         // Plan: a change of the plan is no action. Nothing goes to the Mac,
         // and it takes no step. Its own bound ends a planner that loops on it.
-        if ("update" in planned) {
+        if ("update" in planned && !planned.action) {
           if (this.replan(run, planned.update)) continue;
           if (++run.plannerFailures >= 2)
             return this.finish(run, "blocked", "plan_loop", planLoopText);
           continue;
         }
+        // Plan: a plan_update that came with the action is marked first.
+        if ("update" in planned && planned.update !== undefined)
+          this.replan(run, planned.update);
         run.plannerFailures = 0;
         run.step++;
         const actFrom = this.now();

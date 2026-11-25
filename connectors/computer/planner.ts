@@ -699,7 +699,13 @@ export function brief(
 
 /** What one answer of the model gives. */
 type Reading =
-  | { kind: "action"; action: Action; why: string }
+  | {
+      kind: "action";
+      action: Action;
+      why: string;
+      /** A plan_update that came in the same answer, before the action. */
+      update?: unknown;
+    }
   | PlanReading
   | { kind: "refused" }
   | {
@@ -763,12 +769,42 @@ function readAnswer(
     );
   if (calls.length === 0)
     return malformed("no_tool_call", "It had no tool call.");
+  // With a plan, a plan_update may come with one action in the same answer:
+  // the plan is marked first, then the action is read as always. It saves a
+  // whole turn of the model for each subgoal.
+  const updates = calls.filter((call) => call.name === planUpdateName);
+  if (
+    calls.length === 2 &&
+    updates.length === 1 &&
+    offered.has(planUpdateName)
+  ) {
+    const update = readCall(updates[0]!, offered, malformed, closer);
+    const other = calls.find((call) => call.name !== planUpdateName)!;
+    const acted = readCall(other, offered, malformed, closer);
+    if (update.kind === "malformed") return update;
+    if (acted.kind === "malformed") return acted;
+    if (update.kind !== "plan" || acted.kind !== "action")
+      return malformed(
+        "several_tool_calls",
+        "It had two tool calls that are not one plan_update and one action, so none of them ran.",
+      );
+    return { ...acted, update: (update.chosen as PlanChoice).update };
+  }
   if (calls.length > 1)
     return malformed(
       "several_tool_calls",
-      `It had ${calls.length} tool calls, and only one is taken, so none of them ran.`,
+      `It had ${calls.length} tool calls, and only one is taken, so none of them ran. Only plan_update may come with one action.`,
     );
-  const call = calls[0]!;
+  return readCall(calls[0]!, offered, malformed, closer);
+}
+
+/** One function call of an answer, read as an action or as a change of the plan. */
+function readCall(
+  call: ModelAnswer["calls"][number],
+  offered: ReadonlySet<string>,
+  malformed: (code: string, problem: string) => Reading,
+  closer?: Closer,
+): Reading {
   const name = call.name ?? "";
   if (!name)
     return malformed("no_function_name", "Its tool call named no function.");
@@ -1023,6 +1059,8 @@ export class ModelPlanner implements Planner {
           ...toolsFor(browser, this.browserMethods),
           ...planTools(input.plan),
         ],
+        // plan_update may come with one action in the same answer.
+        ...(planTools(input.plan).length ? { pair: true } : {}),
         user: {
           text: brief(input, browser),
           images: [
@@ -1084,7 +1122,11 @@ export class ModelPlanner implements Planner {
       closer,
     );
     if (first.kind === "action")
-      return { action: first.action, why: first.why };
+      return {
+        action: first.action,
+        why: first.why,
+        ...(first.update !== undefined ? { update: first.update } : {}),
+      };
     if (first.kind === "plan") return first.chosen;
     if (first.kind === "refused") throw refusal();
     // A repair needs the time for one more request.
@@ -1103,7 +1145,11 @@ export class ModelPlanner implements Planner {
       closer,
     );
     if (second.kind === "action")
-      return { action: second.action, why: second.why };
+      return {
+        action: second.action,
+        why: second.why,
+        ...(second.update !== undefined ? { update: second.update } : {}),
+      };
     if (second.kind === "plan") return second.chosen;
     if (second.kind === "refused") throw refusal();
     this.report(2, "malformed", null);
@@ -1246,7 +1292,12 @@ export function plannerFromEnvironment(
 type OutlineChoice = { outline: Subgoal[]; why: string };
 type PlanReading = { kind: "plan"; chosen: PlanChoice | OutlineChoice };
 type NextInput = Parameters<Planner["next"]>[0];
-type Chosen = { action: Action; why: string };
+type Chosen = {
+  action: Action;
+  why: string;
+  /** A plan_update that came with the action: the worker applies it first. */
+  update?: unknown;
+};
 
 /** Lines on how to work through a whole task. Both the outline and the turns with a plan read them. */
 const proactiveRules = [
@@ -1271,6 +1322,7 @@ const outlineRules = [
 const planRules = [
   "You made a plan for this goal before the first action. It is below the goal: each subgoal, its check, and the one to work on now. Keep the whole task in mind, and work on the subgoal marked now.",
   "plan_update changes only the plan and sends nothing to the Mac. Call it in place of an action: op done when the screen shows the check of the current subgoal, with what on the screen shows it; op skip when it is not needed, with why; op revise, with the new rest of the plan, when the screen shows that the plan was wrong.",
+  "Call plan_update together with the next action in the same answer: mark the subgoal done and take the first step of the next one at once. Never two actions in one answer.",
   "When the screen shows something that the person will want (an order number, a name, a link), keep it in facts of plan_update. Never a password, a code or another secret.",
   ...proactiveRules,
 ].join("\n");
@@ -1305,7 +1357,7 @@ const outlineTool = tool(
 );
 const planUpdateTool = tool(
   "plan_update",
-  "Change the plan, in place of an action. It sends nothing to the Mac.",
+  "Change the plan. It sends nothing to the Mac. Call it alone, or together with the next action in the same answer.",
   {
     op: {
       type: "string",
@@ -1344,6 +1396,7 @@ function planBrief(plan: PlanView | undefined): string[] {
 /** The lines that a turn with a plan adds to the system message. */
 const planSystem = (plan: PlanView | undefined) =>
   plan ? `\n${planRules}` : "";
+const planUpdateName = "plan_update";
 /** plan_update is offered only with a plan, and only while an update may come. */
 const planTools = (plan: PlanView | undefined) =>
   plan && plan.updatesLeft > 0 ? [planUpdateTool] : [];

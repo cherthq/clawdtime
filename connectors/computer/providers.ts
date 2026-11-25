@@ -463,6 +463,8 @@ export interface PlannerRequest {
       };
   /** Earlier answers that could not be used, each with what the program said about it. */
   repairs?: readonly { answer: ModelAnswer; note: string }[];
+  /** A change of the plan may come with one action in the same answer: two calls are allowed. */
+  pair?: boolean;
 }
 
 /** One tool call of an answer. Nothing in it is trusted. */
@@ -712,7 +714,10 @@ export class ChatTransport implements Transport {
       tools: request.tools,
       // One action for each turn: a function call, and only one.
       ...(openai
-        ? { tool_choice: "required", parallel_tool_calls: false }
+        ? {
+            tool_choice: "required",
+            parallel_tool_calls: request.pair === true,
+          }
         : {}),
       ...(effort ? { reasoning_effort: effort } : {}),
     };
@@ -1132,7 +1137,10 @@ export class MessagesTransport implements Transport {
           cache_control: { type: "ephemeral" },
         },
       ],
-      tool_choice: { type: "auto", disable_parallel_tool_use: true },
+      tool_choice: {
+        type: "auto",
+        disable_parallel_tool_use: request.pair !== true,
+      },
       messages,
       ...(effort ? { output_config: { effort } } : {}),
       ...(sentFast("anthropic", model, this.options.speed)
