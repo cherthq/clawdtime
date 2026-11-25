@@ -185,9 +185,17 @@ const strictSecretShapes = [
     String.raw`\bfill\s+(?:in\s+|out\s+)?(?:(?:the|my|your|a|an)\s+)?(?:[A-Za-z0-9'_-]+\s+){0,2}?${secretNoun}s?(?:\s+(?:field|box|input|slot|entry))?\s+with\s+(?:(?:the|my)\s+)?(?!${notAValue})\S+`,
     "i",
   ),
-  // Payment card numbers: 13 to 19 digits with optional spaces or hyphens (excluding order/ISBN/tracking/invoice/shipment references).
-  /(?<!\b(?:order|isbn|tracking|invoice|shipment)\s+)(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/i,
 ];
+/**
+ * Payment card numbers: 13 to 19 digits with optional spaces or hyphens
+ * (excluding order/ISBN/tracking/invoice/shipment references). It reads the
+ * text without its links, and a number glued to a letter is no card: a link's
+ * message or file number ("p1795625515736179") is not one.
+ */
+const cardNumber =
+  /(?<!\b(?:order|isbn|tracking|invoice|shipment)\s+)(?<![\dA-Za-z])\d(?:[ -]?\d){12,18}(?![\dA-Za-z])/i;
+/** A link: a web address with a scheme, a www. host, or a host with a path. */
+const links = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\/\S*/gi;
 /**
  * Long secret nouns that people misspell ("pasword", "passwrod", "paswrd",
  * "credental"), and the English words near them that stay as they are.
@@ -322,7 +330,8 @@ export function looksSecretStrict(text: string): boolean {
   return [...variants, ...variants.map(spellSecretNouns)].some(
     (value) =>
       looksSecret(value) ||
-      strictSecretShapes.some((shape) => shape.test(value)),
+      strictSecretShapes.some((shape) => shape.test(value)) ||
+      cardNumber.test(value.replace(links, " ")),
   );
 }
 /** What the journal holds in place of a request that carried a credential. */
