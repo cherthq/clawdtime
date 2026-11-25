@@ -23,6 +23,8 @@ import {
   type PlannerUsage,
   type Provider,
 } from "../connectors/computer/providers.js";
+import { TaskPlan } from "../connectors/computer/plan.js";
+import type { Closer } from "../connectors/computer/ports.js";
 import { element, observation } from "./connectors-computer-fixture.js";
 
 const key = "fixture-provider-key-0123456789";
@@ -1062,5 +1064,125 @@ describe("the strict tools of Anthropic", () => {
   it("names no provider that is not in the registry", () => {
     expect(providerById("anthropic")?.wire).toBe("messages");
     expect(providerById("nowhere")).toBeUndefined();
+  });
+});
+
+describe("the merged planner features through every provider", () => {
+  const closer: Closer = {
+    image: "Y2xvc2Vy",
+    imageWidth: 960,
+    imageHeight: 600,
+    region: { x: 480, y: 300, w: 320, h: 200 },
+  };
+  const plan = TaskPlan.from([
+    { goal: "Open the note", check: "The editor shows it" },
+    { goal: "Add milk", check: "The note holds milk" },
+  ])!.view();
+
+  it("Anthropic: the closer look as a second image block, and a click in it mapped back", async () => {
+    const net = service(
+      json(
+        message([
+          toolUse("click_at", { x: 300, y: 150, closer: true, why: "Star" }),
+        ]),
+      ),
+    );
+    const planned = await planner(net.request, { provider: "anthropic" }).next({
+      ...input(),
+      closer,
+    });
+    // 480 + 300 * 320 / 960 = 580; 300 + 150 * 200 / 600 = 350.
+    expect(planned.action).toEqual({ kind: "click_at", x: 580, y: 350 });
+    const turn = net.sent[0]!.body.messages[0]!.content as {
+      type: string;
+      source?: { data: string };
+    }[];
+    expect(turn.map((part) => part.type)).toEqual(["image", "image", "text"]);
+    expect(turn.map((part) => part.source?.data)).toEqual([
+      "aW1hZ2U=",
+      "Y2xvc2Vy",
+      undefined,
+    ]);
+  });
+
+  it("a plan adds its rules and plan_update, byte-stable while it does not change, for OpenAI and Anthropic", async () => {
+    const chat = service(json(chatCall("wait", { ms: 1, why: "w" })));
+    const openai = planner(chat.request);
+    await openai.next({ ...input("Shopping"), plan });
+    await openai.next({ ...input("Groceries"), plan });
+    const [a, b] = chat.sent.map((item) => item.body);
+    // The default request of OpenAI keeps its forced single call.
+    expect(a!.tool_choice).toBe("required");
+    expect(a!.parallel_tool_calls).toBe(false);
+    expect(
+      (a!.tools as { function: { name: string } }[]).map(
+        (tool) => tool.function.name,
+      ),
+    ).toContain("plan_update");
+    expect(JSON.stringify([a!.tools, a!.messages[0]])).toBe(
+      JSON.stringify([b!.tools, b!.messages[0]]),
+    );
+    const messages = service(
+      json(
+        message([
+          toolUse("plan_update", {
+            op: "done",
+            evidence: "The editor shows it",
+            why: "Met",
+          }),
+        ]),
+      ),
+    );
+    const anthropic = planner(messages.request, { provider: "anthropic" });
+    const chosen = await anthropic.next({ ...input("Shopping"), plan });
+    expect(chosen).toMatchObject({ update: { op: "done" } });
+    await anthropic.next({ ...input("Groceries"), plan });
+    const [c, d] = messages.sent.map((item) => item.body);
+    expect((c!.tools as { name: string }[]).map((tool) => tool.name)).toContain(
+      "plan_update",
+    );
+    expect(JSON.stringify([c!.tools, c!.system])).toBe(
+      JSON.stringify([d!.tools, d!.system]),
+    );
+  });
+
+  it("the outline goes through the same call: low detail on OpenAI, one image block on Anthropic", async () => {
+    const subgoals = [{ goal: "Open the note", check: "The editor shows it" }];
+    const chat = service(json(chatCall("outline", { subgoals, why: "One" })));
+    expect(
+      await planner(chat.request).outline({
+        goal,
+        observation: observation(),
+        page: null,
+      }),
+    ).toEqual(subgoals);
+    const parts = chat.sent[0]!.body.messages[1]!.content as {
+      type: string;
+      image_url?: { detail?: string };
+    }[];
+    expect(parts[1]!.image_url!.detail).toBe("low");
+    expect(chat.sent[0]!.body.tool_choice).toBe("required");
+    const messages = service(
+      json(message([toolUse("outline", { subgoals, why: "One" })])),
+    );
+    expect(
+      await planner(messages.request, { provider: "anthropic" }).outline({
+        goal,
+        observation: observation(),
+        page: null,
+      }),
+    ).toEqual(subgoals);
+    const body = messages.sent[0]!.body;
+    expect(
+      (body.tools as { name: string; strict?: boolean }[]).map((tool) => [
+        tool.name,
+        tool.strict,
+      ]),
+    ).toEqual([["outline", true]]);
+    expect(
+      (body.messages[0]!.content as { type: string }[]).map(
+        (part) => part.type,
+      ),
+    ).toEqual(["image", "text"]);
   });
 });

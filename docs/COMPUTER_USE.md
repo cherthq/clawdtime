@@ -1530,7 +1530,7 @@ Tested, with made-up hands, a scripted planner, a scripted language model and
 a made-up browser. No test moves the real mouse, presses a real key, captures
 the real screen, draws the cursor or calls a language model.
 
-402 tests in `tests/connectors-computer-*.test.ts`:
+405 tests in `tests/connectors-computer-*.test.ts`:
 
 - `guards` (88): every check above, one by one.
 - `worker` (56): a task that completes; Stop before, during and after an
@@ -1589,14 +1589,15 @@ the real screen, draws the cursor or calls a language model.
   when the panel gives it up; the wait of each command for the panel; the cost
   header; the parts in the timing record and its line; and the held route
   over a real worker.
-- `providers` (42): the table of providers; `provider/model` and a bare
+- `providers` (45): the table of providers; `provider/model` and a bare
   model; the order of the choice; the request of each chat provider (address,
   key header, functions, picture, effort) and of Anthropic through its
   library over a scripted network (cached rules, strict tools inside the
   limits, image, `auto`, effort, fast mode, refusal fallback); one call back;
   429, 529, 5xx, 401, 403, billing, the spend cap, quota and refusal; the
   repair that sends the answer back unchanged; the use of tokens; the same
-  bytes from step to step.
+  bytes from step to step; the closer look, a plan turn and the outline
+  through both transports.
 - `keys` (13): set, list and remove; the modes of the file and the folder; a
   store that others can read, a link, a file of another user and a file that
   is not valid, none of which is read or overwritten; the environment that
