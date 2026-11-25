@@ -25,40 +25,20 @@ public struct GuidedOverlay: Equatable, Sendable {
 }
 
 /// The sizes of the guided cursor, in points. They are chosen for a phone that
-/// shows the whole screen in a picture 720 pixels high: the pointer, its ring
-/// and the letters of the label stay clear there.
+/// shows the whole screen in a picture 720 pixels high: the arrow, its rays and
+/// the letters of the label stay clear there. The arrow and the rays are in
+/// `GuidedCursorArt`.
 public enum GuidedLook {
-  /// ClawdTime's own pointer, from its tip to the end of its tail. It is a small one, a little smaller than
-  /// the pointer of the Mac. The ring and the label are the parts that a phone must show clearly.
-  public static let pointer = 16.0
-  /// Where the tip of that small pointer goes, from the middle of the ring, while the pointer of the Mac is
-  /// there: to the right of the Mac's pointer and a little under its tip, so neither one covers the other.
-  public static let besideX = 14.0, besideY = -9.0
-  /// The pointer of the Mac is "there" when its tip is this near to the middle of the ring.
-  public static let near = 14.0
-  /// One turn of the ring's colors, in seconds. How long the ring takes to close in when the cursor arrives,
-  /// and the small pointer to step aside. Both fit in the short wait before the input, so the ring is solid
-  /// when the hands act. While the cursor glides, the ring is this many times its size.
-  public static let turn = 5.0, settle = 0.10, aside = 0.08, flight = 1.16
-
-  /// ClawdTime's own pointer stands beside the place, not on it: the tip of the Mac's pointer is there.
-  public static func standsBeside(tip: CGPoint, pointer: CGPoint) -> Bool {
-    let dx = Double(pointer.x - tip.x), dy = Double(pointer.y - tip.y)
-    guard dx.isFinite, dy.isFinite else { return false }
-    return (dx * dx + dy * dy).squareRoot() <= near
-  }
-  /// The ring around the tip: across, and the width of its line.
-  public static let ring = 44.0, ringLine = 3.5
-  /// A click opens a second ring to this many times the first.
-  public static let pulse = 1.7
   /// The label: its letters, the height of its pill, the space inside the pill at each end,
   /// its greatest width, and the most characters that it shows.
   public static let letters = 20.0, pill = 38.0, pillInset = 15.0, pillMax = 440.0, labelLimit = 44
-  /// The space between the ring and the pill, how far under the tip the middle of the pill
-  /// is, and how far the pill keeps from the edge of the screen.
-  public static let gap = 8.0, drop = 26.0, margin = 8.0
-  /// The room around the pill for its soft shadow.
-  public static let shade = 8.0
+  /// The pill sits just below and to the right of the arrow: its leading edge `ahead` to the right
+  /// of the tip and its top edge `below` under it, in the space between the two wings. On the left of
+  /// the tip its trailing edge is `behind` to the left of it. Over the tip its lower edge is `above`
+  /// over it, clear of the rays.
+  public static let ahead = 18.0, behind = 8.0, below = 18.0, above = 14.0
+  /// How far the pill keeps from the edge of the screen, and the room around it for its soft shadow.
+  public static let margin = 8.0, shade = 8.0
 
   /// How many pixels `points` take in a picture of the screen that is `shownHeight` pixels high.
   public static func pixels(_ points: Double, screenHeight: Double, shownHeight: Double) -> Double {
@@ -78,21 +58,22 @@ public enum GuidedLook {
 /// points count from the bottom left, as windows do.
 public struct GuidedLayout: Equatable, Sendable {
   public enum Side: Equatable, Sendable { case right, left }
-  /// The window on the screen. It holds the ring, the pointer and the pill.
+  /// The window on the screen. It holds the arrow, the rays and the pill.
   public let window: CGRect
-  /// The tip of the pointer inside the window.
+  /// The tip of the arrow inside the window: its hot spot.
   public let tip: CGPoint
   /// The pill inside the window. Empty when there is no label.
   public let pill: CGRect
   /// The pill is on this side of the tip, and under or over it.
   public let side: Side, under: Bool
 
-  /// The square around the tip that holds the ring, its pulse and the pointer.
-  public static var reach: Double { (GuidedLook.ring * GuidedLook.pulse / 2 + GuidedLook.ringLine).rounded(.up) }
+  /// The square around the tip that holds the pictures of the arrow and the rays, with their glow, and the
+  /// copy of the rays at the end of a click.
+  public static var reach: Double { GuidedCursorArt.half }
 
-  /// `tip` is where the tip of the pointer is on the screen, `pillWidth` comes from
+  /// `tip` is where the tip of the arrow is on the screen, `pillWidth` comes from
   /// `GuidedLook.pillWidth`, and `screen` is the frame of the screen that the tip is on.
-  /// The pill is to the right of the tip and a little under it, as a tooltip is. Near the
+  /// The pill is just below and to the right of the arrow, as a tooltip is. Near the
   /// right edge it goes to the left of the tip, and near the bottom edge over it, so the
   /// label is whole on the screen wherever the hands act.
   public init(tip: CGPoint, pillWidth: Double, screen: CGRect) {
@@ -107,14 +88,13 @@ public struct GuidedLayout: Equatable, Sendable {
       return
     }
     let x = Double(tip.x), y = Double(tip.y)
-    let away = GuidedLook.ring / 2 + GuidedLook.gap
-    let fitsRight = x + away + width <= Double(screen.maxX) - GuidedLook.margin
-    let fitsLeft = x - away - width >= Double(screen.minX) + GuidedLook.margin
+    let fitsRight = x + GuidedLook.ahead + width <= Double(screen.maxX) - GuidedLook.margin
+    let fitsLeft = x - GuidedLook.behind - width >= Double(screen.minX) + GuidedLook.margin
     // The right side is the usual one. The left side is taken only when it helps.
     let side: Side = fitsRight || !fitsLeft ? .right : .left
-    let fitsUnder = y - GuidedLook.drop - GuidedLook.pill / 2 >= Double(screen.minY) + GuidedLook.margin
-    var dx = side == .right ? away : -away - width
-    var dy = (fitsUnder ? -GuidedLook.drop : GuidedLook.drop) - GuidedLook.pill / 2
+    let fitsUnder = y - GuidedLook.below - GuidedLook.pill >= Double(screen.minY) + GuidedLook.margin
+    var dx = side == .right ? GuidedLook.ahead : -GuidedLook.behind - width
+    var dy = fitsUnder ? -GuidedLook.below - GuidedLook.pill : GuidedLook.above
     // At the very edge of the screen the pill moves in, so all of it stays in view.
     func within(_ value: Double, _ low: Double, _ high: Double) -> Double { high < low ? low : max(low, min(high, value)) }
     let left = within(x + dx, Double(screen.minX) + GuidedLook.margin, Double(screen.maxX) - GuidedLook.margin - width)
@@ -129,22 +109,16 @@ public struct GuidedLayout: Equatable, Sendable {
     self.side = side; under = fitsUnder
   }
 
-  /// The painted pointer/pulse and label/shadow envelope, in bottom-left screen
+  /// The painted arrow, rays, click and label envelope, in bottom-left screen
   /// points. This excludes transparent window padding. A video crop uses the
   /// envelope, so the label stays attached even when its side flips at an edge.
   public var paintedBounds: CGRect {
-    let at = CGPoint(x: window.minX + tip.x, y: window.minY + tip.y)
-    let radius = max((GuidedLook.ring + GuidedLook.ringLine) * GuidedLook.pulse / 2,
-                     (GuidedLook.ring + GuidedLook.ringLine + 3) / 2)
-    let ring = CGRect(x: at.x - radius, y: at.y - radius, width: radius * 2, height: radius * 2)
-    // The pointer outline is 15 units wide and 23.4 high. Its tip is at the middle of
-    // the ring, or beside it while the Mac's pointer is there: both places count. Its
-    // shadow fits in the same shade allowance as the pill; normally the pulse already
-    // encloses it.
-    let pointer = CGRect(x: at.x, y: at.y + GuidedLook.besideY - GuidedLook.pointer,
-      width: GuidedLook.besideX + GuidedLook.pointer * 15 / 23.4, height: GuidedLook.pointer - GuidedLook.besideY)
-      .insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade)
-    let glyphs = ring.union(pointer)
+    let at = CGPoint(x: window.minX + tip.x, y: window.minY + tip.y), pad = GuidedCursorArt.glowPad
+    let arrow = GuidedCursorArt.arrowBounds.insetBy(dx: -pad, dy: -pad)
+    // The copy of the rays at the end of a click, with its glow, grown from the tip.
+    let rays = GuidedCursorArt.raysBounds.insetBy(dx: -pad, dy: -pad)
+      .applying(CGAffineTransform(scaleX: CGFloat(GuidedClick.spread), y: CGFloat(GuidedClick.spread)))
+    let glyphs = arrow.union(rays).offsetBy(dx: at.x, dy: at.y)
     guard !pill.isEmpty else { return glyphs }
     return glyphs.union(pill.offsetBy(dx: window.minX, dy: window.minY).insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade))
   }
@@ -162,7 +136,7 @@ public enum GuidedFocus {
   /// gives one. All points count from the bottom left of `screen`.
   ///
   /// - A field of one line: the tip is at its lower edge, a little inside its leading edge.
-  ///   The pointer hangs under the tip, so it is under the text and hides none of it.
+  ///   The arrow hangs under the tip, so it is under the text and hides none of it.
   /// - An area of text: the cursor stays where it last pointed when that is inside the area,
   ///   which is the place that the hands clicked. Otherwise it goes near the top leading corner.
   /// - No frame: the cursor stays where it last pointed. With no such place it shows at the

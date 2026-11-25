@@ -19,45 +19,27 @@ final class GuidedCursorLookTests: XCTestCase {
     XCTAssertTrue(rule.inScreenShare)
   }
 
-  func testTheSmallPointerStandsBesideOnlyWhileThePointerOfTheMacIsAtThePlace() {
+  func testThePaintedBoundsHoldTheArrowItsRaysAndTheWholeClick() {
     let tip = CGPoint(x: 400, y: 300)
-    XCTAssertTrue(GuidedLook.standsBeside(tip: tip, pointer: tip))
-    XCTAssertTrue(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 408, y: 292)))
-    XCTAssertTrue(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 400 + GuidedLook.near, y: 300)))
-    XCTAssertFalse(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 400 + GuidedLook.near + 0.5, y: 300)))
-    XCTAssertFalse(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: 100, y: 700)))
-    XCTAssertFalse(GuidedLook.standsBeside(tip: tip, pointer: CGPoint(x: CGFloat.nan, y: 300)))
-    XCTAssertFalse(GuidedLook.standsBeside(tip: CGPoint(x: CGFloat.infinity, y: 0), pointer: tip))
-    // A pointer that is this near would lie under the small pointer: the two places do not overlap.
-    XCTAssertGreaterThanOrEqual(GuidedLook.near, 12)
-    // The painted bounds hold the small pointer at both of its places.
-    let layout = GuidedLayout(tip: tip, pillWidth: 0, screen: CGRect(x: 0, y: 0, width: 1512, height: 982))
-    let width = GuidedLook.pointer * 15 / 23.4
-    XCTAssertTrue(layout.paintedBounds.contains(CGRect(x: 400, y: 300 - GuidedLook.pointer, width: width, height: GuidedLook.pointer)))
-    XCTAssertTrue(layout.paintedBounds.contains(CGRect(x: 400 + GuidedLook.besideX, y: 300 + GuidedLook.besideY - GuidedLook.pointer,
-      width: width, height: GuidedLook.pointer)))
+    let layout = GuidedLayout(tip: tip, pillWidth: 0, screen: screen)
+    let pad = GuidedCursorArt.glowPad
+    // The arrow with its glow, under the tip and to its right.
+    XCTAssertTrue(layout.paintedBounds.contains(GuidedCursorArt.arrowBounds.insetBy(dx: -pad, dy: -pad).offsetBy(dx: tip.x, dy: tip.y)))
+    // The copy of the rays at the end of a click, with its glow, over the tip and to its left.
+    let click = GuidedCursorArt.raysBounds.insetBy(dx: -pad, dy: -pad)
+      .applying(CGAffineTransform(scaleX: CGFloat(GuidedClick.spread), y: CGFloat(GuidedClick.spread))).offsetBy(dx: tip.x, dy: tip.y)
+    XCTAssertTrue(layout.paintedBounds.contains(click))
+    // All of that is inside the window, and the window is the square that the pictures need.
+    XCTAssertTrue(layout.window.contains(layout.paintedBounds))
+    XCTAssertEqual(GuidedLayout.reach, GuidedCursorArt.side / 2)
   }
 
-  func testTheRingAndTheLettersAreClearOnAPhoneThatShowsTheScreenAndThePointerIsASmallOne() {
-    // The pointer of the Mac is about 17 points high. ClawdTime's own is a little smaller.
-    XCTAssertEqual(GuidedLook.pointer, 16)
-    XCTAssertGreaterThan(GuidedLook.ring, GuidedLook.pointer)
-    // Beside the Mac's pointer, which is about 12 points wide from the same tip, the small pointer is clear
-    // of it, and all of it is inside the square that the window keeps around the ring.
-    XCTAssertGreaterThanOrEqual(GuidedLook.besideX, 12)
-    XCTAssertLessThan(GuidedLook.besideY, 0)
-    XCTAssertLessThanOrEqual(GuidedLook.besideX + GuidedLook.pointer * 15 / 23.4 + GuidedCursorArt.pointerInset, GuidedLayout.reach)
-    XCTAssertLessThanOrEqual(-GuidedLook.besideY + GuidedLook.pointer + GuidedCursorArt.pointerInset, GuidedLayout.reach)
-    // The ring in flight, with its pale edge, is inside that square too, and so is the second ring of a click.
-    XCTAssertLessThanOrEqual(GuidedCursorArt.ringSide / 2 * GuidedLook.flight, GuidedLayout.reach)
-    XCTAssertLessThanOrEqual((GuidedLook.ring + GuidedLook.ringLine) / 2 * GuidedLook.pulse, GuidedLayout.reach)
-    XCTAssertGreaterThanOrEqual(GuidedLook.ringLine, 3)
+  func testTheArrowAndTheLettersAreClearOnAPhoneThatShowsTheScreen() {
     XCTAssertGreaterThan(GuidedLook.pill, GuidedLook.letters)
     // A screen of 1512 by 982 points, shown as a picture of 1280 by 720 pixels, fits by its height.
     func shown(_ points: Double) -> Double { GuidedLook.pixels(points, screenHeight: 982, shownHeight: 720) }
-    XCTAssertGreaterThanOrEqual(shown(GuidedLook.pointer), 11)
-    XCTAssertGreaterThanOrEqual(shown(GuidedLook.ring), 30)
-    XCTAssertGreaterThanOrEqual(shown(GuidedLook.ringLine), 2.5)
+    XCTAssertGreaterThanOrEqual(shown(Double(GuidedCursorArt.arrowPath.boundingBoxOfPath.height)), 16)
+    XCTAssertGreaterThanOrEqual(shown(GuidedCursorArt.rayLine), 1.6)
     XCTAssertGreaterThanOrEqual(shown(GuidedLook.letters), 14)
     // The same on a screen of 1440 by 900 points.
     XCTAssertGreaterThanOrEqual(GuidedLook.pixels(GuidedLook.letters, screenHeight: 900, shownHeight: 720), 14)
@@ -65,6 +47,16 @@ final class GuidedCursorLookTests: XCTestCase {
     XCTAssertEqual(GuidedLook.pixels(28, screenHeight: 0, shownHeight: 720), 0)
     XCTAssertEqual(GuidedLook.pixels(.nan, screenHeight: 982, shownHeight: 720), 0)
     XCTAssertEqual(GuidedLook.pixels(-5, screenHeight: 982, shownHeight: 720), 0)
+  }
+
+  func testWithReduceMotionNothingMoves() {
+    // No glide: the cursor is at the target at once, on no curve.
+    let way = GuidedPath.glide(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 900, y: 600), still: true)
+    XCTAssertEqual(way.duration, 0); XCTAssertEqual(way.bend, 0)
+    XCTAssertEqual(way.point(at: 0), CGPoint(x: 900, y: 600))
+    // No pulse at a click.
+    XCTAssertTrue(GuidedClick.frames(still: true).isEmpty)
+    XCTAssertNil(GuidedClick.frame(at: 0, still: true))
   }
 
   func testThePillIsAsWideAsItsLettersUpToALimit() {
@@ -92,39 +84,79 @@ final class GuidedCursorLookTests: XCTestCase {
      layout.pill.offsetBy(dx: layout.window.minX, dy: layout.window.minY))
   }
 
-  func testThePillIsBesideThePointerToTheRightAndALittleUnderIt() {
+  /// Points inside the arrow, every half point, around its tip.
+  static let arrowPoints: [CGPoint] = {
+    let path = GuidedCursorArt.arrowPath, box = path.boundingBoxOfPath
+    var points: [CGPoint] = []
+    for x in stride(from: box.minX, through: box.maxX, by: 0.5) {
+      for y in stride(from: box.minY, through: box.maxY, by: 0.5) where path.contains(CGPoint(x: x, y: y)) { points.append(CGPoint(x: x, y: y)) }
+    }
+    return points
+  }()
+  /// The pill lies on no part of the arrow, its edge or its rays, as they are painted around `tip`.
+  func clear(_ pill: CGRect, of tip: CGPoint) -> Bool {
+    let near = pill.insetBy(dx: -(GuidedCursorArt.edgeLine / 2 + 0.5), dy: -(GuidedCursorArt.edgeLine / 2 + 0.5))
+    guard near.intersection(GuidedCursorArt.raysBounds.offsetBy(dx: tip.x, dy: tip.y)).isNull else { return false }
+    return !Self.arrowPoints.contains { near.contains(CGPoint(x: $0.x + tip.x, y: $0.y + tip.y)) }
+  }
+
+  func testThePillIsJustBelowAndToTheRightOfTheArrow() {
     let tip = CGPoint(x: 600, y: 500)
     let layout = GuidedLayout(tip: tip, pillWidth: 180, screen: screen)
     XCTAssertEqual(layout.side, .right); XCTAssertTrue(layout.under)
     let shown = onScreen(layout)
     XCTAssertEqual(shown.tip, tip)
     XCTAssertEqual(shown.pill.width, 180); XCTAssertEqual(shown.pill.height, GuidedLook.pill)
-    // Beside the ring, with a space between, and its middle under the tip.
-    XCTAssertEqual(shown.pill.minX, tip.x + GuidedLook.ring / 2 + GuidedLook.gap)
-    XCTAssertEqual(shown.pill.midY, tip.y - GuidedLook.drop)
-    // The window holds the ring with its pulse, the pointer under the tip, and the pill with its shadow.
-    XCTAssertTrue(layout.window.contains(CGRect(x: tip.x - GuidedLook.ring * GuidedLook.pulse / 2, y: tip.y - GuidedLook.ring * GuidedLook.pulse / 2,
-                                                width: GuidedLook.ring * GuidedLook.pulse, height: GuidedLook.ring * GuidedLook.pulse)))
-    XCTAssertTrue(layout.window.contains(CGPoint(x: tip.x + 18, y: tip.y - GuidedLook.pointer)))
+    // Its leading edge to the right of the tip, its top edge under it: in the space between the two wings.
+    XCTAssertEqual(shown.pill.minX, tip.x + GuidedLook.ahead)
+    XCTAssertEqual(shown.pill.maxY, tip.y - GuidedLook.below)
+    // It does not lie on the arrow, its edge or its rays.
+    XCTAssertGreaterThan(Self.arrowPoints.count, 200)
+    XCTAssertTrue(clear(shown.pill, of: tip))
+    // The check finds a pill that would lie on the arrow.
+    XCTAssertFalse(clear(shown.pill.offsetBy(dx: -8, dy: 8), of: tip))
+    // It is near the arrow: its corner is within a few points of the notch.
+    XCTAssertLessThanOrEqual(shown.pill.minX - tip.x, GuidedCursorArt.arrowBounds.maxX)
+    XCTAssertLessThanOrEqual(tip.y - shown.pill.maxY, -GuidedCursorArt.arrowBounds.minY)
+    // The window holds the arrow and its rays, and the pill with its shadow.
+    XCTAssertTrue(layout.window.contains(CGRect(x: tip.x - GuidedLayout.reach, y: tip.y - GuidedLayout.reach,
+                                                width: GuidedLayout.reach * 2, height: GuidedLayout.reach * 2)))
     XCTAssertTrue(layout.window.contains(shown.pill.insetBy(dx: -GuidedLook.shade, dy: -GuidedLook.shade)))
-    // The pill does not lie on the tip or on the ring.
-    XCTAssertFalse(shown.pill.contains(tip))
-    XCTAssertGreaterThanOrEqual(shown.pill.minX - tip.x, GuidedLook.ring / 2)
   }
 
   func testNearTheRightEdgeThePillGoesToTheLeftAndNearTheBottomItGoesOver() {
     let right = GuidedLayout(tip: CGPoint(x: 1480, y: 500), pillWidth: 180, screen: screen)
     XCTAssertEqual(right.side, .left); XCTAssertTrue(right.under)
     XCTAssertEqual(onScreen(right).tip, CGPoint(x: 1480, y: 500))
-    XCTAssertEqual(onScreen(right).pill.maxX, 1480 - GuidedLook.ring / 2 - GuidedLook.gap)
+    XCTAssertEqual(onScreen(right).pill.maxX, 1480 - GuidedLook.behind)
     let bottom = GuidedLayout(tip: CGPoint(x: 600, y: 20), pillWidth: 180, screen: screen)
     XCTAssertEqual(bottom.side, .right); XCTAssertFalse(bottom.under)
-    XCTAssertEqual(onScreen(bottom).pill.midY, 20 + GuidedLook.drop)
+    XCTAssertEqual(onScreen(bottom).pill.minY, 20 + GuidedLook.above)
     let corner = GuidedLayout(tip: CGPoint(x: 1500, y: 10), pillWidth: 180, screen: screen)
     XCTAssertEqual(corner.side, .left); XCTAssertFalse(corner.under)
     // A screen too narrow for the pill on either side keeps the usual side.
     let narrow = GuidedLayout(tip: CGPoint(x: 100, y: 300), pillWidth: 180, screen: CGRect(x: 0, y: 0, width: 220, height: 600))
     XCTAssertEqual(narrow.side, .right)
+  }
+
+  func testAtEveryEdgeAndCornerOfTheScreenThePillIsWholeAndOffTheArrow() {
+    // The four edges and the four corners, at the very edge and a little inside it.
+    let xs: [CGFloat] = [0, 1, 30, 756, 1482, 1511, 1512], ys: [CGFloat] = [0, 1, 30, 491, 952, 981, 982]
+    for width in [60.0, 180, GuidedLook.pillMax] {
+      for x in xs {
+        for y in ys {
+          let tip = CGPoint(x: x, y: y)
+          let layout = GuidedLayout(tip: tip, pillWidth: width, screen: screen)
+          let shown = onScreen(layout), at = "x \(x) y \(y) width \(width)"
+          XCTAssertEqual(shown.tip, tip, at)
+          XCTAssertTrue(screen.insetBy(dx: GuidedLook.margin - 0.000_001, dy: GuidedLook.margin - 0.000_001).contains(shown.pill), at)
+          XCTAssertTrue(clear(shown.pill, of: tip), at)
+          // The usual place is below and to the right. The pill leaves it only at the right or the bottom edge.
+          XCTAssertEqual(layout.side == .right, x + GuidedLook.ahead + width <= screen.maxX - GuidedLook.margin, at)
+          XCTAssertEqual(layout.under, y - GuidedLook.below - GuidedLook.pill >= screen.minY + GuidedLook.margin, at)
+        }
+      }
+    }
   }
 
   func testTheWholeLabelIsOnTheScreenWhereverTheHandsAct() {
@@ -134,13 +166,14 @@ final class GuidedCursorLookTests: XCTestCase {
           let tip = CGPoint(x: x, y: y)
           let layout = GuidedLayout(tip: tip, pillWidth: width, screen: screen)
           let shown = onScreen(layout)
-          // The tip of the pointer is exactly where the hands act.
+          // The tip of the arrow is exactly where the hands act.
           XCTAssertEqual(shown.tip.x, tip.x, accuracy: 0.000_001); XCTAssertEqual(shown.tip.y, tip.y, accuracy: 0.000_001)
           XCTAssertGreaterThanOrEqual(shown.pill.minX, screen.minX + GuidedLook.margin - 0.000_001, "x \(x) y \(y) width \(width)")
           XCTAssertLessThanOrEqual(shown.pill.maxX, screen.maxX - GuidedLook.margin + 0.000_001, "x \(x) y \(y) width \(width)")
           XCTAssertGreaterThanOrEqual(shown.pill.minY, screen.minY + GuidedLook.margin - 0.000_001, "x \(x) y \(y) width \(width)")
           XCTAssertLessThanOrEqual(shown.pill.maxY, screen.maxY, "x \(x) y \(y) width \(width)")
           XCTAssertFalse(shown.pill.contains(tip))
+          XCTAssertTrue(clear(shown.pill, of: tip), "x \(x) y \(y) width \(width)")
         }
       }
     }
@@ -162,7 +195,7 @@ final class GuidedCursorLookTests: XCTestCase {
     }
   }
 
-  func testWithNoLabelThereIsOnlyThePointerAndItsRing() {
+  func testWithNoLabelThereIsOnlyTheArrowAndItsRays() {
     let tip = CGPoint(x: 700, y: 300)
     for width in [0.0, -4, .nan] {
       let layout = GuidedLayout(tip: tip, pillWidth: width, screen: screen)
@@ -223,7 +256,7 @@ final class GuidedCursorLookTests: XCTestCase {
     XCTAssertTrue(region.contains(map.flip(tip)))
   }
 
-  func testPresentationRegionKeepsTheLongestLabelAndPulseInsideEveryScreenEdge() {
+  func testPresentationRegionKeepsTheLongestLabelArrowAndClickInsideEveryScreenEdge() {
     let display = CGRect(x: 0, y: 0, width: 1440, height: 900)
     for point in [CGPoint(x: 0, y: 0), CGPoint(x: 1439, y: 0), CGPoint(x: 0, y: 899),
                   CGPoint(x: 1439, y: 899), CGPoint(x: 1400, y: 450)] {
@@ -231,9 +264,9 @@ final class GuidedCursorLookTests: XCTestCase {
       let painted = layout.paintedBounds.intersection(display)
       XCTAssertTrue(display.contains(painted))
       XCTAssertTrue(painted.contains(onScreen(layout).pill))
-      let radius = (GuidedLook.ring + GuidedLook.ringLine) * GuidedLook.pulse / 2
-      let pulse = CGRect(x: point.x - radius, y: point.y - radius, width: 2 * radius, height: 2 * radius).intersection(display)
-      XCTAssertTrue(painted.contains(pulse))
+      let click = GuidedCursorArt.raysBounds.applying(CGAffineTransform(scaleX: CGFloat(GuidedClick.spread), y: CGFloat(GuidedClick.spread)))
+      XCTAssertTrue(painted.contains(click.offsetBy(dx: point.x, dy: point.y).intersection(display)))
+      XCTAssertTrue(painted.contains(GuidedCursorArt.arrowBounds.offsetBy(dx: point.x, dy: point.y).intersection(display)))
     }
   }
 

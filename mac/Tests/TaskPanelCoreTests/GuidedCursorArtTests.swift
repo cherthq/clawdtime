@@ -4,10 +4,11 @@ import ImageIO
 import XCTest
 @testable import TaskPanelCore
 
-/// The pictures of the guided cursor, checked by their numbers: the colors of the mark, and a ring that is
-/// round, centered and the same on its left as on its right.
+/// The pictures of the guided cursor, checked by their numbers: the orange of the panel, a small arrow whose
+/// tip is the hot spot, three rays at that tip, and a click that moves only with motion on.
 final class GuidedCursorArtTests: XCTestCase {
-  /// The pixels of a picture as red, green, blue and alpha, with the color not multiplied by alpha.
+  /// The pixels of a picture as red, green, blue and alpha, with the color not multiplied by alpha. The first
+  /// row is the top one.
   private struct Pixels {
     let width: Int, height: Int, data: [UInt8]
     init?(_ image: CGImage) {
@@ -25,146 +26,199 @@ final class GuidedCursorArtTests: XCTestCase {
       let i = (y * width + x) * 4, a = max(1, Double(data[i + 3]))
       return (Double(data[i]) / a, Double(data[i + 1]) / a, Double(data[i + 2]) / a)
     }
-  }
-
-  func testTheColorsAreThoseOfTheMarkWarmAtTheTopAndDeepAtTheBottom() {
-    XCTAssertEqual(GuidedCursorArt.warm, .init(red: 239 / 255.0, green: 144 / 255.0, blue: 68 / 255.0))
-    XCTAssertEqual(GuidedCursorArt.deep, .init(red: 37 / 255.0, green: 51 / 255.0, blue: 93 / 255.0))
-    XCTAssertEqual(GuidedCursorArt.ringTint(turn: 0), GuidedCursorArt.warm)
-    XCTAssertEqual(GuidedCursorArt.ringTint(turn: 0.5).red, GuidedCursorArt.deep.red, accuracy: 1e-9)
-    // The same on the left as on the right, and no seam where a turn ends.
-    for turn in stride(from: 0.0, through: 0.5, by: 0.05) {
-      XCTAssertEqual(GuidedCursorArt.ringTint(turn: turn).red, GuidedCursorArt.ringTint(turn: 1 - turn).red, accuracy: 1e-9)
-      XCTAssertEqual(GuidedCursorArt.ringTint(turn: turn).blue, GuidedCursorArt.ringTint(turn: 1 - turn).blue, accuracy: 1e-9)
-    }
-    // Each color holds for a part of the ring: an eighth of a turn from the top is still nearly warm.
-    XCTAssertEqual(GuidedCursorArt.ringTint(turn: 0.125).red, GuidedCursorArt.warm.red, accuracy: 0.06)
-    XCTAssertEqual(GuidedCursorArt.ringTint(turn: 0.375).blue, GuidedCursorArt.deep.blue, accuracy: 0.03)
-    XCTAssertEqual(GuidedCursorArt.ringTint(turn: .nan), GuidedCursorArt.warm)
-    XCTAssertEqual(GuidedCursorArt.ringTint(turn: 0.999).green, GuidedCursorArt.ringTint(turn: 0.001).green, accuracy: 1e-4)
-    XCTAssertEqual(GuidedCursorArt.mix(-3), GuidedCursorArt.warm)
-    XCTAssertEqual(GuidedCursorArt.mix(.nan), GuidedCursorArt.warm)
-  }
-
-  func testTheRingIsRoundCenteredAndTheExactMirrorOfItselfLeftToRight() throws {
-    for scale in [1.0, 2.0, 4.0] {
-      let image = try XCTUnwrap(GuidedCursorArt.ring(scale: scale))
-      let pixels = try XCTUnwrap(Pixels(image))
-      XCTAssertEqual(pixels.width, pixels.height)
-      // An even number of pixels: the middle of the picture lies between two of them.
-      XCTAssertEqual(Double(pixels.width), GuidedCursorArt.ringSide * scale)
-      XCTAssertEqual(pixels.width % 2, 0)
-      let n = pixels.width
-      var sum = 0.0, sumX = 0.0, sumY = 0.0, unequal = 0, worstFlip = 0.0
-      for y in 0..<n {
-        for x in 0..<n {
-          let a = pixels.alpha(x, y)
-          sum += a; sumX += a * (Double(x) + 0.5); sumY += a * (Double(y) + 0.5)
-          // Left and right: the same shape and the same color, to the last bit.
-          let here = (y * n + x) * 4, there = (y * n + n - 1 - x) * 4
-          if pixels.data[here..<here + 4] != pixels.data[there..<there + 4] { unequal += 1 }
-          // Top and bottom: the same shape. The colors differ, as in the mark.
-          worstFlip = max(worstFlip, abs(a - pixels.alpha(x, n - 1 - y)))
-        }
-      }
-      XCTAssertEqual(unequal, 0, "scale \(scale)")
-      XCTAssertEqual(worstFlip, 0)
-      // The middle of everything that is painted is the middle of the picture.
-      XCTAssertEqual(sumX / sum, Double(n) / 2, accuracy: 1e-9)
-      XCTAssertEqual(sumY / sum, Double(n) / 2, accuracy: 1e-9)
-      // The line is where the ring is, all the way around, with no seam, and nothing is painted inside it.
-      let middle = Double(n) / 2, radius = GuidedLook.ring / 2 * scale
-      for step in 0..<360 {
-        let angle = Double(step) / 360 * 2 * Double.pi
-        XCTAssertEqual(pixels.alpha(Int(middle + cos(angle) * radius), Int(middle + sin(angle) * radius)), 1, "the line at \(step) degrees")
-        XCTAssertEqual(pixels.alpha(Int(middle + cos(angle) * radius * 0.5), Int(middle + sin(angle) * radius * 0.5)), 0)
-      }
-      XCTAssertEqual(pixels.alpha(n / 2, n / 2), 0)
-      // The top is warm and the bottom is deep. A picture counts its rows from the top.
-      let top = pixels.color(n / 2, Int(middle - radius)), bottom = pixels.color(n / 2, Int(middle + radius))
-      XCTAssertEqual(top.0, GuidedCursorArt.warm.red, accuracy: 0.02)
-      XCTAssertEqual(top.2, GuidedCursorArt.warm.blue, accuracy: 0.02)
-      XCTAssertEqual(bottom.0, GuidedCursorArt.deep.red, accuracy: 0.02)
-      XCTAssertEqual(bottom.2, GuidedCursorArt.deep.blue, accuracy: 0.02)
-      // The pale edge is outside the colored line, on both of its sides, all the way around: also where the
-      // line is deep, so all of the ring shows on a dark ground.
-      if scale >= 2 {
-        let reach = (GuidedLook.ringLine / 2 + GuidedCursorArt.edge / 2) * scale
-        for (x, y) in [(n / 2, Int(middle - radius - reach)), (n / 2, Int(middle + radius + reach)), (n / 2, Int(middle + radius - reach))] {
-          XCTAssertGreaterThan(pixels.alpha(x, y), 0.5)
-          XCTAssertGreaterThan(pixels.color(x, y).2, 0.9)
-        }
-      }
+    /// The pixel at `x` points right of the middle and `y` points under it.
+    func at(_ x: Double, _ y: Double, scale: Double) -> (Int, Int) {
+      (Int((Double(width) / 2 + x * scale).rounded(.down)), Int((Double(height) / 2 + y * scale).rounded(.down)))
     }
   }
 
-  func testThePointerIsWarmAtItsTipAndDeepAtItsTailWithItsTipAtTheInset() throws {
-    let image = try XCTUnwrap(GuidedCursorArt.pointer(scale: 4))
-    let pixels = try XCTUnwrap(Pixels(image))
-    let size = GuidedCursorArt.pointerSize
-    XCTAssertEqual(Double(pixels.width), (Double(size.width) * 4).rounded(.up))
-    XCTAssertEqual(Double(pixels.height), (Double(size.height) * 4).rounded(.up))
-    let inset = GuidedCursorArt.pointerInset * 4, unit = GuidedLook.pointer / 23.4 * 4
-    func at(_ x: Double, _ y: Double) -> (Int, Int) { (Int(inset + x * unit), Int(inset + y * unit)) }
-    // Inside the outline near the tip, and inside the tail.
-    let tip = at(2.2, 6), tail = at(9.86, 21.5)
-    XCTAssertEqual(pixels.alpha(tip.0, tip.1), 1)
-    XCTAssertEqual(pixels.alpha(tail.0, tail.1), 1)
-    XCTAssertGreaterThan(pixels.color(tip.0, tip.1).0, 0.75)
-    XCTAssertEqual(pixels.color(tail.0, tail.1).0, GuidedCursorArt.deep.red, accuracy: 0.05)
-    XCTAssertEqual(pixels.color(tail.0, tail.1).2, GuidedCursorArt.deep.blue, accuracy: 0.05)
-    // The pale edge is outside the outline: just left of the long left side, the picture is nearly white.
-    let edge = at(-0.9, 10)
-    XCTAssertGreaterThan(pixels.alpha(edge.0, edge.1), 0.8)
-    XCTAssertGreaterThan(pixels.color(edge.0, edge.1).2, 0.9)
-    // The edge is inside the picture, and nothing is painted to the upper right of the outline.
-    XCTAssertLessThanOrEqual(GuidedCursorArt.pointerEdge, GuidedCursorArt.pointerInset)
-    XCTAssertEqual(pixels.alpha(pixels.width - 2, 2), 0)
+  func testTheArrowIsTheAccentOrangeOfThePanelInLightAndDarkWithADarkerEdgeAndASoftGlow() throws {
+    XCTAssertEqual(GuidedCursorArt.fill(dark: false), RGB(0xFF8040))
+    XCTAssertEqual(GuidedCursorArt.fill(dark: true), RGB(0xFF8A50))
+    for dark in [false, true] {
+      let fill = GuidedCursorArt.fill(dark: dark), edge = GuidedCursorArt.edge(dark: dark)
+      // The edge is the same orange, darker.
+      XCTAssertLessThan(edge.red, fill.red); XCTAssertLessThan(edge.luminance, fill.luminance)
+      XCTAssertGreaterThan(edge.red, edge.green); XCTAssertGreaterThan(edge.green, edge.blue)
+      let scale = 4.0
+      let pixels = try XCTUnwrap(Pixels(try XCTUnwrap(GuidedCursorArt.arrow(scale: scale, dark: dark))))
+      // Inside the body, on its line from the tip to the notch: solid, and exactly the orange of the theme.
+      let inside = pixels.at(9, 9, scale: scale)
+      XCTAssertEqual(pixels.alpha(inside.0, inside.1), 1)
+      let color = pixels.color(inside.0, inside.1)
+      XCTAssertEqual(color.0, fill.red, accuracy: 1.5 / 255, "dark \(dark)")
+      XCTAssertEqual(color.1, fill.green, accuracy: 1.5 / 255, "dark \(dark)")
+      XCTAssertEqual(color.2, fill.blue, accuracy: 1.5 / 255, "dark \(dark)")
+      // Out along that row to the left, the last solid pixel is the darker edge.
+      var x = inside.0
+      while x > 0, pixels.alpha(x - 1, inside.1) >= 0.9 { x -= 1 }
+      XCTAssertLessThan(pixels.color(x, inside.1).0, fill.red - 0.1, "the edge, dark \(dark)")
+      // A few points out from the edge there is only the glow: orange, and faint.
+      let glow = pixels.at(-1, 14, scale: scale)
+      XCTAssertGreaterThan(pixels.alpha(glow.0, glow.1), 0.01)
+      XCTAssertLessThan(pixels.alpha(glow.0, glow.1), 0.35)
+      let tint = pixels.color(glow.0, glow.1)
+      XCTAssertGreaterThan(tint.0, tint.1); XCTAssertGreaterThan(tint.1, tint.2)
+      // The glow fades out before the border of the picture.
+      XCTAssertEqual(pixels.alpha(pixels.width - 1, pixels.height - 1), 0)
+      XCTAssertEqual(pixels.alpha(0, pixels.height - 1), 0)
+    }
   }
 
-  /// Not a check: with CLAWDTIME_RENDER_DIR set, it writes the look as a picture for a person to look at.
-  /// From the left: on its way, at its place, the pointer of the Mac came, a click. On a bright and a dark ground.
+  func testTheTipIsTheHotSpotAndTheMiddleOfThePictureWithinOnePointAtCommonScales() throws {
+    // The round tip is nearest to its corner on the line that halves it, r / sin(a / 2) - r inside.
+    let tip = GuidedCursorArt.corners[0], angle = GuidedCursorArt.tipAngle * Double.pi / 180
+    let inside = tip.radius / sin(angle / 2) - tip.radius
+    XCTAssertEqual(Double(GuidedCursorArt.hotSpot.x), inside / 2.0.squareRoot(), accuracy: 1e-9)
+    XCTAssertEqual(Double(GuidedCursorArt.hotSpot.y), inside / 2.0.squareRoot(), accuracy: 1e-9)
+    // The outline is at zero there: just inside it is the arrow, just outside it is not. The arrow points up
+    // and to the left, so nothing of it is further that way than zero.
+    let path = GuidedCursorArt.arrowPath
+    XCTAssertTrue(path.contains(CGPoint(x: 0.03, y: -0.03)))
+    XCTAssertFalse(path.contains(CGPoint(x: -0.03, y: 0.03)))
+    XCTAssertFalse(path.contains(CGPoint(x: -0.6, y: 0)))
+    XCTAssertFalse(path.contains(CGPoint(x: 0, y: 0.6)))
+    // The pictures: the hot spot is their middle, on a pixel border, so a layer placed at the tip is exact.
+    XCTAssertEqual(GuidedCursorArt.side.truncatingRemainder(dividingBy: 2), 0)
+    for scale in [1.0, 1.5, 2.0, 3.0] {
+      for dark in [false, true] {
+        let pixels = try XCTUnwrap(Pixels(try XCTUnwrap(GuidedCursorArt.arrow(scale: scale, dark: dark))))
+        XCTAssertEqual(Double(pixels.width), GuidedCursorArt.side * scale)
+        XCTAssertEqual(Double(pixels.height), GuidedCursorArt.side * scale)
+        // The painted tip: of all solid pixels, the one furthest up and to the left.
+        var best: (x: Int, y: Int)?
+        for y in 0..<pixels.height {
+          for x in 0..<pixels.width where pixels.alpha(x, y) >= 0.5 {
+            if best == nil || x + y < best!.x + best!.y { best = (x, y) }
+          }
+        }
+        let found = try XCTUnwrap(best)
+        let middle = Double(pixels.width) / 2
+        let dx = (Double(found.x) + 0.5 - middle) / scale, dy = (Double(found.y) + 0.5 - middle) / scale
+        XCTAssertLessThanOrEqual((dx * dx + dy * dy).squareRoot(), 1, "scale \(scale) dark \(dark): \(dx), \(dy)")
+      }
+    }
+  }
+
+  func testTheArrowIsSmallWithRoundCornersAndAShortNotch() throws {
+    let bounds = GuidedCursorArt.arrowPath.boundingBoxOfPath
+    XCTAssertGreaterThanOrEqual(bounds.height, 22); XCTAssertLessThanOrEqual(bounds.height, 28)
+    XCTAssertGreaterThanOrEqual(bounds.width, 22); XCTAssertLessThanOrEqual(bounds.width, 28)
+    // It hangs under the tip and to its right.
+    XCTAssertLessThanOrEqual(bounds.maxY, 1); XCTAssertGreaterThanOrEqual(bounds.minX, -1)
+    // Every corner is round. The tip is sharp: under 60 degrees.
+    XCTAssertTrue(GuidedCursorArt.corners.allSatisfy { $0.radius > 0 })
+    XCTAssertLessThan(GuidedCursorArt.tipAngle, 60)
+    // The notch is inside the line from wing to wing, a short way: under a quarter of the length of the arrow.
+    let c = GuidedCursorArt.corners, wing = (x: (c[1].x + c[3].x) / 2, y: (c[1].y + c[3].y) / 2)
+    let depth = ((wing.x - c[2].x) + (wing.y - c[2].y)) / 2.0.squareRoot()
+    XCTAssertGreaterThan(depth, 2); XCTAssertLessThan(depth, Double(bounds.height) / 4)
+    // The arrow is its own mirror across its line from the tip to the notch.
+    XCTAssertEqual(c[1].x, c[3].y); XCTAssertEqual(c[1].y, c[3].x); XCTAssertEqual(c[2].x, c[2].y)
+    // What is painted solid is as small, at a usual scale.
+    let pixels = try XCTUnwrap(Pixels(try XCTUnwrap(GuidedCursorArt.arrow(scale: 2, dark: false))))
+    var top = Int.max, bottom = Int.min
+    for y in 0..<pixels.height { for x in 0..<pixels.width where pixels.alpha(x, y) >= 0.5 { top = min(top, y); bottom = max(bottom, y) } }
+    let painted = Double(bottom - top + 1) / 2
+    XCTAssertGreaterThanOrEqual(painted, 22); XCTAssertLessThanOrEqual(painted, 28 + GuidedCursorArt.edgeLine)
+    // On a phone that shows a screen of 982 points as 720 pixels, the arrow is still 16 pixels high.
+    XCTAssertGreaterThanOrEqual(GuidedLook.pixels(Double(bounds.height), screenHeight: 982, shownHeight: 720), 16)
+  }
+
+  func testThreeRaysFanOutJustBeyondTheTipEvenlyAndClearOfTheArrow() throws {
+    let angles = GuidedCursorArt.rayAngles
+    XCTAssertEqual(angles.count, 3)
+    // To the left, up and to the left, and up: 45 degrees apart, and the middle one on the line of the arrow.
+    XCTAssertEqual(angles, [180, 135, 90])
+    let path = GuidedCursorArt.arrowPath, clear = (GuidedCursorArt.rayLine + GuidedCursorArt.edgeLine) / 2 + 0.5
+    for (start, end) in GuidedCursorArt.raySegments {
+      // Short, and starting just beyond the tip.
+      let length = hypot(Double(end.x - start.x), Double(end.y - start.y))
+      XCTAssertGreaterThanOrEqual(length, 3); XCTAssertLessThanOrEqual(length, 7)
+      let near = hypot(Double(start.x), Double(start.y))
+      XCTAssertGreaterThan(near - clear, 2); XCTAssertLessThan(near, 8)
+      // No part of a ray, with its edge, lies on the arrow.
+      for step in 0...20 {
+        let t = Double(step) / 20
+        let x = Double(start.x) + Double(end.x - start.x) * t, y = Double(start.y) + Double(end.y - start.y) * t
+        for turn in 0..<16 {
+          let a = Double(turn) / 16 * 2 * Double.pi
+          XCTAssertFalse(path.contains(CGPoint(x: x + cos(a) * clear, y: y + sin(a) * clear)))
+        }
+      }
+    }
+    for dark in [false, true] {
+      let scale = 4.0
+      let pixels = try XCTUnwrap(Pixels(try XCTUnwrap(GuidedCursorArt.rays(scale: scale, dark: dark))))
+      XCTAssertEqual(Double(pixels.width), GuidedCursorArt.side * scale)
+      // The middle of each ray is solid orange. The tip itself is clear: the arrow is there.
+      for (start, end) in GuidedCursorArt.raySegments {
+        // A picture counts its rows down, the rays count up.
+        let mid = pixels.at(Double(start.x + end.x) / 2, -Double(start.y + end.y) / 2, scale: scale)
+        XCTAssertEqual(pixels.alpha(mid.0, mid.1), 1)
+        XCTAssertEqual(pixels.color(mid.0, mid.1).0, GuidedCursorArt.fill(dark: dark).red, accuracy: 1.5 / 255)
+      }
+      XCTAssertLessThan(pixels.alpha(pixels.width / 2, pixels.height / 2), 0.3)
+      // Nothing of the rays is under the tip and to its right, where the arrow is.
+      let body = pixels.at(9, 9, scale: scale)
+      XCTAssertLessThan(pixels.alpha(body.0, body.1), 0.05)
+    }
+  }
+
+  func testAClickPulsesTheRaysOnceAndReduceMotionHasNoPulse() {
+    // Reduce Motion: no frames, so nothing moves.
+    XCTAssertTrue(GuidedClick.frames(still: true).isEmpty)
+    for time in [0, 0.05, GuidedClick.duration / 2, GuidedClick.duration] {
+      XCTAssertNil(GuidedClick.frame(at: time, still: true))
+    }
+    // With motion: a quick scale and fade, from the rays as they are to nothing.
+    XCTAssertLessThanOrEqual(GuidedClick.duration, 0.4)
+    let frames = GuidedClick.frames(still: false)
+    XCTAssertGreaterThanOrEqual(frames.count, 6)
+    XCTAssertEqual(frames.first, GuidedClick.Frame(scale: 1, opacity: 1))
+    XCTAssertEqual(frames.last?.scale ?? 0, GuidedClick.spread, accuracy: 1e-9)
+    XCTAssertEqual(frames.last?.opacity ?? 1, 0, accuracy: 1e-9)
+    for (before, after) in zip(frames, frames.dropFirst()) {
+      XCTAssertGreaterThanOrEqual(after.scale, before.scale)
+      XCTAssertLessThanOrEqual(after.opacity, before.opacity)
+    }
+    // Once: there is nothing before the click or after it.
+    XCTAssertNil(GuidedClick.frame(at: -0.01, still: false))
+    XCTAssertNil(GuidedClick.frame(at: GuidedClick.duration + 0.01, still: false))
+    XCTAssertNil(GuidedClick.frame(at: .nan, still: false))
+    // The copy at its full size, with its glow, is inside the window of the cursor.
+    let rays = GuidedCursorArt.raysBounds.insetBy(dx: -GuidedCursorArt.glowPad, dy: -GuidedCursorArt.glowPad)
+    let far = max(-Double(rays.minX), Double(rays.maxX), -Double(rays.minY), Double(rays.maxY))
+    XCTAssertLessThanOrEqual(far * GuidedClick.spread, GuidedLayout.reach)
+  }
+
+  /// Not a check: with CLAWDTIME_RENDER_DIR set, it writes the art as a picture for a person to look at. Each
+  /// row is a theme on a white and on a dark ground: the cursor, then the click in six steps.
   func testWritesTheLookForAPersonWhenAFolderIsNamed() throws {
     guard let folder = ProcessInfo.processInfo.environment["CLAWDTIME_RENDER_DIR"], !folder.isEmpty else { return }
-    let scale = 6.0
-    let ring = try XCTUnwrap(GuidedCursorArt.ring(scale: scale)), wave = ring
-    let pointer = try XCTUnwrap(GuidedCursorArt.pointer(scale: scale))
-    let side = 150.0, space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
-    let grounds: [(CGFloat, CGFloat, CGFloat)] = [(0.11, 0.12, 0.14), (0.96, 0.96, 0.95)]
-    let context = try XCTUnwrap(CGContext(data: nil, width: Int(side * 4 * scale), height: Int(side * 2 * scale), bitsPerComponent: 8,
-      bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    let scale = 4.0, side = GuidedCursorArt.side, columns = 7
+    let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+    let grounds: [(CGFloat, CGFloat, CGFloat)] = [(1, 1, 1), (0.12, 0.12, 0.13)]
+    let context = try XCTUnwrap(CGContext(data: nil, width: Int(side * Double(columns) * scale), height: Int(side * 4 * scale),
+      bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
     context.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
-    for (row, ground) in grounds.enumerated() {
-      for column in 0..<4 {
-        let cell = CGRect(x: Double(column) * side, y: Double(row) * side, width: side, height: side)
-        context.setFillColor(red: ground.0, green: ground.1, blue: ground.2, alpha: 1); context.fill(cell)
-        let middle = CGPoint(x: cell.midX, y: cell.midY), ringSide = GuidedCursorArt.ringSide
-        func draw(_ image: CGImage, across: Double, turned: Double = 0, alpha: CGFloat = 1) {
-          context.saveGState()
-          context.translateBy(x: middle.x, y: middle.y); context.rotate(by: CGFloat(-turned * 2 * Double.pi))
-          context.setAlpha(alpha)
-          context.draw(image, in: CGRect(x: -across / 2, y: -across / 2, width: across, height: across))
-          context.restoreGState()
-        }
-        if column == 3 { draw(wave, across: ringSide * 1.4, alpha: 0.45) }
-        draw(ring, across: column == 0 ? ringSide * GuidedLook.flight : ringSide, turned: [0.1, 0.3, 0, 0.6][column], alpha: column == 0 ? 0.7 : 1)
-        // The pointer of the Mac, as a plain dark outline, where it is when the hands act.
-        let macIsHere = column >= 2
-        if macIsHere {
-          let mac = CGMutablePath(), unit = 17.0 / 23.4
-          for (index, place) in GuidedCursorArt.outline.enumerated() {
-            let point = CGPoint(x: middle.x + place.0 * unit, y: middle.y - place.1 * unit)
-            if index == 0 { mac.move(to: point) } else { mac.addLine(to: point) }
+    for (theme, dark) in [false, true].enumerated() {
+      let arrow = try XCTUnwrap(GuidedCursorArt.arrow(scale: scale, dark: dark))
+      let rays = try XCTUnwrap(GuidedCursorArt.rays(scale: scale * 2, dark: dark))
+      for (index, ground) in grounds.enumerated() {
+        let row = theme * 2 + index
+        for column in 0..<columns {
+          let cell = CGRect(x: Double(column) * side, y: Double(row) * side, width: side, height: side)
+          context.setFillColor(red: ground.0, green: ground.1, blue: ground.2, alpha: 1); context.fill(cell)
+          context.draw(rays, in: cell)
+          if column > 0, let click = GuidedClick.frame(at: GuidedClick.duration * Double(column - 1) / 5, still: false) {
+            context.saveGState(); context.setAlpha(CGFloat(click.opacity))
+            context.translateBy(x: cell.midX, y: cell.midY); context.scaleBy(x: CGFloat(click.scale), y: CGFloat(click.scale))
+            context.draw(rays, in: CGRect(x: -side / 2, y: -side / 2, width: side, height: side))
+            context.restoreGState()
           }
-          mac.closeSubpath()
-          context.addPath(mac); context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: 1); context.setLineWidth(2); context.strokePath()
-          context.addPath(mac); context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1); context.fillPath()
+          context.draw(arrow, in: cell)
         }
-        let box = GuidedCursorArt.pointerSize, inset = GuidedCursorArt.pointerInset
-        let tip = macIsHere ? CGPoint(x: middle.x + GuidedLook.besideX, y: middle.y + GuidedLook.besideY) : middle
-        context.setShadow(offset: CGSize(width: 0, height: -1.5 * scale), blur: CGFloat(4 * scale), color: CGColor(gray: 0, alpha: 0.34))
-        context.draw(pointer, in: CGRect(x: tip.x - inset, y: tip.y + inset - Double(box.height), width: Double(box.width), height: Double(box.height)))
-        context.setShadow(offset: .zero, blur: 0, color: nil)
       }
     }
     let image = try XCTUnwrap(context.makeImage())

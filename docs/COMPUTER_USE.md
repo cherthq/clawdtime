@@ -1449,28 +1449,40 @@ so does a person who watches the shared screen on a phone.
 - **Not in the worker's own picture.** The picture that the hands take for the
   planner leaves out every window of ClawdTime with a filter of its own, so
   the planner never sees the cursor or its label.
-- **The look.** The cursor is ClawdTime's own: a ring around the place where
-  the hands act, and a small pointer. Both have the two colors of the Chert
-  mark, warm at the top and deep at the bottom, with a pale edge, so that all
-  of the ring is clear on a dark and on a bright ground. The ring is a picture
-  that is computed pixel by pixel: its left half is the exact mirror of its
-  right half, and its middle is the middle of every motion.
-- **Two pointers.** The pointer of the Mac stays the person's. The small
-  pointer points at the place. When the hands bring the pointer of the Mac
-  there for a click, a scroll or a drag, the small pointer steps aside and
-  stands beside it, so a person sees both. It points again when the cursor
-  goes on.
+- **The look.** The cursor is ClawdTime's own: a small solid arrow in the
+  orange accent of the panel, with three short rays at its tip, as a click is
+  drawn. The arrow points up and to the left. All its corners are round, and
+  its back has a short notch. The rays fan out from just beyond the tip: to the
+  left, up and to the left, and up, 45 degrees apart. A soft orange glow is
+  around the arrow and the rays. A thin darker edge and a very soft shadow keep
+  the arrow clear on a white window. The orange is that of the theme: `#FF8040`
+  in light, `#FF8A50` in dark. `GuidedCursorArt` draws the pictures.
+- **The tip is the place.** The tip of the arrow is its hot spot: the point
+  where the hands act is exactly at the tip. The tip is round, so the hot spot
+  is not the corner of the outline. It is the front of the round tip, on the
+  line that halves the corner, `r / sin(a / 2) - r` inside it (`r` is the
+  radius of the tip, `a` its angle). Each picture has the hot spot at its exact
+  middle, on a pixel border, and the view puts the middle of each layer at the
+  tip on a whole pixel. So the tip is within half a pixel of the place. Tests
+  render the arrow at 1, 1.5, 2 and 3 pixels a point and find its painted tip
+  within 1 point of the place.
+- **Two pointers.** The pointer of the Mac stays the person's. When the hands
+  bring it to the place for a click, a scroll or a drag, its tip meets the tip
+  of the arrow. Both point at the same spot.
 - **The label.** Each command for the hands comes with a short label from the
   worker: `Click "Save"`, `Type in "Search"`, `Press cmd+s`, `Scroll down`,
-  `Open Notes`, `Hover over "File"`, `Drag "Card" to "Done"`. The cursor shows it in a pill beside the pointer, as one line of
-  at most 44 characters. The label of typed text never holds that text. The
-  label of a key names the key, and the label of a click names the element as
-  the screen names it.
+  `Open Notes`, `Hover over "File"`, `Drag "Card" to "Done"`. The cursor shows
+  it in a pill just below and to the right of the arrow, as one line of at
+  most 44 characters. Near the right edge of the screen the pill goes to the
+  left of the tip. Near the bottom edge it goes over the tip, clear of the
+  rays. The pill is always whole on the screen and never lies on the arrow.
+  The label of typed text never holds that text. The label of a key names the
+  key, and the label of a click names the element as the screen names it.
 - **The glide.** The cursor goes on from where it is. The first time it comes
   out of the mascot. A glide takes 0.15 seconds, and 1 ms more for each 4
   points of the way, up to 0.26 seconds: the usual way of 150 to 400 points
   takes 0.19 to 0.25 seconds. The cursor then waits 0.10 seconds at the
-  target, and the ring closes in that time. So a glide and its wait take 0.38
+  target. So a glide and its wait take 0.38
   seconds at most, where they took up to one second before. The picture of a
   call defaults to 20 frames a second, so the shortest glide is in three of
   them. The cursor stays 3 seconds after the command and then fades: longer
@@ -1482,23 +1494,21 @@ so does a person who watches the shared screen on a phone.
   there too, as a hand moves it: on a slight curve, in 0.15 to 0.24 seconds
   (0.18 to 0.22 for a usual way), so you see it go, before a click, a scroll
   or a drag. Its events carry a mark, so the watch never takes them for yours.
-- **The ring in motion.** While the cursor is out, the colors of the ring turn
-  slowly, one turn in five seconds. On its way the ring is open and light. At
-  the place it closes in and is solid. At a click the ring gives way and comes
-  back, and a second ring opens from it and fades.
+- **The click.** The arrow and the rays stay still. At a click, a copy of the
+  rays opens out from the tip to 1.6 times their size and fades, once, in 0.32
+  seconds. Nothing else moves at the place, so the frame clock stops after the
+  glide.
 - **Typed keys.** A command that types names no place. The cursor goes to the
   field that has the keyboard: to the lower edge of a field of one line, so
   the pointer is under the text. With no field known it stays where it last
   pointed. The checks for a password field and for ClawdTime's own windows run
   again after the glide, just before the first key.
 - **The size.** For a screen that a phone shows as a picture of 1280 by 720
-  pixels: a ring of 44 points and letters of 20 points in the pill. The small
-  pointer is 16 points, a little smaller than the pointer of the Mac. The
-  colors and the typeface of the pill are those of the panel.
+  pixels: an arrow about 24 points high and letters of 20 points in the pill.
+  The colors and the typeface of the pill are those of the panel.
 - **Reduce Motion.** With the macOS setting Reduce Motion the cursor jumps to
-  the target with no glide, waits 0.12 seconds, and the ring of a click shows
-  with no growth. The colors of the ring do not turn, the ring does not open
-  or close, and the small pointer changes its place with no slide.
+  the target with no glide and waits 0.12 seconds. A click has no pulse.
+  Nothing moves.
 
 The outgoing call video can now automatically frame these agent targets and
 focused typing fields. Capture stays continuous and input coordinates stay
