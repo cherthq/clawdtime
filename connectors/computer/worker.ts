@@ -2839,15 +2839,10 @@ export class ComputerWorker implements DesktopExecutorPort {
    */
   private reading(goal: string, signal: AbortSignal) {
     const behind = this.options.planner;
-    const read = behind.navigation as
-      | ((
-          goal: string,
-          options?: { signal?: AbortSignal },
-        ) => Promise<NavigationIntent>)
-      | undefined;
+    const read = behind.navigation;
     if (!read || directAddress(goal))
       return Promise.resolve<NavigationIntent>({ kind: "none" });
-    return read.call(behind, goal, { signal });
+    return read.call(behind, goal, signal);
   }
   /**
    * The action was not sent: the screen is not what the planner saw, or the

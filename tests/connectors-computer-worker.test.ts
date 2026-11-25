@@ -6599,8 +6599,8 @@ describe("trouble of the planner", () => {
     let signal: AbortSignal | undefined;
     const { worker, planner } = setup([done]);
     Object.assign(planner, {
-      navigation: (_goal: string, options?: { signal?: AbortSignal }) => {
-        signal = options?.signal;
+      navigation: (_goal: string, given?: AbortSignal) => {
+        signal = given;
         return new Promise(() => {});
       },
     });
