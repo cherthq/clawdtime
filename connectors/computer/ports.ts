@@ -386,6 +386,12 @@ export interface Planner {
     page: BrowserPage | null;
     /** False when the browser cannot be used in this request. The browser functions are then not offered. */
     browser?: boolean;
+    /** The plan of this request, with the state of each subgoal (`plan.ts`). Absent when it has none. */
+    plan?: import("./plan.js").PlanView;
     signal?: AbortSignal;
-  }): Promise<{ action: Action; why: string }>;
+  }): Promise<{ action: Action; why: string } | import("./plan.js").PlanChoice>;
+  /** Splits the goal into ordered subgoals, after the first look and before the first action. */
+  outline?(
+    input: import("./plan.js").OutlineInput,
+  ): Promise<import("./plan.js").Subgoal[]>;
 }
