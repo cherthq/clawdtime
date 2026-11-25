@@ -73,13 +73,13 @@ describe("the person talks to a computer worker that waits", () => {
     const f = setup();
     const model = f.model as ReturnType<typeof delegating>;
     expect(
-      await f.supervisor.reply([], "Open the draft and send the mail", "chat"),
+      await f.supervisor.reply([], "Open the draft and finish it", "chat"),
     ).toMatch(/^Started\./);
     expect(model.complete).toHaveBeenCalledTimes(1);
     await f.waiting();
     // The question came to the chat by itself.
     expect(f.said).toHaveLength(1);
-    expect(f.said[0]).toMatch(/^Click "Send"\?/);
+    expect(f.said[0]).toMatch(/^Click "Send" in Notes\?/);
     expect(f.hands.sent).toEqual([]);
     // A plain yes after seeing the approval question answers it. The model is not asked.
     const shown = [
@@ -100,7 +100,7 @@ describe("the person talks to a computer worker that waits", () => {
 
   it("a no cancels, by voice as well", async () => {
     const f = setup(null);
-    await f.worker.submit("r1", "Send the mail");
+    await f.worker.submit("r1", "Finish the draft");
     await f.waiting();
     const shown = [
       {
@@ -110,9 +110,9 @@ describe("the person talks to a computer worker that waits", () => {
         via: "chat" as const,
       },
     ];
-    expect(await f.supervisor.reply(shown, "No, do not send it.", "voice")).toBe(
-      'Canceled. I did not do it: Click "Send".',
-    );
+    expect(
+      await f.supervisor.reply(shown, "No, do not send it.", "voice"),
+    ).toBe('Canceled. I did not do it: Click "Send".');
     await f.worker.idle();
     expect(f.hands.sent).toEqual([]);
     expect(f.worker.snapshot().state).toBe("canceled");
@@ -121,11 +121,11 @@ describe("the person talks to a computer worker that waits", () => {
   it("words that are not a clear answer change nothing, and the question is said again", async () => {
     const f = setup();
     const model = f.model as ReturnType<typeof delegating>;
-    await f.worker.submit("r1", "Send the mail");
+    await f.worker.submit("r1", "Finish the draft");
     await f.waiting();
     for (const words of ["hmm, what is in it?", "maybe"]) {
       const reply = await f.supervisor.reply([], words, "chat");
-      expect(reply).toContain('Click "Send"?');
+      expect(reply).toContain('Click "Send" in Notes?');
     }
     // Nothing reached the model, so nothing new was started in the meantime.
     expect(model.complete).not.toHaveBeenCalled();
@@ -136,10 +136,10 @@ describe("the person talks to a computer worker that waits", () => {
 
   it("stop still stops, and a question about the state still tells the state", async () => {
     const f = setup(null);
-    await f.worker.submit("r1", "Send the mail");
+    await f.worker.submit("r1", "Finish the draft");
     await f.waiting();
     expect(await f.supervisor.reply([], "computer status", "chat")).toMatch(
-      /^Click "Send"\?/,
+      /^Click "Send" in Notes\?/,
     );
     expect(f.worker.snapshot().state).toBe("waiting_for_person");
     expect(await f.supervisor.reply([], "Stop.", "chat")).toBe(stoppedText);
@@ -158,7 +158,7 @@ describe("the person talks to a computer worker that waits", () => {
 
   it("answers neither when an agent's request waits at the same time", async () => {
     const f = setup(null);
-    await f.worker.submit("r1", "Send the mail");
+    await f.worker.submit("r1", "Finish the draft");
     await f.waiting();
     const asked = f.desk.open({
       agent: "claude-code",
@@ -366,7 +366,7 @@ describe("a spoken or typed UI request reaches the computer worker", () => {
       goal: "click the blue Send button",
     });
     // The guard still asks before the click, whoever started the request.
-    expect(f.said[0]).toMatch(/^Click "Send"\?/);
+    expect(f.said[0]).toMatch(/^Click "Send" in Notes\?/);
     expect(f.hands.sent).toEqual([]);
     f.worker.stop();
   });
@@ -415,7 +415,7 @@ describe("the chat of the panel", () => {
       state: "idle",
       canStop: false,
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await until(() => worker.snapshot().state === "waiting_for_person");
     expect(feed.chat().execution).toMatchObject({
       state: "waiting_for_person",
@@ -425,7 +425,7 @@ describe("the chat of the panel", () => {
     expect(reply).toMatchObject({ role: "assistant", text: "Continuing." });
     await worker.idle();
     expect(feed.chat().messages.map((message) => message.text)).toEqual([
-      'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.',
+      'Click "Send" in Notes? It sends as you to other people. Say yes or no.',
       "yes",
       "Continuing.",
       "Done. The mail is sent.",

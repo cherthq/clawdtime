@@ -348,12 +348,12 @@ describe("the person's yes", () => {
     const { worker, hands, said, waiting, journal } = setup([click, done], {
       screens: [send],
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     expect(hands.sent).toEqual([]);
     const question = worker.snapshot().message;
     expect(question).toBe(
-      'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.',
+      'Click "Send" in Notes? It sends as you to other people. Say yes or no.',
     );
     expect(said).toEqual([question]);
     expect(worker.snapshot().canStop).toBe(true);
@@ -382,7 +382,7 @@ describe("the person's yes", () => {
     const { worker, hands, waiting, journal, planner } = setup([click, done], {
       screens: [send],
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     expect((await worker.answer("no")).message).toBe(
       'Canceled. I did not do it: Click "Send".',
@@ -407,7 +407,7 @@ describe("the person's yes", () => {
     const { worker, hands, waiting, planner } = setup([click, done], {
       screens: [send, other],
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await worker.answer("yes");
     await worker.idle();
@@ -422,48 +422,59 @@ describe("the person's yes", () => {
   const dialog = observation([
     element(1, { title: "Cancel" }),
     element(2, { title: "Delete" }),
+    element(3, {
+      role: "AXStaticText",
+      title: "You can\u2019t undo this action.",
+    }),
   ]);
+  const edited = observation([element(1, { title: "Save" })], {
+    app: {
+      name: "TextEdit",
+      bundleId: "com.apple.TextEdit",
+      window: "Report \u2014 Edited",
+    },
+  });
   const cases: [string, Observation, Action, RegExp, HandCommand][] = [
     [
       "typing in a terminal",
       terminal,
+      { kind: "type", text: "ls" },
+      /^Type text in Terminal\? Text in a terminal runs as a command, and your request did not ask for one\. Say yes or no\.$/,
+      { kind: "type", text: "ls" },
+    ],
+    [
+      "a command that deletes for good",
+      terminal,
       { kind: "type", text: "rm -rf build" },
-      /^Type text\? This goes into a terminal/,
+      /^Type text in Terminal\? The command deletes files for good\. Say yes or no\.$/,
       { kind: "type", text: "rm -rf build" },
     ],
     [
       "Return in a terminal",
       terminal,
       { kind: "key", combo: "return" },
-      /^Press return\? This goes into a terminal/,
+      /^Press return in Terminal\? Text in a terminal runs as a command/,
       { kind: "key", combo: "return" },
     ],
     [
-      "a key that quits",
-      save,
+      "a key that quits an app with unsaved changes",
+      edited,
       { kind: "key", combo: "cmd+q" },
-      /^Press cmd\+q\? This key combination can quit an app, log out or lock the Mac\./,
+      /^Press cmd\+q in TextEdit\? "Report \u2014 Edited" shows changes that are not saved, which can be lost\. Say yes or no\.$/,
       { kind: "key", combo: "cmd+q" },
     ],
     [
       "a key that logs out",
       save,
       { kind: "key", combo: "shift+cmd+q" },
-      /^Press cmd\+shift\+q\?/,
+      /^Press cmd\+shift\+q in Notes\? It logs you out of the Mac/,
       { kind: "key", combo: "cmd+shift+q" },
     ],
     [
-      "a key that locks",
-      save,
-      { kind: "key", combo: "ctrl+cmd+q" },
-      /^Press cmd\+ctrl\+q\?/,
-      { kind: "key", combo: "cmd+ctrl+q" },
-    ],
-    [
-      "Return that can press Delete",
+      "Return that can press a Delete that cannot be undone",
       dialog,
       { kind: "key", combo: "return" },
-      /^Press return\? This key can press "Delete"/,
+      /^Press return in Notes\? It can press "Delete"\. What it removes is gone for good\. Say yes or no\.$/,
       { kind: "key", combo: "return" },
     ],
   ];
@@ -493,33 +504,20 @@ describe("the person's yes", () => {
     },
   );
 
-  it("is asked before the same action goes out a third time in a row", async () => {
-    const yes = setup([click, click, click, done]);
-    await yes.worker.submit("r1", "Click it");
-    await yes.waiting();
-    expect(yes.hands.sent).toHaveLength(2);
-    expect(yes.worker.snapshot().message).toBe(
-      'I already did this twice in a row: Click "Save". Say yes to do it a third time, or no to stop.',
-    );
-    await yes.worker.answer("yes");
-    await yes.worker.idle();
-    expect(yes.hands.sent).toHaveLength(3);
-    expect(yes.worker.snapshot().state).toBe("completed");
+  it("is not asked for the same action again: a loop is for the row of tries and the progress guard", async () => {
+    const thrice = setup([click, click, click, done]);
+    await thrice.worker.submit("r1", "Click it");
+    await thrice.worker.idle();
+    expect(thrice.hands.sent).toHaveLength(3);
+    expect(thrice.said).toEqual(["Done. The note is saved."]);
+    expect(thrice.worker.snapshot().state).toBe("completed");
 
-    const no = setup([click, click, click, done]);
-    await no.worker.submit("r1", "Click it");
-    await no.waiting();
-    await no.worker.answer("no");
-    await no.worker.idle();
-    expect(no.hands.sent).toHaveLength(2);
-    expect(no.worker.snapshot().state).toBe("canceled");
-
-    // A wait between two clicks does not end the row. Another action does.
-    const waits = setup([click, { kind: "wait", ms: 1 }, click, click]);
+    // A wait between two clicks asks nothing either.
+    const waits = setup([click, { kind: "wait", ms: 1 }, click, click, done]);
     await waits.worker.submit("r1", "Click it");
-    await waits.waiting();
-    expect(waits.hands.sent).toHaveLength(2);
-    waits.worker.stop();
+    await waits.worker.idle();
+    expect(waits.hands.sent).toHaveLength(3);
+    expect(waits.worker.snapshot().state).toBe("completed");
     const mixed = setup(
       [click, click, { kind: "click_element", element: 2 }, click, click, done],
       {
@@ -539,7 +537,7 @@ describe("the person's yes", () => {
 
   it("stops while it waits for an answer, with the plain answer", async () => {
     const { worker, hands, waiting } = setup([click], { screens: [send] });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     expect(worker.stop()).toMatchObject({
       state: "canceled",
@@ -558,7 +556,7 @@ describe("the person's yes", () => {
       [click, done],
       { screens: [send] },
     );
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     clock.now += 15 * 60_000;
     expect((await worker.answer("yes")).message).toBe(
@@ -743,14 +741,23 @@ describe("the time of each step", () => {
 describe("a yes after which the action was not sent", () => {
   // The question itself changes what is in front: the look just before the
   // click has another generation than the planner's look.
+  const warning = element(3, {
+    role: "AXStaticText",
+    title:
+      "This item will be deleted immediately. You can\u2019t undo this action.",
+  });
   const dialog = (surfaceEpoch: number) =>
     observation(
-      [element(1, { title: "Cancel" }), element(2, { title: "Delete" })],
+      [
+        element(1, { title: "Cancel" }),
+        element(2, { title: "Delete" }),
+        warning,
+      ],
       { surfaceEpoch },
     );
   const press: Action = { kind: "click_element", element: 2 };
   const questions = (said: string[]) =>
-    said.filter((text) => text.startsWith('Click "Delete"?')).length;
+    said.filter((text) => text.startsWith('Click "Delete" in ')).length;
 
   it("holds for the same action: the person is not asked a second time", async () => {
     const { worker, hands, planner, said, waiting } = setup(
@@ -816,7 +823,11 @@ describe("a yes after which the action was not sent", () => {
 
   it("does not hold for a button of the same name in another app or window", async () => {
     const elsewhere = observation(
-      [element(1, { title: "Cancel" }), element(2, { title: "Delete" })],
+      [
+        element(1, { title: "Cancel" }),
+        element(2, { title: "Delete" }),
+        warning,
+      ],
       {
         surfaceEpoch: 2,
         app: {
@@ -841,7 +852,11 @@ describe("a yes after which the action was not sent", () => {
 
   it("does not hold for another action, nor after a minute", async () => {
     const other = observation(
-      [element(1, { title: "Cancel" }), element(2, { title: "Remove" })],
+      [
+        element(1, { title: "Cancel" }),
+        element(2, { title: "Remove" }),
+        warning,
+      ],
       { surfaceEpoch: 2 },
     );
     const changed = setup([press, press, done], {
@@ -852,7 +867,9 @@ describe("a yes after which the action was not sent", () => {
     await changed.worker.answer("yes");
     await changed.waiting();
     // The screen now has another button under that number: a new question, for its name.
-    expect(changed.worker.snapshot().message).toMatch(/^Click "Remove"\?/);
+    expect(changed.worker.snapshot().message).toMatch(
+      /^Click "Remove" in Notes\?/,
+    );
     expect(changed.hands.sent).toEqual([]);
     changed.worker.stop();
 
@@ -879,12 +896,29 @@ describe("a yes after which the action was not sent", () => {
 
 describe("a quit by name", () => {
   const quit: Action = { kind: "quit_app", name: "TextEdit" };
-  it("asks, sends the quit after a yes, and needs no look at a window", async () => {
-    const { worker, hands, waiting } = setup([quit, done]);
+  const edited = observation([element(1, { title: "Save" })], {
+    app: {
+      name: "TextEdit",
+      bundleId: "com.apple.TextEdit",
+      window: "Report \u2014 Edited",
+    },
+  });
+  it("quits with no question when the app shows no unsaved work, and needs no look at a window", async () => {
+    const { worker, hands, said } = setup([quit, done]);
+    await worker.submit("r1", "Quit TextEdit");
+    await worker.idle();
+    expect(hands.sent).toEqual([{ kind: "quit_app", name: "TextEdit" }]);
+    expect(said).toEqual(["Done. The note is saved."]);
+    expect(worker.snapshot().state).toBe("completed");
+  });
+  it("asks while the app shows unsaved changes, and sends the quit after a yes", async () => {
+    const { worker, hands, waiting } = setup([quit, done], {
+      screens: [edited],
+    });
     await worker.submit("r1", "Quit TextEdit");
     await waiting();
     expect(worker.snapshot().message).toBe(
-      "Quit TextEdit? This quits the app, with what is open in it. Work that is not saved can be lost. Say yes to allow it, or no to stop.",
+      'Quit TextEdit? "Report \u2014 Edited" shows changes that are not saved, which can be lost. Say yes or no.',
     );
     expect(hands.sent).toEqual([]);
     await worker.answer("yes");
@@ -893,19 +927,19 @@ describe("a quit by name", () => {
     expect(worker.snapshot().state).toBe("completed");
   });
   it("tells the planner when the app stayed open", async () => {
-    const { worker, hands, planner, waiting } = setup([quit, done]);
+    const { worker, hands, planner } = setup([quit, done]);
     hands.answer = (command) =>
       command.kind === "quit_app" ? { ok: false, error: "failed" } : undefined;
     await worker.submit("r1", "Quit TextEdit");
-    await waiting();
-    await worker.answer("yes");
     await worker.idle();
     expect(planner.inputs[1]!.history[0]!.outcome).toBe(
       "the quit was sent, but the app still runs: it may ask something first. Look at the screen.",
     );
   });
   it("sends nothing after a no", async () => {
-    const { worker, hands, waiting } = setup([quit, done]);
+    const { worker, hands, waiting } = setup([quit, done], {
+      screens: [edited],
+    });
     await worker.submit("r1", "Quit TextEdit");
     await waiting();
     await worker.answer("no");
@@ -938,23 +972,48 @@ describe("typed text and the focus", () => {
     await there.worker.idle();
     expect(there.planner.inputs[1]!.history[0]!.outcome).toBe("ok");
   });
-  it("passes the person's request to the checks: a close that was asked for needs no question", async () => {
-    const screen = observation([element(1, { title: "Close" })]);
+  it("passes the person's request to the checks: a send that was asked for needs no question", async () => {
+    const screen = observation([element(1, { title: "Send" })]);
     const said = setup([{ kind: "click_element", element: 1 }, done], {
       screens: [screen],
     });
-    await said.worker.submit("r1", "Close the banner");
+    await said.worker.submit("r1", "Reply to Sam that I am late, and send it");
     await said.worker.idle();
     expect(said.worker.snapshot().state).toBe("completed");
     expect(said.hands.sent.map((command) => command.kind)).toEqual(["click"]);
     const other = setup([{ kind: "click_element", element: 1 }, done], {
       screens: [screen],
     });
-    await other.worker.submit("r1", "Tidy up the screen");
+    await other.worker.submit("r1", "Read my messages");
     await other.waiting();
-    expect(other.worker.snapshot().message).toMatch(/^Click "Close"\?/);
+    expect(other.worker.snapshot().message).toBe(
+      'Click "Send" in Notes? It sends as you to other people. Say yes or no.',
+    );
     expect(other.hands.sent).toEqual([]);
     other.worker.stop();
+  });
+  it("closes a window, a banner and a dialog with no question", async () => {
+    const screen = observation([
+      element(1, { title: "Close" }),
+      element(2, { title: "OK" }),
+    ]);
+    const { worker, hands, said } = setup(
+      [
+        { kind: "click_element", element: 1 },
+        { kind: "key", combo: "cmd+w" },
+        { kind: "click_element", element: 2 },
+        done,
+      ],
+      { screens: [screen] },
+    );
+    await worker.submit("r1", "Tidy up the screen");
+    await worker.idle();
+    expect(hands.sent.map((command) => command.kind)).toEqual([
+      "click",
+      "key",
+      "click",
+    ]);
+    expect(said).toEqual(["Done. The note is saved."]);
   });
 });
 
@@ -1352,7 +1411,7 @@ describe("what the person says while a task runs", () => {
     // Before an action that waits for a yes: hold words set aside and pause without sending.
     const send = observation([element(1, { title: "Send" })]);
     const asked = setup([click, done], { screens: [send] });
-    await asked.worker.submit("r1", "Send the mail");
+    await asked.worker.submit("r1", "Finish the draft");
     await asked.waiting();
     expect(
       (await asked.worker.submit("r2", "No, do not send it")).message,
@@ -1394,7 +1453,7 @@ describe("what the person says while a task runs", () => {
     expect(journal.all()).toHaveLength(1);
     const send = observation([element(1, { title: "Send" })]);
     const asked = setup([click, done], { screens: [send] });
-    await asked.worker.submit("r1", "Send the mail");
+    await asked.worker.submit("r1", "Finish the draft");
     await asked.waiting();
     expect((await asked.worker.submit("r2", "please cancel")).message).toBe(
       stoppedText,
@@ -1434,7 +1493,7 @@ describe("what the person says while a task runs", () => {
     // hold words set aside what waited and pause without sending input.
     for (const [index, words] of unclear.entries()) {
       const asked = setup([click, done], { screens: [send] });
-      await asked.worker.submit("r1", "Send the mail");
+      await asked.worker.submit("r1", "Finish the draft");
       await asked.waiting();
       expect((await asked.worker.submit(`a${index}`, words)).message).toBe(
         "Got it. I hold now and take that into the task. That was no yes: what waited for one is set aside. Say continue to go on, or stop.",
@@ -1481,7 +1540,7 @@ describe("what the person says while a task runs", () => {
       if (command.kind === "observe" && !command.image) await gate;
       return {};
     };
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     expect((await worker.answer("yes")).message).toBe("Continuing.");
     await until(() => hands.commands.length === 2);
@@ -1503,7 +1562,7 @@ describe("what the person says while a task runs", () => {
     await waiting();
     expect(hands.sent).toEqual([]);
     expect(
-      said.filter((text) => text.startsWith('Click "Send"?')),
+      said.filter((text) => text.startsWith('Click "Send" in Notes?')),
     ).toHaveLength(2);
     worker.stop();
   });
@@ -1569,10 +1628,10 @@ describe("what the person says while a task runs", () => {
       [click, click, done],
       { screens: [send] },
     );
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     const question = worker.snapshot().message;
-    expect(question).toMatch(/^Click "Send"\?/);
+    expect(question).toMatch(/^Click "Send" in Notes\?/);
     expect(worker.snapshot()).toMatchObject({ waiting: "approval" });
     // The reader of a yes takes these words for a yes. As words for the
     // task they are none: what waited is set aside, and nothing is sent.
@@ -1669,7 +1728,11 @@ describe("what the person says while a task runs", () => {
     // and the yes is kept for the same action.
     const dialog = (surfaceEpoch: number) =>
       observation(
-        [element(1, { title: "Cancel" }), element(2, { title: "Delete" })],
+        [
+          element(1, { title: "Cancel" }),
+          element(2, { title: "Delete" }),
+          element(3, { role: "AXStaticText", title: "You cannot undo this." }),
+        ],
         { surfaceEpoch },
       );
     const press: Action = { kind: "click_element", element: 2 };
@@ -1690,7 +1753,7 @@ describe("what the person says while a task runs", () => {
     await waiting();
     expect(hands.sent).toEqual([]);
     expect(
-      said.filter((text) => text.startsWith('Click "Delete"?')),
+      said.filter((text) => text.startsWith('Click "Delete" in Notes?')),
     ).toHaveLength(2);
     worker.stop();
   });
@@ -1700,7 +1763,7 @@ describe("what the person says while a task runs", () => {
     const { worker, hands, waiting, clock, journal } = setup([click, done], {
       screens: [send],
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     clock.now += 15 * 60_000;
     expect((await worker.submit("r2", "Use the other tab")).message).toBe(
@@ -1783,7 +1846,7 @@ describe("what the person says while a task runs", () => {
     const { worker, hands, waiting } = setup([click, done], {
       screens: [send],
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     const question = worker.snapshot().message;
     expect(
@@ -1941,11 +2004,11 @@ describe("what the person says while a task runs", () => {
     expect(phone.journal.all()).toHaveLength(1);
   });
 
-  it("ends the free close that the request asked for, and cannot add one: after any more words a close asks", async () => {
-    const screen = observation([element(1, { title: "Close" })]);
-    const close: Action = { kind: "click_element", element: 1 };
-    // The request asked for a close. Whatever the person says after it, in
-    // whatever words, the close asks again.
+  it("ends the free send that the request asked for, and cannot add one: after any more words a send asks", async () => {
+    const screen = observation([element(1, { title: "Send" })]);
+    const press: Action = { kind: "click_element", element: 1 };
+    // The request asked for a send. Whatever the person says after it, in
+    // whatever words, the send asks again.
     for (const [words, pauses] of [
       ["Do not close the window", true],
       ["Leave the window open, I want it to stay", true],
@@ -1953,9 +2016,9 @@ describe("what the person says while a task runs", () => {
     ] as const) {
       const first = held({ kind: "wait", ms: 0 });
       const back = await running(
-        [first.step, close, done],
+        [first.step, press, done],
         { screens: [screen] },
-        "Close the banner",
+        "Send the reply",
       );
       expect((await back.worker.submit("r2", words)).message).toBe(
         pauses
@@ -1970,17 +2033,19 @@ describe("what the person says while a task runs", () => {
         await back.worker.answer("continue");
         await until(() => back.worker.snapshot().waiting === "approval");
       }
-      expect(back.worker.snapshot().message).toMatch(/^Click "Close"\?/);
+      expect(back.worker.snapshot().message).toMatch(
+        /^Click "Send" in Notes\?/,
+      );
       expect(back.hands.sent).toEqual([]);
       // The yes is for the same action: the look just before it reads the same words.
       await back.worker.answer("yes");
       await back.worker.idle();
       expect(back.hands.sent.map((command) => command.kind)).toEqual(["click"]);
     }
-    // The request asked for no close. Later words do not take the question away.
+    // The request asked for no send. Later words do not take the question away.
     const second = held({ kind: "wait", ms: 0 });
     const added = await running(
-      [second.step, close, done],
+      [second.step, press, done],
       { screens: [screen] },
       "Tidy up the screen",
     );
@@ -1989,7 +2054,7 @@ describe("what the person says while a task runs", () => {
     );
     second.release();
     await added.waiting();
-    expect(added.worker.snapshot().message).toMatch(/^Click "Close"\?/);
+    expect(added.worker.snapshot().message).toMatch(/^Click "Send" in Notes\?/);
     expect(added.hands.sent).toEqual([]);
     added.worker.stop();
   });
@@ -2064,7 +2129,7 @@ describe("what the person says while a task runs", () => {
       ],
       { screens: [send] },
     );
-    await asked.worker.submit("r1", "Send the mail");
+    await asked.worker.submit("r1", "Finish the draft");
     await asked.waiting();
     expect((await asked.worker.submit("s2", "ok stop")).message).toBe(
       stoppedText,
@@ -2094,7 +2159,7 @@ describe("what the person says while a task runs", () => {
         ],
         { screens: [send] },
       );
-      await asked.worker.submit("r1", "Send the mail");
+      await asked.worker.submit("r1", "Finish the draft");
       await asked.waiting();
       expect((await asked.worker.submit("g1", words)).message).toBe(
         "Got it. I hold now and take that into the task. That was no yes: what waited for one is set aside. Say continue to go on, or stop.",
@@ -2267,7 +2332,7 @@ describe("what the person says while a task runs", () => {
     // Sequence A: step limit reached while waiting on yes_no.
     const send = observation([element(1, { title: "Send" })]);
     const atAsk = setup([click, done], { screens: [send], maxSteps: 1 });
-    await atAsk.worker.submit("r1", "Send the mail");
+    await atAsk.worker.submit("r1", "Finish the draft");
     await atAsk.waiting();
     const askReply = (await atAsk.worker.submit("g1", "click draft instead"))
       .message;
@@ -2342,9 +2407,16 @@ describe("what the person says while a task runs", () => {
 
   it("holds back viaHands commands with send.look false (quit_app) when newer words arrive before dispatch", async () => {
     const quit: Action = { kind: "quit_app", name: "Notes" };
+    const unsaved = observation([element(1, { title: "Save" })], {
+      app: {
+        name: "Notes",
+        bundleId: "com.apple.Notes",
+        window: "Shopping \u2014 Edited",
+      },
+    });
     const { worker, hands, waiting, planner, said } = setup(
       [quit, quit, done],
-      { screens: [save] },
+      { screens: [unsaved] },
     );
     await worker.submit("r1", "Quit Notes");
     await waiting();
@@ -2584,7 +2656,7 @@ describe("what the person says while a task runs", () => {
         ],
         { screens: [approvalScreen] },
       );
-      await run.worker.submit("r1", "Send it");
+      await run.worker.submit("r1", "Finish it");
       await run.waiting();
       const reply = (await run.worker.submit("h1", phrase)).message;
       expect(reply).toContain("hold");
@@ -3541,12 +3613,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       { screens: [bar()] },
     );
     await worker.submit("r1", "Type example.com/app in the address bar");
-    // The third time in a row asks first, as before.
-    await until(() => said.length === 1);
-    expect(said[0]).toBe(
-      "I already did this twice in a row: Press return. Say yes to do it a third time, or no to stop.",
-    );
-    await worker.answer("yes");
+    // No question comes before the third time: the row tells the planner.
     await worker.idle();
     expect(hands.sent).toEqual(again(enter, 3));
     expect(planner.inputs).toHaveLength(4);
@@ -3557,7 +3624,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     );
     const end = ending(3, "and I saw no change on the screen after it.");
     expect(worker.snapshot()).toMatchObject({ state: "blocked", message: end });
-    expect(said.at(-1)).toBe(end);
+    expect(said).toEqual([end]);
     expect(said.join(" ")).not.toMatch(/\bdone\b/i);
     expect(journal.get("r1")).toMatchObject({
       state: "blocked",
@@ -3610,9 +3677,8 @@ describe("an action that is not sent, or that moves nothing", () => {
       { screens: [bar()] },
     );
     await worker.submit("r1", "Type example.com/app in the address bar");
-    await until(() => said.length === 1);
-    await worker.answer("yes");
     await worker.idle();
+    expect(said).toEqual(["Done. The note is saved."]);
     expect(planner.inputs[3]!.history.at(-1)!.outcome).toBe(
       `${told(3)} Last outcome: ok`,
     );
@@ -3654,18 +3720,10 @@ describe("an action that is not sent, or that moves nothing", () => {
           ? { observation: form(1 + hands.sent.length) }
           : undefined;
       await worker.submit("r1", "Go to the sixth field");
-      // From the third time on the person is asked, with the real count. Nothing ends the task.
-      for (let asked = 1; asked <= 3; asked++) {
-        await until(() => said.length === asked);
-        expect(said[asked - 1]).toBe(
-          asked === 1
-            ? `I already did this twice in a row: Press ${combo}. Say yes to do it a third time, or no to stop.`
-            : `I already did this ${asked + 1} times in a row: Press ${combo}. Say yes to do it again, or no to stop.`,
-        );
-        await worker.answer("yes");
-      }
+      // The screen moves with each key: no question, and nothing ends the task.
       await worker.idle();
       expect(hands.sent).toEqual(again(key, 5));
+      expect(said).toEqual(["Done. The note is saved."]);
       expect(worker.snapshot().state).toBe("completed");
     },
   );
@@ -3745,19 +3803,11 @@ describe("an action that is not sent, or that moves nothing", () => {
     hands.answer = (command) =>
       command.kind === "observe" ? { ok: false, error: "failed" } : undefined;
     await worker.submit("r1", "Open example.com/app and read its title");
-    // With no look the worker cannot tell whether the link moved anything.
-    // It asks before each further time with the real count, and ends nothing itself.
-    for (let asked = 1; asked <= 2; asked++) {
-      await until(() => said.length === asked);
-      expect(said[asked - 1]).toBe(
-        asked === 1
-          ? "I already did this twice in a row: Open example.com. Say yes to do it a third time, or no to stop."
-          : `I already did this ${asked + 1} times in a row: Open example.com. Say yes to do it again, or no to stop.`,
-      );
-      await worker.answer("yes");
-    }
+    // With no look the worker cannot tell whether the link moved anything,
+    // so it ends nothing itself, and asks nothing.
     await worker.idle();
     expect(hands.sent).toEqual(again(link, 4));
+    expect(said.join(" ")).not.toMatch(/nothing changed|I already did/);
     expect(journal.get("r1")).toMatchObject({ reason: "gave_up" });
   });
 
@@ -3853,7 +3903,16 @@ describe("an action that is not sent, or that moves nothing", () => {
 
   it("asks again for a yes when the hands held the action back for the person", async () => {
     const quit: Action = { kind: "quit_app", name: "TextEdit" };
-    const { worker, hands, said } = setup([quit, quit, done]);
+    const edited = observation([element(1, { title: "Save" })], {
+      app: {
+        name: "TextEdit",
+        bundleId: "com.apple.TextEdit",
+        window: "Report \u2014 Edited",
+      },
+    });
+    const { worker, hands, said } = setup([quit, quit, done], {
+      screens: [edited],
+    });
     let refusals = 1;
     hands.answer = (command) =>
       command.kind === "quit_app" && refusals-- > 0
@@ -3887,20 +3946,14 @@ describe("an action that is not sent, or that moves nothing", () => {
     );
     await worker.submit("r1", "Type example.com/app in the address bar");
     await until(() => said.length === 1);
-    await worker.answer("yes");
-    await until(() => said.length === 2);
-    expect(said[1]).toBe(
+    expect(said[0]).toBe(
       "The task asks: The page does not load. Try once more?",
     );
     await worker.answer("try once more");
-    // The key goes out again, behind the question for a repeat with the real count.
-    await until(() => said.length === 3);
-    expect(said[2]).toBe(
-      "I already did this 3 times in a row: Press return. Say yes to do it again, or no to stop.",
-    );
-    await worker.answer("yes");
+    // The key goes out again, with no question for a repeat.
     await worker.idle();
     expect(hands.sent).toEqual(again(enter, 4));
+    expect(said).toHaveLength(2);
     expect(worker.snapshot().state).toBe("completed");
   });
 
@@ -3928,16 +3981,10 @@ describe("an action that is not sent, or that moves nothing", () => {
           }
         : undefined;
     await worker.submit("r1", "Press Return on the address that you wrote");
-    await until(() => said.length === 1);
-    await worker.answer("yes");
     // The planner was told after the third try, waited, and another window
-    // came to the front. The key is tried there, behind the repeat question.
-    await until(() => said.length === 2);
-    expect(said[1]).toBe(
-      "I already did this 3 times in a row: Press return. Say yes to do it again, or no to stop.",
-    );
-    await worker.answer("yes");
+    // came to the front. The key is tried there, with no question.
     await worker.idle();
+    expect(said).toEqual(["Done. The note is saved."]);
     expect(hands.sent).toEqual(again(enter, 4));
     expect(worker.snapshot().state).toBe("completed");
   });
@@ -3948,16 +3995,10 @@ describe("an action that is not sent, or that moves nothing", () => {
       { screens: [bar()] },
     );
     await worker.submit("r1", "Type example.com/app in the address bar");
-    await until(() => said.length === 1);
-    await worker.answer("yes");
     // Twelve waits later the line is out of the planner's view: the key is
-    // tried again, behind the question for a repeat.
-    await until(() => said.length === 2);
-    expect(said[1]).toBe(
-      "I already did this 3 times in a row: Press return. Say yes to do it again, or no to stop.",
-    );
-    await worker.answer("yes");
+    // tried again, with no question.
     await worker.idle();
+    expect(said).toEqual(["Done. The note is saved."]);
     expect(hands.sent).toEqual(again(enter, 4));
     expect(worker.snapshot().state).toBe("completed");
   });
@@ -3975,25 +4016,21 @@ describe("an action that is not sent, or that moves nothing", () => {
     };
     const { worker, said } = setup(again(link, 5), { browser });
     await worker.submit("r1", "Open example.com/app and read its title");
-    // No sentence says that it was never sent. The person is asked before
-    // each further time with the real count.
-    for (let asked = 1; asked <= 3; asked++) {
-      await until(() => said.length === asked);
-      expect(said[asked - 1]).toBe(
-        asked === 1
-          ? "I already did this twice in a row: Open example.com in the browser. Say yes to do it a third time, or no to stop."
-          : `I already did this ${asked + 1} times in a row: Open example.com in the browser. Say yes to do it again, or no to stop.`,
-      );
-      if (asked < 3) await worker.answer("yes");
-    }
-    expect(browser.calls).toHaveLength(4);
-    worker.stop();
+    // No sentence says that it was never sent, and no question comes for
+    // the same address again.
+    await worker.idle();
+    expect(browser.calls).toHaveLength(5);
+    expect(said.join(" ")).not.toMatch(/never sent|was not sent|I already did/);
   });
 
   it("drops a kept yes on takeover during pre-action look and enforces the shared pause rule", async () => {
-    const notesDelete = observation([element(1, { title: "Delete" })], {
-      surfaceEpoch: 1,
-    });
+    const notesDelete = observation(
+      [
+        element(1, { title: "Delete" }),
+        element(2, { role: "AXStaticText", title: "You cannot undo this." }),
+      ],
+      { surfaceEpoch: 1 },
+    );
     const press: Action = { kind: "click_element", element: 1 };
     const { worker, hands, said, waiting } = setup([press, press, done], {
       screens: [notesDelete],
@@ -4008,7 +4045,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     };
     await worker.submit("r1", "Delete it");
     await waiting();
-    expect(said[0]).toMatch(/^Click "Delete"\?/);
+    expect(said[0]).toMatch(/^Click "Delete" in Notes\?/);
     await worker.answer("yes");
     // Pre-action look reported person takeover: pause with what it wanted next.
     await until(() => said.length === 2);
@@ -4040,7 +4077,13 @@ describe("an action that is not sent, or that moves nothing", () => {
 
   it("drops a kept yes from an earlier non-person hold when personNear triggers a takeover pause", async () => {
     const notesDelete = (surfaceEpoch: number) =>
-      observation([element(1, { title: "Delete" })], { surfaceEpoch });
+      observation(
+        [
+          element(1, { title: "Delete" }),
+          element(2, { role: "AXStaticText", title: "You cannot undo this." }),
+        ],
+        { surfaceEpoch },
+      );
     const press: Action = { kind: "click_element", element: 1 };
     const { worker, hands, said, waiting } = setup(
       [press, press, press, done],
@@ -4063,7 +4106,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     };
     await worker.submit("r1", "Delete it");
     await waiting();
-    expect(said[0]).toMatch(/^Click "Delete"\?/);
+    expect(said[0]).toMatch(/^Click "Delete" in Notes\?/);
     await worker.answer("yes");
     // Step 1 held by surfaceEpoch bump, step 2 planning observe saw personNear -> takeover pause.
     await until(() => said.length === 2);
@@ -4281,7 +4324,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     });
     const empty = observation([], { surfaceEpoch: 1 });
     const risky = observation(
-      [element(1, { title: "Save" }), element(2, { title: "Delete" })],
+      [element(1, { title: "Save" }), element(2, { title: "Delete forever" })],
       { surfaceEpoch: 1 },
     );
     const merged = setup([click, enter, click, enter, done], {
@@ -4295,7 +4338,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       if (command.image) return { observation: base };
       preA++;
       // Step 1 (click): empty -> targetGoneReason.
-      // Step 2 (return): Delete button appeared -> risk mismatch -> screenChangedReason.
+      // Step 2 (return): a Delete forever button appeared -> risk mismatch -> screenChangedReason.
       // Step 3 (click): empty -> targetGoneReason -> 3rd in merged "target_changed" row!
       return { observation: preA === 2 ? risky : empty };
     };
@@ -4846,9 +4889,6 @@ describe("an action that is not sent, or that moves nothing", () => {
       { screens: [refreshScreen], maxSteps: 12 },
     );
     await worker.submit("r1", "Click Refresh");
-    // After 2 clicks, the repeat confirmation asks before the 3rd click.
-    await until(() => worker.status().state === "waiting_for_person");
-    await worker.answer("yes");
     // After the 3rd click on an unchanged screen, remind() marks row.told and Step 4 starts planning.
     await until(() => planCalls === 1);
     const guideReply = await worker.submit(
@@ -4871,8 +4911,8 @@ describe("an action that is not sent, or that moves nothing", () => {
         input.guidance?.includes("try clicking Refresh one more time"),
       ),
     ).toBe(true);
-    expect(said).toHaveLength(2);
-    expect(said[1]).toContain('I tried 3 times to click "Refresh"');
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('I tried 3 times to click "Refresh"');
   });
 });
 
@@ -5439,8 +5479,8 @@ describe("the browser", () => {
     );
     await asked.worker.submit("r1", "Buy it");
     await asked.waiting();
-    expect(asked.worker.snapshot().message).toMatch(
-      /^Click "Buy now" on the page\?/,
+    expect(asked.worker.snapshot().message).toBe(
+      'Click "Buy now" on example.com? It spends your money. Say yes or no.',
     );
     await asked.worker.answer("no");
     await asked.worker.idle();
@@ -5618,11 +5658,11 @@ describe("what the panel shows", () => {
       goal: "",
       question: null,
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     expect(worker.run()).toEqual({
       active: true,
-      goal: "Send the mail",
+      goal: "Finish the draft",
       step: 1,
       state: "waiting_for_person",
     });
@@ -5630,15 +5670,15 @@ describe("what the panel shows", () => {
       enabled: true,
       state: "waiting_for_person",
       step: 1,
-      goal: "Send the mail",
-      question: expect.stringMatching(/^Click "Send"\?/),
+      goal: "Finish the draft",
+      question: expect.stringMatching(/^Click "Send" in Notes\?/),
     });
     worker.stop();
     expect(worker.run()).toMatchObject({ active: false, state: "idle" });
     expect(worker.status()).toMatchObject({
       state: "canceled",
       question: null,
-      goal: "Send the mail",
+      goal: "Finish the draft",
     });
   });
 });
@@ -5752,11 +5792,6 @@ describe("stackfix round 1 blockers and rests", () => {
       { screens: [refreshScreen], maxSteps: 12 },
     );
     await worker.submit("r1", "Click Refresh");
-    await until(() => worker.status().state === "waiting_for_person");
-    expect(said[0]).toBe(
-      'I already did this twice in a row: Click "Refresh". Say yes to do it a third time, or no to stop.',
-    );
-    await worker.answer("yes");
     await until(() => planCalls === 1);
     const guideReply = await worker.submit(
       "g1",
@@ -5775,8 +5810,8 @@ describe("stackfix round 1 blockers and rests", () => {
       state: "blocked",
       reason: "no_progress",
     });
-    expect(said).toHaveLength(2);
-    expect(said[1]).toContain('I tried 3 times to click "Refresh"');
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('I tried 3 times to click "Refresh"');
   });
 
   it("blocker 1: hold followed by continue after remind does not clear stuck", async () => {
@@ -5805,8 +5840,6 @@ describe("stackfix round 1 blockers and rests", () => {
       { screens: [refreshScreen], maxSteps: 12 },
     );
     await worker.submit("r1", "Click Refresh");
-    await until(() => worker.status().state === "waiting_for_person");
-    await worker.answer("yes");
     await until(() => planCalls === 1);
     await worker.submit("h1", "hold on");
     releasePlan4();
@@ -5826,8 +5859,8 @@ describe("stackfix round 1 blockers and rests", () => {
     expect(said.at(-1)).toContain('I tried 3 times to click "Refresh"');
   });
 
-  it("blocker 1: repeat question and refusal use the real count when count is 3 or more", async () => {
-    const { worker, hands, said } = setup(
+  it("blocker 1: no question for a repeat, also from the fourth time on: a no to the task's question goes to the planner", async () => {
+    const { worker, hands, said, planner } = setup(
       [
         ...again(enter, 3),
         { kind: "ask", question: "The page does not load. Try once more?" },
@@ -5839,21 +5872,15 @@ describe("stackfix round 1 blockers and rests", () => {
     await worker.submit("r1", "Type example.com/app in the address bar");
     await until(() => said.length === 1);
     expect(said[0]).toBe(
-      "I already did this twice in a row: Press return. Say yes to do it a third time, or no to stop.",
+      "The task asks: The page does not load. Try once more?",
     );
-    await worker.answer("yes");
-    await until(() => said.length === 2);
-    await worker.answer("try once more");
-    await until(() => said.length === 3);
-    expect(said[2]).toBe(
-      "I already did this 3 times in a row: Press return. Say yes to do it again, or no to stop.",
-    );
-    const refusal = await worker.answer("no");
+    await worker.answer("no");
     await worker.idle();
-    expect(refusal.message).toBe(
-      "Canceled. I did not do it again: Press return.",
+    expect(said.join(" ")).not.toMatch(/I already did/);
+    expect(planner.inputs[4]!.history.at(-1)!.outcome).toBe(
+      "the person answered: no",
     );
-    expect(hands.sent).toEqual(again(enter, 3));
+    expect(hands.sent).toEqual(again(enter, 4));
   });
 
   it("blocker 3: stops after 3 clickedOnly focus clicks even with wait/scroll/browser_read and transient list", async () => {

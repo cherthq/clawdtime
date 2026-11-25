@@ -19,7 +19,6 @@ import type {
   Observation,
   ScreenElement,
 } from "./ports.js";
-import { webAddress } from "./navigation.js";
 import { parsePageKey, type PageKey } from "./browser-script.js";
 import { closerSecureText, secureInArea } from "./closer.js";
 
@@ -151,120 +150,607 @@ export const actionSchema = z.discriminatedUnion("kind", [
 export const clean = (value: string, limit: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
 
+/** One row of the policy: what asks for the person's yes, and why. */
+export interface PolicyRow {
+  /** What asks, in plain words. */
+  asks: string;
+  /** When the person's own request already said yes to it. Null: never. */
+  unless: string | null;
+  /** Why the yes is needed. It ends the question. */
+  reason: string;
+}
+
 /**
- * Words in a name that say an action that cannot be undone, or that speaks
- * for the person. A click on such a name needs the person's yes. A word counts
- * only as a whole word: "Sender" and "Reorder" do not count.
- */
-export const dangerWords = [
-  "send",
-  "delete",
-  "remove",
-  "erase",
-  "pay",
-  "buy",
-  "order",
-  "submit",
-  "post",
-  "publish",
-  "share",
-  "transfer",
-  "confirm",
-  "sign out",
-  "log out",
-  "empty trash",
-  "reset",
-  "format",
-  "purchase",
-  "check out",
-  "donate",
-  "discard",
-  "trash",
-  "uninstall",
-  "wipe",
-  "shut down",
-  "restart",
-  "log off",
-  "quit",
-  "replace",
-  "overwrite",
-  "revert",
-  "don't save",
-  // A program that still ran is gone.
-  "terminate",
-  // A name that gives a yes in the person's place: a permission of macOS, a
-  // request of an agent, the terms of a site.
-  "approve",
-  "allow",
-  "accept",
-  "authorize",
-  "authorise",
-  "grant",
-  "agree",
-  "permit",
-  "trust",
-] as const;
-// A space in a word also stands for no space and for a hyphen: "log out",
-// "logout", "log-out". An apostrophe also stands for the curved one.
-const danger = new RegExp(
-  `\\b(?:${dangerWords
-    .map((word) => word.replace(/ /g, "[\\s-]*").replace(/'/g, "['\u2019]?"))
-    .join("|")})\\b`,
-  "i",
-);
-/**
- * A close takes away what was open. It asks, except when the person's own
- * request says to close or to dismiss: then the person asked for it already,
- * and a question for each banner, tab and window is one too many. What can
- * be lost with a close keeps its own question: "Don't Save", "Delete",
- * "Terminate". A request that says not to close asks as before: a word of
- * denial up to four words before the close counts, which errs to a question.
+ * The policy: the only actions that need the person's yes. A question can
+ * reach a person who is away, by a call or a message, so it is asked only
+ * before what cannot be undone and costs money, data or trust. Everything
+ * else goes with no question: opening and quitting apps, closing what loses
+ * nothing, a plain OK, a cookie banner, a download, a move, a scroll, a link,
+ * a cart and the pages of a checkout before its last step.
  *
- * Only a plain close control goes without the question: a name that is
- * "Close" alone, or with the thing that closes on the screen ("Close tab").
- * "Close account" or "Close issue" ends something that is not a view, and
- * asks whatever the request says.
+ * Every question of the checks comes from one row of this table, and ends
+ * with the reason of its row. `nameRules` say which names belong to a row.
  */
-const closing = /\bclose\b/i;
+export const askPolicy = {
+  pay: {
+    asks: "Paying or placing an order: Buy, Pay, Place order, the last step of a checkout, Subscribe, Donate, Send money, Transfer, Book, Rent, and a button that is only a price.",
+    unless: null,
+    reason: "It spends your money.",
+  },
+  loss: {
+    asks: "What is lost for good: Delete forever, Empty Trash, Erase, Delete account, Uninstall, Terminate, Factory reset, Revoke, Overwrite, Shut down, a log out of the Mac, a Delete, Remove or OK where the screen says that it cannot be undone, a Replace of a file that exists, and a terminal command that deletes for good.",
+    unless: null,
+    reason: "What it removes is gone for good.",
+  },
+  unsaved: {
+    asks: "Losing changes that are not saved: Don't Save, Discard, Revert, a button of a sheet that asks to save, and a quit or a close while the window shows unsaved work.",
+    unless:
+      "The request asks to lose the changes: without saving, discard, throw away, revert.",
+    reason: "Changes that are not saved are lost.",
+  },
+  send: {
+    asks: "Sending as you to other people: Send, Reply, Post, Comment, Publish, Submit, Share, Return in a messages app, a command that publishes, and an address with a long part that you did not write.",
+    unless:
+      "The request asks to send, reply, post or share. An address with a long part asks always.",
+    reason: "It sends as you to other people.",
+  },
+  public: {
+    asks: "Acting as you in public: Like, Follow, Repost, Upvote.",
+    unless: "The request asks to like, follow or repost.",
+    reason: "It acts as you in public.",
+  },
+  account: {
+    asks: "Security and accounts: a password, two-factor, recovery, privacy or visibility setting, a switch of the security and privacy settings of macOS, and a terminal command that runs as an administrator, changes the security of the Mac or runs code from the web.",
+    unless: null,
+    reason: "It changes the security or the privacy of your account.",
+  },
+  grant: {
+    asks: "A yes in your place: Allow, OK, Approve or Trust in a permission dialog of macOS, of a site or of ClawdTime, and a name that grants access.",
+    unless: null,
+    reason: "It gives access in your place.",
+  },
+  terms: {
+    asks: "Agree or Accept for terms that bind you. A cookie banner is not such terms.",
+    unless: null,
+    reason: "It accepts terms that bind you.",
+  },
+  terminal: {
+    asks: "Typing or a key in a terminal, and a paste into one, and a drop onto one.",
+    unless:
+      "The request asks for terminal work: a command, a script, a build, a test, git. A paste and a drop ask always.",
+    reason:
+      "Text in a terminal runs as a command, and your request did not ask for one.",
+  },
+  trash: {
+    asks: "A drag that drops onto the Trash.",
+    unless: null,
+    reason: "It moves what it drags to the Trash.",
+  },
+  secret: {
+    asks: "A drag that starts in a password field.",
+    unless: null,
+    reason: "It could carry your password somewhere else.",
+  },
+} as const satisfies Record<string, PolicyRow>;
+export type AskKind = keyof typeof askPolicy;
+/** Why the person's yes is needed: the row, and the reason that the question says. */
+export interface Ask {
+  kind: AskKind;
+  reason: string;
+}
+const ask = (kind: AskKind, reason: string = askPolicy[kind].reason): Ask => ({
+  kind,
+  reason,
+});
+
+/** A name as the rules read it: lower case, straight apostrophes, a hyphen as a space. */
+const plain = (value: string) =>
+  clean(value, 600)
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/[-_\u2010-\u2015]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+/** A name that ends with an ellipsis opens a dialog first. */
+const trailingDots = /\s*(?:\u2026|\.\.\.)$/;
+
+/** What a name is judged in. */
+interface Scene {
+  /** The person's own request. Empty once they said more: then it asks for nothing. */
+  goal: string;
+  /** What the screen or the page shows, as one plain text: the window, the names, the page. */
+  text: string;
+  /** The app in front, for a name on the screen. */
+  app?: Observation["app"];
+}
+const screenScene = (observation: Observation, goal?: string): Scene => ({
+  goal: goal ?? "",
+  text: plain(
+    [
+      observation.app.window,
+      ...observation.elements.map((item) => item.title),
+    ].join("\n"),
+  ),
+  app: observation.app,
+});
+const pageScene = (page: BrowserPage | null, goal?: string): Scene => ({
+  goal: goal ?? "",
+  text: page
+    ? plain(
+        [
+          page.title,
+          page.text,
+          ...page.elements.map((item) => item.label),
+        ].join("\n"),
+      )
+    : "",
+});
+
+// Words on the screen that say what is at stake.
+const money =
+  /(?:us\$|c\$|a\$|\$|\u20ac|\u00a3|\u20b9|\u00a5|rs\.?\s?)\s?\d[\d,]*(?:\.\d{1,2})?|\b\d[\d,]*(?:\.\d{1,2})?\s?(?:usd|eur|gbp|inr|cad|aud|dollars?|euros?|pounds?|rupees?)\b/;
+const chargeWords =
+  /\b(?:total|order summary|amount due|you(?:'ll| will)? (?:pay|be charged)|charged?|billing|payment|card ending|subtotal)\b/;
+const charged = (scene: Scene) =>
+  money.test(scene.text) && chargeWords.test(scene.text);
+const permanentWords =
+  /\b(?:cannot|can not|can't|won't be able to|unable to) (?:be )?(?:undo(?:ne)?|reverse[d]?|recover(?:ed)?|restore[d]?)\b|\bpermanent(?:ly)?\b|\birreversibl[ey]\b|\bforever\b|\bno undo\b|\bwill be lost\b/;
+const replaceWords =
+  /\balready exists\b|\breplacing it\b|\bwill (?:replace|overwrite)\b/;
+const saveSheetWords =
+  /\bdo you want to (?:save|keep)\b|\bsave (?:the |your )?changes\b|\bnot (?:been )?saved\b|\bunsaved changes\b|\bchanges (?:you made )?(?:will|may) (?:be lost|not be saved)\b|\bsave this (?:message|document|file) as a draft\b/;
+const sessionWords =
+  /\byour computer now\b|\bquit all applications\b|\bthe computer will\b|\bautomatically in \d+ seconds\b/;
+const permissionWords =
+  /\bwould like to (?:access|control|record|use|receive|find|send|connect|add|administer|make changes)\b|\bwants? to (?:access|use|control|record|know your location|show notifications|see|connect|make changes|install)\b|\baccess (?:to )?your (?:contacts|calendars?|reminders|photos|camera|microphone|location|files|documents|desktop|downloads|keychain|data|account|screen)\b|\b(?:full disk access|screen recording|screen & system audio recording|input monitoring|location services|keychain|administrator)\b|\bis trying to (?:install|modify|unlock|change|add)\b|\bdownloaded from the internet\b|\bunidentified developer\b|\bpermissions? (?:to|for|request)\b/;
+const termsWords =
+  /\b(?:terms|conditions|agreement|license|licence|eula|contract)\b/;
+const cookieWords = /\bcookies?\b/;
+/** The apps of macOS that ask for a permission, and ClawdTime itself. A yes there is a yes in the person's place. */
+const permissionApps = new Set([
+  "com.apple.usernotificationcenter",
+  "com.apple.coreservices.uiagent",
+  "com.apple.securityagent",
+  "com.apple.localauthentication.uiagent",
+  "com.apple.accessibility.universalaccessauthwarn",
+]);
+const asksPermission = (scene: Scene) => {
+  const bundle = scene.app?.bundleId.toLowerCase() ?? "";
+  return (
+    permissionApps.has(bundle) ||
+    bundle.startsWith("com.clawdtime.") ||
+    permissionWords.test(scene.text)
+  );
+};
+
+/** The fillers in front of a verb of a request: "please", "can you", "and then". */
+const fillers =
+  /^(?:(?:please|pls|kindly|just|now|also|then|and|so|ok|okay|hey|clawdtime|can you|could you|would you|will you|you can|you may|go ahead and|i want you to|i need you to|i'd like you to|i would like you to|help me|try to|remember to|make sure to|make sure you|feel free to|be sure to)\s+)*/;
+/**
+ * True when a part of the request starts with one of these verbs: "Reply to
+ * Sam", "read it and reply". A noun is not a verb: "read my messages" asks
+ * for no send. A denial is no verb either: "don't reply" asks for nothing.
+ */
+function requestSays(goal: string, verbs: string) {
+  if (!goal) return false;
+  const verb = new RegExp(`^(?:${verbs})\\b`);
+  return plain(goal)
+    .split(/[.;:!?,\n]|\b(?:and|then|also|but|after that|afterwards)\b/)
+    .some((part) => verb.test(part.trim().replace(fillers, "")));
+}
+const sendVerbs =
+  "send|reply|respond|answer|post|tweet|publish|comment|submit|share|message|text|email|e mail|mail|dm|write back|write to|tell(?! me\\b| us\\b)|forward|invite|rsvp|announce";
+const publicVerbs =
+  "like|unlike|follow|unfollow|repost|retweet|upvote|downvote|react|favorite|favourite|vote|endorse";
+const commandVerbs =
+  "run|execute|install|build|compile|commit|push|pull|clone|deploy|rebase|merge|lint|test|debug";
+const publishVerbs =
+  "push|publish|deploy|release|ship|merge|open a pull request|create a pull request|send";
+const denial = /\b(?:don't|do not|never|not|without|no)\s+(?:\w+\s+){0,3}$/;
+/** True when the request holds these words, and no denial right before them. */
+function requestHolds(goal: string, words: RegExp) {
+  const said = plain(goal);
+  for (const found of said.matchAll(new RegExp(words.source, "g")))
+    if (!denial.test(said.slice(0, found.index))) return true;
+  return false;
+}
+/** The request asks to lose the changes that are not saved. */
+const asksToLose = (goal: string) =>
+  /\b(?:without saving|don't save|do not save)\b/.test(plain(goal)) ||
+  requestHolds(
+    goal,
+    /\b(?:discard|throw away|revert|lose (?:the |my |all |any )?(?:changes|edits))\b/,
+  );
+/** The request asks for terminal work: a command, a script, a build, a test, git. */
+export const asksForCommand = (goal: string | undefined) =>
+  !!goal &&
+  (requestHolds(
+    goal,
+    /\b(?:terminal|shell|command line|commands?|cli|bash|zsh|iterm|scripts?|repo|repository|codebase|source code|coding|bug|tests?|build|commit|branch|pull request|git|npm|npx|pnpm|yarn|pip3?|brew|python3?|node|cargo|xcodebuild|docker|kubectl|ssh|gh|tsc|vitest|pytest)\b/,
+  ) ||
+    requestSays(goal, commandVerbs));
+
+/** One rule of names for a row of the policy. */
+interface NameRule {
+  kind: AskKind;
+  /** At the start of a name only: "Send" and "Send now", not "Quick send". */
+  start?: string;
+  /** Anywhere in a name, as whole words. */
+  any?: string;
+  /** At the end of a name: "12 likes. Like". */
+  end?: string;
+  /** Only while this holds for the screen or the page. */
+  when?: (scene: Scene, dots: boolean) => boolean;
+  /** Not while this holds. */
+  unless?: (scene: Scene) => boolean;
+  /** The request asked for it already. */
+  asked?: (goal: string) => boolean;
+  /** A name with an ellipsis opens a dialog first, and asks nothing. With this, it asks. */
+  dots?: true;
+  /** A reason of its own, in place of the row's. */
+  reason?: string;
+}
+const sendAsked = (goal: string) => requestSays(goal, sendVerbs);
+/**
+ * Which names ask, and for which row. The first rule that fits gives the
+ * row. Words count as whole words: "Sender", "Reorder", "Postpone" and
+ * "Formatting" are none of them.
+ */
+const nameRules: readonly NameRule[] = [
+  {
+    kind: "pay",
+    start:
+      "buy|pay|purchase|subscribe|donate|book|reserve|rent|order(?: now)?$",
+    any: "buy (?:it )?now|pay now|pay with|apple pay|google pay|shop pay|subscribe|donate|place (?:the |your |my |this )?order|complete (?:the |your |my )?(?:order|purchase|payment|checkout|booking|reservation)|confirm (?:and pay|(?:the |your |my )?(?:order|purchase|payment|booking|reservation|subscription|transfer))|submit (?:the |your |my )?(?:order|payment)|send (?:money|payment)|transfer (?:money|funds)|make (?:a )?payment|start (?:my |your |the )?(?:free )?trial|1 click|one click",
+  },
+  {
+    // The last step of a checkout, with a total on the screen.
+    kind: "pay",
+    start:
+      "confirm|submit|complete|finish|authori[sz]e|approve|transfer|verify|send|place",
+    when: charged,
+  },
+  {
+    kind: "loss",
+    // The Apple menu and the dialog of macOS: every app quits.
+    start: "restart|log out|log off|shut down",
+    when: (scene, dots) => dots || sessionWords.test(scene.text),
+    dots: true,
+    reason: "Every app quits, and changes that are not saved are lost.",
+  },
+  {
+    kind: "loss",
+    any: "(?:delete|remove|erase|clear|empty)(?: it| them| this| these| all| everything| items?| files?)? (?:forever|permanently|immediately|for good)|permanently (?:delete|remove|erase)|empty (?:the )?(?:trash|bin|recycle bin|recently deleted)|factory reset|reset (?:all|everything|to factory|(?:all )?settings|(?:this |the )?(?:mac|device|phone|computer|iphone|ipad))|erase|uninstall|wipe|terminate|destroy|purge|revoke|overwrite|shut down|(?:delete|close|deactivate) (?:my |your |the |this )?(?:account|profile)|delete (?:my |your |the |this )?(?:repository|repo|organization|organisation|workspace|database|project|server|instance|domain|website|site|channel|team|backups?|vault|api key|key|token|branch|everything)|drop (?:table|database)|clear (?:all )?(?:browsing )?(?:history|data|website data)|format (?:the )?(?:disk|drive|volume|partition|card)",
+  },
+  {
+    // A plain Delete or OK, where the screen says that it cannot be undone.
+    kind: "loss",
+    start:
+      "delete|remove|clear|reset|empty|erase|ok|yes|confirm|continue|proceed|i understand",
+    when: (scene) => permanentWords.test(scene.text),
+  },
+  {
+    kind: "loss",
+    start: "replace",
+    when: (scene) => replaceWords.test(scene.text),
+    reason: "It replaces a file that exists, which is then gone for good.",
+  },
+  {
+    kind: "unsaved",
+    start:
+      "don't save|do not save|discard|revert|throw away|lose changes|close without saving|quit without saving|delete draft",
+    any: "discard|revert to saved",
+    asked: asksToLose,
+  },
+  {
+    // A button of a sheet that asks to save: all but Save loses the changes.
+    kind: "unsaved",
+    start: "delete|close|quit|leave|continue|ok|yes|don't keep",
+    when: (scene) => saveSheetWords.test(scene.text),
+    asked: asksToLose,
+  },
+  {
+    kind: "account",
+    any: "(?:change|reset|update|set|set up|remove|turn off|disable|create|save|edit) (?:the |your |my |a |new |account |login )?(?:password|passcode|pin)|two factor|2fa|two step|multi factor|mfa|authenticator|security keys?|passkeys?|backup codes?|recovery (?:email|phone|key|codes?|contact|number|address)|trusted (?:phone|number|device)s?|(?:sign|log) out (?:of |from )?(?:all|other|every)|make (?:it |this |my )?(?:profile |account |repo |repository |page |post )?(?:public|private)|change (?:the )?visibility|who can see|location services|share (?:my )?location|privacy settings|transfer ownership",
+  },
+  {
+    kind: "grant",
+    any: "(?:grant|allow|give) (?:full |me |them |it )?(?:access|permission)|allow full (?:disk )?access|trust (?:this )?(?:computer|device|mac|browser|app|developer|certificate)|authori[sz]e (?:app|application|access|this|device)|open anyway",
+  },
+  {
+    // A permission dialog: "Allow" and "OK" give the yes. "Don't Allow" does not.
+    kind: "grant",
+    start:
+      "allow|always allow|approve|authori[sz]e|grant|permit|trust|ok|open|continue|accept|yes|install|turn on|enable|agree",
+    when: asksPermission,
+  },
+  {
+    kind: "terms",
+    any: "(?:i )?(?:agree|accept)(?: to)?(?: all)?(?: the)? (?:terms|conditions|agreement|license|licence|eula)",
+  },
+  {
+    kind: "terms",
+    start: "(?:i )?agree|(?:i )?accept",
+    when: (scene) => termsWords.test(scene.text),
+    unless: (scene) => cookieWords.test(scene.text),
+  },
+  {
+    // "Send to Back" and "Send Backward" of a drawing app send nothing.
+    kind: "send",
+    start:
+      "send(?! to back| backward)|reply|respond|post|tweet|publish|comment|submit|share|answer",
+    asked: sendAsked,
+  },
+  {
+    kind: "public",
+    start:
+      "like|unlike|follow|unfollow|repost|retweet|upvote|downvote|react|favorite|favourite|vote|endorse",
+    end: "like|follow|repost|retweet",
+    asked: (goal) => requestSays(goal, publicVerbs),
+  },
+];
+const alternatives = (rule: NameRule) =>
+  [rule.start, rule.any, rule.end].filter(Boolean).join("|");
+const compiled = nameRules.map((rule) => ({
+  rule,
+  name: new RegExp(
+    [
+      rule.start && `^(?:${rule.start})\\b`,
+      rule.any && `\\b(?:${rule.any})\\b`,
+      rule.end && `\\b(?:${rule.end})$`,
+    ]
+      .filter(Boolean)
+      .join("|"),
+  ),
+  // In a sentence of the planner a word is anywhere.
+  words: new RegExp(`\\b(?:${alternatives(rule)})\\b`),
+}));
+/** A button whose whole name is a price: it buys. */
+const priceOnly = new RegExp(`^(?:${money.source})$`);
+
+const moneyWords: Record<string, string> = {
+  $: "dollars",
+  us$: "dollars",
+  c$: "dollars",
+  a$: "dollars",
+  "\u20ac": "euros",
+  "\u00a3": "pounds",
+  "\u20b9": "rupees",
+  "\u00a5": "yen",
+  rs: "rupees",
+  "rs.": "rupees",
+};
+/** An amount as a person says it: "$48.00" is "48 dollars". */
+function sayMoney(amount: string) {
+  const symbol = /^(us\$|c\$|a\$|\$|\u20ac|\u00a3|\u20b9|\u00a5|rs\.?)\s?/.exec(
+    amount,
+  );
+  if (!symbol) return amount;
+  const number = amount.slice(symbol[0].length).replace(/\.00$/, "");
+  return `${number} ${moneyWords[symbol[1]!]}`;
+}
+const totalLabels = [
+  "order total",
+  "grand total",
+  "total due",
+  "amount due",
+  "total to pay",
+  "estimated total",
+  "you(?:'ll| will)? pay",
+  "total",
+];
+/** What a payment costs, as the screen says it: the total, else the price on the button. */
+function costOf(name: string, scene: Scene) {
+  let amount: string | null = null;
+  for (const label of totalLabels) {
+    const found = new RegExp(
+      `\\b${label}\\b[^\\d$\u20ac\u00a3\u20b9\u00a5]{0,24}(${money.source})`,
+    ).exec(scene.text);
+    if (found) {
+      amount = found[1]!;
+      break;
+    }
+  }
+  amount ??= money.exec(name)?.[0] ?? null;
+  if (!amount) return null;
+  const items = /\b(\d{1,3}) items?\b|\bitems? \((\d{1,3})\)/.exec(scene.text);
+  const count = items ? Number(items[1] ?? items[2]) : 0;
+  return `${sayMoney(amount.trim())}${count ? ` for ${count} item${count === 1 ? "" : "s"}` : ""}`;
+}
+
+/**
+ * The row of the policy that a name asks for, with its reason. Null when
+ * nothing asks. `words` is true when the name is the planner's own sentence
+ * about a point with no named element: a sentence is no name of a control,
+ * so a word counts anywhere in it.
+ */
+function askFor(raw: string, scene: Scene, words = false): Ask | null {
+  const dots = !words && trailingDots.test(clean(raw, 200));
+  const name = plain(clean(raw, 200).replace(trailingDots, ""));
+  if (!name) return null;
+  const pay = (found: Ask) => {
+    if (found.kind !== "pay") return found;
+    const cost = costOf(name, scene);
+    return cost ? ask("pay", `It spends your money: ${cost}.`) : found;
+  };
+  if (!words && priceOnly.test(name)) return pay(ask("pay"));
+  for (const { rule, name: names, words: loose } of compiled) {
+    if (!(words ? loose : names).test(name)) continue;
+    // An ellipsis opens a dialog first: its own button asks.
+    if (dots && !rule.dots) continue;
+    if (rule.when && !rule.when(scene, dots)) continue;
+    if (rule.unless?.(scene)) continue;
+    // The request asked for it: no question. An earlier rule still asks.
+    if (rule.asked?.(scene.goal)) return null;
+    return pay(ask(rule.kind, rule.reason));
+  }
+  return null;
+}
+
+/**
+ * A close takes away only a view. A plain close control is "Close" alone, or
+ * with the thing that closes on the screen ("Close tab"). "Close account"
+ * ends more than a view, and is a row of its own.
+ */
 const plainClose =
   /^(?:close|dismiss)(?:\s+(?:this|the))?(?:\s+(?:button|tab|window|banner|dialog|panel|sidebar|pop-?up|notification|message|sheet|drawer|menu|search|alert|preview))?$/i;
-export const askedToClose = (goal: string | undefined) =>
-  !!goal &&
-  /\b(?:close|dismiss)\b/i.test(goal) &&
-  !/\b(?:don['\u2019]?t|do not|never|not|without)\s+(?:\w+\s+){0,4}(?:close|dismiss)\b/i.test(
-    goal,
-  );
+const quitName = /^quit\b/i;
 /**
- * `words` is true when the name is the planner's own sentence about a point
- * with no named element: a sentence is no name of a control, so only the
- * request decides for it.
+ * The window in front shows work that is not saved: "Report \u2014 Edited",
+ * "Report (Edited)", a dot in front of the title. Null when it shows none.
  */
-const dangerRisk = (name: string, goal?: string, words = false) => {
-  let found = danger.exec(name);
-  if (!found) {
-    found = closing.exec(name);
-    if (
-      found &&
-      askedToClose(goal) &&
-      (words || plainClose.test(clean(name, 80)))
-    )
-      found = null;
-  }
-  return found
-    ? `"${clean(found[0], 40)}" may be something that cannot be undone, or that speaks for you.`
+function unsavedIn(observation: Observation) {
+  const title = clean(observation.app.window, 120);
+  if (
+    /\bedited\b|\bunsaved\b|\bnot saved\b/i.test(title) ||
+    /^[\u25cf\u2022*]/.test(title)
+  )
+    return title;
+  const mark = observation.elements.find((item) =>
+    /[(\u2014\u2013-]\s*edited\)?$/i.test(clean(item.title, 120)),
+  );
+  return mark ? clean(mark.title, 120) : null;
+}
+/** A quit or a close of the window in front, while it shows unsaved work. */
+function unsavedRisk(observation: Observation | null, goal?: string) {
+  if (!observation || asksToLose(goal ?? "")) return null;
+  const title = unsavedIn(observation);
+  return title
+    ? ask(
+        "unsaved",
+        `"${title}" shows changes that are not saved, which can be lost.`,
+      )
     : null;
-};
-const terminalRisk =
-  "This goes into a terminal, where text can run as a command.";
-const appQuitRisk =
-  "This quits the app, with what is open in it. Work that is not saved can be lost.";
-const quitRisk =
-  "This key combination can quit an app, log out or lock the Mac.";
-const removeRisk = "This key combination can remove something.";
-const closeRisk =
-  "This key combination closes a window or a tab, with what is open in it.";
-const sendRisk = "This key usually sends or submits what is typed.";
-const submitRisk = "This submits a form.";
+}
+
+/** A setting of macOS for security or privacy: a switch there changes who may do what. */
+const settingsBundles = new Set([
+  "com.apple.systempreferences",
+  "com.apple.settings",
+]);
+const privatePanes =
+  /\b(?:privacy|security|screen (?:& system audio )?recording|accessibility|full disk access|input monitoring|automation|files and folders|location services|camera|microphone|passwords?|touch id|users (?:&|and) groups|login items|filevault|firewall|sharing|remote (?:login|management)|developer tools|app management)\b/i;
+const settingRoles = new Set([
+  "AXCheckBox",
+  "AXSwitch",
+  "AXToggle",
+  "AXRadioButton",
+  "AXPopUpButton",
+]);
+function settingRisk(item: ScreenElement, observation: Observation) {
+  if (
+    !settingsBundles.has(observation.app.bundleId.toLowerCase()) ||
+    !privatePanes.test(observation.app.window)
+  )
+    return null;
+  const name = plain(item.title);
+  return settingRoles.has(item.role) ||
+    /^(?:\+|-|add|remove|allow|turn on|turn off|enable|disable|open anyway)(?:\s|$)/.test(
+      name,
+    )
+    ? ask("account")
+    : null;
+}
+
+/** A name on the screen: the table, a close or a quit of unsaved work, a switch of the private settings. */
+function screenRisk(
+  item: ScreenElement,
+  observation: Observation,
+  goal?: string,
+) {
+  const name = clean(item.title, 80);
+  return (
+    askFor(item.title, screenScene(observation, goal)) ??
+    (plainClose.test(name) ||
+    quitName.test(name) ||
+    item.role === "AXCloseButton"
+      ? unsavedRisk(observation, goal)
+      : null) ??
+    settingRisk(item, observation)
+  );
+}
+
+/** A terminal command that asks whatever the request says. */
+const commandRisks: readonly (readonly [RegExp, AskKind, string])[] = [
+  [
+    /\bgit\s+push\b[^;&|]*(?:\s-f\b|\s--force\b|\s\+\S)/,
+    "loss",
+    "The command overwrites the history that others share.",
+  ],
+  [
+    /(?:^|[\s;&|(`])(?:rm|rmdir|shred|unlink|srm)(?:\s|$)/,
+    "loss",
+    "The command deletes files for good.",
+  ],
+  [
+    /\bgit\s+(?:reset\s[^;&|]*--hard|clean\b|checkout\s(?:[^;&|]*\s)?--(?:\s|$)|restore\b|branch\s[^;&|]*-d\b|stash\s+(?:drop|clear)\b)/,
+    "loss",
+    "The command throws away work in git for good.",
+  ],
+  [
+    /(?:^|[\s;&|(])(?:dd|mkfs(?:\.\w+)?|fdisk|newfs_\w+)\s|\bdiskutil\s+(?:erase\w*|partition\w*|zero\w*|secure\w*|reformat)\b/,
+    "loss",
+    "The command can erase a disk.",
+  ],
+  [
+    /\b(?:drop\s+(?:table|database|schema)|truncate\s+(?:table\s+)?\w|delete\s+from)\b/,
+    "loss",
+    "The command deletes data for good.",
+  ],
+  [
+    /(?:^|[\s;&|(])(?:killall|pkill|kill\s+-(?:9|kill))\b/,
+    "loss",
+    "The command ends programs, with their work.",
+  ],
+  [
+    /\b(?:curl|wget)\b[^;&]*\|\s*(?:sudo\s+)?(?:(?:ba|z|k|fi)?sh|python3?|node|ruby|perl)\b|\b(?:ba|z)?sh\s+<\(\s*(?:curl|wget)\b/,
+    "account",
+    "The command runs code from the web.",
+  ],
+  [
+    /(?:^|[\s;&|(])(?:sudo|doas)\s|(?:^|[\s;&|(])su(?:\s+-|\s*$)/,
+    "account",
+    "The command runs as an administrator.",
+  ],
+  [
+    /(?:^|[\s;&|(])(?:launchctl|tccutil|csrutil|spctl|security|passwd|dscl|systemsetup|fdesetup|pfctl)\b|\bdefaults\s+delete\b|\bch(?:mod|own)\s+-r\b/,
+    "account",
+    "The command changes the security of the Mac.",
+  ],
+];
+const publishCommand =
+  /\bgit\s+push\b|\b(?:npm|pnpm|yarn)\s+publish\b|\bdocker\s+push\b|\bgh\s+(?:pr\s+(?:create|merge)|release\s+create|repo\s+create)\b/;
+/** Text for a terminal: a command that asks always, else a question unless the request asks for terminal work. */
+function terminalRisk(text: string | null, goal?: string) {
+  if (text !== null) {
+    const said = text.toLowerCase();
+    for (const [pattern, kind, reason] of commandRisks)
+      if (pattern.test(said)) return ask(kind, reason);
+    if (publishCommand.test(said) && !requestSays(goal ?? "", publishVerbs))
+      return ask("send", "The command publishes your work to other people.");
+  }
+  return asksForCommand(goal) ? null : ask("terminal");
+}
+const pasteRisk = ask(
+  "terminal",
+  "It pastes text that I cannot see into a terminal, where it runs as a command.",
+);
+const terminalDropRisk = ask(
+  "terminal",
+  "What is dropped on a terminal is typed there, where it can run as a command.",
+);
+const sessionKeyRisk = ask(
+  "loss",
+  "It logs you out of the Mac: every app quits, and changes that are not saved are lost.",
+);
+/** Return and the send keys in an app that sends what is typed. */
+const sendKeyRisk = (goal?: string) =>
+  sendAsked(goal ?? "")
+    ? null
+    : ask("send", `This key sends what is typed. ${askPolicy.send.reason}`);
+/** A key that can press a control that asks: the question names it. */
+const pressRisk = (name: string, found: Ask) =>
+  ask(found.kind, `It can press "${clean(name, 40)}". ${found.reason}`);
 
 const terminalBundles = new Set([
   "com.apple.terminal",
@@ -281,6 +767,8 @@ const terminalBundles = new Set([
 ]);
 const terminalName =
   /^(?:terminal|iterm2?|warp|ghostty|kitty|alacritty|hyper|wezterm|tabby|rio)$/i;
+/** The Trash of the Dock, by its name. In the planner's words, the word anywhere. */
+const trashName = /^(?:trash|bin|recycle bin)$|\b(?:the )?trash\b/i;
 /** True when keys go to a terminal: a terminal app is in front, or a terminal inside another app has the focus. */
 export function inTerminal(observation: Observation) {
   const app = observation.app;
@@ -383,50 +871,65 @@ function keyRisk(
   parsed: NonNullable<ReturnType<typeof parseCombo>>,
   observation: Observation,
   goal?: string,
-) {
+): Ask | null {
   const { key, modifiers } = parsed;
-  if (inTerminal(observation)) return terminalRisk;
-  // Quit, log out with shift, lock with ctrl; and the force-quit window.
-  if (modifiers.has("cmd") && key === "q") return quitRisk;
-  if (modifiers.has("cmd") && modifiers.has("opt") && key === "escape")
-    return quitRisk;
-  if (modifiers.has("cmd") && (key === "delete" || key === "forwarddelete"))
-    return removeRisk;
-  // Close a window or a tab, in any form (with shift: all of them).
-  if (modifiers.has("cmd") && key === "w")
-    return askedToClose(goal) ? null : closeRisk;
-  if (key === "return" && (modifiers.has("cmd") || modifiers.has("ctrl")))
-    return sendRisk;
+  const cmd = modifiers.has("cmd");
+  if (inTerminal(observation)) {
+    // A paste is text that nobody checked, and a line break in it runs.
+    if (cmd && key === "v") return pasteRisk;
+    const terminal = terminalRisk(null, goal);
+    if (terminal) return terminal;
+  }
+  // Log out of the Mac, with its dialog or at once.
+  if (cmd && modifiers.has("shift") && key === "q") return sessionKeyRisk;
+  // Lock the screen: nothing is lost.
+  if (cmd && modifiers.has("ctrl") && key === "q") return null;
+  // Quit the app, or close a window or a tab: only unsaved work can be lost.
+  if (cmd && (key === "q" || key === "w"))
+    return unsavedRisk(observation, goal);
+  const writing = hasTextFocus(observation);
+  // Delete at once, and empty the Trash, in Finder. Command with Delete alone
+  // moves to the Trash, which can be undone.
+  if (
+    cmd &&
+    (key === "delete" || key === "forwarddelete") &&
+    (modifiers.has("opt") || modifiers.has("shift")) &&
+    !writing
+  )
+    return ask("loss");
+  if (key === "return" && (cmd || modifiers.has("ctrl")))
+    return sendKeyRisk(goal);
   if (key === "return" && !modifiers.size && sendsOnReturn(observation.app))
-    return sendRisk;
+    return sendKeyRisk(goal);
   // The mail app sends with this one.
   if (
     key === "d" &&
-    modifiers.has("cmd") &&
+    cmd &&
     modifiers.has("shift") &&
     observation.app.bundleId.toLowerCase() === "com.apple.mail"
   )
-    return sendRisk;
+    return sendKeyRisk(goal);
   // Return and Space press the default button of a window, the chosen item of
   // an open menu, and whatever has the focus. So a key can do what a click on
-  // "Delete" does. With the focus in a text field the key goes to the text,
-  // and this does not apply.
-  if ((key === "return" || key === "space") && !modifiers.size) {
-    const writing = observation.elements.some(
-      (item) => item.focused && textRoles.has(item.role),
-    );
-    const button = writing
-      ? undefined
-      : observation.elements.find(
-          (item) =>
-            item.enabled &&
-            (item.role === "AXButton" ||
-              item.role === "AXMenuItem" ||
-              item.focused) &&
-            danger.test(item.title),
-        );
-    if (button)
-      return `This key can press "${clean(button.title, 40)}", which may be something that cannot be undone, or that speaks for you.`;
+  // "Place order" does. With the focus in a text field the key goes to the
+  // text, and this does not apply.
+  if ((key === "return" || key === "space") && !modifiers.size && !writing) {
+    const scene = screenScene(observation, goal);
+    for (const item of observation.elements) {
+      if (
+        !item.enabled ||
+        !(
+          item.role === "AXButton" ||
+          item.role === "AXMenuItem" ||
+          item.focused
+        )
+      )
+        continue;
+      const found =
+        askFor(item.title, scene) ??
+        (item.focused ? settingRisk(item, observation) : null);
+      if (found) return pressRisk(item.title, found);
+    }
   }
   return null;
 }
@@ -450,80 +953,23 @@ function safeLink(raw: string) {
 }
 const linkRefusal =
   "Only http and https links are opened, with no login in the link.";
-/** A site as the checks compare it: its host with no "www." in front, and its port when it has one. */
-const siteKey = (url: URL) =>
-  `${url.hostname.toLowerCase().replace(/^www\./, "")}${url.port ? `:${url.port}` : ""}`;
-/**
- * The sites that the person's own words name. Each word is read as the
- * reader of a direct request reads an address (`webAddress`): "example.com",
- * "https://Example.com/board," and "localhost:3000" name a site; a file name
- * ("README.md"), a mail address and a word in another script do not.
- */
-function sitesIn(said: string) {
-  const sites = new Set<string>();
-  for (const word of said.split(/\s+/)) {
-    const found = webAddress(word);
-    if (found) sites.add(siteKey(found.url));
-  }
-  return sites;
-}
 /** A path and a query longer than this, that the person did not write, can carry what the screen shows. */
 const longAddressPart = 120;
 /**
- * An address that the planner chose is a plan that nobody checked, as every
- * other part of its action. It may open with no question only when the
- * person's own request holds its site, with the same port; with plain http
- * only when the person wrote http, or for a server of this Mac; and with a
- * long path or query only when the person wrote it. For every other address
- * the person says yes first, and the question names the site.
+ * An address that the planner chose opens with no question: a shop, a site of
+ * the news, a page that the task needs. Only an address with a long path or
+ * query that the person did not write asks: such a part could carry what the
+ * screen shows to the site.
  */
-const unaskedRisk = (link: URL, goal?: string) => {
-  const host = clean(link.host, 80);
-  const said = goal ?? "";
-  if (!sitesIn(said).has(siteKey(link)))
-    return `The address ${host} is not in your request.`;
-  const own = link.hostname === "localhost" || link.hostname === "127.0.0.1";
-  if (
-    link.protocol === "http:" &&
-    !own &&
-    !said.toLowerCase().includes(`http://${link.hostname.toLowerCase()}`) &&
-    !said.toLowerCase().includes(`http://www.${link.hostname.toLowerCase()}`)
-  )
-    return `The address ${host} would open with plain http, which you did not ask for.`;
+const addressRisk = (link: URL, goal?: string) => {
   const rest = `${link.pathname}${link.search}`;
-  if (
-    rest.length > longAddressPart &&
-    !said.toLowerCase().includes(rest.toLowerCase())
-  )
-    return `The address ${host} carries a long part that is not in your request.`;
-  return null;
-};
-/** Words of a browser's name that name nothing by themselves. */
-const browserFillers = new Set([
-  "the",
-  "my",
-  "a",
-  "an",
-  "your",
-  "our",
-  "browser",
-  "web",
-  "app",
-]);
-/**
- * A browser that the planner chose: it opens the address with no question
- * only when the person named it, by a word of its name ("Fixture" for
- * "Fixture Browser"). Another app that opens web addresses could read the page.
- */
-const browserRisk = (browser: string, goal?: string) => {
-  const said = new Set((goal ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u));
-  const named = browser
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((word) => word && !browserFillers.has(word));
-  return named.length && named.some((word) => said.has(word))
-    ? null
-    : `The browser ${clean(browser, 60)} is not in your request.`;
+  return rest.length > longAddressPart &&
+    !(goal ?? "").toLowerCase().includes(rest.toLowerCase())
+    ? ask(
+        "send",
+        `The address carries a long part that you did not write, which could send what the screen shows to ${clean(link.host, 80)}.`,
+      )
+    : null;
 };
 
 const textRoles = new Set([
@@ -635,7 +1081,10 @@ export interface View {
   browser: boolean;
   /** The optional methods of the connected browser. Absent: it has none of them. */
   browserMethods?: readonly BrowserMethod[];
-  /** The person's own request, word for word. Only it can say that a close was asked for. */
+  /**
+   * The person's own request, word for word. Only it can say that a send, a
+   * terminal command or the loss of unsaved changes was asked for.
+   */
   goal?: string;
 }
 
@@ -735,8 +1184,10 @@ export type Checked =
       label: string;
       /** The name of the element, for the journal. Never typed text or page text. */
       target: string;
-      /** Why the person's yes is needed first. Null when it is not. */
+      /** Why the person's yes is needed first, as the question says it. Null when it is not. */
       risk: string | null;
+      /** The row of the policy that asks (`askPolicy`). Null when nothing asks. */
+      policy: AskKind | null;
       /** The same for the same target and arguments. Null for an action that may repeat. */
       signature: string | null;
       send: Send;
@@ -746,6 +1197,41 @@ export type Checked =
   | { verdict: "give_up"; reason: string };
 
 const refuse = (reason: string): Checked => ({ verdict: "refuse", reason });
+/** The question of a row, or none, as a result carries it. */
+const asking = (found: Ask | null) => ({
+  risk: found?.reason ?? null,
+  policy: found?.kind ?? null,
+});
+
+/**
+ * The question before an action that needs a yes. It is short enough for a
+ * phone call, and concrete: what the action does, where, and what it costs or
+ * loses. 'Click "Place order" on shop.example? It spends your money: 48
+ * dollars for 2 items. Say yes or no.'
+ */
+export function yesQuestion(
+  checked: { label: string; risk: string | null; send: Send },
+  observation: Observation | null,
+  page: BrowserPage | null,
+) {
+  let what = checked.label;
+  if (checked.send.via === "browser") {
+    const host = hostOf(page?.url);
+    if (host && what.endsWith(onThePage))
+      what = `${what.slice(0, -onThePage.length)} on ${host}`;
+  } else if (checked.send.look && observation?.app.name.trim())
+    // An open, a quit and a wait name their app in the label already.
+    what = `${what} in ${clean(observation.app.name, 60)}`;
+  return `${what}? ${checked.risk ?? ""} Say yes or no.`.replace(/\s+/g, " ");
+}
+const onThePage = " on the page";
+const hostOf = (url: string | undefined) => {
+  try {
+    return url ? new URL(url).hostname.replace(/^www\./, "") : "";
+  } catch {
+    return "";
+  }
+};
 const noImageRefusal =
   "The last observation has no image, so a point has no meaning.";
 const outsideRefusal = "That point is outside the last image.";
@@ -772,23 +1258,38 @@ const pageChoice = (item: BrowserElement) =>
  * focus, so either key asks while any control of the page that is not a
  * field has a name that a click asks about.
  */
-const pageKeyRisk = (key: PageKey, page: BrowserPage, goal?: string) => {
+const pageKeyRisk = (
+  key: PageKey,
+  page: BrowserPage,
+  goal?: string,
+): Ask | null => {
   if (key !== "Enter" && key !== "Space") return null;
+  const scene = pageScene(page, goal);
   for (const item of page.elements) {
-    // A plain close control only takes a view away.
-    if (
-      item.disabled ||
-      pageTextEntry(item) ||
-      plainClose.test(clean(item.label, 80))
-    )
-      continue;
-    if (dangerRisk(item.label, goal))
-      return `This key can press "${clean(item.label, 40)}", which may be something that cannot be undone, or that speaks for you.`;
+    if (item.disabled || pageTextEntry(item)) continue;
+    const found = askFor(item.label, scene);
+    if (found) return pressRisk(item.label, found);
   }
   return null;
 };
-const secureDragRisk =
-  "This drag starts in a password field, and could take what it holds somewhere else.";
+/** A field where what is typed goes to other people: a message, a comment, a post. */
+const messageBox = (item: BrowserElement) =>
+  /^textarea$/i.test(item.tag) ||
+  /\b(?:message|comment|reply|post|tweet|chat|compose|status|what's happening|say something|write)\b/.test(
+    plain(item.label),
+  );
+/**
+ * Enter in a field submits its form: what a button of the page would do. A
+ * search goes with no question. A message, a comment or a post asks unless
+ * the request asks to send it.
+ */
+const submitRisk = (field: BrowserElement, page: BrowserPage, goal?: string) =>
+  pageSearch(field)
+    ? null
+    : (pageKeyRisk("Enter", page, goal) ??
+      (messageBox(field) && !sendAsked(goal ?? "")
+        ? ask("send", `It submits what is typed. ${askPolicy.send.reason}`)
+        : null));
 
 /**
  * Checks one planned action against what the worker last saw. It sends
@@ -816,7 +1317,7 @@ export function check(raw: unknown, view: View, why: string): Checked {
         verdict: "run",
         label: "Wait",
         target: "",
-        risk: null,
+        ...asking(null),
         signature: null,
         send: {
           via: "hands",
@@ -861,7 +1362,7 @@ export function check(raw: unknown, view: View, why: string): Checked {
         verdict: "run",
         label: `Open ${clean(name, 80)}`,
         target: clean(name, 80),
-        risk: null,
+        ...asking(null),
         signature: JSON.stringify(["open_app", name, action.window ?? null]),
         send: {
           via: "hands",
@@ -882,8 +1383,16 @@ export function check(raw: unknown, view: View, why: string): Checked {
         verdict: "run",
         label: `Quit ${clean(name, 80)}`,
         target: clean(name, 80),
-        // A quit always asks: work that is not saved, and what still runs in the app, can be lost.
-        risk: appQuitRisk,
+        // The hands quit the polite way, and an app with unsaved work asks
+        // first. So a quit asks only while the app is in front and shows
+        // changes that are not saved.
+        ...asking(
+          view.observation &&
+            clean(view.observation.app.name, 120).toLowerCase() ===
+              clean(name, 120).toLowerCase()
+            ? unsavedRisk(view.observation, view.goal)
+            : null,
+        ),
         signature: JSON.stringify(["quit_app", name]),
         send: {
           via: "hands",
@@ -908,9 +1417,7 @@ export function check(raw: unknown, view: View, why: string): Checked {
           ? `Open ${host} in ${clean(browser, 60)}`
           : `Open ${host}`,
         target: host,
-        risk:
-          unaskedRisk(link, view.goal) ??
-          (browser ? browserRisk(browser, view.goal) : null),
+        ...asking(addressRisk(link, view.goal)),
         signature: `open_url|${action.url}${browser ? `|${browser}` : ""}`,
         send: {
           via: "hands",
@@ -996,9 +1503,9 @@ function checkScreen(
         label: `${verb(action.double, action.right)} ${nameOf(found)}`,
         target: clean(found.title, 80),
         // A click on a text field only gives it the focus.
-        risk: textRoles.has(found.role)
-          ? null
-          : dangerRisk(found.title, view.goal),
+        ...asking(
+          textRoles.has(found.role) ? null : screenRisk(found, seen, view.goal),
+        ),
         signature: `click|${found.role}|${found.title || `${Math.round(point.x)},${Math.round(point.y)}`}|${!!action.double}|${!!action.right}`,
         send: {
           via: "hands",
@@ -1021,11 +1528,13 @@ function checkScreen(
         target: named ? clean(named.title, 80) : "",
         // With no name under the point, the planner's own words are the only
         // name there is. They can add a question. They never remove one.
-        risk: named
-          ? textRoles.has(named.role)
-            ? null
-            : dangerRisk(named.title, view.goal)
-          : dangerRisk(why, view.goal, true),
+        ...asking(
+          named
+            ? textRoles.has(named.role)
+              ? null
+              : screenRisk(named, seen, view.goal)
+            : askFor(why, screenScene(seen, view.goal), true),
+        ),
         signature: `click_at|${Math.round(point.x / 8)}|${Math.round(point.y / 8)}|${!!action.double}|${!!action.right}`,
         send: {
           via: "hands",
@@ -1063,7 +1572,9 @@ function checkScreen(
         verdict: "run",
         label: field ? `Type in ${nameOf(field)}` : "Type text",
         target: field ? clean(field.title, 80) : "",
-        risk: inTerminal(seen) ? terminalRisk : null,
+        ...asking(
+          inTerminal(seen) ? terminalRisk(action.text, view.goal) : null,
+        ),
         signature: `type|${field ? `${field.role}|${field.title}` : ""}|${action.text}`,
         send: {
           via: "hands",
@@ -1096,7 +1607,7 @@ function checkScreen(
         verdict: "run",
         label: `Press ${parsed.combo}`,
         target: parsed.combo,
-        risk: keyRisk(parsed, seen, view.goal),
+        ...asking(keyRisk(parsed, seen, view.goal)),
         signature: `key|${parsed.combo}`,
         send: {
           via: "hands",
@@ -1118,7 +1629,7 @@ function checkScreen(
         verdict: "run",
         label: `Scroll ${action.direction}`,
         target,
-        risk: null,
+        ...asking(null),
         signature: null,
         send: {
           via: "hands",
@@ -1144,7 +1655,7 @@ function checkScreen(
           verdict: "run",
           label: `Hover over ${nameOf(found)}`,
           target: clean(found.title, 80),
-          risk: null,
+          ...asking(null),
           signature: `hover|${found.role}|${found.title || `${Math.round(point.x)},${Math.round(point.y)}`}`,
           send: {
             via: "hands",
@@ -1162,7 +1673,7 @@ function checkScreen(
         verdict: "run",
         label: named ? `Hover over ${nameOf(named)}` : "Hover at a point",
         target: named ? clean(named.title, 80) : "",
-        risk: null,
+        ...asking(null),
         signature: `hover_at|${Math.round(point.x / 8)}|${Math.round(point.y / 8)}`,
         send: {
           via: "hands",
@@ -1216,22 +1727,25 @@ function checkScreen(
         side.item && !side.words ? side.item : null;
       const source = named(from);
       const goal = named(to);
+      const scene = screenScene(seen, view.goal);
       /** A click at this end would ask: the same rule, at both ends. A field only takes what is dropped. */
       const endRisk = (item: ScreenElement | null) =>
-        item && !textRoles.has(item.role)
-          ? dangerRisk(item.title, view.goal)
-          : null;
+        item && !textRoles.has(item.role) ? askFor(item.title, scene) : null;
       const risk =
-        (from.item?.secure ? secureDragRisk : null) ??
+        (from.item?.secure ? ask("secret") : null) ??
         (inTerminal(seen) ||
         (goal !== null && terminalName.test(clean(goal.title, 80)))
-          ? terminalRisk
+          ? terminalDropRisk
+          : null) ??
+        (goal !== null && trashName.test(clean(goal.title, 80))
+          ? ask("trash")
           : null) ??
         endRisk(source) ??
         endRisk(goal) ??
         // With no name at an end, the planner's own words are the only name
         // there is. They can add a question. They never remove one.
-        (from.words || to.words ? dangerRisk(why, view.goal, true) : null);
+        (to.words && trashName.test(why) ? ask("trash") : null) ??
+        (from.words || to.words ? askFor(why, scene, true) : null);
       const fromName = source ? nameOf(source) : null;
       const toName = goal ? nameOf(goal) : "a point";
       return {
@@ -1243,7 +1757,7 @@ function checkScreen(
           .map((item) => (item ? clean(item.title, 60) : ""))
           .filter(Boolean)
           .join(" to "),
-        risk,
+        ...asking(risk),
         signature: `drag|${from.key}|${to.key}`,
         send: {
           via: "hands",
@@ -1274,17 +1788,18 @@ function checkBrowser(
   const ready = (
     label: string,
     target: string,
-    risk: string | null,
+    risk: Ask | null,
     signature: string | null,
     call: BrowserCall,
   ): Checked => ({
     verdict: "run",
     label,
     target,
-    risk,
+    ...asking(risk),
     signature,
     send: { via: "browser", call },
   });
+  const scene = pageScene(view.page, view.goal);
   /** The element of the last page with this number, when it can take input. */
   const pick = (index: number) => {
     if (!view.page) return refuse("Read the page first, with browser_read.");
@@ -1309,7 +1824,7 @@ function checkBrowser(
       return ready(
         `Open ${host} in the browser`,
         host,
-        unaskedRisk(link, view.goal),
+        addressRisk(link, view.goal),
         `browser_open|${action.url}`,
         { name: "open", url: action.url },
       );
@@ -1322,7 +1837,7 @@ function checkBrowser(
       return ready(
         `Click ${pageName(found)} on the page`,
         clean(found.label, 80),
-        pageTextEntry(found) ? null : dangerRisk(found.label, view.goal),
+        pageTextEntry(found) ? null : askFor(found.label, scene),
         `browser_click|${found.tag}|${found.role}|${found.label}`,
         { name: "click", index: action.index, element: found },
       );
@@ -1346,7 +1861,7 @@ function checkBrowser(
       return ready(
         label,
         clean(found.label, 80),
-        submit && !pageSearch(found) ? submitRisk : null,
+        submit && view.page ? submitRisk(found, view.page, view.goal) : null,
         `browser_type|${found.tag}|${found.label}|${submit}|${action.text}`,
         {
           name: "type",
@@ -1386,7 +1901,7 @@ function checkBrowser(
         clean(found.label, 80),
         // The choice is what a click on it would press: an option such as
         // "Delete selected" asks, as a button with that name does.
-        dangerRisk(option, view.goal),
+        askFor(option, scene),
         `browser_select|${found.tag}|${found.role}|${found.label}|${option}`,
         { name: "select", index: action.index, option, element: found },
       );

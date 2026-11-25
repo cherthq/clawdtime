@@ -157,7 +157,7 @@ describe("a hover and a drag through the worker", () => {
       await worker.submit("r1", "Tidy the desktop");
       await waiting();
       expect(worker.snapshot().message).toBe(
-        'Drag "Report.pdf" to "Trash"? "Trash" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.',
+        'Drag "Report.pdf" to "Trash" in Notes? It moves what it drags to the Trash. Say yes or no.',
       );
       expect(hands.sent).toEqual([]);
       await worker.answer(answer);
@@ -239,7 +239,7 @@ describe("the newer browser actions through the worker", () => {
     await worker.submit("r1", "Finish the form");
     await waiting();
     expect(worker.snapshot().message).toBe(
-      'Press Enter on the page? This key can press "Pay now", which may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.',
+      'Press Enter on example.com? It can press "Pay now". It spends your money. Say yes or no.',
     );
     await worker.answer("no");
     await worker.idle();

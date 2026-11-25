@@ -71,6 +71,7 @@ import {
   type View,
   hasTextFocus,
   closerPart,
+  yesQuestion,
 } from "./guards.js";
 import { closerHold, closerSecureText, closerShowsSecure } from "./closer.js";
 import { textKeyHold } from "./text-keys.js";
@@ -2559,29 +2560,11 @@ export class ComputerWorker implements DesktopExecutorPort {
     // is held back again and again must come back to the person.
     const tries = kept ? kept.tries + 1 : 0;
     const answered: string[] = [];
-    // The same action with the same arguments does not go out a third time in a row.
-    if (
-      checked.signature !== null &&
-      run.streak?.signature === checked.signature &&
-      run.streak.count >= 2
-    ) {
-      const repeats = run.streak.count;
-      const question =
-        repeats === 2
-          ? `I already did this twice in a row: ${checked.label}. Say yes to do it a third time, or no to stop.`
-          : `I already did this ${repeats} times in a row: ${checked.label}. Say yes to do it again, or no to stop.`;
-      const refusal =
-        repeats === 2
-          ? `Canceled. I did not do it a third time: ${checked.label}.`
-          : `Canceled. I did not do it again: ${checked.label}.`;
-      if (!granted.includes(question)) {
-        const reply = await this.ask(run, "yes_no", question, refusal);
-        if (reply.kind !== "yes") return;
-      }
-      answered.push(question);
-    }
+    // Only a row of the policy asks (`askPolicy` in guards.ts). The same
+    // action again needs no yes of its own: the row of tries that changed
+    // nothing, and the progress guard, answer a loop.
     if (checked.risk) {
-      const question = `${checked.label}? ${checked.risk} Say yes to allow it, or no to stop.`;
+      const question = yesQuestion(checked, before, run.page);
       if (!granted.includes(question)) {
         const reply = await this.ask(
           run,
