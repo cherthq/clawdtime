@@ -14,6 +14,7 @@ public struct RGB: Equatable, Sendable {
   public init(_ hex: UInt32) {
     red = Double((hex >> 16) & 0xFF) / 255; green = Double((hex >> 8) & 0xFF) / 255; blue = Double(hex & 0xFF) / 255
   }
+  public init(red: Double, green: Double, blue: Double) { self.red = red; self.green = green; self.blue = blue }
   /// Relative luminance, as the contrast formula of WCAG 2 defines it.
   public var luminance: Double {
     func linear(_ value: Double) -> Double { value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4) }

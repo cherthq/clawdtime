@@ -6,9 +6,10 @@ import TaskPanelCore
 /// type, this cursor glides to the place, with a short label of what they do
 /// there. Only then does the real event go, so a person sees each action before
 /// it happens: at the Mac, and on a phone that shows the screen. The cursor is
-/// ClawdTime's own: a ring and a small pointer in the colors of the Chert mark.
+/// ClawdTime's own: a small orange arrow with three short rays at its tip. The
+/// tip is the place: the hot spot of the arrow is exactly where the hands act.
 /// The pointer of the Mac stays the person's. When the hands bring it to the
-/// place for a click, the small pointer steps aside and stands beside it.
+/// place for a click, its tip meets the tip of the arrow.
 ///
 /// Its window is above every other window, shows on every Space and lets
 /// every click through: `GuidedOverlay.cursor` holds that rule. A screen share
@@ -30,8 +31,6 @@ import TaskPanelCore
   private var fade: Task<Void, Never>?
   /// Reduce Motion, as it was when the cursor last set out.
   private var still = false
-  /// The hands brought the pointer of the Mac here for a click: the small pointer stays beside it until the cursor goes on.
-  private var pressed = false
 
   init(pet: PetController) {
     self.pet = pet
@@ -79,17 +78,9 @@ import TaskPanelCore
     if size == layout.window.size { window.setFrameOrigin(layout.window.origin) }
     else { size = layout.window.size; window.setFrame(layout.window, display: false) }
     view.show(layout, label: label)
-    watch()
-  }
-  /// The small pointer points at the place, or stands beside the pointer of the Mac when that one is there.
-  /// On the way it only goes back to the middle: a pointer that the cursor passes does not move it.
-  private func watch() {
-    guard let shown, !pressed else { return }
-    let here = GuidedLook.standsBeside(tip: shown, pointer: NSEvent.mouseLocation)
-    if !here { view.stand(beside: false, still: still) } else if path == nil { view.stand(beside: true, still: still) }
   }
   private func frame(_ step: Double) {
-    guard let path else { watch(); return }
+    guard let path else { return }
     elapsed += step
     put(path.point(at: elapsed))
   }
@@ -105,7 +96,7 @@ import TaskPanelCore
   @discardableResult func travel(to target: CGPoint, label text: String) async -> Double {
     let began = Date()
     fade?.cancel(); fade = nil
-    still = Theme.reduceMotion; pressed = false
+    still = Theme.reduceMotion
     let shownBefore = place
     let way = GuidedPath.glide(from: GuidedPath.origin(shown: shownBefore, mascot: pet.handsOrigin, pointer: NSEvent.mouseLocation), to: target, still: still)
     pet.point(at: target)
@@ -114,30 +105,28 @@ import TaskPanelCore
     let relabeled = shownBefore == nil || said != label
     label = said; pillWidth = GuidedCursorView.pillWidth(for: label)
     elapsed = 0; path = way
-    view.turn(!still)
-    view.fly(way.duration > 0, still: still)
     put(way.point(at: 0))
     // A fade that still runs ends here.
     NSAnimationContext.runAnimationGroup({ context in context.duration = 0; window.animator().alphaValue = 1 }, completionHandler: nil)
     window.alphaValue = 1
     // In front of every window, with no focus taken: the window can never be key or main.
     window.orderFrontRegardless()
-    // The clock moves the cursor on its way. After that it only looks, a few times a second, where the pointer of the Mac is.
-    clock.framesPerSecond = way.duration > 0 ? 120 : 30
-    clock.start(on: view)
-    if way.duration > 0 { await pause(way.duration) }
+    // The clock moves the cursor on its way. At the place nothing moves, so the clock stops.
+    if way.duration > 0 {
+      clock.framesPerSecond = 120
+      clock.start(on: view)
+      await pause(way.duration)
+    }
     path = nil
-    clock.framesPerSecond = 30
+    clock.stop()
     put(target)
-    view.fly(false, still: still)
     await pause(GuidedPath.dwell(still: still, moved: way.length >= GuidedPath.inPlace, relabeled: relabeled))
     return Date().timeIntervalSince(began)
   }
-  /// The hands click where the cursor is. They brought the pointer of the Mac here for it.
+  /// The hands click where the cursor is. They brought the pointer of the Mac here for it. The rays pulse
+  /// once; with Reduce Motion nothing moves.
   func pulse() {
     guard window.isVisible else { return }
-    pressed = true
-    view.stand(beside: true, still: still)
     view.pulse(still: still)
   }
   /// The command is done: the mascot stands straight, and the cursor fades unless another command sends it on.
@@ -160,7 +149,6 @@ import TaskPanelCore
   /// The cursor leaves the screen: nothing of it moves or looks any more.
   private func out() {
     clock.stop()
-    view.turn(false)
     if window.isVisible { window.orderOut(nil) }
   }
   /// The run is over, or it was stopped: nothing points any more.
