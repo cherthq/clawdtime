@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.114",
+    "@anthropic-ai/sdk": "1.8.0",
     "@hono/node-server": "2.1.6",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@trycua/cua-driver": "0.55.0",
