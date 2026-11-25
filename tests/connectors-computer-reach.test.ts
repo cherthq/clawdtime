@@ -134,7 +134,7 @@ class FakeWorker implements ReachWorker {
       state: "waiting_for_person",
       canStop: true,
       message,
-      goal: "Send the mail",
+      goal: "Finish the draft",
       waiting,
     };
   }
@@ -164,7 +164,7 @@ const send = observation([element(1, { title: "Send" })]);
 const click: Action = { kind: "click_element", element: 1 };
 const done: Action = { kind: "done", summary: "The mail is sent." };
 const sendQuestion =
-  'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.';
+  'Click "Send" in Notes? It sends as you to other people. Say yes or no.';
 
 function home() {
   const path = mkdtempSync(join(tmpdir(), "clawdtime-reach-"));
@@ -263,7 +263,7 @@ const intentFor = (ask: ReachAsk): ProactiveCallIntent => ({
 describe("the reach waits for the chat first", () => {
   it("makes no call when the question is answered in the chat in time", async () => {
     const { worker, reach, call, text, waiting, after, hands } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     expect(reach.current()).toMatchObject({
@@ -288,7 +288,7 @@ describe("the reach waits for the chat first", () => {
 
   it("places exactly one call for an unanswered question, with the question said plainly", async () => {
     const { worker, reach, call, text, waiting, after } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(44_000);
@@ -311,7 +311,7 @@ describe("the reach waits for the chat first", () => {
     const { worker, reach, call, waiting, after } = setup(undefined, {
       delayMs: 10_000,
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(10_000);
@@ -322,7 +322,7 @@ describe("the reach waits for the chat first", () => {
 describe("the answer on the call", () => {
   it("goes to the worker's own answer, and the worker decides", async () => {
     const { worker, reach, call, waiting, after, hands } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -358,7 +358,7 @@ describe("the answer on the call", () => {
 
   it("takes a no as a no: the request ends", async () => {
     const { worker, reach, call, waiting, after, hands } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -371,7 +371,7 @@ describe("the answer on the call", () => {
 
   it("stops the request at a spoken stop", async () => {
     const { worker, reach, call, waiting, after, hands } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -382,7 +382,7 @@ describe("the answer on the call", () => {
 
   it("stops the request when the line's own stop tool is used on the call", async () => {
     const { worker, reach, call, waiting, after, hands } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -397,7 +397,7 @@ describe("the answer on the call", () => {
 
   it("passes nothing for a question that no longer waits, or for another question", async () => {
     const { worker, reach, call, waiting, after } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -417,7 +417,7 @@ describe("the answer on the call", () => {
 
   it("lets the line read the exact question while it waits, and no longer after", async () => {
     const { worker, reach, call, waiting, after } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -445,7 +445,7 @@ describe("the text after the call", () => {
     "goes once when the call is %s, and nothing is sent again",
     async (_name, phase) => {
       const { worker, reach, call, text, waiting, after } = setup();
-      await worker.submit("r1", "Send the mail");
+      await worker.submit("r1", "Finish the draft");
       await waiting();
       await reach.tick();
       await after(45_000);
@@ -454,7 +454,7 @@ describe("the text after the call", () => {
       expect(text.sent).toHaveLength(1);
       expect(text.sent[0]!.key).toBe(`clawdtime-reach:${reach.current()!.id}`);
       expect(text.sent[0]!.text).toBe(
-        `ClawdTime on your Mac needs your yes for "Send the mail". ${sendQuestion} Reply yes or no.`,
+        `ClawdTime on your Mac needs your yes for "Finish the draft". ${sendQuestion}`,
       );
       for (let index = 0; index < 30; index++) await after(10_000);
       expect(call.placed).toHaveLength(1);
@@ -465,7 +465,7 @@ describe("the text after the call", () => {
   it("goes at once when the line is not set up for calls", async () => {
     const { worker, reach, call, text, waiting, after } = setup();
     call.ready = { ready: false, reason: "outbound_setup_missing" };
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -481,7 +481,7 @@ describe("the text after the call", () => {
 
   it("goes when a call was never dialed in a minute, and the call is taken back", async () => {
     const { worker, reach, call, text, waiting, after } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -494,7 +494,7 @@ describe("the text after the call", () => {
 
   it("does not go after a call that was answered, also with no clear answer on it", async () => {
     const { worker, reach, call, text, waiting, after } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -510,7 +510,7 @@ describe("the text after the call", () => {
       call: null,
       text: null,
     });
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -522,7 +522,7 @@ describe("the text after the call", () => {
 
   it("passes a text reply to the worker's own answer", async () => {
     const { worker, reach, call, waiting, after, hands } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -573,7 +573,7 @@ describe("the text after the call", () => {
 describe("one call and one text for one question", () => {
   it("never calls again, also after a restart of the service", async () => {
     const first = setup();
-    await first.worker.submit("r1", "Send the mail");
+    await first.worker.submit("r1", "Finish the draft");
     await first.waiting();
     await first.reach.tick();
     await first.after(45_000);
@@ -664,7 +664,7 @@ describe("one call and one text for one question", () => {
 describe("Stop of the request", () => {
   it("takes back a call that was not dialed and sends no text", async () => {
     const { worker, reach, call, text, waiting, after } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);
@@ -685,7 +685,7 @@ describe("Stop of the request", () => {
 
   it("before the wait is over places nothing", async () => {
     const { worker, reach, call, text, waiting, after } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(20_000);
@@ -824,7 +824,7 @@ describe("where the request came from", () => {
     expect(call.placed).toHaveLength(1);
     const texted = setup();
     texted.reach.textTurn(texted.clock.now);
-    await texted.worker.submit("r1", "Send the mail");
+    await texted.worker.submit("r1", "Finish the draft");
     texted.reach.textTurnEnded(texted.clock.now, texted.clock.now + 2_000);
     await texted.waiting();
     await texted.reach.tick();
@@ -883,7 +883,7 @@ describe("a request that ended blocked", () => {
 describe("the record of the reach", () => {
   it("is for its owner only and holds no question, no answer and no typed text", async () => {
     const { worker, reach, call, waiting, after, root } = setup();
-    await worker.submit("r1", "Send the mail");
+    await worker.submit("r1", "Finish the draft");
     await waiting();
     await reach.tick();
     await after(45_000);

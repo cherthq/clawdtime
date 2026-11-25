@@ -1343,6 +1343,7 @@ export function check(raw: unknown, view: View, why: string): Checked {
         label: "Look closer",
         target: "",
         risk: null,
+        policy: null,
         signature: null,
         send: { via: "hands", look: false, command: part.command },
       };

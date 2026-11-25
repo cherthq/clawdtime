@@ -219,7 +219,7 @@ export function reachWords(input: {
     case "approval":
       return {
         spoken: `ClawdTime on your Mac needs your yes. ${cut(input.question, 260)}`,
-        text: `ClawdTime on your Mac needs your yes${goal ? ` for "${goal}"` : ""}. ${cut(input.question, 600)} Reply yes or no.`,
+        text: `ClawdTime on your Mac needs your yes${goal ? ` for "${goal}"` : ""}. ${cut(input.question, 600)}${/\byes or no\.?\s*$/i.test(input.question) ? "" : " Reply yes or no."}`,
       };
     case "question": {
       const asked = input.question.replace(/^The task asks:\s*/i, "");
