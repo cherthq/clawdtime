@@ -69,10 +69,14 @@ and no Automation right of macOS.
 - It starts at the first browser step, with its window, and closes when the
   desktop service stops.
 - It reads a page with the same page script and the same numbers as the other
-  driver. It clicks, types and presses keys with the browser's own input, so
-  the page sees trusted events. Before a click, the page says whether the
-  element is the topmost one at its centre. When something covers it, nothing
-  is sent.
+  driver. The script runs in a world of its own in the page, so the page's
+  scripts cannot see its state or change what it calls. It clicks, types and
+  presses keys with the browser's own input, so the page sees trusted events.
+- Before a click, the page script says whether a pointer at the element's
+  centre reaches it and nothing else. When another element covers it, when a
+  frame lies there (the click would land in another page, maybe of another
+  site), when another control lies inside it there, or when the page replaced
+  the browser's hit test, nothing is sent.
 - After an open, a click, a key or back, it waits until the page has loaded
   and the network is quiet, for at most 5 seconds, or 10 after an open.
 - It can also hover, pick an option by its label, press one key, wait for a

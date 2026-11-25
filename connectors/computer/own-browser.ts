@@ -17,10 +17,14 @@
  *
  * Reading is the page script of `browser-script.ts`, run in the page, with
  * the parser of `browser.ts`, so a reading and its numbers are the same as
- * with the other driver. Input is real: the browser itself makes the mouse
- * and key events, so the page sees them as trusted. Before a pointer event,
- * the page script brings the element into view and says whether it is the
- * topmost element at its centre; when it is not, nothing is sent.
+ * with the other driver. The script runs in a private world of the page (an
+ * isolated world of the protocol): it sees the same document, but the page's
+ * own scripts cannot see its state or change the functions that it calls.
+ * Input is real: the browser itself makes the mouse and key events, so the
+ * page sees them as trusted. Before a pointer event, the page script brings
+ * the element into view and says whether a pointer at its centre reaches it
+ * and nothing else: no element on top, no frame and no other control there.
+ * When it does not, nothing is sent.
  *
  * No blind retry. A read may start the browser again when it ended. An input
  * never starts it, and an input whose answer did not come back is never sent
@@ -60,6 +64,7 @@ import {
 import {
   DevToolsClosed,
   DevToolsConnection,
+  DevToolsError,
   DevToolsTimeout,
   browserEndpoint,
   dialWebSocket,
@@ -186,6 +191,9 @@ const endedNothingSent = `${me} closed. Nothing was sent. Read the page again: t
 const lostInput = `${me} closed while the input went out. Its result is not known, and it is not sent again. Read the page to see what happened.`;
 const ownPage = `${me} shows one of its own pages, which ClawdTime does not read or operate: open a web page, then try again.`;
 const unreadable = `${me} gave an answer that ClawdTime could not read: read the page again.`;
+const changing = `The page changed while ${me} read it: read the page again.`;
+/** The name of the private world of the page script. The page does not see it. */
+const worldName = "ClawdTime";
 
 /** The keys that a page step may press, with what the browser needs to make each one. */
 interface KeySpec {
@@ -346,6 +354,8 @@ const locateSchema = z
     password: z.boolean(),
     focused: z.boolean(),
     cover: z.string().max(40).optional(),
+    /** Why a pointer at the centre does not reach it, besides an element on top of it. */
+    blocked: z.enum(["frame", "control", "unsure"]).optional(),
   })
   .strict();
 type Located = z.infer<typeof locateSchema>;
@@ -360,6 +370,9 @@ const targetsSchema = z.object({ targetInfos: z.array(targetSchema) });
 type Target = z.infer<typeof targetSchema>;
 const processesSchema = z.object({
   processInfo: z.array(z.object({ type: z.string(), id: z.number() })),
+});
+const frameTreeSchema = z.object({
+  frameTree: z.object({ frame: z.object({ id: z.string().min(1).max(200) }) }),
 });
 const historySchema = z.object({
   currentIndex: z.number().int(),
@@ -426,6 +439,16 @@ interface Tab {
   dialog: string | null;
   /** Called when a dialog opens. */
   dialogWatch: Set<() => void>;
+  /** The id of the main frame of the tab, once known. */
+  frame: string | null;
+  /**
+   * The private world of the page script in the document of the tab: its
+   * execution context, "page" when the browser named none, or null before
+   * the first call and after the document changed.
+   */
+  world: number | "page" | null;
+  /** Counts the documents of the tab, so that a world made for an earlier one is never kept. */
+  documents: number;
 }
 /** One input step: whether a command with an effect went out. */
 interface Step {
@@ -1023,6 +1046,15 @@ export class OwnBrowser implements BrowserPort {
       const tab = tabOf(session);
       if (tab) tab.dialog = null;
     });
+    // A new document in the main frame: the private world went with the old one.
+    connection.on("Page.frameNavigated", (params, session) => {
+      const tab = tabOf(session);
+      const frame = params.frame;
+      if (!tab || typeof frame !== "object" || frame === null) return;
+      if ((frame as { parentId?: unknown }).parentId !== undefined) return;
+      tab.documents += 1;
+      tab.world = null;
+    });
     connection.on("Target.detachedFromTarget", (params) => {
       if (typeof params.sessionId !== "string") return;
       const tab = this.tabsBySession.get(params.sessionId);
@@ -1213,6 +1245,9 @@ export class OwnBrowser implements BrowserPort {
       open: new Map(),
       dialog: null,
       dialogWatch: new Set(),
+      frame: null,
+      world: null,
+      documents: 0,
     };
     this.tabsById.set(targetId, tab);
     this.tabsBySession.set(tab.session, tab);
@@ -1351,24 +1386,82 @@ export class OwnBrowser implements BrowserPort {
       await this.effect(step, tab, "Input.dispatchKeyEvent", { ...event });
   }
 
+  /** The id of the main frame of the tab. */
+  private async mainFrame(tab: Tab): Promise<string> {
+    if (tab.frame !== null) return tab.frame;
+    const tree = frameTreeSchema.safeParse(
+      await this.command(tab, "Page.getFrameTree"),
+    );
+    // The main frame of a page has the id of its target.
+    tab.frame = tree.success ? tree.data.frameTree.frame.id : tab.targetId;
+    return tab.frame;
+  }
+
+  /**
+   * The private world of the page script in the document of the tab, made
+   * once for each document. A world made while the document changed is not
+   * kept: it may belong to the one before.
+   */
+  private async world(tab: Tab): Promise<number | "page"> {
+    for (let attempt = 0; ; attempt++) {
+      if (tab.world !== null) return tab.world;
+      if (attempt === 2) throw new Error(changing);
+      const documents = tab.documents;
+      const frameId = await this.mainFrame(tab);
+      const made = await this.command<{ executionContextId?: unknown }>(
+        tab,
+        "Page.createIsolatedWorld",
+        { frameId, worldName },
+      );
+      if (tab.documents !== documents) continue;
+      const id = made.executionContextId;
+      // Every browser of the family names the world. One on paper may not:
+      // the script then runs in the page's world, and its own checks still
+      // refuse a hit test that the page replaced.
+      tab.world =
+        typeof id === "number" && Number.isSafeInteger(id) ? id : "page";
+    }
+  }
+
   /** Runs the page script once and gives back its answer as text. */
   private async evaluate(tab: Tab, call: PageCall): Promise<string> {
     if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
-    const result = await this.command<{
-      result?: { value?: unknown };
-      exceptionDetails?: unknown;
-    }>(tab, "Runtime.evaluate", {
-      expression: pageScript(call, { session: this.session, start: this.next }),
-      returnByValue: true,
-      silent: true,
-      includeCommandLineAPI: false,
+    const expression = pageScript(call, {
+      session: this.session,
+      start: this.next,
     });
-    if (
-      result.exceptionDetails !== undefined ||
-      typeof result.result?.value !== "string"
-    )
-      throw new Error(unreadable);
-    return result.result.value;
+    for (let attempt = 0; ; attempt++) {
+      const world = await this.world(tab);
+      let result: { result?: { value?: unknown }; exceptionDetails?: unknown };
+      try {
+        result = await this.command(tab, "Runtime.evaluate", {
+          expression,
+          returnByValue: true,
+          silent: true,
+          includeCommandLineAPI: false,
+          ...(world === "page" ? {} : { contextId: world }),
+        });
+      } catch (error) {
+        // The document changed and its world went with it: the script did
+        // not start, so it runs once in the world of the new document.
+        if (
+          attempt === 0 &&
+          world !== "page" &&
+          error instanceof DevToolsError &&
+          /cannot find context with specified id/i.test(error.message)
+        ) {
+          if (tab.world === world) tab.world = null;
+          continue;
+        }
+        throw error;
+      }
+      if (
+        result.exceptionDetails !== undefined ||
+        typeof result.result?.value !== "string"
+      )
+        throw new Error(unreadable);
+      return result.result.value;
+    }
   }
 
   /** One call into the page. It throws the reason when the page refuses. */
@@ -1463,16 +1556,29 @@ function programName(path: string) {
   return /([^/]+)\.app\//.exec(path)?.[1] ?? basename(path);
 }
 
-/** A pointer at the centre reaches the element, or nothing is sent. */
+/** A pointer at the centre reaches the element and nothing else, or nothing is sent. */
 function reachable(box: Located) {
   if (!box.inside)
     throw new Error(
       `${box.name} is not in view, even after scrolling. Nothing was sent. Read the page again.`,
     );
-  if (!box.hit)
+  if (box.hit) return;
+  const what = box.cover ? ` (${box.cover})` : "";
+  if (box.blocked === "frame")
     throw new Error(
-      `${box.name} is under another element at its centre${box.cover ? ` (${box.cover})` : ""}. Nothing was sent. Close what covers it, or scroll, then read the page again.`,
+      `${box.name} has a frame at its centre${what}: a click there lands in another page, maybe of another site. Nothing was sent. Do it another way, or ask the person.`,
     );
+  if (box.blocked === "control")
+    throw new Error(
+      `${box.name} has another control at its centre${what}: a click there presses that control. Nothing was sent. Read the page again and choose the element that does what you want.`,
+    );
+  if (box.blocked === "unsure")
+    throw new Error(
+      `ClawdTime cannot tell what lies at the centre of ${box.name}: the page changed the browser's own check. Nothing was sent. Use the screen, or ask the person.`,
+    );
+  throw new Error(
+    `${box.name} is under another element at its centre${what}. Nothing was sent. Close what covers it, or scroll, then read the page again.`,
+  );
 }
 
 /** The second wall: no text goes into a password field, or into a field that takes none. */

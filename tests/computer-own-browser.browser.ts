@@ -95,6 +95,36 @@ const second = `<!doctype html>
 <h1>Second page</h1><a href="/">Back to the desk</a>
 </body></html>`;
 
+/**
+ * A page that works against the driver: it replaces the browser's hit test
+ * on the prototype, where a check in its own world cannot see it, hides a
+ * frame inside a button, and has a password field.
+ */
+const hostile = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Hostile page</title>
+<style>
+  .pile { position: relative; display: inline-block; }
+  .veil { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.1); }
+  #framed { position: relative; width: 200px; height: 60px; }
+  #framed iframe { position: absolute; inset: 0; width: 200px; height: 60px; border: 0; opacity: 0; }
+</style></head><body>
+<p><span class="pile"><button id="covered">Covered button</button><span class="veil"></span></span> <span id="covers">0</span></p>
+<div id="framed" role="button" aria-label="Framed">Framed<iframe src="/inner"></iframe></div>
+<p><label>Secret <input id="secret" type="password"></label></p>
+<script>
+  var covered = document.getElementById("covered");
+  covered.addEventListener("click", function () {
+    var count = document.getElementById("covers");
+    count.textContent = String(Number(count.textContent) + 1);
+  });
+  var real = Document.prototype.elementFromPoint;
+  Document.prototype.elementFromPoint = function (x, y) {
+    var hit = real.call(this, x, y);
+    return hit && hit.className === "veil" ? covered : hit;
+  };
+</script>
+</body></html>`;
+
 /** The results load their prices after the page itself, from a slow address. */
 const results = (asked: string) => `<!doctype html>
 <html><head><meta charset="utf-8"><title>Results</title></head><body>
@@ -115,6 +145,8 @@ function serve() {
     };
     if (url.pathname === "/") return html(desk);
     if (url.pathname === "/next") return html(second);
+    if (url.pathname === "/hostile") return html(hostile);
+    if (url.pathname === "/inner") return html("<button>Inner</button>");
     if (url.pathname === "/search")
       return html(
         results((url.searchParams.get("q") ?? "").replace(/[^\w ]/g, "")),
@@ -327,6 +359,22 @@ try {
       assert.equal(switched.title, "Shop desk");
       const again = await driver.tabs();
       assert.equal(again.tabs!.find((tab) => tab.active)!.title, "Shop desk");
+    },
+  );
+  await step(
+    "a page that replaces the hit test, and a frame inside a button, are refused",
+    async () => {
+      const page = await driver.open(`${origin}/hostile`);
+      // The script runs in a world of its own, which the page cannot change.
+      await assert.rejects(
+        driver.click(number(page, "Covered button")),
+        /under another element at its centre \(span\)\. Nothing was sent/,
+      );
+      await assert.rejects(
+        driver.click(number(page, "Framed")),
+        /has a frame at its centre \(iframe\)/,
+      );
+      assert.match((await driver.read()).text, /Covered button\n0\n/);
     },
   );
   await step(

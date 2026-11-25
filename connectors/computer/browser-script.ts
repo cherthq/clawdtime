@@ -1044,18 +1044,69 @@ function key(combo) {
 
 // Locate: for a driver that sends real input events at a point. It brings
 // element N into view and says where its centre is, what kind of element it
-// is, and whether the element is the topmost one at its centre, so that a
-// pointer there reaches it and nothing else. It sends no event and reads no
-// value: of a password field it says only that it is one.
+// is, and whether a pointer at its centre reaches it and nothing else. It
+// sends no event and reads no value: of a password field it says only that
+// it is one.
+//
+// A pointer there does not reach the element when another element lies on
+// top of it, when a frame lies there (inside it or on top: the click would
+// land in another page, maybe of a site where the person is signed in), or
+// when another control lies inside it there (the click would press that
+// control). When the page put its own function in place of the browser's
+// hit test, the answer cannot be told: that is a no too.
+var FRAMES = { iframe: 1, frame: 1, object: 1, embed: 1, fencedframe: 1, portal: 1 };
+
+// The browser's own hit test of a document or a shadow tree, or null when
+// the page replaced it, on the object or on its prototype.
+function hitTest(root, Home) {
+  var own;
+  try {
+    own = Object.getOwnPropertyDescriptor(root, "elementFromPoint");
+  } catch (problem) {
+    return null;
+  }
+  if (own) return null;
+  var test = root.elementFromPoint;
+  if (typeof test !== "function") return null;
+  if (Home && Home.prototype && Home.prototype.elementFromPoint !== test) return null;
+  return test;
+}
+// The element on top at the point, also inside open shadow trees, null when
+// none is there, or undefined when the hit test was replaced.
 function topAt(x, y) {
-  var top = typeof doc.elementFromPoint === "function" ? doc.elementFromPoint(x, y) : null;
+  var test = hitTest(doc, win.Document);
+  if (!test) return undefined;
+  var top = test.call(doc, x, y);
   // A pointer goes into open shadow trees.
   for (var depth = 0; top && top.shadowRoot && depth < 30; depth++) {
-    var inner = typeof top.shadowRoot.elementFromPoint === "function" ? top.shadowRoot.elementFromPoint(x, y) : null;
-    if (!inner || inner === top) break;
-    top = inner;
+    var root = top.shadowRoot;
+    if (typeof root.elementFromPoint !== "function") break;
+    var inner = hitTest(root, win.ShadowRoot);
+    if (!inner) return undefined;
+    var below = inner.call(root, x, y);
+    if (!below || below === top) break;
+    top = below;
   }
-  return top;
+  return top || null;
+}
+// What is in the way of a pointer at the point, from the element on top up
+// to the element: null when the pointer reaches the element, a part of it
+// that takes no click of its own, or a label of it. Otherwise the element in
+// the way: a frame, another control inside it, or what lies on top of it.
+function inTheWay(top, el) {
+  var control = null;
+  for (var node = top, depth = 0; node && depth < 1000; depth++) {
+    var element = typeof node.getAttribute === "function";
+    if (element && FRAMES[tagOf(node)] === 1) return { node: node, why: "frame" };
+    if (node === el) return control ? { node: control, why: "control" } : null;
+    if (element && !control) {
+      // A click on the label of a field reaches the field.
+      if (tagOf(node) === "label" && node.control === el) return null;
+      if (factsOf(node)) control = node;
+    }
+    node = node.parentNode || (node.nodeType === 11 ? node.host : null);
+  }
+  return { node: top, why: "" };
 }
 // Whether the node is the element or inside it, also across a shadow tree.
 function within(node, el) {
@@ -1064,11 +1115,6 @@ function within(node, el) {
     node = node.parentNode || (node.nodeType === 11 ? node.host : null);
   }
   return false;
-}
-// A click on the label of a field reaches the field.
-function labels(node, el) {
-  var label = node && typeof node.closest === "function" ? node.closest("label") : null;
-  return !!label && label.control === el;
 }
 function focusedNow() {
   var active = doc.activeElement;
@@ -1087,7 +1133,8 @@ function locate(index) {
   var x = rect.left + rect.width / 2;
   var y = rect.top + rect.height / 2;
   var top = topAt(x, y);
-  var hit = !!top && (within(top, el) || labels(top, el));
+  var way = top === undefined ? { node: null, why: "unsure" } : top ? inTheWay(top, el) : { node: null, why: "" };
+  var hit = way === null;
   var answer = {
     ok: true,
     x: x,
@@ -1103,7 +1150,8 @@ function locate(index) {
     password: secret(el),
     focused: within(focusedNow(), el)
   };
-  if (!hit && top) answer.cover = cut(tagOf(top), 40);
+  if (way && way.node) answer.cover = cut(tagOf(way.node), 40);
+  if (way && way.why) answer.blocked = way.why;
   return answer;
 }
 // End of locate.
