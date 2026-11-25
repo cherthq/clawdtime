@@ -40,9 +40,12 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  unlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -135,11 +138,162 @@ export const sessionNewsFrame =
 export const credentialMarker =
   "[A message that held a credential. Its text is not kept.]";
 
-/** The conversation, kept in one owner-only file so the chat screen shows it after a restart. */
+/**
+ * The name of a conversation that was put aside: the time it was put aside,
+ * in UTC to the second, and a number after it when two were put aside in one
+ * second. `clawdtime chat open` takes it.
+ */
+export const chatArchiveId = /^[0-9]{8}T[0-9]{6}Z(?:-[0-9]{1,3})?$/;
+/** A conversation that was put aside, as `clawdtime chat history` lists it. */
+export interface ArchivedChat {
+  id: string;
+  messages: number;
+  /** The first words of the person, or of ClawdTime when the person said nothing. */
+  first: string;
+}
+/** A conversation could not be put aside or opened. Its message says why, and that nothing changed. */
+export class ChatArchiveError extends Error {}
+const stampOf = (at: number) =>
+  new Date(at)
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.[0-9]+/, "");
+const errorCode = (error: unknown) =>
+  (error as NodeJS.ErrnoException | undefined)?.code;
+/** The file at this path, without following a link. Null when there is none. */
+const fileAt = (path: string) => {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return null;
+    throw error;
+  }
+};
+
+/**
+ * The conversation, kept in one owner-only file so the chat screen shows it
+ * after a restart. A new chat puts the file aside beside it, as
+ * `chat-<time>.jsonl`, and starts an empty one. No conversation is ever
+ * deleted, and no file is written over.
+ */
 export class ChatLog {
+  private readonly folder: string;
   private readonly file: string;
   constructor(root: string) {
-    this.file = join(root, "agents", "chat.jsonl");
+    this.folder = join(root, "agents");
+    this.file = join(this.folder, "chat.jsonl");
+  }
+  private archived(id: string) {
+    return join(this.folder, `chat-${id}.jsonl`);
+  }
+  /**
+   * Puts the conversation aside and leaves an empty one: the file moves to
+   * `chat-<time>.jsonl` beside it and stays owner-only. The id of the file,
+   * or null when the conversation was already empty.
+   */
+  archive(at: number): string | null {
+    const current = fileAt(this.file);
+    if (!current) return null;
+    if (!current.isFile())
+      throw new ChatArchiveError(
+        "The chat file is not a regular file. Nothing was moved.",
+      );
+    if (current.size === 0) return null;
+    chmodSync(this.file, 0o600);
+    const stamp = stampOf(at);
+    for (let count = 1; count < 1000; count++) {
+      const id = count === 1 ? stamp : `${stamp}-${count}`;
+      // A hard link and then the removal of the old name: the move never
+      // writes over a file, and the text is under one of the two names at
+      // every moment.
+      try {
+        linkSync(this.file, this.archived(id));
+      } catch (error) {
+        if (errorCode(error) === "EEXIST") continue;
+        throw error;
+      }
+      unlinkSync(this.file);
+      return id;
+    }
+    throw new ChatArchiveError(
+      "Too many chats were put aside in one second. Nothing was moved.",
+    );
+  }
+  /**
+   * Makes a conversation that was put aside the current one again. The
+   * current one is put aside first. Null when no conversation has that id.
+   */
+  open(id: string, at: number): { archived: string | null } | null {
+    if (!chatArchiveId.test(id)) return null;
+    const source = this.archived(id);
+    if (!fileAt(source)?.isFile()) return null;
+    const archived = this.archive(at);
+    // Only an empty file can still stand here: it holds no words.
+    if (fileAt(this.file)?.size === 0) unlinkSync(this.file);
+    try {
+      linkSync(source, this.file);
+    } catch (error) {
+      if (errorCode(error) === "EEXIST")
+        throw new ChatArchiveError(
+          "A new message came in at that moment. The chat was not opened. Try again.",
+        );
+      throw error;
+    }
+    unlinkSync(source);
+    chmodSync(this.file, 0o600);
+    return { archived };
+  }
+  /** The conversations that were put aside, the newest first. */
+  history(): ArchivedChat[] {
+    let names: string[];
+    try {
+      names = readdirSync(this.folder);
+    } catch {
+      return [];
+    }
+    const result: ArchivedChat[] = [];
+    for (const name of names) {
+      const id = /^chat-(.+)\.jsonl$/.exec(name)?.[1];
+      if (!id || !chatArchiveId.test(id)) continue;
+      const file = this.archived(id);
+      if (!fileAt(file)?.isFile()) continue;
+      const messages = this.read(file);
+      const first =
+        messages.find((message) => message.role === "user") ?? messages[0];
+      result.push({
+        id,
+        messages: messages.length,
+        first: (first?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
+      });
+    }
+    const order = (id: string) => {
+      const [stamp, count] = id.split("-");
+      return [stamp!, Number(count ?? 1)] as const;
+    };
+    return result.sort((one, two) => {
+      const [a, m] = order(one.id);
+      const [b, n] = order(two.id);
+      return a === b ? n - m : a < b ? 1 : -1;
+    });
+  }
+  private read(file: string, lines = Infinity): ChatMessage[] {
+    const result: ChatMessage[] = [];
+    for (const line of readFileSync(file, "utf8")
+      .split("\n")
+      .slice(Number.isFinite(lines) ? -lines : 0)) {
+      if (!line.trim()) continue;
+      const parsed = chatMessageSchema.safeParse(
+        (() => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return null;
+          }
+        })(),
+      );
+      if (parsed.success) result.push(parsed.data);
+    }
+    return result;
   }
   append(message: ChatMessage) {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
@@ -159,23 +313,77 @@ export class ChatLog {
   }
   recent(limit = 60): ChatMessage[] {
     if (!existsSync(this.file) || !lstatSync(this.file).isFile()) return [];
-    const result: ChatMessage[] = [];
-    for (const line of readFileSync(this.file, "utf8")
-      .split("\n")
-      .slice(-400)) {
-      if (!line.trim()) continue;
-      const parsed = chatMessageSchema.safeParse(
-        (() => {
-          try {
-            return JSON.parse(line);
-          } catch {
-            return null;
-          }
-        })(),
-      );
-      if (parsed.success) result.push(parsed.data);
+    return this.read(this.file, 400).slice(-limit);
+  }
+}
+
+/**
+ * The person asks in the chat for a new conversation, in so many words:
+ * "new chat", "clear the chat", "start over". Only a message that says that
+ * and nothing more counts: "start over the export" is work.
+ */
+export const asksForNewChat = (words: string) =>
+  /^(?:(?:please|pls|ok|okay|let['’]?s)[,\s]+)*(?:(?:(?:start|open|begin)\s+)?(?:a\s+)?(?:new|fresh)\s+(?:chat|conversation)|clear\s+(?:the\s+|this\s+|my\s+)?(?:chat|conversation)|start\s+(?:over|fresh))(?:[,\s]+please)?[.!]*$/i.test(
+    words.replace(/\s+/g, " ").trim(),
+  );
+
+/** What came of a new chat, or of opening a chat that was put aside. */
+export interface ChatSwitch {
+  ok: boolean;
+  /** One plain sentence or two for the person. */
+  text: string;
+  /** The id under which the chat before was put aside, or null when it was empty or nothing moved. */
+  archived: string | null;
+  /** The chat that is current now, when one was opened. */
+  opened?: string;
+}
+/** What the person hears when a turn of the chat still waits for its answer. */
+export const chatBusyText =
+  "ClawdTime is still answering a message. Start the new chat after that answer.";
+/**
+ * Starts a new chat, or opens one that was put aside, in the files alone.
+ * The current chat is put aside first, never deleted. It never throws: what
+ * failed is in the answer, and nothing changed then.
+ */
+export function switchChat(
+  log: ChatLog,
+  change: "new" | { open: string },
+  at: number,
+): ChatSwitch {
+  try {
+    if (change === "new") {
+      const archived = log.archive(at);
+      return {
+        ok: true,
+        archived,
+        text: archived
+          ? `A new chat started. The chat before it is kept as ${archived} (clawdtime chat history). Work that runs goes on.`
+          : "A new chat started. Work that runs goes on.",
+      };
     }
-    return result.slice(-limit);
+    const id = change.open;
+    const opened = log.open(id, at);
+    if (!opened)
+      return {
+        ok: false,
+        archived: null,
+        text: `No kept chat has the id ${chatArchiveId.test(id) ? id : "you gave"}. Run: clawdtime chat history`,
+      };
+    return {
+      ok: true,
+      archived: opened.archived,
+      opened: id,
+      text: `Opened the chat ${id}.${opened.archived ? ` The chat before it is kept as ${opened.archived}.` : ""} Work that runs goes on.`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      archived: null,
+      text:
+        error instanceof ChatArchiveError
+          ? error.message
+          : "The chat files could not be changed. No chat was deleted. Run: clawdtime chat history",
+    };
   }
 }
 
@@ -9789,6 +9997,15 @@ export class Supervisor {
    * data for the model: a report or a request that holds a credential is
    * never sent to it.
    */
+  /**
+   * A new conversation started. What ClawdTime offered in the old one, and
+   * waits for a yes to, is dropped: the new one does not show that question,
+   * so no answer in it may take the offer. Work that runs is not touched.
+   */
+  newConversation() {
+    this.pendingIntent = null;
+    this.nextStep = null;
+  }
   async offerNextStep(report: string): Promise<string | null> {
     this.nextStep = null;
     const done = clean(report, 1000);

@@ -9,9 +9,15 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  asksForNewChat,
+  chatBusyText,
   ChatLog,
+  computerTaskNow,
   Supervisor,
+  switchChat,
+  type ArchivedChat,
   type ChatMessage,
+  type ChatSwitch,
   type ModelClient,
   historyForTurn,
   supervisorModel,
@@ -73,6 +79,12 @@ export interface AgentBoardPort {
   setAway(away: boolean): void;
   send(id: string, text: string, enter: boolean): ReturnType<typeof sendText>;
   chat(): ChatView;
+  /** A new chat: the current one is put aside, never deleted. Work that runs goes on. */
+  newChat(): ChatSwitch;
+  /** A chat that was put aside becomes the current one again. The current one is put aside first. */
+  openChat(id: string): ChatSwitch;
+  /** The chats that were put aside, the newest first. */
+  chatHistory(): { chats: ArchivedChat[] };
   /** Memory on or off. It is off until the person turns it on. */
   setMemory(enabled: boolean): void;
   /** What the watcher found: a long wait, a stall, a bad end, finished work. */
@@ -431,6 +443,52 @@ export class BoardFeed implements AgentBoardPort {
         : {}),
     };
   }
+  /** Turns of the chat that wait for their answer now. A chat is not changed under one. */
+  private answering = 0;
+  /**
+   * A new chat. The current one is put aside, never deleted, and an empty
+   * one starts. Work that runs goes on: the computer task, the jobs and the
+   * routines are not touched, and the new chat reads their state as every
+   * chat does. A question of the computer worker that waits for the person
+   * is the first line of the new chat, so a yes or a no still answers it.
+   */
+  newChat(): ChatSwitch {
+    return this.switchTo("new");
+  }
+  /** A chat that was put aside becomes the current one again. The current one is put aside first. */
+  openChat(id: string): ChatSwitch {
+    return this.switchTo({ open: id });
+  }
+  chatHistory() {
+    return { chats: this.log.history() };
+  }
+  private switchTo(change: "new" | { open: string }): ChatSwitch {
+    // The answer of a turn belongs with its question: no chat changes while
+    // a turn waits for its answer.
+    if (this.answering > 0)
+      return { ok: false, archived: null, text: chatBusyText };
+    const now = this.options.now ?? Date.now;
+    const result = switchChat(this.log, change, now());
+    if (!result.ok) return result;
+    this.supervisor.newConversation();
+    this.carryQuestion(now());
+    return result;
+  }
+  /**
+   * The question of the computer worker that waits for the person, as the
+   * chat always says it, when the chat now in view does not end with it.
+   */
+  private carryQuestion(at: number) {
+    const snapshot = this.options.execution?.snapshot();
+    if (
+      !snapshot?.configured ||
+      (!snapshot.pendingAction && snapshot.state !== "waiting_for_person")
+    )
+      return;
+    const text = computerTaskNow(snapshot);
+    if (!text || this.log.recent(1)[0]?.text === text) return;
+    this.log.append({ role: "assistant", text, at, via: "chat" });
+  }
   /** Durable bridge invokes this once after it records a terminal result. */
   appendExecutionResult(text: string) {
     const now = this.options.now ?? Date.now;
@@ -488,6 +546,29 @@ export class BoardFeed implements AgentBoardPort {
     via: ChatMessage["via"] = "chat",
     context?: PhoneTurnContext,
   ): Promise<ChatMessage> {
+    // "New chat", typed in the chat: no turn of the brain. A new chat that
+    // started holds no line of it; one that could not start keeps the words
+    // and the reason in the chat in view.
+    if (
+      via === "chat" &&
+      !context?.phonePresentation &&
+      !context?.isLive &&
+      asksForNewChat(text)
+    ) {
+      const now = this.options.now ?? Date.now;
+      const result = this.newChat();
+      const reply: ChatMessage = {
+        role: "assistant",
+        text: result.text,
+        at: now(),
+        via,
+      };
+      if (!result.ok) {
+        this.log.append({ role: "user", text, at: now(), via });
+        this.log.append(reply);
+      }
+      return reply;
+    }
     return phoneTurn.run(context ?? {}, () =>
       this.sayInTurn(text, via, context),
     );
@@ -505,7 +586,13 @@ export class BoardFeed implements AgentBoardPort {
       at: now(),
       via,
     });
-    const answer = await this.supervisor.answer(history, text, via, context);
+    this.answering++;
+    let answer: Awaited<ReturnType<Supervisor["answer"]>>;
+    try {
+      answer = await this.supervisor.answer(history, text, via, context);
+    } finally {
+      this.answering--;
+    }
     const reply: ChatMessage = {
       role: "assistant",
       text: answer.text,

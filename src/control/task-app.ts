@@ -82,6 +82,12 @@ export interface AgentBoardPort {
   ): Promise<{ ok: boolean; route: string }>;
   /** The conversation with ClawdTime itself. */
   chat(): unknown;
+  /** A new chat: the current one is put aside, never deleted. Work that runs goes on. */
+  newChat(): unknown;
+  /** A chat that was put aside becomes the current one again. */
+  openChat(id: string): unknown;
+  /** The chats that were put aside. */
+  chatHistory(): unknown;
   say(
     text: string,
     via?: "chat" | "voice",
@@ -98,6 +104,10 @@ const incidentDismissSchema = z
   .strict();
 const memorySchema = z.object({ enabled: z.boolean() }).strict();
 const chatSchema = z.object({ text: z.string().min(1).max(8000) }).strict();
+const newChatSchema = z.object({}).strict();
+const openChatSchema = z
+  .object({ id: z.string().regex(/^[0-9]{8}T[0-9]{6}Z(?:-[0-9]{1,3})?$/) })
+  .strict();
 const voiceSchema = z
   .object({ recording: z.string().regex(/^[A-Za-z0-9_-]{1,60}\.(wav|m4a)$/) })
   .strict();
@@ -450,6 +460,22 @@ export function createTaskApp(
         desktop.authorizePanel(credential(c));
         const { text } = chatSchema.parse(await c.req.json());
         return c.json({ reply: await agents.say(text) });
+      });
+      // A new chat. The current one is put aside, never deleted; work that
+      // runs goes on. The chats put aside, and one of them back.
+      app.post("/desktop/chat/new", async (c) => {
+        desktop.authorizePanel(credential(c));
+        newChatSchema.parse(await c.req.json());
+        return c.json(agents.newChat());
+      });
+      app.get("/desktop/chat/history", (c) => {
+        desktop.authorizePanel(credential(c));
+        return c.json(agents.chatHistory());
+      });
+      app.post("/desktop/chat/open", async (c) => {
+        desktop.authorizePanel(credential(c));
+        const { id } = openChatSchema.parse(await c.req.json());
+        return c.json(agents.openChat(id));
       });
       app.post("/desktop/voice", async (c) => {
         desktop.authorizePanel(credential(c));
