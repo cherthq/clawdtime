@@ -930,6 +930,107 @@ On a phone call nothing says a question by itself. Ask "computer status": the
 answer is the question that waits. Then say yes or no. Both go to the desktop
 service through `clawdtime chat TEXT`.
 
+### When you are not at the chat
+
+A question that waits too long in the chat reaches you by itself. The code is
+in `connectors/computer/reach.ts`.
+
+1. The worker asks a yes, a sign-in, a code or a choice. The reach reads that
+   from the worker's own status, as the panel does.
+2. When nobody answers in the chat for 45 seconds, ClawdTime calls you once on
+   the Chert line. It says the question in one or two plain sentences. A
+   request that came from a call, from a text or from a routine does not wait:
+   the reach goes at once. `CLAWDTIME_COMPUTER_REACH_SECONDS` in the
+   environment of the desktop service sets the wait, from 0 to 600.
+3. What you say on that call goes to the worker as an answer in the chat does.
+   The worker reads it with its own rules: words that are not a clear yes
+   approve nothing, and a no ends the request. Stop stops it, also through the
+   stop tool of the call.
+4. When the call fails, is not answered, is not dialed within a minute, or the
+   line is not set up for calls, ClawdTime texts you once: the question, and
+   how to answer it. Your reply to that text goes to the worker the same way.
+5. When the request ended blocked, the call or the text says why, and what
+   you can do. Nothing runs from your answer to it.
+
+What holds every time:
+
+- One call and one text at most for one question, also after a restart.
+  There is no second call, whatever came of the first one. A call that you
+  picked up gets no text after it.
+- A newer question replaces an older one. A call for the older one that was
+  not dialed yet is taken back.
+- An answer in the chat, Stop, or the end of the request takes back a call
+  that was not dialed, and ends a call that rings for it. No text follows.
+- A sign-in or a code is never asked for by voice or by text. The call and
+  the text say what is needed and where, the site or the app, and that you
+  sign in on the Mac or once in ClawdTime's own browser profile. Words that
+  look like a password or a code (also a bare run of digits) are not passed
+  on, so they never reach the planner.
+- The call goes through the proactive call path of the line: one spoken alert
+  for one question, under your calling policy, with the same receipts and the
+  same rule against a redial. It shares no screen, so the worker keeps the
+  screen while it rings and can take the answer that you say on it.
+- Every attempt and its outcome is kept in `computer/reach.json`: the kind of
+  question, the times and one fixed word for each outcome. Never a question,
+  an answer or a typed text.
+
+The reach is on when the worker is on. `CLAWDTIME_COMPUTER_REACH=off` turns it
+off. It calls when the line is set up for proactive calls: an outbound line in
+`proactive.json` of the desktop service, and one active calling policy of the
+project with the `decision` trigger and the `phone_alert` channel (and
+`failure` for a request that ended blocked). It texts when the settings of the
+text channel (`CHERT_API_KEY`, `CHERT_PROJECT_ID`, `CLAWDTIME_OWNER_PHONE`,
+and `CHERT_LINE_ID` or a first text from you) are in the environment of the
+desktop service. `clawdtime computer doctor` says for both whether they can
+reach you, and why not.
+
+A text of yours reaches the worker only when `clawdtime texts run` hands it to
+the desktop service. It does that first now, as `clawdtime chat TEXT` does for
+a call, and it marks the text, so that the service knows these exact words
+came by text.
+
+## Routines
+
+A routine is one request that the worker gets at a time of day. Say or type
+it, in the chat, on a call or by text:
+
+> every morning at 9, follow up on my latest X posts and tell me
+
+Or run it:
+
+```sh
+clawdtime routine add every morning at 9, follow up on my latest X posts
+clawdtime routine list
+clawdtime routine pause ID
+clawdtime routine resume ID
+clawdtime routine remove ID
+```
+
+The time reads as "every day", "every morning", "every evening", "every
+weekday" or a day by name, with "at" and an hour, as in "at 9", "at 8:30 am",
+"at 6pm", "at noon". "every morning" alone means 09:00 and "every evening"
+18:00. In the chat you can also say "list my routines", "pause routine ID" and
+"remove routine ID".
+
+- Routines are off until you add one. They live in `computer/routines.json` in
+  the state folder, for its owner only. A request that looks like a password
+  or a key is not kept.
+- At its time the routine hands its request to the worker in your words, as a
+  request of its own. Every rule of the worker holds for it.
+- It starts only when no other request runs and no call is live on the line.
+  Otherwise it waits once, up to five minutes, then skips that time and texts
+  you that it skipped.
+- A time that passed more than 15 minutes ago, while the Mac slept or the
+  service was stopped, is not run late. The next time counts.
+- The same time never starts a second request: the id of the run is made from
+  the routine and its time.
+- When the request ends, the routine texts you its result. When the request
+  needs you on its way, the reach calls or texts at once. With no text
+  settings, the result is said in the chat.
+- Pause and remove do not stop a request that already runs. Stop does.
+
+The desktop service runs the routines, with the worker on.
+
 The chat of the panel stays open when you send a message. The panel closes its
 chat and its board only when a run really starts, so that they are not in the
 way of the hands. It reads which engine the service has from
@@ -1067,6 +1168,13 @@ file are for their owner only. It keeps the last 30 requests:
 
 The journal never holds an image, typed text, the text of a page, a question,
 an answer or the planner's words.
+
+Beside the journal, for their owner only: `reach.json` keeps the last 50
+questions that the reach worked on, as a digest, the request id, the kind and
+the outcome words, and what the service last said about calls and texts.
+`text-turn.json` keeps the time and a digest of the last text that the text
+channel handed over. `routines.json` keeps each routine with its request in
+your words.
 
 The chat keeps what the worker said to you: its questions and its last message.
 The last message of a finished request is the planner's summary, cut to 900
@@ -1223,6 +1331,20 @@ the real screen, draws the cursor or calls a language model.
   note before a done, a failed outline, Stop and a hold during the outline,
   facts that never reach the journal, and 80 actions only with a plan of 3
   subgoals or more.
+- `reach` (37): no call for a question answered in the chat in time; one
+  call for an unanswered one; the spoken yes, no, stop and unclear words that
+  the worker reads itself; one text after a call that failed, rang out, had
+  an unknown outcome, was not dialed or was not set up; a text reply; no
+  redial and no second text, also after a restart; a newer question; Stop; a
+  sign-in and a code that ask for no secret and pass none on; a request from
+  a call, a text or a routine at once; a blocked end; the record and one
+  that cannot be read; the real coordinator of proactive calls and its
+  preparation; and one text with one key over a scripted service.
+- `routines` (16): the words, the next time, add, list, pause, resume and
+  remove in an owner-only file, a start at its time with a result by text, a
+  wait and a skip when busy, never during a live call, no late run, no second
+  start, the chat line with no text settings, a real worker request, and the
+  command.
 - `planner-resilience` (45): each status with and without a retry,
   Retry-After in its three forms, errors of the network, the timeout of one
   request, the budget, an abort during a wait and during a request, each kind
@@ -1274,6 +1396,11 @@ Not tested, and so not proven:
 - A phone call that reaches the worker. `clawdtime chat TEXT` is tested
   against a service with no engine. The line agent that calls the command is
   not part of these tests.
+- A call or a text of the reach on a real line. The call and the text sides
+  are made-up in the tests. No test shows that a phone rings, that the line
+  agent says the question well, or that a text arrives. The lines of
+  `scripts/task-server.ts` that wire the reach, the routines and the chat are
+  checked by the type checker only.
 - A whole task on a real Mac. There is no physical acceptance yet.
 
 ## Known gaps
@@ -1299,8 +1426,28 @@ Not tested, and so not proven:
   cursor and its wait add up to one second to that time. A command for the
   hands names a point, not an element, so the hands cannot check what is under
   the point just before the click.
-- A question reaches you in the chat only. On a phone call nothing says it by
-  itself: ask "computer status".
+- A question reaches you in the chat first. A call of the line says it after
+  45 seconds, or a text when the call does not get through. During a call that
+  you started, nothing says it on that call by itself: ask "computer status".
+  A request that came from such a call is reached at once, and while that call
+  is live the line is busy, so the reach texts.
+- When the worker asks a second question while the call about the first one is
+  still on the line, the second question goes by text: the line is busy, and
+  words said on a call are taken only for the question that the call is about.
+- A call that you picked up gets no text after it, also when no clear answer
+  came on it. The question still waits in the chat.
+- The service knows a live call of the line from its own outbound calls and
+  from an open phone conversation of the worker. A call that only uses
+  `clawdtime chat TEXT` is not seen, so a routine can start during it.
+- A text counts as a reply to the reach only while the text channel runs on
+  the same Mac and in the same state folder as the desktop service.
+- The reach reads a sign-in from the worker's own words: a password field, or
+  a question of the planner that names a sign-in, a password or a code. A
+  sign-in page that the planner does not name is a plain question.
+- The place of a sign-in is a site address or a capitalized name in the words.
+  When neither is there, the call and the text name no place.
+- A request that ended blocked is reached after 45 seconds also when you sit
+  at the Mac and read it. Start a new request in that time, and no call comes.
 - Two tools of the supervisor overlap with the worker: the browser tool and
   the tool that reads the screen from a picture. Which one its language model
   picks for "refresh the browser" is not fixed in code.
