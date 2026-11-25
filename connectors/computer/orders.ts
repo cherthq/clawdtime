@@ -1915,7 +1915,7 @@ const goOnly =
  * - "status": every sentence asks how the task goes ("are you done?", "what
  *   are you doing?").
  * - "go": a plain continue phrase, or only a yes, an ok or a thanks.
- * - "steer": everything else. "not instagram, flipkart", "no, the other one",
+ * - "steer": everything else. "not social.example, shop.example", "no, the other one",
  *   "hmm try the search box" and "that's wrong, go back" all steer.
  */
 export function readMidTask(text: string): MidTaskKind {

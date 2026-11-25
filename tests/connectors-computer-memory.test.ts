@@ -54,9 +54,9 @@ const shop = observation([
   element(1, { title: "Search", role: "AXTextField" }),
 ]);
 const done: Action = { kind: "done", summary: "A black case for 499 shows." };
-const flipkart: Action = {
+const shopSite: Action = {
   kind: "open_url",
-  url: "https://www.flipkart.com/search?q=phone+case",
+  url: "https://www.shop.example/search?q=phone+case",
 };
 
 function setup(
@@ -84,7 +84,7 @@ describe("notes from memory before a computer request", () => {
   it("gives the planner at most 5 notes that fit the goal, only while memory is on", async () => {
     const { memory } = memoryOf(true);
     for (const text of [
-      "Shop for a phone case on flipkart.com, not instagram.com.",
+      "Shop for a phone case on shop.example, not social.example.",
       "A phone case should be black.",
       "Pay for a phone case with the work card on file.",
       "A phone case is for an iPhone 15.",
@@ -153,29 +153,29 @@ describe("what a computer request teaches memory", () => {
     const { root, memory } = memoryOf(true);
     let release = () => {};
     const gate = new Promise<void>((open) => (release = open));
-    const run = setup([flipkart, done], computerMemory(memory));
+    const run = setup([shopSite, done], computerMemory(memory));
     // The first look waits, and the owner corrects the request meanwhile.
     run.hands.answer = async (command) => {
       if (command.kind === "observe") await gate;
       return {};
     };
-    await run.worker.submit("r1", "Find a phone case on flipkart.com");
+    await run.worker.submit("r1", "Find a phone case on shop.example");
     // The correction steers the task, and the task goes on by itself.
-    await run.worker.submit("r2", "not instagram, flipkart");
+    await run.worker.submit("r2", "not social.example, shop.example");
     release();
     await run.worker.idle();
     expect(run.planner.inputs[0]).toMatchObject({
-      guidance: ["not instagram, flipkart"],
+      guidance: ["not social.example, shop.example"],
     });
     expect(run.worker.snapshot().state).toBe("completed");
     expect(current(memory)).toMatchObject([
       {
-        text: 'For the request "Find a phone case on flipkart.com", the owner said: not instagram, flipkart.',
+        text: 'For the request "Find a phone case on shop.example", the owner said: not social.example, shop.example.',
         kind: "preference",
         source: "said",
       },
       {
-        text: 'Opened flipkart.com for the request "Find a phone case on flipkart.com". It was done.',
+        text: 'Opened shop.example for the request "Find a phone case on shop.example". It was done.',
         kind: "episode",
         source: "inferred",
       },
@@ -189,7 +189,7 @@ describe("what a computer request teaches memory", () => {
     await next.worker.idle();
     expect(next.planner.inputs[0]!.remembered).toEqual(
       expect.arrayContaining([
-        'For the request "Find a phone case on flipkart.com", the owner said: not instagram, flipkart.',
+        'For the request "Find a phone case on shop.example", the owner said: not social.example, shop.example.',
       ]),
     );
   });
@@ -226,12 +226,12 @@ describe("what a computer request teaches memory", () => {
   it("keeps nothing while memory is off", async () => {
     const { root, memory } = memoryOf(false);
     const run = setup(
-      [{ kind: "ask", question: "Which site should I use?" }, flipkart, done],
+      [{ kind: "ask", question: "Which site should I use?" }, shopSite, done],
       computerMemory(memory),
     );
-    await run.worker.submit("r1", "Find a phone case on flipkart.com");
+    await run.worker.submit("r1", "Find a phone case on shop.example");
     await run.waiting();
-    await run.worker.answer("flipkart, never instagram");
+    await run.worker.answer("shop, never instagram");
     await run.worker.idle();
     expect(run.worker.snapshot().state).toBe("completed");
     expect(existsSync(factsFile(root))).toBe(false);
@@ -281,8 +281,8 @@ describe("what a computer request teaches memory", () => {
       lessonNotes(
         lesson({
           goal: "Log in with password hunter22!",
-          said: ["use flipkart"],
-          history: [{ step: 1, action: flipkart, why: "", outcome: "ok" }],
+          said: ["use shop"],
+          history: [{ step: 1, action: shopSite, why: "", outcome: "ok" }],
         }),
       ),
     ).toEqual([]);
@@ -299,7 +299,7 @@ describe("what a computer request teaches memory", () => {
         "ok",
         "wait a second",
         "not instagram",
-        "use flipkart",
+        "use shop",
         "black only",
         "yes go ahead",
         "under 500 rupees",
@@ -307,7 +307,7 @@ describe("what a computer request teaches memory", () => {
       state: "completed",
       reason: "done",
       history: [
-        { step: 1, action: flipkart, why: "", outcome: "ok" },
+        { step: 1, action: shopSite, why: "", outcome: "ok" },
         {
           step: 2,
           action: { kind: "open_app", name: "Safari" },
@@ -325,7 +325,7 @@ describe("what a computer request teaches memory", () => {
     expect(notes.map((note) => note.text)).toEqual([
       'For the request "Find a phone case", the owner said: black only.',
       'For the request "Find a phone case", the owner said: under 500 rupees.',
-      'Opened flipkart.com and Safari for the request "Find a phone case". It was done.',
+      'Opened shop.example and Safari for the request "Find a phone case". It was done.',
     ]);
     // A one-step move to a desktop or an app, and a request with no step, keep no outcome.
     const plain = {
@@ -394,7 +394,7 @@ describe("the service", () => {
     const { root, memory } = memoryOf(true);
     setComputerSwitch(root, true);
     memory.remember({
-      text: "Shop for a phone case on flipkart.com, not instagram.com.",
+      text: "Shop for a phone case on shop.example, not social.example.",
       kind: "preference",
     });
     const planner = new ScriptedPlanner([done]);
@@ -402,7 +402,7 @@ describe("the service", () => {
     await built.worker!.submit("r1", "Find a phone case");
     await serve(built, shop);
     expect(planner.inputs[0]!.remembered).toEqual([
-      "Shop for a phone case on flipkart.com, not instagram.com.",
+      "Shop for a phone case on shop.example, not social.example.",
     ]);
     expect(built.worker!.snapshot().state).toBe("completed");
     expect(current(memory).map((fact) => fact.text)).toContain(

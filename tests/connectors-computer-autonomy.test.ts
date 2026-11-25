@@ -127,8 +127,8 @@ type Effect = "steer" | "stop" | "pause" | "status" | "go" | "secret";
 /** Mid-task messages and what each one does to the task. */
 const table: Array<[string, Effect]> = [
   // Steer: the words go into the task, and it keeps going.
-  ["Bro, open flipkart.com, not instagram.com.", "steer"],
-  ["not instagram, flipkart", "steer"],
+  ["Open shop.example, not social.example.", "steer"],
+  ["not social.example, shop.example", "steer"],
   ["no, the other one", "steer"],
   ["hmm try the search box", "steer"],
   ["that's wrong, go back", "steer"],
@@ -285,7 +285,7 @@ describe("autonomy: each message while a task runs", () => {
 
 describe("autonomy: any next message ends a pause", () => {
   it.each([
-    ["open flipkart.com instead", resumed, ["open flipkart.com instead"]],
+    ["open shop.example instead", resumed, ["open shop.example instead"]],
     ["hmm", resumed, ["hmm"]],
     ["no, the other one", resumed, ["no, the other one"]],
     ["continue", "Continuing.", []],
@@ -629,7 +629,7 @@ describe("autonomy: the chat hands the words to the task that runs", () => {
 
   it("steers the task with the owner's correction, and the task goes on", async () => {
     const run = await running();
-    const words = "Bro, open flipkart.com, not instagram.com.";
+    const words = "Open shop.example, not social.example.";
     expect(await chat(run.worker, run.home).reply([], words, "chat")).toBe(
       taken,
     );
@@ -641,7 +641,7 @@ describe("autonomy: the chat hands the words to the task that runs", () => {
   });
 
   it.each([
-    "not instagram, flipkart",
+    "not social.example, shop.example",
     "no, the other one",
     "hmm try the search box",
     "that's wrong, go back",
@@ -661,13 +661,13 @@ describe("autonomy: the chat hands the words to the task that runs", () => {
     expect(await talk.reply([], "hold on", "chat")).toBe(paused);
     await until(() => run.worker.snapshot().waiting === "takeover");
     run.release();
-    expect(await talk.reply([], "not instagram, flipkart", "chat")).toBe(
-      resumed,
-    );
+    expect(
+      await talk.reply([], "not social.example, shop.example", "chat"),
+    ).toBe(resumed);
     await run.worker.idle();
     expect(run.worker.snapshot().state).toBe("completed");
     expect(run.planner.inputs.at(-1)).toMatchObject({
-      guidance: ["not instagram, flipkart"],
+      guidance: ["not social.example, shop.example"],
     });
 
     const again = await pausedTask();

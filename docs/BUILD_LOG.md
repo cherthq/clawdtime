@@ -892,7 +892,6 @@ tests in 60 files** (12.18s), typecheck and build. `cd mac && swift test` passed
 source is unchanged since the **283-test** passing checkpoint. `git diff --check`
 passed. No completed-step tag is added.
 
-
 ### Step d — prepared framing and provider audio ordering
 
 Exact-window checkpoint `dcbbaf3` is pushed. The user's focused local window
@@ -1229,7 +1228,6 @@ Transport independently reviewed the root change; all 14 engine tests passed.
 The lead submitted one further scoped continuation to validate the resolved
 decision using the corrected context, without changing the verification criteria.
 
-
 The final real continuation completed with no remaining decision. Its independent
 filter/empty-state assertion and JavaScript syntax checks both passed; task
 revision 27 is review-ready. The private result receipt is preserved and the task
@@ -1237,7 +1235,6 @@ server was stopped cleanly only after the worker and watcher settled. This
 validates the corrected context in one real run, without claiming deterministic
 model behavior. Future presentation must use this fresh verified result, not the
 retired revision-11 manifest or old displayed verification text.
-
 
 The media repair admits ordinary replies after retirement only for a fresh,
 finalized human turn with a successful transcript receipt and current authority.
@@ -1261,7 +1258,6 @@ each audio chunk's causal attribution. A newly authorized handset test remains
 necessary. Transport approved the updated root handoff/evidence documentation;
 connector and transport approved the answered-decision context regression.
 
-
 Final repair checkpoint validation: `npm run check` passed **1,027 tests in
 65 files** (12.05s), typecheck and build. Full
 `media/.venv/bin/python -m unittest discover -s media -v` passed **344 tests in
@@ -1273,7 +1269,6 @@ passed; no new Swift execution is claimed. `git diff --check` passed; lead revie
 found no unrelated changes, literal credentials or relaxed capture/permission
 checks. Native/media/task ports 3322, 13324 and 13323 are closed. This is a passing
 repair checkpoint, not step-d completion; no step-d tag or step-e work follows.
-
 
 ### Step d — accepted final review and natural acceptance repair
 
@@ -1330,7 +1325,6 @@ acceptance without a new run or deployment. No private transcript was copied int
 tracked files or test fixtures. The accepted task was not rewritten to test the
 new grammar; its existing successful receipt is preserved.
 
-
 Failed/unconfirmed acceptance now performs one bounded authoritative status read
 for that finalized utterance. Its cached recovery distinguishes already accepted,
 the original review still waiting, a changed result requiring fresh review, and
@@ -1345,7 +1339,6 @@ Transport corrected that expectation and added synthetic bounded positives,
 negated judgments, conditional judgments and added-change refusals; all 85 focused
 acceptance tests passed. Connector independently approved the confined grammar;
 transport reviewed the API integration and updated outcome/handoff documentation.
-
 
 Final checkpoint validation: `npm run check` passed **1,112 tests in 66 files**
 (12.53s), typecheck and build. Full
@@ -2082,7 +2075,6 @@ independently approved the exact acceptance/no-new-run conclusion; transport
 reviewed the final documentation and restoration boundaries. Lead scope/secret
 review and `git diff --check` passed.
 
-
 ## November 19, 2026 — keep prepared windows shared throughout a call
 
 The user requested that sharing remain active after spoken requests and
@@ -2130,7 +2122,6 @@ All owners reported no remaining blocker. Lead scope/secret review and
 `git diff --check` passed. No Swift source changed and no physical qualification
 or d/e completion tag is claimed.
 
-
 ## November 19, 2026 — one continuous-sharing handset retest failed
 
 The user authorized one visual retest and separately confirmed temporary
@@ -2173,7 +2164,6 @@ recorded last-successful-frame age alone does not prove the live trigger. Media
 is reproducing the capture cadence separately while preserving all freshness
 and authority limits. No repair claim is inferred from this failure.
 
-
 Offline reproduction and narrow repair: the native helper timestamps before
 SCScreenshotManager capture. Injecting 450 ms acquisition into the prepared/ringing
 fixture reproduced premature retirement under the old loop: first stop at about
@@ -2198,7 +2188,6 @@ Lead scope/secret review and `git diff --check` passed. Connector independently
 reviewed the source and five targeted regressions; transport reviewed evidence
 and handoff boundaries. No Swift source changed. This checkpoint has no new
 handset acceptance or step-d/e qualification tag.
-
 
 ## November 19, 2026 — second continuity retest confirms freshness retirement
 
@@ -2236,7 +2225,6 @@ bounded first-stop pipeline timing metadata and independent synthetic fault case
 without changing the one-second limit, capture authority, Stop or call admission.
 Local capture qualification must precede another proposed handset test; synthetic
 success alone is not a basis to repeat calls with the human.
-
 
 Diagnostic-only follow-up: media now freezes an optional `pipelineAtStop` with
 its first sharing-stop reason. It distinguishes watchdog/publication triggers

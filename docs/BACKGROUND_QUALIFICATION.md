@@ -14,23 +14,23 @@ References: [official driver documentation](https://cua.ai/docs/cua-driver), [SD
 
 ## Physical capability matrix
 
-| Capability | Evidence | Status |
-| --- | --- | --- |
-| TextEdit disposable editing, v1.20 | Explicit background typing; independent AX text and exact-window screenshot matched synthetic text | Verified on same desktop |
-| Covered-window capture | Exact authorized TextEdit window remained capturable behind foreground app | Verified |
-| Messages, v14.0 | Designated conversation navigation qualified; integrated already-selected read independently verified with 11 valid preview frames; no send | Verified read on same desktop |
-| Codex, bundle com.openai.codex, v26.1027.61615 | Native File → New Chat action; exact harmless draft observed in unsent composer and intended destination | Manual draft verified; assembled workflow pending |
-| Codex sidebar New chat | Native element and pixel attempts did not visibly change state | Unsupported route; no retry/fallback in workflow |
-| Foreground non-interference | Pre/post foreground app, pointer and clipboard change count unchanged; user separately confirmed normal typing and pointer behavior | Verified for tested draft |
-| Agent cursor mapping | Driver session cursor position matched original editor center in screen points and Retina screenshot transform | Verified local mapping |
-| Other Spaces | Target binding/input failed or could not establish reliable current state | Blocked by first-release contract |
-| Minimized window | Driver refused window-pointer/keyboard route as minimized/hidden | Blocked |
-| Window recreation | Synthetic identity and stale-frame checks; physical recreation still pending | Not fully qualified |
-| Exact-window capture performance | Seven frames in 2.545 seconds, 1280×828, approximately 2.75 delivered fps | Measured fixture, phone tuning pending |
-| Phone overlay inclusion | Driver exact-window frames omit overlay inclusion metadata | Unknown; synthetic cursor suppressed pending qualification |
-| Driver restart | Controlled graceful shutdown; new daemon cursor state had no previous position | Cursor retirement observed; integrated failure test pending |
-| Email | Selected signed-in Gmail account identified in Chrome; inbox and account identity readable through this coding chat’s browser tool only | Phone adapter remains unqualified |
-| Real FaceTime audio/video | Existing transport preserved; new controller not physically tested over a call | Pending |
+| Capability                                     | Evidence                                                                                                                                    | Status                                                      |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| TextEdit disposable editing, v1.20             | Explicit background typing; independent AX text and exact-window screenshot matched synthetic text                                          | Verified on same desktop                                    |
+| Covered-window capture                         | Exact authorized TextEdit window remained capturable behind foreground app                                                                  | Verified                                                    |
+| Messages, v14.0                                | Designated conversation navigation qualified; integrated already-selected read independently verified with 11 valid preview frames; no send | Verified read on same desktop                               |
+| Codex, bundle com.openai.codex, v26.1027.61615 | Native File → New Chat action; exact harmless draft observed in unsent composer and intended destination                                    | Manual draft verified; assembled workflow pending           |
+| Codex sidebar New chat                         | Native element and pixel attempts did not visibly change state                                                                              | Unsupported route; no retry/fallback in workflow            |
+| Foreground non-interference                    | Pre/post foreground app, pointer and clipboard change count unchanged; user separately confirmed normal typing and pointer behavior         | Verified for tested draft                                   |
+| Agent cursor mapping                           | Driver session cursor position matched original editor center in screen points and Retina screenshot transform                              | Verified local mapping                                      |
+| Other Spaces                                   | Target binding/input failed or could not establish reliable current state                                                                   | Blocked by first-release contract                           |
+| Minimized window                               | Driver refused window-pointer/keyboard route as minimized/hidden                                                                            | Blocked                                                     |
+| Window recreation                              | Synthetic identity and stale-frame checks; physical recreation still pending                                                                | Not fully qualified                                         |
+| Exact-window capture performance               | Seven frames in 2.545 seconds, 1280×828, approximately 2.75 delivered fps                                                                   | Measured fixture, phone tuning pending                      |
+| Phone overlay inclusion                        | Driver exact-window frames omit overlay inclusion metadata                                                                                  | Unknown; synthetic cursor suppressed pending qualification  |
+| Driver restart                                 | Controlled graceful shutdown; new daemon cursor state had no previous position                                                              | Cursor retirement observed; integrated failure test pending |
+| Email                                          | Selected signed-in Gmail account identified in Chrome; inbox and account identity readable through this coding chat’s browser tool only     | Phone adapter remains unqualified                           |
+| Real FaceTime audio/video                      | Existing transport preserved; new controller not physically tested over a call                                                              | Pending                                                     |
 
 No message was sent and no Codex prompt was submitted. Private contacts, accounts, screenshots, conversation content and credentials are not included here.
 
@@ -73,7 +73,6 @@ Codex New Chat now allows at most four fresh read-only observations within three
 A separately bounded Cua Chrome observation was refused as outside the capability manifest for the requested application process; no email input occurred and no desktop capture fallback was used. The coding-chat browser can identify the selected account, but that does not qualify phone email access.
 
 The updated helper accepted local Enable and remained armed during the next artifact test. That test found Codex on a different Space and dispatched no click or typing. The launch-only receipt was reconciled with an independent live code-signature/version/window-owner witness plus exact inactive session; its original isolated encrypted record remains retained without replay. Running-app verification is now separate from current-Space input eligibility: unavailable or ambiguous work windows produce a blocked task after verified launch. Independent review and six worker regressions confirm that launch verification creates no target, preview or action grant. The user subsequently arranged the same desktop. Further artifact attempts stopped before clicking when screenshot corroboration failed; integrated Codex drafting has not passed.
-
 
 ## Final stopped checkpoint
 
