@@ -24,6 +24,10 @@
  *   says what is needed and where, and that the owner signs in on the Mac or
  *   in ClawdTime's own browser profile. Words that look like a password or a
  *   code are never passed on to the worker, and so never reach the planner.
+ * - A card, bank or identity number (a card number, a CVV, a social security
+ *   number, a routing or account number) is never asked for either: the
+ *   message says only that the owner enters it on the Mac. A reply that holds
+ *   such a number is refused and never passed on.
  * - Every attempt and its outcome is kept in `computer/reach.json`, for its
  *   owner only: kinds, times and fixed outcome words. Never a question, an
  *   answer or a typed text.
@@ -65,7 +69,8 @@ import {
 import { readWords } from "./orders.js";
 
 /** What the worker waits on, in the reach's own words. */
-export type ReachKind = "approval" | "question" | "signin" | "code" | "blocked";
+export type ReachKind =
+  "approval" | "question" | "signin" | "code" | "private" | "blocked";
 /** Where the request came from. Only a request from the chat waits before the reach. */
 export type ReachOrigin = "chat" | "call" | "text" | "routine";
 
@@ -157,6 +162,31 @@ const cut = (value: string, limit: number) => {
   return `${part.slice(0, space > 0 ? space : limit)}...`;
 };
 
+/**
+ * Words for a card, bank or identity number: a card number, a CVV, a social
+ * security number, a bank routing or account number, an IBAN, a passport or
+ * a tax number. A question with one of them asks for a private number.
+ */
+const privateNumberWords =
+  /\b(?:(?:credit|debit|bank|payment)\s+cards?|card\s+(?:numbers?|details|info(?:rmation)?|no)|cvv2?|cvc2?|card\s+verification|card\s+security\s+code|security\s+code\s+(?:on|of|for)\s+(?:the|your|my)\s+(?:credit\s+|debit\s+)?card|expir(?:y|ation)\s+date|social\s+security|ssn|social\s+insurance|national\s+insurance|tax\s+(?:id|identification|number)|taxpayer|employer\s+identification|itin|passport\s+(?:numbers?|no)|driver(?:'?s)?\s+licen[cs]e|licen[cs]e\s+number|(?:bank\s+)?account\s+(?:and\s+routing\s+)?numbers?|routing(?:\s+number)?|sort\s+code|iban|swift\s+code|bic\s+code|aba\s+number|national\s+id|id\s+number|identity\s+number|identification\s+number|(?:medicare|medicaid)\s+(?:numbers?|id)|insurance\s+number|bank\s+details|wire\s+details)\b/i;
+/** True when the question asks for a card, bank or identity number. */
+export const asksPrivateNumber = (question: string) =>
+  privateNumberWords.test(tidy(question));
+/**
+ * True when a reply holds a card, bank or identity number: a number in the
+ * shape of a social security number or an IBAN, a long run of digits, or a
+ * number of three digits or more beside a word for such a number.
+ */
+export function holdsPrivateNumber(reply: string): boolean {
+  const said = tidy(reply);
+  if (/(?<!\d)\d{3}[\s.-]\d{2}[\s.-]\d{4}(?!\d)/.test(said)) return true;
+  if (/\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]){11,30}\b/.test(said)) return true;
+  if (/(?<!\d)\d(?:[\s.-]?\d){12,18}(?!\d)/.test(said)) return true;
+  return (
+    privateNumberWords.test(said) && /(?<!\d)\d(?:[\s.-]?\d){2,}/.test(said)
+  );
+}
+
 /** What kind of help the question needs. Read from the worker's own fixed words. */
 export function reachKind(
   question: string,
@@ -164,6 +194,7 @@ export function reachKind(
 ): Exclude<ReachKind, "blocked"> {
   if (/that is a password field/i.test(question)) return "signin";
   if (mode === "yes_no") return "approval";
+  if (asksPrivateNumber(question)) return "private";
   if (
     /\b(?:codes?|otp|one[- ]time|verification|verify|2fa|two[- ]factor|authenticator|passcode|pin)\b/i.test(
       question,
@@ -224,6 +255,13 @@ export function reachWords(input: {
         text: `ClawdTime on your Mac needs a code${at}${goal ? ` for "${goal}"` : ""}. Type it on the Mac yourself, then reply ${go} to go on, or stop. Never send a code in a text.`,
       };
     }
+    case "private": {
+      const at = where ? ` for ${where}` : "";
+      return {
+        spoken: `ClawdTime on your Mac needs a card, bank or identity number${at}: enter it on the Mac yourself, then say done. Never say such a number on this call.`,
+        text: `ClawdTime on your Mac needs a card, bank or identity number${at}${goal ? ` for "${goal}"` : ""}. Enter it on the Mac yourself, then reply done to go on, or stop. Never send such a number in a text.`,
+      };
+    }
     case "approval":
       return {
         spoken: `ClawdTime on your Mac needs your yes. ${cut(input.question, 260)}`,
@@ -252,6 +290,8 @@ export const reachReplies = {
   secret:
     "I do not take a password or a code by phone or by text, so nothing was passed on. Type it on the Mac yourself, then say done.",
   held: "I did not pass that on: it reads as a question or as a wait.",
+  number:
+    "I do not take a card, bank or identity number by phone or by text, so nothing was passed on. Enter it on the Mac yourself, then say done.",
   unclear: "I did not get a clear answer.",
 } as const;
 
@@ -272,7 +312,14 @@ const recordSchema = z
     /** A digest of the question. It holds none of its words. */
     id: z.string().regex(/^[a-f0-9]{24}$/),
     requestId: z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/),
-    kind: z.enum(["approval", "question", "signin", "code", "blocked"]),
+    kind: z.enum([
+      "approval",
+      "question",
+      "signin",
+      "code",
+      "private",
+      "blocked",
+    ]),
     origin: z.enum(["chat", "call", "text", "routine"]),
     seenAt: z.number().int().nonnegative(),
     events: z.array(eventSchema).max(40),
@@ -807,6 +854,15 @@ export class OwnerReach {
     ) {
       this.record(item, `secret_refused_${via}`);
       return reachReplies.secret;
+    }
+    // A card, bank or identity number goes nowhere. For a question that asks
+    // for one, any digit is refused: a CVV has three.
+    if (
+      holdsPrivateNumber(said) ||
+      (item.kind === "private" && /\d/.test(said))
+    ) {
+      this.record(item, `number_refused_${via}`);
+      return reachReplies.number;
     }
     if (item.mode === "free" && holdsBack(said)) {
       this.record(item, `held_${via}`);

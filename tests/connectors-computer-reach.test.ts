@@ -16,6 +16,7 @@ import {
   markTextTurn,
   ownerTextPort,
   proactiveReachCall,
+  holdsPrivateNumber,
   reachKind,
   reachPlace,
   reachReplies,
@@ -1153,6 +1154,52 @@ describe("the text side over the text settings", () => {
   });
 });
 
+describe("card, bank and identity numbers", () => {
+  it("reads a question for such a number, and says only that the owner enters it on the Mac", () => {
+    for (const question of [
+      "The task asks: What is the CVV on your card?",
+      "The task asks: What is your social security number?",
+      "The task asks: What is your bank account and routing number?",
+      "The task asks: What is the card number?",
+      "The task asks: What is the security code on your card?",
+      "The task asks: What is your passport number?",
+    ]) {
+      expect(reachKind(question, "free"), question).toBe("private");
+      const words = reachWords({
+        kind: "private",
+        mode: "free",
+        question,
+        goal: "Pay the invoice",
+      });
+      for (const said of [words.spoken, words.text])
+        expect(said).not.toMatch(
+          /CVV|social security|routing|passport|card number|security code/i,
+        );
+      expect(words.spoken).toContain("enter it on the Mac yourself");
+    }
+    expect(
+      reachKind("The task asks: What is the verification code?", "free"),
+    ).toBe("code");
+    expect(reachKind("The task asks: Which mug do you want?", "free")).toBe(
+      "question",
+    );
+  });
+
+  it("finds such a number in a reply, and leaves plain answers alone", () => {
+    for (const reply of [
+      "078-05-1120",
+      "my ssn is 078 05 1120",
+      "routing 021000021 account 123456789",
+      "the card number is 4111 1111 1111 1111",
+      "cvv 123",
+      "DE89 3704 0044 0532 0130 00",
+    ])
+      expect(holdsPrivateNumber(reply), reply).toBe(true);
+    for (const reply of ["the blue one", "2", "done", "call me at 3pm"])
+      expect(holdsPrivateNumber(reply), reply).toBe(false);
+  });
+});
+
 describe("the strict yes", () => {
   it("is the only yes that the worker itself takes for a yes or no question", async () => {
     const { worker, waiting, hands } = setup();
@@ -1191,5 +1238,35 @@ describe("the strict yes", () => {
     ).toMatch(/^Canceled\./);
     expect(worker.snapshot().state).toBe("canceled");
     expect(hands.sent).toEqual([]);
+  });
+
+  it("refuses a card or bank number in the answer to a plain question", async () => {
+    const { worker, reach, waiting, after, call, planner } = setup(
+      [{ kind: "ask", question: "Which way should I pay?" }, done],
+      { screens: [send] },
+    );
+    await worker.submit("r1", "Pay the invoice");
+    await waiting();
+    await reach.tick();
+    expect(reach.current()!.kind).toBe("question");
+    await after(45_000);
+    const key = call.placed[0]!.key;
+    expect(
+      await reach.reply("use card number 4111 1111 1111 1111", "call", key),
+    ).toBe(reachReplies.secret);
+    expect(
+      await reach.reply(
+        "by bank, routing 021000021 account 123456789",
+        "call",
+        key,
+      ),
+    ).toBe(reachReplies.number);
+    expect(await reach.reply("it is 078-05-1120", "text")).toBe(
+      reachReplies.number,
+    );
+    expect(worker.snapshot().state).toBe("waiting_for_person");
+    for (const number of ["4111", "021000021", "078-05-1120"])
+      expect(JSON.stringify(planner.inputs)).not.toContain(number);
+    worker.stop();
   });
 });

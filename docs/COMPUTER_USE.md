@@ -1305,6 +1305,12 @@ What holds every time:
   sign in on the Mac or once in ClawdTime's own browser profile. Words that
   look like a password or a code (also a bare run of digits) are not passed
   on, so they never reach the planner.
+- A card, bank or identity number is never asked for either: a card number, a
+  CVV, a social security number, a routing or account number, an IBAN, a
+  passport or a tax number. The call and the text say only that you enter it
+  on the Mac yourself, then say done. A reply that holds such a number is
+  refused and never passed on. For a question that asks for one, a reply with
+  any digit is refused.
 - The call goes through the proactive call path of the line: one spoken alert
   for one question, under your calling policy, with the same receipts and the
   same rule against a redial. It shares no screen, so the worker keeps the
