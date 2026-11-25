@@ -187,6 +187,76 @@ const parts = (text: string) => {
   return found.length ? found : ["Done."];
 };
 
+/**
+ * The line that a text to the owner goes out on: the line of the settings, or
+ * else the line of the owner's newest text that the channel kept. Null when
+ * neither is known. It reads the journal of the channel and writes nothing.
+ */
+export function ownerTextLine(
+  root: string,
+  settings: TextSettings,
+): string | null {
+  if (settings.line) return settings.line;
+  try {
+    const file = join(root, "agents", "texts.json");
+    if (!existsSync(file) || !lstatSync(file).isFile()) return null;
+    const value = JSON.parse(readFileSync(file, "utf8")) as { line?: unknown };
+    return typeof value?.line === "string" && uuid.test(value.line)
+      ? value.line
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sends one text to the owner's own number, by itself: no message of the owner
+ * waits for it. It is sent once. The key names this one text, and the service
+ * sends no second text for the same key. A failure is not tried again here:
+ * "unknown" means that the text may or may not have gone out.
+ */
+export async function sendOwnerText(
+  settings: TextSettings,
+  line: string,
+  key: string,
+  text: string,
+  request: typeof fetch = fetch,
+): Promise<"sent" | "already_sent" | "unknown" | `refused:${string}`> {
+  if (!uuid.test(line)) return "refused:line";
+  try {
+    const response = await request(`${settings.base}/shared-messages`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${settings.key}`,
+        "x-chert-project-id": settings.project,
+        "content-type": "application/json",
+        "idempotency-key": key,
+      },
+      body: JSON.stringify({
+        line_id: line,
+        recipient: settings.owner,
+        text: messageText(text).slice(0, partSize) || "ClawdTime",
+      }),
+      // The key and the owner's number go to the configured address only.
+      redirect: "error",
+      signal: AbortSignal.timeout(60_000),
+    });
+    let code: string | null = null;
+    try {
+      const body = (await response.json()) as { error?: { code?: unknown } };
+      code = typeof body?.error?.code === "string" ? body.error.code : null;
+    } catch {
+      code = null;
+    }
+    if (response.status === 200) return "sent";
+    if (code === "shared_idempotency_conflict") return "already_sent";
+    if (response.status === 429 || response.status >= 500) return "unknown";
+    return `refused:${(code ?? String(response.status)).slice(0, 60)}`;
+  } catch {
+    return "unknown";
+  }
+}
+
 export class TextChannel {
   private readonly file: string;
   private readonly now: () => number;
