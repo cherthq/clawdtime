@@ -145,8 +145,12 @@ describe("the ClawdTime agent", () => {
       "I need your approval to read your emails; please say approve or deny.",
     ]);
     const answer = await new Supervisor(value, model).reply([], spoken, "chat");
-    expect(answer).toContain("no email integration");
-    expect(answer).toContain("paste email text");
+    // Mail is read on the screen. With computer use off, the answer says
+    // what ClawdTime would do and how to turn computer use on: never "I
+    // cannot", and never an approval.
+    expect(answer).toContain("on the screen");
+    expect(answer).toContain("clawdtime computer on");
+    expect(answer).not.toMatch(/\bI (?:cannot|can't)\b|approv/i);
     expect(seen).toEqual([]);
     expect(desk.pending()).toEqual([]);
     expect(log).toEqual([]);

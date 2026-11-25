@@ -166,10 +166,11 @@ describe("supervisor connected execution", () => {
       expect(execution.submit).not.toHaveBeenCalled();
     },
   );
-  it("keeps the truthful unavailable response when not connected", async () => {
+  it("says how to turn computer use on when not connected, and never that it cannot", async () => {
     const { supervisor, execution } = setup(executor(false));
-    expect(await supervisor.reply([], "read my inbox", "chat")).toContain(
-      "no email integration",
+    const said = await supervisor.reply([], "read my inbox", "chat");
+    expect(said).toBe(
+      "I'd read your inbox on the screen, but computer use is off. Turn it on with: clawdtime computer on. Then ask me again.",
     );
     expect(execution.submit).not.toHaveBeenCalled();
   });
