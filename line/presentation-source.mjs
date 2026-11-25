@@ -233,11 +233,20 @@ export function startPresentation({
     controller = null,
     verified = null,
     boundConnection = null,
-    shown = null;
+    shown = null,
+    activeHold = false;
   let producer = null,
     sequence = 0,
     command = 0;
-  const clear = () => {
+  const clear = (immediate = false) => {
+    if (immediate) {
+      if (shown !== null || activeHold) {
+        shown = null;
+        activeHold = false;
+        onEvent(null, { immediate: true });
+      }
+      return;
+    }
     if (shown !== null) {
       shown = null;
       onEvent(null);
@@ -245,13 +254,13 @@ export function startPresentation({
   };
   const check = () => {
     if (stopped) return Promise.resolve();
-    if (shown && shown.expiresAt <= now()) clear();
+    if (shown && shown.expiresAt <= now()) clear(false);
     if (pending) return pending;
     pending = (async () => {
       const service = discover();
       if (!service) {
         verified = null;
-        clear();
+        clear(true);
         return;
       }
       const connection = `${service.origin}|${service.instanceId}|${service.token}`;
@@ -272,7 +281,7 @@ export function startPresentation({
       };
       try {
         if (verified !== connection) {
-          clear();
+          clear(true);
           const state = await get("/desktop/state", 262144);
           if (state.instanceId !== service.instanceId)
             throw Error("Presentation unavailable.");
@@ -287,15 +296,21 @@ export function startPresentation({
         }
         const snapshot = await get("/desktop/presentation", 8192);
         if (stopped) return;
-        if (!keys(snapshot, ["version", "event"]) || snapshot.version !== 1)
+        if (
+          !keys(snapshot, ["version", "event"], ["retired"]) ||
+          snapshot.version !== 1 ||
+          (Object.hasOwn(snapshot, "retired") &&
+            typeof snapshot.retired !== "boolean") ||
+          (snapshot.retired === true && snapshot.event !== null)
+        )
           throw Error("Presentation unavailable.");
         const event = snapshot.event;
         if (event === null) {
-          clear();
+          clear(snapshot.retired === true);
           return;
         }
         if (!validPresentationEvent(event, { now: now(), since })) {
-          clear();
+          clear(true);
           return;
         }
         if (
@@ -305,7 +320,7 @@ export function startPresentation({
             event.producerId !== producer &&
             event.commandSeq <= command)
         ) {
-          clear();
+          clear(true);
           return;
         }
         if (event.producerId === producer && event.sequence === sequence)
@@ -314,17 +329,18 @@ export function startPresentation({
         sequence = event.sequence;
         command = event.commandSeq;
         shown = event;
+        activeHold = event.kind !== "reset" && event.kind !== "transition";
         onEvent(event);
       } catch {
         verified = null;
-        if (!stopped) clear();
+        if (!stopped) clear(true);
       } finally {
         clearTimeout(timer);
         controller = null;
       }
     })()
       .catch(() => {
-        if (!stopped) clear();
+        if (!stopped) clear(true);
       })
       .finally(() => {
         pending = null;
@@ -342,7 +358,7 @@ export function startPresentation({
       stopped = true;
       if (timer) clearInterval(timer);
       controller?.abort();
-      clear();
+      clear(true);
     },
   };
 }
@@ -429,6 +445,61 @@ export async function requestRegion(
     return validRegionAnswer(answer) ?? { code: "unavailable" };
   } catch {
     return { code: "unavailable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Reads the active call video view from the desktop service (`GET /desktop/view`).
+ * Returns null when the desktop service is unavailable or the reply is malformed.
+ */
+export async function requestView({
+  env = process.env,
+  home = homedir(),
+  timeoutMs = 2000,
+  request = fetch,
+  discover = () => presentationService({ env, home }),
+} = {}) {
+  const service = discover();
+  if (!service) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const get = (path, maximum) =>
+    request(service.origin + path, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${service.token}`,
+        "cache-control": "no-store",
+      },
+      redirect: "error",
+      cache: "no-store",
+      signal: controller.signal,
+    }).then((response) => boundedJSON(response, maximum));
+  try {
+    const state = await get("/desktop/state", 262144);
+    if (state?.instanceId !== service.instanceId) return null;
+    const value = await get("/desktop/view", 4096);
+    if (
+      !keys(value, ["view", "at"]) ||
+      typeof value.at !== "number" ||
+      !Number.isFinite(value.at) ||
+      value.at < 0
+    )
+      return null;
+    if (value.view === null) return { view: null, at: value.at };
+    if (!share(value.view)) return null;
+    return {
+      view: {
+        x: value.view.x,
+        y: value.view.y,
+        w: value.view.w,
+        h: value.view.h,
+      },
+      at: value.at,
+    };
+  } catch {
+    return null;
   } finally {
     clearTimeout(timer);
   }

@@ -84,23 +84,34 @@ export class ViewStore {
 }
 
 /**
- * The front window of one application as shares of the main screen:
- * "x y w h" in shares, or "none". It reads the window list of the system,
- * which needs no permission for the place and the owner of a window.
+ * The front window of one running application as shares of the main screen:
+ * JSON `{ owner, x, y, w, h }`, or "none". Matches only exact case-insensitive
+ * owner names passed in argv. Reads the window list of the system, which needs
+ * no permission for the place and the owner of a window.
  */
 const frontWindow = `function run(argv) {
   ObjC.import("CoreGraphics");
   ObjC.import("AppKit");
+  var wanted = [];
+  for (var j = 0; j < argv.length; j++) wanted.push(String(argv[j]).toLowerCase());
   var list = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))) || [];
   var screens = $.NSScreen.screens;
   if (!screens.count) return "none";
   var main = screens.objectAtIndex(0).frame;
   for (var i = 0; i < list.length; i++) {
     var w = list[i];
-    if (w.kCGWindowOwnerName !== argv[0] || w.kCGWindowLayer !== 0 || !w.kCGWindowBounds) continue;
+    if (w.kCGWindowLayer !== 0 || !w.kCGWindowBounds || !w.kCGWindowOwnerName) continue;
+    var owner = String(w.kCGWindowOwnerName);
+    if (wanted.indexOf(owner.toLowerCase()) < 0) continue;
     var b = w.kCGWindowBounds;
     if (b.Width < 200 || b.Height < 120) continue;
-    return [b.X / main.size.width, b.Y / main.size.height, b.Width / main.size.width, b.Height / main.size.height].join(" ");
+    return JSON.stringify({
+      owner: owner,
+      x: b.X / main.size.width,
+      y: b.Y / main.size.height,
+      w: b.Width / main.size.width,
+      h: b.Height / main.size.height
+    });
   }
   return "none";
 }`;
@@ -117,22 +128,130 @@ const owners: Record<string, string> = {
   Warp: "Warp",
 };
 
+/** Exact aliases from spoken or short app names to macOS window owner names. */
+const appAliases: Record<string, readonly string[]> = {
+  chrome: ["Google Chrome"],
+  "google chrome": ["Google Chrome"],
+  vscode: ["Code", "Visual Studio Code"],
+  "vs code": ["Code", "Visual Studio Code"],
+  "visual studio code": ["Code", "Visual Studio Code"],
+  iterm: ["iTerm2"],
+  iterm2: ["iTerm2"],
+  imessage: ["Messages"],
+  messages: ["Messages"],
+  settings: ["System Settings", "System Preferences"],
+  "system settings": ["System Settings", "System Preferences"],
+  "system preferences": ["System Settings", "System Preferences"],
+  brave: ["Brave Browser"],
+  edge: ["Microsoft Edge"],
+  zoom: ["zoom.us"],
+  quicktime: ["QuickTime Player"],
+  "text edit": ["TextEdit"],
+  "apple mail": ["Mail"],
+  word: ["Microsoft Word"],
+  excel: ["Microsoft Excel"],
+  powerpoint: ["Microsoft PowerPoint"],
+  outlook: ["Microsoft Outlook"],
+  teams: ["Microsoft Teams", "Microsoft Teams (work or school)"],
+};
+
+const cleanAppQuery = (value: string): string | null => {
+  const name = value
+    .replace(/\p{C}/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\.app$/i, "")
+    .trim();
+  if (!name || name.length > 80 || name.startsWith("-")) return null;
+  return name;
+};
+
+/** Exact candidate owner names for a query, preserving case and order. */
+export function ownerCandidates(name: string): string[] {
+  const clean = cleanAppQuery(name);
+  if (!clean) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (value: string) => {
+    const lower = value.toLowerCase();
+    if (seen.has(lower)) return;
+    seen.add(lower);
+    out.push(value);
+  };
+  add(clean);
+  const aliases = appAliases[clean.toLowerCase()];
+  if (aliases) {
+    for (const alias of aliases) add(alias);
+  }
+  return out;
+}
+
+export interface WindowMatch {
+  owner: string;
+  view: CallView;
+}
+
+/**
+ * Looks up the front on-screen window of a running macOS application by exact
+ * case-insensitive owner match (or exact alias). Never launches an app.
+ */
+export async function windowLookup(
+  run: Runner,
+  name: string,
+): Promise<WindowMatch | null> {
+  const candidates = ownerCandidates(name);
+  if (!candidates.length) return null;
+  const result = await run(
+    "/usr/bin/osascript",
+    ["-l", "JavaScript", "-e", frontWindow, ...candidates],
+    5000,
+  );
+  if (result.status !== 0) return null;
+  const raw = result.stdout.trim();
+  if (!raw || raw === "none") return null;
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as {
+        owner?: unknown;
+        x?: unknown;
+        y?: unknown;
+        w?: unknown;
+        h?: unknown;
+      };
+      const owner = typeof parsed.owner === "string" ? parsed.owner.trim() : "";
+      if (
+        !owner ||
+        owner.startsWith("-") ||
+        !candidates.some((c) => c.toLowerCase() === owner.toLowerCase())
+      )
+        return null;
+      const view = cleanView({
+        x: parsed.x,
+        y: parsed.y,
+        w: parsed.w,
+        h: parsed.h,
+      });
+      return view ? { owner, view } : null;
+    } catch {
+      return null;
+    }
+  }
+  const numbers = raw.split(/\s+/).map(Number);
+  if (numbers.length !== 4) return null;
+  const [x, y, w, h] = numbers as [number, number, number, number];
+  const view = cleanView({ x, y, w, h });
+  return view ? { owner: candidates[0]!, view } : null;
+}
+
 /** The front window of an application, as a view. null when it has no window on the main screen. */
 export async function windowView(
   run: Runner,
   owner: string,
 ): Promise<CallView | null> {
-  const result = await run(
-    "/usr/bin/osascript",
-    ["-l", "JavaScript", "-e", frontWindow, owner],
-    5000,
-  );
-  if (result.status !== 0) return null;
-  const numbers = result.stdout.trim().split(/\s+/).map(Number);
-  if (numbers.length !== 4) return null;
-  const [x, y, w, h] = numbers as [number, number, number, number];
-  return cleanView({ x, y, w, h });
+  return (await windowLookup(run, owner))?.view ?? null;
 }
+
+export type CallViewTarget = AgentSession | null | { app: string };
 
 export interface ViewResult {
   ok: boolean;
@@ -141,9 +260,44 @@ export interface ViewResult {
 }
 
 /**
- * Sets the view of the call to the window of one session, or to the whole
- * screen with null. For a session: its tab comes to the front first, so its
- * window is the front window of its terminal, and that window is the view.
+ * Zooms the call video to the front window of an already-running macOS app.
+ * Never launches a non-running app and focuses only the exact matched owner.
+ */
+export async function showAppOnCall(
+  deps: {
+    store: ViewStore;
+    run: Runner;
+    pause?: (ms: number) => Promise<void>;
+  },
+  app: string,
+): Promise<ViewResult> {
+  const name = cleanAppQuery(app);
+  if (!name)
+    return {
+      ok: false,
+      said: "Tell me which open app window you want to zoom in on.",
+    };
+  const found = await windowLookup(deps.run, name);
+  if (!found)
+    return {
+      ok: false,
+      said: `I could not find an open ${name} window on the main screen to zoom in on.`,
+    };
+  await deps.run("/usr/bin/open", ["-a", found.owner], 5000);
+  await (deps.pause ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(450);
+  const refreshed = await windowLookup(deps.run, found.owner);
+  const view = refreshed?.view ?? found.view;
+  deps.store.set(view);
+  return {
+    ok: true,
+    said: `The call now shows only the ${found.owner} window. Say "show the whole screen" to go back.`,
+  };
+}
+
+/**
+ * Sets the view of the call to the window of one session or running app, or to
+ * the whole screen with null. For a session: its tab comes to the front first,
+ * so its window is the front window of its terminal, and that window is the view.
  */
 export async function showOnCall(
   deps: {
@@ -153,12 +307,14 @@ export async function showOnCall(
     titles: (session: AgentSession) => string[];
     pause?: (ms: number) => Promise<void>;
   },
-  session: AgentSession | null,
+  target: CallViewTarget,
 ): Promise<ViewResult> {
-  if (!session) {
+  if (!target) {
     deps.store.set(null);
     return { ok: true, said: "The call shows the whole screen again." };
   }
+  if ("app" in target) return showAppOnCall(deps, target.app);
+  const session = target;
   const name = title(session);
   if (session.host || session.terminal.remote || session.focus === "none")
     return { ok: false, said: `${name} has no window on this Mac to show.` };

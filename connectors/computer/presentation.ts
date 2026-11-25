@@ -73,6 +73,7 @@ export class PresentationEvents {
   private producer: string | null = null;
   private sequence = 0;
   private command = 0;
+  private retiredState = false;
   constructor(private readonly now: () => number = Date.now) {}
 
   accept(raw: unknown, commandSeq: number, active: boolean): boolean {
@@ -94,14 +95,32 @@ export class PresentationEvents {
     this.producer = event.producerId;
     this.sequence = event.sequence;
     this.command = event.commandSeq;
-    this.event = event.kind === "reset" ? null : event;
+    if (event.kind === "reset") {
+      this.event = null;
+      this.retiredState = true;
+    } else {
+      this.event = event;
+      this.retiredState = false;
+    }
     return true;
   }
 
-  latest(active: boolean): PresentationEvent | null {
-    if (!active || (this.event && this.event.expiresAt <= this.now()))
-      this.clear();
+  latest(allow = true): PresentationEvent | null {
+    if (!allow) {
+      this.retire();
+      return null;
+    }
+    if (this.event && this.event.expiresAt <= this.now()) this.clear();
     return this.event;
+  }
+
+  retire(): void {
+    this.event = null;
+    this.retiredState = true;
+  }
+
+  retired(): boolean {
+    return this.retiredState;
   }
 
   clear(): void {

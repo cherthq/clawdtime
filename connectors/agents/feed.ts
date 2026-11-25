@@ -49,7 +49,12 @@ import { sendText } from "./input.js";
 import { openApp } from "./apps.js";
 import { browse, type BrowserAction } from "./browsing.js";
 import { lookAtScreen } from "./eyes.js";
-import { showOnCall, ViewStore } from "./view.js";
+import {
+  showOnCall,
+  ViewStore,
+  type CallView,
+  type CallViewTarget,
+} from "./view.js";
 import { Jobs } from "./jobs.js";
 import { JobNews } from "./jobnews.js";
 import { title } from "./render.js";
@@ -110,6 +115,8 @@ export interface AgentBoardPort {
     reply: ChatMessage | null;
     audio: string | null;
   }>;
+  /** The active call video view: one window in shares, or null for the whole screen. */
+  view?(): { view: CallView | null; at: number };
   /** Stop: ends the turn of the chat that runs. Absent where the chat has no turn to end. */
   stopChat?(): void;
 }
@@ -329,14 +336,14 @@ export class BoardFeed implements AgentBoardPort {
                 action: BrowserAction,
                 choice: { browser?: string; tab?: number },
               ) => browse(files, this.run, action, choice),
-              callView: (session: AgentSession | null) =>
+              callView: (target: CallViewTarget) =>
                 showOnCall(
                   {
                     store: new ViewStore(this.root, options.now ?? Date.now),
                     run: this.run,
                     titles: (item) => tabTitles(item, this.titles(item)),
                   },
-                  session,
+                  target,
                 ),
               look: (question: string) =>
                 lookAtScreen(
@@ -521,6 +528,10 @@ export class BoardFeed implements AgentBoardPort {
     const text = computerTaskNow(snapshot);
     if (!text || this.log.recent(1)[0]?.text === text) return;
     this.log.append({ role: "assistant", text, at, via: "chat" });
+  }
+  /** The active call video view from the state folder. */
+  view() {
+    return new ViewStore(this.root, this.options.now ?? Date.now).get();
   }
   /** Stop: the chat agent ends the turn that runs. The computer task stops through its own route. */
   stopChat() {

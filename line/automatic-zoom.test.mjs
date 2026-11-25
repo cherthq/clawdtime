@@ -157,9 +157,8 @@ test("every edge crop contains its target and large fields widen for context", (
   assert.equal(frameTarget({ x: 0.01, y: 0.1, w: 0.95, h: 0.3 }).w, 1);
 });
 
-test("expiry, missing metadata, wrong aspect, and old calls retire targets", () => {
+test("immediate retirement, invalid metadata, wrong aspect, and old calls retire targets; clean expiry preserves hold", () => {
   for (const invalid of [
-    null,
     event(999),
     event(1000, 2, { expiresAt: 9999 }),
     event(1000, 2, { target: { ...target, x: -1 } }),
@@ -172,20 +171,80 @@ test("expiry, missing metadata, wrong aspect, and old calls retire targets", () 
     r.at(1800);
     assert.deepEqual(r.camera.crop(), OVERVIEW);
   }
+  // Immediate null retires right away (Stop, takeover, failure, disconnect).
+  const immediate = rig();
+  immediate.send(1);
+  immediate.at(1400);
+  immediate.camera.crop();
+  immediate.camera.event(null, { immediate: true });
+  immediate.at(1800);
+  assert.deepEqual(immediate.camera.crop(), OVERVIEW);
+
+  // Clean null preserves CAMERA.hold (2800ms from 1000 -> 3800) before widening.
+  const clean = rig();
+  clean.send(1);
+  clean.at(1400);
+  const zoomed = clean.camera.crop();
+  assert.ok(zoomed.w < 1);
+  clean.camera.event(null);
+  clean.at(1800);
+  assert.deepEqual(clean.camera.crop(), zoomed);
+  clean.at(3700);
+  assert.deepEqual(clean.camera.crop(), zoomed);
+  clean.at(3800);
+  clean.camera.crop();
+  clean.at(4200);
+  assert.deepEqual(clean.camera.crop(), OVERVIEW);
+
+  // Natural expiresAt (2400) preserves CAMERA.hold until 3800, then widens by 4200.
   const r = rig();
   r.send(1);
   r.at(1400);
-  r.camera.crop();
+  const held = r.camera.crop();
   r.at(2400);
-  r.camera.crop();
+  assert.deepEqual(r.camera.crop(), held);
   r.at(2800);
+  assert.deepEqual(r.camera.crop(), held);
+  // A mid-hold immediate retire widens right away.
+  r.camera.event(null, { immediate: true });
+  r.at(3200);
   assert.deepEqual(r.camera.crop(), OVERVIEW);
+
+  // Wrong aspect ratio still retires immediately.
   const a = rig();
   a.send(1);
   a.at(1400);
   a.camera.crop({ width: 900, height: 1440 });
   a.at(1800);
   assert.deepEqual(a.camera.crop(), OVERVIEW);
+});
+
+test("clearManual clears a manual crop without latching overview so auto-follow zoom keeps working", () => {
+  const r = rig(),
+    manual = { x: 0.1, y: 0.2, w: 0.6, h: 0.5 };
+  r.camera.manual(manual);
+  r.at(1400);
+  assert.deepEqual(r.camera.crop(), manual);
+  assert.equal(r.camera.status().manual, true);
+  assert.equal(r.camera.status().overview, false);
+
+  r.camera.clearManual();
+  assert.equal(r.camera.status().manual, false);
+  assert.equal(r.camera.status().overview, false);
+  r.at(1800);
+  assert.deepEqual(r.camera.crop(), OVERVIEW);
+
+  // Auto-follow zoom still works after clearManual.
+  r.send(1);
+  r.at(2200);
+  assert.ok(r.camera.crop().w < 1);
+
+  // If overview was already latched, clearManual respects it.
+  r.camera.control("overview");
+  r.camera.manual(manual);
+  r.camera.clearManual();
+  assert.equal(r.camera.status().manual, false);
+  assert.equal(r.camera.status().overview, true);
 });
 
 test("app/window/geometry identity changes widen and require a new target", () => {
@@ -576,6 +635,54 @@ test("the one-window view holds when a computer-use action starts, ends or is st
   assert.equal(middle(s.call.frame()), "screen");
   assert.equal(s.call.status().manual, false);
   s.call.close();
+});
+
+test("call video forwards immediate retire vs clean hold and clearManual preserves auto-follow", async () => {
+  let at = 1000,
+    send = null;
+  const shot = twoPartScreen();
+  const call = makeCallVideo({
+    since: 1000,
+    now: () => at,
+    capture: () => ({
+      supportsAutomaticZoom: true,
+      latest: () => shot,
+      started: async () => true,
+      stop() {},
+    }),
+    presentation: ({ onEvent }) => {
+      send = onEvent;
+      return { stop() {} };
+    },
+  });
+  assert.equal(await call.show(), true);
+  send(event(at));
+  at += 400;
+  call.frame();
+  assert.ok(call.view().crop.w < 1);
+  // Clean completion preserves CAMERA.hold.
+  send(null);
+  at += 400;
+  call.frame();
+  assert.ok(call.view().crop.w < 1);
+  // Explicit immediate retirement widens right away.
+  send(null, { immediate: true });
+  at += 400;
+  call.frame();
+  assert.deepEqual(call.view().crop, OVERVIEW);
+
+  // clearManual clears manual framing without latching overview.
+  call.manual(windowView);
+  assert.equal(call.status().manual, true);
+  assert.equal(call.status().overview, false);
+  call.clearManual();
+  assert.equal(call.status().manual, false);
+  assert.equal(call.status().overview, false);
+  send(event(at, 2));
+  at += 400;
+  call.frame();
+  assert.ok(call.view().crop.w < 1);
+  call.close();
 });
 
 test("the one-window view holds through hide and show, with no frame of the whole screen", async () => {

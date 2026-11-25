@@ -19,10 +19,17 @@ import type {
 } from "../connectors/agents/types.js";
 import {
   cleanView,
+  ownerCandidates,
+  showAppOnCall,
   showOnCall,
   ViewStore,
+  windowLookup,
   windowView,
 } from "../connectors/agents/view.js";
+import { createTaskApp, type AgentBoardPort } from "../src/control/task-app.js";
+import type { TaskService } from "../src/control/task-service.js";
+import type { TaskDesktopService } from "../src/control/task-desktop-service.js";
+import { DomainError } from "../src/storage/security.js";
 import { fakeSystem } from "./connectors-agents-fixture.js";
 
 const now = Date.UTC(2026, 10, 21, 6, 0, 0);
@@ -166,6 +173,162 @@ describe("the view of a call", () => {
     expect((await showOnCall(deps("none"), session())).ok).toBe(false);
     expect(store.get().view).toEqual({ x: 0.2, y: 0.2, w: 0.4, h: 0.4 });
   });
+
+  it("matches arbitrary running macOS apps by exact case-insensitive owner or alias, never substring, and never launches non-running apps", async () => {
+    // Fake window list simulating CGWindowListCopyWindowInfo exact case-insensitive lookup.
+    function desktopRunner(
+      windows: { owner: string; x: number; y: number; w: number; h: number }[],
+    ) {
+      const calls: string[][] = [];
+      const run: Runner = async (command, args) => {
+        calls.push([command, ...args]);
+        if (command === "/usr/bin/osascript" && args.includes("JavaScript")) {
+          const candidates = args.slice(4).map((c) => c.toLowerCase());
+          const found = windows.find((w) =>
+            candidates.includes(w.owner.toLowerCase()),
+          );
+          return {
+            status: 0,
+            stdout: found ? `${JSON.stringify(found)}\n` : "none\n",
+          };
+        }
+        return { status: 0, stdout: "" };
+      };
+      return { calls, run };
+    }
+
+    // Exact case-insensitive match for an arbitrary running app.
+    const stone = desktopRunner([
+      { owner: "Stonepad", x: 0.1, y: 0.1, w: 0.6, h: 0.7 },
+    ]);
+    expect(await windowLookup(stone.run, "stonepad")).toEqual({
+      owner: "Stonepad",
+      view: { x: 0.1, y: 0.1, w: 0.6, h: 0.7 },
+    });
+
+    // Alias match: "chrome" matches "Google Chrome" and focuses ONLY "Google Chrome".
+    const directory = root();
+    const store = new ViewStore(directory, () => now);
+    const chrome = desktopRunner([
+      { owner: "Google Chrome", x: 0.05, y: 0.05, w: 0.8, h: 0.85 },
+    ]);
+    const shown = await showOnCall(
+      { store, run: chrome.run, titles: () => [], pause: async () => {} },
+      { app: "chrome" },
+    );
+    expect(shown).toEqual({
+      ok: true,
+      said: 'The call now shows only the Google Chrome window. Say "show the whole screen" to go back.',
+    });
+    expect(
+      chrome.calls.filter((entry) => entry[0] === "/usr/bin/open"),
+    ).toEqual([["/usr/bin/open", "-a", "Google Chrome"]]);
+    expect(store.get().view).toEqual({ x: 0.05, y: 0.05, w: 0.8, h: 0.85 });
+
+    // No sloppy substring matching: "code" must NOT match Xcode, and
+    // "the session about notes" must NOT match Notes. Never calls open -a!
+    const strict = desktopRunner([
+      { owner: "Xcode", x: 0, y: 0, w: 0.9, h: 0.9 },
+      { owner: "Notes", x: 0.1, y: 0.1, w: 0.5, h: 0.6 },
+    ]);
+    for (const query of [
+      "code",
+      "the session about notes",
+      "Riverchat",
+      "-bad",
+    ]) {
+      const result = await showAppOnCall(
+        { store, run: strict.run, pause: async () => {} },
+        query,
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(
+      strict.calls.filter((entry) => entry[0] === "/usr/bin/open"),
+    ).toEqual([]);
+    // Exact case-insensitive match on "notes" succeeds and focuses "Notes".
+    const notesResult = await showAppOnCall(
+      { store, run: strict.run, pause: async () => {} },
+      "notes",
+    );
+    expect(notesResult.ok).toBe(true);
+    expect(
+      strict.calls.filter((entry) => entry[0] === "/usr/bin/open"),
+    ).toEqual([["/usr/bin/open", "-a", "Notes"]]);
+    expect(ownerCandidates("Stonepad.app")).toEqual(["Stonepad"]);
+  });
+
+  it("serves authenticated GET /desktop/view from agents.view() or ViewStore fallback", async () => {
+    const token = "p".repeat(40);
+    const desktop = {
+      authorizePanel(value: string) {
+        if (value !== token) throw new DomainError(401, "Denied.");
+      },
+    } as TaskDesktopService;
+    const activeView = {
+      view: { x: 0.2, y: 0.1, w: 0.6, h: 0.8 },
+      at: now,
+    };
+    const agents = {
+      view: () => activeView,
+    } as unknown as AgentBoardPort;
+    const withAgents = createTaskApp(
+      {} as TaskService,
+      "o".repeat(40),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      desktop,
+      undefined,
+      agents,
+    );
+    expect(
+      (
+        await withAgents.request("/desktop/view", {
+          headers: { authorization: "Bearer wrong" },
+        })
+      ).status,
+    ).toBe(401);
+    const ok = await withAgents.request("/desktop/view", {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual(activeView);
+
+    // Fallback to ViewStore when agents is absent.
+    const fallbackRoot = root();
+    const prevConfig = process.env.CLAWDTIME_CONFIG_HOME;
+    process.env.CLAWDTIME_CONFIG_HOME = fallbackRoot;
+    try {
+      new ViewStore(fallbackRoot, () => now).set({
+        x: 0.15,
+        y: 0.15,
+        w: 0.5,
+        h: 0.5,
+      });
+      const withoutAgents = createTaskApp(
+        {} as TaskService,
+        "o".repeat(40),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        desktop,
+      );
+      const res = await withoutAgents.request("/desktop/view", {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        view: { x: 0.15, y: 0.15, w: 0.5, h: 0.5 },
+        at: now,
+      });
+    } finally {
+      if (prevConfig === undefined) delete process.env.CLAWDTIME_CONFIG_HOME;
+      else process.env.CLAWDTIME_CONFIG_HOME = prevConfig;
+    }
+  });
 });
 
 const board = (sessions: AgentSession[]): BoardSnapshot => ({
@@ -219,10 +382,21 @@ describe("the brain changes what the call shows", () => {
           ? ["work-13", "Line status check"]
           : ["work-9d", "HIPAA compliance roadmap"],
       callView: async (item) => {
-        shown.push(item ? item.id : "screen");
+        shown.push(
+          item === null
+            ? "screen"
+            : "app" in item
+              ? `app:${item.app}`
+              : item.id,
+        );
         return {
           ok: true,
-          said: item ? "Only that window." : "The whole screen.",
+          said:
+            item === null
+              ? "The whole screen."
+              : "app" in item
+                ? `Only ${item.app}.`
+                : "Only that window.",
         };
       },
     };
@@ -263,6 +437,15 @@ describe("the brain changes what the call shows", () => {
       scripted([[call("call_view", { target: "screen" })], "Done."]).model,
     ).reply([], "show the whole screen again", "call");
     expect(out).toEqual(["screen"]);
+    const { value: fourth, shown: appShown } = world();
+    await new Supervisor(
+      fourth,
+      scripted([
+        [call("call_view", { target: "app", app: "Stonepad" })],
+        "Done.",
+      ]).model,
+    ).reply([], "zoom in on Stonepad", "call");
+    expect(appShown).toEqual(["app:Stonepad"]);
   });
 
   it("changes no view that the person did not ask for, and offers the tool only where a view can change", async () => {

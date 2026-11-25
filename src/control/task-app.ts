@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { Hono } from "hono";
 import { buildTaskBrief } from "../attention/task-ledger.js";
 import { bodyLimit } from "hono/body-limit";
@@ -26,6 +27,8 @@ import {
   type ProactiveLineSessions,
 } from "./proactive-line.js";
 import type { PhoneTurnContext } from "../phone-desktop-contracts.js";
+import { stateRoot } from "../../connectors/agents/hooks.js";
+import { ViewStore } from "../../connectors/agents/view.js";
 import { regionRequestSchema } from "../../connectors/computer/zoom-region.js";
 
 /**
@@ -101,6 +104,8 @@ export interface AgentBoardPort {
   /** What the watcher found on the sessions. */
   incidents(): unknown;
   dismissIncident(id: string): boolean;
+  /** The active call video view: one window in shares, or null for the whole screen. */
+  view?(): unknown;
   /** Stop: ends the turn of the chat that runs, where the chat has turns to end. */
   stopChat?(): void;
 }
@@ -428,6 +433,13 @@ export function createTaskApp(
       });
     }
     app.get("/desktop/state", (c) => c.json(desktop.snapshot(credential(c))));
+    app.get("/desktop/view", (c) => {
+      desktop.authorizePanel(credential(c));
+      return c.json(
+        agents?.view?.() ??
+          new ViewStore(stateRoot({ env: process.env, home: homedir() })).get(),
+      );
+    });
     app.get("/desktop/operations/:eventId", (c) =>
       c.json(desktop.operation(credential(c), c.req.param("eventId"))),
     );

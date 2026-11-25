@@ -77,7 +77,11 @@ export interface ComputerPort {
   /** `GET /desktop/computer`. */
   status(): ComputerStatus;
   present(raw: unknown): boolean;
-  presentation(): { version: 1; event: PresentationEvent | null };
+  presentation(): {
+    version: 1;
+    event: PresentationEvent | null;
+    retired?: true;
+  };
   /**
    * `POST /desktop/presentation/region`: where a named thing is, for the call
    * video. Read only: no input, no picture, no command for the hands.
@@ -94,6 +98,13 @@ const nothingRuns: HandsNext["run"] = {
   state: "idle",
 };
 
+const retiredWorkerStates = new Set([
+  "stopping",
+  "canceled",
+  "blocked",
+  "uncertain",
+]);
+
 /** The routes over a worker and the hands that the panel serves. */
 export function computerPort(
   worker: ComputerWorker,
@@ -107,6 +118,14 @@ export function computerPort(
       status.enabled &&
       status.state === "running" &&
       hands.presentationCommand() > 0
+    );
+  };
+  const retired = () => {
+    const status = worker.status();
+    return (
+      !status.enabled ||
+      retiredWorkerStates.has(status.state) ||
+      status.waiting === "takeover"
     );
   };
   const next = (after: number) =>
@@ -126,17 +145,32 @@ export function computerPort(
       });
       return next(after);
     },
-    result: (raw, cost) => hands.result(raw, cost),
+    result: (raw, cost) => {
+      const parsed = handResultSchema.parse(raw);
+      const accepted = hands.result(parsed, cost);
+      if (accepted && (!parsed.ok || parsed.interrupted)) events.retire();
+      return accepted;
+    },
     status: () => computerStatusSchema.parse(worker.status()),
     present: (raw) => events.accept(raw, hands.presentationCommand(), active()),
-    presentation: () => ({ version: 1, event: events.latest(active()) }),
+    presentation: () => {
+      if (retired()) {
+        events.retire();
+        return { version: 1, event: null, retired: true };
+      }
+      const event = events.latest();
+      if (event) return { version: 1, event };
+      return events.retired()
+        ? { version: 1, event: null, retired: true }
+        : { version: 1, event: null };
+    },
     region: (name) =>
       resolveRegion(name, {
         look: hands.look,
         ...(options.windows ? { windows: options.windows } : {}),
       }),
     stop: () => {
-      events.clear();
+      events.retire();
       return worker.stop();
     },
   };

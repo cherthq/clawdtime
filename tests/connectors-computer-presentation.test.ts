@@ -106,6 +106,7 @@ describe("native presentation boundary", () => {
       expect(await (await request("/desktop/presentation")).json()).toEqual({
         version: 1,
         event: null,
+        retired: true,
       });
       expect(
         await (
@@ -123,6 +124,7 @@ describe("native presentation boundary", () => {
       expect(await (await request("/desktop/presentation")).json()).toEqual({
         version: 1,
         event: null,
+        retired: true,
       });
     } finally {
       worker.stop();
@@ -293,6 +295,7 @@ describe("native presentation boundary", () => {
     expect(await (await request("/desktop/presentation")).json()).toEqual({
       version: 1,
       event: null,
+      retired: true,
     });
     enabled = true;
     expect(
@@ -304,6 +307,7 @@ describe("native presentation boundary", () => {
     expect(await (await request("/desktop/presentation")).json()).toEqual({
       version: 1,
       event: null,
+      retired: true,
     });
     expect(
       await (
@@ -315,6 +319,136 @@ describe("native presentation boundary", () => {
     expect(offComputerPort("Disabled").presentation()).toEqual({
       version: 1,
       event: null,
+    });
+  });
+
+  it("distinguishes clean expiry/completion/question pause from explicit retirement states", async () => {
+    let now = 10_000;
+    const broker = new PresentationEvents(() => now);
+    expect(broker.retired()).toBe(false);
+    expect(broker.accept(event(now), 41, true)).toBe(true);
+    expect(broker.retired()).toBe(false);
+    // Default latest() keeps event readable until natural expiry without retiring.
+    expect(broker.latest()).toEqual(event(now));
+    now += 1500;
+    expect(broker.latest()).toBeNull();
+    expect(broker.retired()).toBe(false);
+    // Explicit retire(), reset event, and latest(false) mark retired; new non-reset clears it.
+    broker.retire();
+    expect(broker.retired()).toBe(true);
+    expect(broker.accept({ ...event(now), sequence: 2 }, 41, true)).toBe(true);
+    expect(broker.retired()).toBe(false);
+    expect(
+      broker.accept(
+        {
+          version: 1,
+          producerId: "fixture-panel",
+          sequence: 3,
+          commandSeq: 41,
+          at: now,
+          expiresAt: now + 1000,
+          kind: "reset",
+          reducedMotion: false,
+        },
+        41,
+        true,
+      ),
+    ).toBe(true);
+    expect(broker.retired()).toBe(true);
+    expect(
+      broker.accept(
+        { ...event(now), producerId: "panel-2", commandSeq: 42, sequence: 1 },
+        42,
+        true,
+      ),
+    ).toBe(true);
+    expect(broker.retired()).toBe(false);
+    expect(broker.latest(false)).toBeNull();
+    expect(broker.retired()).toBe(true);
+
+    // Service port: clean completion and paused-for-question preserve event without retired: true,
+    // while failed/interrupted result and retired worker states emit retired: true.
+    const hands = new PanelHands({ first: 41 });
+    let status: {
+      enabled: boolean;
+      state: string;
+      waiting?: "takeover" | "approval" | "question";
+    } = { enabled: true, state: "running" };
+    const worker = {
+      status: () => status,
+      run: () => ({
+        active: status.state === "running",
+        goal: "",
+        step: 1,
+        state: status.state,
+      }),
+      stop: () => {
+        status = { enabled: true, state: "stopping" };
+        return {};
+      },
+    } as unknown as ComputerWorker;
+    const port = computerPort(worker, hands);
+    const firstCmd = hands.run({ kind: "wait", ms: 0 }, "Wait");
+    hands.next(0);
+    const wire = event(Date.now());
+    expect(port.present(wire)).toBe(true);
+    expect(port.presentation()).toEqual({ version: 1, event: wire });
+
+    // Clean completion and question pause keep the event readable and never accept new ones.
+    status = { enabled: true, state: "completed" };
+    expect(port.present({ ...wire, sequence: 2 })).toBe(false);
+    expect(port.presentation()).toEqual({ version: 1, event: wire });
+
+    status = {
+      enabled: true,
+      state: "waiting_for_person",
+      waiting: "question",
+    };
+    expect(port.present({ ...wire, sequence: 2 })).toBe(false);
+    expect(port.presentation()).toEqual({ version: 1, event: wire });
+
+    // Takeover, blocked, uncertain, canceled, stopping, !enabled all return retired: true.
+    for (const nextStatus of [
+      {
+        enabled: true,
+        state: "waiting_for_person",
+        waiting: "takeover" as const,
+      },
+      { enabled: true, state: "blocked" },
+      { enabled: true, state: "uncertain" },
+      { enabled: true, state: "canceled" },
+      { enabled: true, state: "stopping" },
+      { enabled: false, state: "idle" },
+    ]) {
+      status = nextStatus;
+      expect(port.presentation()).toEqual({
+        version: 1,
+        event: null,
+        retired: true,
+      });
+    }
+
+    // Failed or interrupted hand result retires immediately.
+    status = { enabled: true, state: "running" };
+    expect(port.present({ ...wire, sequence: 2 })).toBe(true);
+    expect(port.result({ seq: 41, ok: false, error: "failed" })).toBe(true);
+    await firstCmd;
+    expect(port.presentation()).toEqual({
+      version: 1,
+      event: null,
+      retired: true,
+    });
+
+    const secondCmd = hands.run({ kind: "wait", ms: 0 }, "Wait");
+    hands.next(41);
+    const wire2 = { ...event(Date.now()), commandSeq: 42, sequence: 3 };
+    expect(port.present(wire2)).toBe(true);
+    expect(port.result({ seq: 42, ok: true, interrupted: true })).toBe(true);
+    await secondCmd;
+    expect(port.presentation()).toEqual({
+      version: 1,
+      event: null,
+      retired: true,
     });
   });
 });

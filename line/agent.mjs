@@ -46,7 +46,7 @@ import { makeCallVideo } from "./call-video.mjs";
 import { videoFPS } from "./continuous-screen.mjs";
 import { makeZoomSettings } from "./zoom-settings.mjs";
 import { planZoom, zoomGeometry } from "./manual-zoom.mjs";
-import { requestRegion } from "./presentation-source.mjs";
+import { requestRegion, requestView } from "./presentation-source.mjs";
 import { makeProactiveVideo } from "./proactive-outbound.mjs";
 import {
   createReachCallClient,
@@ -85,6 +85,29 @@ const log = (event, detail = {}) =>
     }),
   );
 const SHOWN = new Set(["listening", "thinking", "speaking"]);
+
+/**
+ * Syncs one call's video view from the desktop service, falling back to the CLI.
+ * Clearing a manual view uses `clearManual()` so auto-follow zoom is not
+ * permanently disabled across calls.
+ */
+export async function syncCallView({
+  callStarted,
+  viewAt,
+  ended = () => false,
+  readDesktop = requestView,
+  readFallback = readView,
+  video,
+  log: writeLog = () => {},
+}) {
+  const now = (await readDesktop()) ?? (await readFallback());
+  if (!now || now.at < callStarted || ended()) return viewAt;
+  if (now.at <= viewAt) return viewAt;
+  writeLog("view", { window: now.view !== null });
+  if (now.view === null) video.clearManual();
+  else video.manual(now.view);
+  return now.at;
+}
 
 export async function callEntry(ctx, { proactive } = {}) {
   let stage = "entry";
@@ -142,8 +165,7 @@ export async function callEntry(ctx, { proactive } = {}) {
         return false;
       }
     };
-    // One part of the screen that the call shows, in shares, or null for the whole screen.
-    let view = null;
+    // When the current call video view was set.
     let viewAt = 0;
     // Provider IDs/transcripts are transient; diagnostics contain bounded codes only.
     const callerRequest = makeCallerRequestBinding({
@@ -368,14 +390,13 @@ export async function callEntry(ctx, { proactive } = {}) {
      * that view until the person asks for another: nothing here has to set it again after a hide or a gap.
      */
     const syncView = async () => {
-      const now = await readView();
-      if (!now || now.at < callStarted || ended) return;
-      if (now.at <= viewAt) return;
-      viewAt = now.at;
-      view = now.view;
-      log("view", { window: view !== null });
-      if (view === null) setZoom("overview");
-      video.manual(view);
+      viewAt = await syncCallView({
+        callStarted,
+        viewAt,
+        ended: () => ended,
+        video,
+        log,
+      });
     };
 
     /**

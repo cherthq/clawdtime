@@ -63,7 +63,7 @@ export function makeCallVideo({
         if (screen.supportsAutomaticZoom)
           source = presentation({
             since: Math.max(since ?? 0, now()),
-            onEvent: (event) => {
+            onEvent: (event, options) => {
               if (generation !== ownGeneration || closed) return;
               if (event?.surface) {
                 const next = JSON.stringify([
@@ -81,7 +81,7 @@ export function makeCallVideo({
                 }
                 display = next;
               }
-              camera.event(event);
+              camera.event(event, options);
             },
           });
       }
@@ -100,6 +100,9 @@ export function makeCallVideo({
     },
     manual(view) {
       camera.manual(view);
+    },
+    clearManual() {
+      camera.clearManual();
     },
     control(action) {
       return camera.control(action);
