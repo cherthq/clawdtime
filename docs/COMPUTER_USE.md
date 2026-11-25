@@ -1278,9 +1278,13 @@ in `connectors/computer/reach.ts`.
    the reach goes at once. `CLAWDTIME_COMPUTER_REACH_SECONDS` in the
    environment of the desktop service sets the wait, from 0 to 600.
 3. What you say on that call goes to the worker as an answer in the chat does.
-   The worker reads it with its own rules: words that are not a clear yes
-   approve nothing, and a no ends the request. Stop stops it, also through the
-   stop tool of the call.
+   A question that waits for your yes takes only the strict yes of the chat
+   ("yes", "yes, go ahead", "approve it") or a plain no ("no", "don't send
+   it"). Words with a doubt, a condition, a delay, a refusal that is no plain
+   no, or a thanks ("ok, hold off", "yes, but later", "yes, only if it is
+   under 20 dollars", "ok thanks") approve nothing: the question waits, and
+   the call or the text says it again. A no ends the request. Stop stops it,
+   also through the stop tool of the call.
 4. When the call fails, is not answered, is not dialed within a minute, or the
    line is not set up for calls, ClawdTime texts you once: the question, and
    how to answer it. Your reply to that text goes to the worker the same way.

@@ -194,6 +194,14 @@ describe("review 2: a reach answer that means no is taken as a yes", () => {
           expect(text.sent).toHaveLength(1);
           await reach.reply(words, "text");
         }
+        // The words approve nothing, as in the chat: the question waits.
+        await new Promise((done) => setTimeout(done, 20));
+        expect(worker.snapshot()).toMatchObject({
+          state: "waiting_for_person",
+          waiting: "approval",
+        });
+        expect(hands.sent).toEqual([]);
+        worker.stop();
         await worker.idle();
         expect(hands.sent).toEqual([]);
       },

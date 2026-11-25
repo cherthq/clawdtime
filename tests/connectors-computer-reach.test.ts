@@ -1152,3 +1152,44 @@ describe("the text side over the text settings", () => {
     });
   });
 });
+
+describe("the strict yes", () => {
+  it("is the only yes that the worker itself takes for a yes or no question", async () => {
+    const { worker, waiting, hands } = setup();
+    await worker.submit("r1", "Finish the draft");
+    await waiting();
+    for (const words of [
+      "ok thanks",
+      "yes, but later",
+      "ok, hold off",
+      "yes, only if it is under 20 dollars",
+      "sure",
+    ]) {
+      expect((await worker.answer(words)).message, words).toBe(
+        `I did not get a clear answer. ${sendQuestion}`,
+      );
+      expect(worker.snapshot().waiting).toBe("approval");
+    }
+    expect(hands.sent).toEqual([]);
+    expect((await worker.answer("yes")).message).toBe("Continuing.");
+    await worker.idle();
+    expect(hands.sent).toHaveLength(1);
+  });
+
+  it("ends the question at a plain no by text, and passes on no other word for it", async () => {
+    const { worker, reach, waiting, after, call, hands } = setup();
+    await worker.submit("r1", "Finish the draft");
+    await waiting();
+    await reach.tick();
+    await after(45_000);
+    expect(
+      await reach.reply("ok, scratch that", "call", call.placed[0]!.key),
+    ).toBe(`${reachReplies.unclear} ${sendQuestion}`);
+    expect(worker.snapshot().state).toBe("waiting_for_person");
+    expect(
+      await reach.reply("don't send it", "call", call.placed[0]!.key),
+    ).toMatch(/^Canceled\./);
+    expect(worker.snapshot().state).toBe("canceled");
+    expect(hands.sent).toEqual([]);
+  });
+});

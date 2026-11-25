@@ -7,7 +7,11 @@
  * sentences. When that call fails, is not answered, or the line is not set up,
  * it sends ONE text to the owner instead. The owner's answer, spoken or texted,
  * goes to the worker's own `answer`, as an answer in the chat does: the worker
- * reads it with its own rules, and a yes is never inferred here.
+ * reads it with its own rules, and a yes is never inferred here. A question
+ * that waits for a yes takes only the strict yes of the chat
+ * (`explicitApprovalYes`) or a plain no: words with a doubt, a condition, a
+ * delay, a refusal or a thanks ("ok, hold off", "yes, but later", "ok
+ * thanks") go nowhere, and the question waits.
  *
  * Rules that are code here:
  *
@@ -40,7 +44,11 @@ import type {
 } from "../../src/attention/proactive-contracts.js";
 import type { ProactivePolicy } from "../../src/attention/proactive-policy.js";
 import type { ProactiveSourceEvidence } from "../../src/control/proactive-preparation.js";
-import { holdsBack } from "../agents/call.js";
+import {
+  explicitApprovalNo,
+  explicitApprovalYes,
+  holdsBack,
+} from "../agents/call.js";
 import { looksSecret } from "../agents/memory.js";
 import {
   ownerTextLine,
@@ -244,6 +252,7 @@ export const reachReplies = {
   secret:
     "I do not take a password or a code by phone or by text, so nothing was passed on. Type it on the Mac yourself, then say done.",
   held: "I did not pass that on: it reads as a question or as a wait.",
+  unclear: "I did not get a clear answer.",
 } as const;
 
 const eventSchema = z
@@ -803,10 +812,21 @@ export class OwnerReach {
       this.record(item, `held_${via}`);
       return `${reachReplies.held} ${item.spoken}`;
     }
+    // A question that waits for a yes takes the strict yes of the chat, or a
+    // plain no. Anything else (a doubt, a condition, a delay, a refusal that
+    // is no plain no, a thanks) goes nowhere, and the question waits.
+    let handed = said;
+    if (item.mode === "yes_no") {
+      if (explicitApprovalNo.test(said)) handed = "no";
+      else if (!explicitApprovalYes.test(said)) {
+        this.record(item, `unclear_${via}`);
+        return `${reachReplies.unclear} ${item.question}`;
+      }
+    }
     item.answeredVia = via;
     let message: string;
     try {
-      message = (await this.options.worker.answer(said)).message;
+      message = (await this.options.worker.answer(handed)).message;
     } catch {
       message = reachReplies.gone;
     }

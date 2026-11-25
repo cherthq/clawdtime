@@ -45,7 +45,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import { interpret } from "./call.js";
+import { explicitApprovalNo, explicitApprovalYes, interpret } from "./call.js";
 import { classifyIntent, intentSchema, type IntentInput } from "./intent.js";
 import { agentLabel } from "./catalog.js";
 import {
@@ -468,12 +468,6 @@ const stopKindOf = (spoken: string): "explicit" | "general" | null => {
  */
 const canDoAnswer =
   "Nothing started: that asks what I can do. I can work on this Mac's screen: open apps, click, type and scroll. Tell me what to do, and in which app.";
-/** Explicit yes for a waiting computer-action approval (never bare ok/okay/sure/yeah/yep, never a question). */
-const explicitApprovalYes =
-  /^(?:(?:please|pls|plz)[,\s]+)?(?:yes(?:[,\s]+(?:please|pls|plz))?(?:[,\s]+(?:do\s+it|go\s+ahead(?:\s+and\s+do\s+it)?|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|proceed|confirm(?:\s+(?:it|that))?|send\s+(?:it|that)|click\s+(?:it|that)|submit\s+(?:it|that)))?|i\s+approve|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|confirm(?:\s+(?:it|that))?|go\s+ahead(?:\s+and\s+do\s+it)?|do\s+it)(?:[,\s]+(?:please|pls|plz))?[.!]*$/i;
-/** Explicit no or refusal for a waiting computer-action approval (never a question). */
-const explicitApprovalNo =
-  /^(?:(?:please|pls|plz)[,\s]+)?(?:no|nope|nah|deny(?:\s+it)?|decline|reject|refuse|cancel|don['\u2019]?t|do\s+not)(?:[,\s]+(?:please|pls|plz))?[.!]*$|^(?:(?:no|nope|nah)[,\s]+)?(?:don['\u2019]?t|do\s+not|deny|decline|reject|refuse)\s+(?:do\s+(?:it|that)|approve(?:\s+(?:it|that))?|allow(?:\s+(?:it|that))?|send(?:\s+(?:it|that))?|click(?:\s+(?:it|that))?|submit(?:\s+(?:it|that))?|proceed|it|that)(?:[,\s]+(?:please|pls|plz))?[.!]*$/i;
 /** True when the newest message in history (on any channel) is ClawdTime's approval question, with no user message after it. */
 const sawApprovalPrompt = (
   history: ChatMessage[],

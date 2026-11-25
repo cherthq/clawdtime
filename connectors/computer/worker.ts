@@ -54,7 +54,11 @@ import type {
   DesktopExecutionAuthority,
   DesktopExecutorPort,
 } from "../../src/control/desktop-executor.js";
-import { interpret } from "../agents/call.js";
+import {
+  explicitApprovalNo,
+  explicitApprovalYes,
+  interpret,
+} from "../agents/call.js";
 import { looksSecret } from "../agents/memory.js";
 import {
   actionSchema,
@@ -978,6 +982,17 @@ function readYes(words: string): boolean | null {
       ? false
       : null;
 }
+/**
+ * The answer to a yes or no question: only the strict yes of the chat
+ * approves ("yes", "yes, go ahead"). A yes with a condition, a delay, a doubt
+ * or a thanks ("yes, but later", "ok thanks") is no answer, and the question
+ * waits. A clear no is a no.
+ */
+function readApproval(words: string): boolean | null {
+  if (explicitApprovalYes.test(words)) return true;
+  if (explicitApprovalNo.test(words)) return false;
+  return readYes(words) === false ? false : null;
+}
 /** Continue or stop. A yes or a no counts too. */
 function readContinue(words: string): boolean | null {
   const plain = readYes(words);
@@ -1686,7 +1701,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       return { message: "Thank you. I go on." };
     }
     const said =
-      question.mode === "continue" ? readContinue(words) : readYes(words);
+      question.mode === "continue" ? readContinue(words) : readApproval(words);
     if (said === null) return { message: unclearText(question.text) };
     if (said) {
       run.question = null;
