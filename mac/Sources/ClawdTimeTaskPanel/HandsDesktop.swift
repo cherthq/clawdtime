@@ -97,7 +97,8 @@ import TaskPanelCore
       MainActor.assumeIsolated {
         guard let self else { return }
         self.spaceChanges += 1
-        self.lease.invalidate()
+        // Another desktop: every old coordinate is retired, also in the worker.
+        self.lease.retire()
         if !self.switching { self.history.invalidate() }
       }
     }))
@@ -108,16 +109,21 @@ import TaskPanelCore
     }))
     for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.screensDidSleepNotification] {
       tokens.append((workspace, workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-        MainActor.assumeIsolated { self?.invalidate() }
+        MainActor.assumeIsolated { self?.retire() }
       }))
     }
     let center = NotificationCenter.default
     tokens.append((center, center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-      MainActor.assumeIsolated { self?.invalidate() }
+      MainActor.assumeIsolated { self?.retire() }
     }))
   }
   deinit { for (center, token) in tokens { center.removeObserver(token) } }
   func invalidate() { lease.invalidate(); history.invalidate(); environmentChanges += 1 }
+  /// The desktop or the display changed, the session went away, or the hands move to another app or desktop.
+  /// Only this changes the epoch that observations carry to the worker (`surfaceEpoch`).
+  private func retire() { lease.retire(); history.invalidate(); environmentChanges += 1 }
+  /// The epoch of every observation: it changes with the desktop or the display, never with a window of the app in front.
+  var surfaceEpoch: Int { lease.surfaceEpoch }
   /// Idle/run completion consumes input evidence but retains a verified previous
   /// desktop in this panel session. External Space/session/display changes do not.
   func retireObservation() { lease.consume(); inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = [] }
@@ -242,9 +248,16 @@ import TaskPanelCore
   /// A directional receipt is a fresh picture of the unchanged composition, never an input lease.
   private func observeNavigationArrival(_ expected: NavigationSurface, observer: HandsObserver, pointer: CGPoint,
                                         allowed: () async -> HandError?, initialSpaces: Int, initialEnvironment: Int,
-                                        trace: SwitchTrace) async -> Result<Observation, HandError> {
+                                        trace: SwitchTrace) async -> Looked {
     retireObservation()
     let captureEpoch = epoch
+    let result = await captureNavigationArrival(expected, captureEpoch: captureEpoch, observer: observer, pointer: pointer,
+      allowed: allowed, initialSpaces: initialSpaces, initialEnvironment: initialEnvironment, trace: trace)
+    return Looked(result: result, epoch: captureEpoch)
+  }
+  private func captureNavigationArrival(_ expected: NavigationSurface, captureEpoch: Int, observer: HandsObserver, pointer: CGPoint,
+                                        allowed: () async -> HandError?, initialSpaces: Int, initialEnvironment: Int,
+                                        trace: SwitchTrace) async -> Result<Observation, HandError> {
     if let error = await allowed() { return .failure(error) }
     let before = await navigationSurface(allowComposite: true, trace: trace)
     if let error = await allowed() { return .failure(error) }
@@ -260,13 +273,24 @@ import TaskPanelCore
       activeDisplays: activeDisplays) else { return .failure(.staleObservation) }
     guard case .success(let seen) = captured else { return captured }
     return .success(Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app, elements: [],
-      image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: captureEpoch))
+      image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: surfaceEpoch))
   }
 
   /// Screenshot and AX evidence bracketed by independently checked window identity.
   /// An observation can still describe a desktop with no usable window, but grants
   /// no input lease in that case (open_app remains available).
   func observe(observer: HandsObserver, image: Bool, elements: Bool, accessibility: Bool, pointer: CGPoint) async -> Result<Observation, HandError> {
+    await leasedLook(observer: observer, image: image, elements: elements, accessibility: accessibility, pointer: pointer).result
+  }
+  /// A look, and the input epoch of the lease just after it. A transition compares that epoch with `epoch`
+  /// before it gives the look as its arrival: nothing retired the look in between. The observation itself
+  /// carries `surfaceEpoch`, which only a change of the desktop or the display moves.
+  struct Looked { let result: Result<Observation, HandError>; let epoch: Int }
+  private func leasedLook(observer: HandsObserver, image: Bool, elements: Bool, accessibility: Bool, pointer: CGPoint) async -> Looked {
+    let result = await readLook(observer: observer, image: image, elements: elements, accessibility: accessibility, pointer: pointer)
+    return Looked(result: result, epoch: epoch)
+  }
+  private func readLook(observer: HandsObserver, image: Bool, elements: Bool, accessibility: Bool, pointer: CGPoint) async -> Result<Observation, HandError> {
     let beforeEpoch = epoch
     let before = accessibility ? await surface() : nil
     let read = await observer.observe(image: image, elements: elements, accessibility: accessibility, pointer: pointer)
@@ -282,7 +306,7 @@ import TaskPanelCore
     }
     else { invalidate() }
     return .success(Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app,
-      elements: seen.elements, image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: epoch))
+      elements: seen.elements, image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: surfaceEpoch))
   }
 
   /// Called after the guided cursor, before any physical pointer/keyboard event.
@@ -360,7 +384,7 @@ import TaskPanelCore
     if let found = running.first { app = found }
     else {
       if let error = await allowed() { return failure(error) }
-      invalidate(); phase(.switching); dispatched = true
+      retire(); phase(.switching); dispatched = true
       let options = NSWorkspace.OpenConfiguration()
       options.activates = false
       do { app = try await NSWorkspace.shared.openApplication(at: url, configuration: options) }
@@ -390,7 +414,7 @@ import TaskPanelCore
     }
     if let error = await allowed() { return failure(error) }
     guard singleDisplay else { return failure(.unsupportedDesktop) }
-    invalidate(); phase(.switching)
+    retire(); phase(.switching)
     // A minimized target is explicitly restored once, never replaced by a sibling.
     if target.minimized {
       dispatched = true
@@ -434,11 +458,11 @@ import TaskPanelCore
       case .waiting: break
       case .ready:
         if let error = await allowed() { return failure(error) }
-        let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+        let captured = await leasedLook(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
         // The same rule as the worker's: the app in front is the app that the name stood for.
-        guard case .success(let seen) = captured, let current = await surface(transition: true), current == matches,
-          seen.surfaceEpoch == epoch, DesktopArrival.sameApp(resolved: bundleID, front: seen.app.bundleId),
+        guard case .success(let seen) = captured.result, let current = await surface(transition: true), current == matches,
+          captured.epoch == epoch, DesktopArrival.sameApp(resolved: bundleID, front: seen.app.bundleId),
           DesktopArrival.sameTitle(seen.app.window, windowTitle) else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(Arrival(observation: seen, bundleID: DesktopArrival.identity(bundleID)))
@@ -458,7 +482,7 @@ import TaskPanelCore
     if let error = await allowed() { return .failure(error) }
     var ready = false
     // Old coordinates are retired before the app comes forward.
-    invalidate(); phase(.switching)
+    retire(); phase(.switching)
     defer { if !ready { invalidate(); phase(.blocked) } }
     // The request is out from here. What fails after it is unknown, never a refusal:
     // Stop, a takeover or a lost right in the middle, and an app that never came forward.
@@ -486,7 +510,7 @@ import TaskPanelCore
           invalidate()
           ready = true; phase(.ready)
           let arrived = Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app, elements: seen.elements,
-            image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: epoch)
+            image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: surfaceEpoch)
           return .success(Arrival(observation: arrived, bundleID: DesktopArrival.identity(bundleID)))
         }
         if wait.over(at: now) { return unknown }
@@ -514,7 +538,7 @@ import TaskPanelCore
     let initialEnvironment = environmentChanges, initialSpaces = spaceChanges
     let began = now
     var dispatched = false, ready = false
-    history.invalidate(); lease.invalidate(); switching = true; phase(.switching)
+    history.invalidate(); lease.retire(); switching = true; phase(.switching)
     defer { switching = false; if !ready { invalidate(); phase(.blocked) } }
     func failure(_ error: HandError) -> Result<Observation?, HandError> {
       .failure(DesktopEffectOutcome.failure(error, dispatched: dispatched))
@@ -544,11 +568,11 @@ import TaskPanelCore
       case .waiting: break
       case .ready:
         if let error = await allowed() { return failure(error) }
-        let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+        let captured = await leasedLook(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
         guard now - began < 5, environmentChanges == initialEnvironment, spaceChanges - initialSpaces <= 1,
-          case .success(let seen) = captured, let current = await surface(transition: true), current == stable,
-          current.pid != origin.pid, seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
+          case .success(let seen) = captured.result, let current = await surface(transition: true), current == stable,
+          current.pid != origin.pid, captured.epoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(seen)
       }
@@ -613,7 +637,7 @@ import TaskPanelCore
     let began = now
     var dispatched = false, ready = false
     // History is retired before the attempt. Nothing restores it on failure.
-    history.invalidate(); lease.invalidate(); switching = true; phase(.switching)
+    history.invalidate(); lease.retire(); switching = true; phase(.switching)
     defer {
       trace.environmentAtResult = environmentChanges
       switching = false
@@ -662,12 +686,12 @@ import TaskPanelCore
         // It is observed as it is. An observation with no window gives no lease for input.
         if let error = await allowed() { return failure(error) }
         guard now - began < 5, environmentChanges == initialEnvironmentChanges, spaceChanges - initialSpaceChanges == 1 else { return failure(.staleObservation) }
-        let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+        let captured = await leasedLook(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
         // The observation of a desktop with no window retires the lease once itself: one more environment change.
         guard now - began < 6, environmentChanges == initialEnvironmentChanges + 1, spaceChanges - initialSpaceChanges == 1,
-          case .success(let seen) = captured, await surface(transition: true, diagnostic: { trace.surfaceReason($0) }) == nil, DesktopAX.noOrdinaryWindow(display: origin.parent.displayID),
-          seen.surfaceEpoch == epoch else { return failure(.staleObservation) }
+          case .success(let seen) = captured.result, await surface(transition: true, diagnostic: { trace.surfaceReason($0) }) == nil, DesktopAX.noOrdinaryWindow(display: origin.parent.displayID),
+          captured.epoch == epoch else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(seen)
       }
@@ -688,14 +712,14 @@ import TaskPanelCore
         let captured = compositionUsed
           ? await observeNavigationArrival(arrival, observer: observer, pointer: pointer(), allowed: allowed,
               initialSpaces: initialSpaceChanges, initialEnvironment: initialEnvironmentChanges, trace: trace)
-          : await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+          : await leasedLook(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
         guard now - began < 5, environmentChanges == initialEnvironmentChanges, spaceChanges - initialSpaceChanges == 1,
-          case .success(let seen) = captured, let target = await navigationSurface(allowComposite: requested != .previous, trace: trace), target == arrival,
-          seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
+          case .success(let seen) = captured.result, let target = await navigationSurface(allowComposite: requested != .previous, trace: trace), target == arrival,
+          captured.epoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         if let error = await allowed() { return failure(error) }
         guard now - began < 5, singleDisplay, environmentChanges == initialEnvironmentChanges,
-          spaceChanges - initialSpaceChanges == 1, seen.surfaceEpoch == epoch else { return failure(.staleObservation) }
+          spaceChanges - initialSpaceChanges == 1, captured.epoch == epoch else { return failure(.staleObservation) }
         if compositionUsed { retireObservation(); history.invalidate() }
         else { history.verified(direction, from: origin.parent, to: target.parent) }
         ready = true; phase(.ready)
@@ -719,7 +743,7 @@ import TaskPanelCore
     trace.spaceBaseline = initialSpaceChanges; trace.environmentBaseline = initialEnvironmentChanges
     let began = now
     var dispatched = false, ready = false
-    history.invalidate(); lease.invalidate(); switching = true; phase(.switching)
+    history.invalidate(); lease.retire(); switching = true; phase(.switching)
     defer {
       trace.environmentAtResult = environmentChanges
       switching = false
@@ -767,11 +791,11 @@ import TaskPanelCore
       case .waiting: break
       case .ready:
         if let error = await allowed() { return failure(error) }
-        let captured = await observe(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
+        let captured = await leasedLook(observer: observer, image: true, elements: true, accessibility: true, pointer: pointer())
         if let error = await allowed() { return failure(error) }
         guard now - began < 5, environmentChanges == initialEnvironmentChanges, spaceChanges - initialSpaceChanges == 1,
-          case .success(let seen) = captured, let target = await surface(transition: true, diagnostic: { trace.surfaceReason($0) }), target == stableCandidate,
-          seen.surfaceEpoch == epoch, now - began < 5 else { return failure(.staleObservation) }
+          case .success(let seen) = captured.result, let target = await surface(transition: true, diagnostic: { trace.surfaceReason($0) }), target == stableCandidate,
+          captured.epoch == epoch, now - began < 5 else { return failure(.staleObservation) }
         ready = true; phase(.ready)
         return .success(seen)
       }

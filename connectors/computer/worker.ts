@@ -3336,7 +3336,12 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.tried = "free";
       return;
     }
-    run.tried = "unsent";
+    // A change of the desktop or of the display retired the coordinates of
+    // the look (`surfaceEpoch`): the action did nothing wrong, and the next
+    // look is a fresh one. It is no try of the action. A change that keeps
+    // coming still fills the row of held steps below, and gets the wait for
+    // the screen to settle.
+    run.tried = reason === retiredReason ? "free" : "unsent";
     const key = heldKey(reason);
     const count = run.heldRow?.key === key ? run.heldRow.count + 1 : 1;
     const total = (run.heldRow?.total ?? 0) + 1;

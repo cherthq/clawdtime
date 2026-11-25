@@ -20,16 +20,26 @@ public struct DesktopSettlement<Surface: Equatable> {
 }
 
 /// The one observation the serialized native hands may act on. Notifications,
-/// app/window/geometry changes and transition starts all retire it. Epochs are
-/// also sent to the worker to prevent retargeting an old plan onto a new Space.
+/// app/window/geometry changes and transition starts all retire it (`epoch`).
+/// The worker gets `surfaceEpoch`, which prevents retargeting an old plan onto
+/// a new Space: only `retire` moves it.
 public struct DesktopObservationLease<Surface: Equatable> {
+  /// The input generation of the panel: anything that changed under a look retires it.
   public private(set) var epoch = 0
+  /// The epoch that an observation carries to the worker. It grows only with `retire`: a change of the desktop
+  /// or of the display, the session going away, and a move of the hands to another app or desktop. A new window
+  /// of the app in front, the first window of an app, a list in front of it, a look with no window and an app
+  /// that came forward by itself retire only the input (`epoch`). The worker then finds its target again in the
+  /// newer look by its app, window, role, name and place, and never counts such a change as one of the desktop.
+  public private(set) var surfaceEpoch = 0
   private var surface: Surface?
   private var observedAt: TimeInterval?
   public init() {}
   /// What the lease holds now, if anything.
   public var held: Surface? { surface }
   public mutating func invalidate() { epoch += 1; surface = nil; observedAt = nil }
+  /// The desktop or the display changed, or the hands move to another app or desktop: every old coordinate is retired.
+  public mutating func retire() { surfaceEpoch += 1; invalidate() }
   /// A dispatched input consumes freshness, not identity (a focus click can precede typing).
   public mutating func consume() { observedAt = nil }
   public mutating func record(_ value: Surface, at: TimeInterval) {

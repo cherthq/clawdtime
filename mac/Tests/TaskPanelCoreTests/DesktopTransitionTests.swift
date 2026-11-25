@@ -71,6 +71,34 @@ final class DesktopTransitionTests: XCTestCase {
     lease.record(surface, at: 10.4)
     XCTAssertNotEqual(lease.epoch, epoch)
   }
+  func testOnlyAChangeOfTheDesktopOrTheDisplayChangesTheSurfaceEpochOfAnObservation() {
+    // The epoch that an observation carries to the worker retires all old coordinates there. A new window of
+    // the app in front, the first window of an app, a look with no window and an app that came forward retire
+    // only the input of the panel: the worker finds its target again in the newer look.
+    var lease = DesktopObservationLease<Surface>()
+    var start = Surface(), document = Surface()
+    start.window = 1; document.window = 2
+    lease.record(start, at: 1)
+    let input = lease.epoch
+    lease.record(document, at: 2) // the app in front opened a window
+    XCTAssertGreaterThan(lease.epoch, input)
+    XCTAssertFalse(lease.permits(start, at: 2))
+    XCTAssertTrue(lease.permits(document, at: 2))
+    lease.invalidate() // an app came forward, or a look found no window
+    XCTAssertFalse(lease.permits(document, at: 2))
+    lease.record(document, at: 3)
+    XCTAssertEqual(lease.surfaceEpoch, 0)
+    // A change of the desktop or of the display, or a move of the hands to another app or desktop.
+    let before = lease.epoch
+    lease.retire()
+    XCTAssertEqual(lease.surfaceEpoch, 1)
+    XCTAssertGreaterThan(lease.epoch, before)
+    XCTAssertNil(lease.held)
+    XCTAssertFalse(lease.permits(document, at: 3))
+    lease.record(document, at: 4)
+    XCTAssertTrue(lease.permits(document, at: 4))
+    XCTAssertEqual(lease.surfaceEpoch, 1)
+  }
   func testGeometryDisplayScaleWindowAndAppMustMatchLastObservation() {
     let original = Surface()
     var lease = DesktopObservationLease<Surface>()
