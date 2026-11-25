@@ -24,6 +24,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
+import { pageError } from "../connectors/computer/error-page.js";
 import { OwnBrowser } from "../connectors/computer/own-browser.js";
 import type { BrowserPage } from "../connectors/computer/ports.js";
 
@@ -136,7 +137,143 @@ const results = (asked: string) => `<!doctype html>
 </script>
 </body></html>`;
 
-function serve() {
+const peak = (crossOrigin: string) => `<!doctype html>
+<html><head><meta charset="utf-8"><title>Peak controls</title>
+<style>
+  #ghost { opacity: 0; }
+  #custom-cb { opacity: 0; position: absolute; }
+  #custom-radio { opacity: 0; width: 0; height: 0; position: absolute; }
+  #orphan-cb { opacity: 0; }
+  iframe { display: block; margin: 24px 0 0 36px; border: 4px solid #333; padding: 6px; width: 360px; height: 220px; }
+</style></head><body>
+<h1>Peak controls</h1>
+<div id="spinner">spinning</div>
+<button id="mutate">Trigger dynamic DOM</button> <span id="dyn">initial</span>
+<p><a id="popup-link" href="/popup" target="_blank">Open popup</a></p>
+<div role="combobox" aria-label="Country picker" aria-expanded="false" tabindex="0">Country picker</div>
+<div role="switch" aria-label="Dark mode" aria-checked="true" tabindex="0">Dark mode</div>
+<div role="slider" aria-label="Volume" aria-valuenow="42" tabindex="0">Volume</div>
+<button id="ghost">Ghost button</button>
+<p><label id="custom-cb-label"><input id="custom-cb" type="checkbox"><span>Accept terms</span></label></p>
+<p><input id="custom-radio" type="radio" name="ship"><label for="custom-radio">Express shipping</label></p>
+<p><input id="orphan-cb" type="checkbox" aria-label="Orphan hidden checkbox"></p>
+<p><label for="phone">Phone number</label> <input id="phone" type="text" value=""> <span id="phone-events">0</span></p>
+<p><label for="color">Color</label> <select id="color"><option>Red</option><option>Blue</option><option>Green</option></select></p>
+<p><label>Upload file <input id="upload" type="file"></label></p>
+<p><label for="date">Delivery date</label> <input id="date" type="date"></p>
+<p><label for="editbox">Edit box</label> <input id="editbox" type="text" value="Hello World"></p>
+<p><a id="broken-link" href="http://127.0.0.1:1/">Broken link</a></p>
+<iframe id="same-frame" src="/frame"></iframe>
+<iframe id="cross-frame" src="${crossOrigin}/xframe"></iframe>
+<iframe id="nested-outer" src="/nested-outer"></iframe>
+<script>
+  // Rapid CSS/style flicker every 15ms: must NOT stall MutationObserver settle.
+  var deg = 0;
+  setInterval(function () {
+    deg = (deg + 10) % 360;
+    document.getElementById("spinner").style.transform = "rotate(" + deg + "deg)";
+  }, 15);
+  document.getElementById("mutate").addEventListener("click", function () {
+    setTimeout(function () { document.getElementById("dyn").textContent = "step 1"; }, 30);
+    setTimeout(function () { document.getElementById("dyn").textContent = "Settled after mutations"; }, 70);
+  });
+  // Masked phone input: reformats 10 digits to (XXX) XXX-XXXX and counts input events.
+  var phone = document.getElementById("phone");
+  var phoneCount = 0;
+  phone.addEventListener("input", function () {
+    phoneCount += 1;
+    var digits = phone.value.replace(/\\D/g, "").slice(0, 10);
+    if (digits.length === 10) {
+      phone.value = "(" + digits.slice(0, 3) + ") " + digits.slice(3, 6) + "-" + digits.slice(6);
+    }
+    document.getElementById("phone-events").textContent = String(phoneCount);
+  });
+</script>
+</body></html>`;
+
+const popupHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Popup page</title></head><body>
+<h1>Popup page</h1><button id="ok">Popup OK</button>
+</body></html>`;
+
+const sameFrameHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Same frame</title></head><body>
+<button id="fbtn">Frame action</button> <span id="fcount">0</span>
+<p><label for="fnote">Frame note</label> <input id="fnote" type="text" value="init"></p>
+<p><label>Frame secret <input id="fpw" type="password" value="top-secret"></label></p>
+<script>
+  document.getElementById("fbtn").addEventListener("click", function () {
+    var c = document.getElementById("fcount");
+    c.textContent = String(Number(c.textContent) + 1);
+  });
+</script>
+</body></html>`;
+
+const crossFrameHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Cross frame</title>
+<style>iframe { display: block; margin-top: 8px; width: 280px; height: 90px; border: 2px solid #555; }</style>
+</head><body>
+<button id="xbtn">Cross frame action</button> <span id="xcount">0</span>
+<p><label>Cross secret <input id="xpw" type="password" value="x-secret"></label></p>
+<iframe id="xinner-frame" src="/xinner"></iframe>
+<script>
+  document.getElementById("xbtn").addEventListener("click", function () {
+    var c = document.getElementById("xcount");
+    c.textContent = String(Number(c.textContent) + 1);
+  });
+</script>
+</body></html>`;
+
+const crossInnerHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Cross inner</title></head><body>
+<button id="xinner-btn">Nested OOPIF action</button> <span id="xinner-count">0</span>
+<script>
+  document.getElementById("xinner-btn").addEventListener("click", function () {
+    var c = document.getElementById("xinner-count");
+    c.textContent = String(Number(c.textContent) + 1);
+  });
+</script>
+</body></html>`;
+
+const nestedOuterHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Nested outer</title>
+<style>
+  .wrap { position: relative; width: 280px; height: 110px; }
+  .wrap iframe { width: 280px; height: 110px; border: 0; }
+  .veil { position: absolute; top: 0; left: 0; width: 280px; height: 48px; background: rgba(0,0,0,0.05); }
+</style>
+</head><body>
+<div class="wrap">
+  <iframe id="nested-inner" src="/nested-inner"></iframe>
+  <div class="veil"></div>
+</div>
+</body></html>`;
+
+const nestedInnerHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Nested inner</title>
+<style>body { margin: 0; } #nbtn { height: 40px; } #npw-row { margin-top: 16px; }</style>
+</head><body>
+<div><button id="nbtn">Covered nested button</button> <span id="ncount">0</span></div>
+<div id="npw-row"><label>Nested secret <input id="npw" type="password" value="nested-secret"></label></div>
+<script>
+  document.getElementById("nbtn").addEventListener("click", function () {
+    var c = document.getElementById("ncount");
+    c.textContent = String(Number(c.textContent) + 1);
+  });
+</script>
+</body></html>`;
+
+const hydrateHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Hydrate page</title></head><body>
+<h1>Hydrate page</h1><p id="status">Booting</p>
+<script>
+  setTimeout(function () {
+    document.getElementById("status").textContent = "Hydrated after 35ms";
+  }, 35);
+</script>
+</body></html>`;
+
+function serve(crossOrigin = "") {
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const html = (body: string) => {
@@ -147,6 +284,14 @@ function serve() {
     if (url.pathname === "/next") return html(second);
     if (url.pathname === "/hostile") return html(hostile);
     if (url.pathname === "/inner") return html("<button>Inner</button>");
+    if (url.pathname === "/peak") return html(peak(crossOrigin));
+    if (url.pathname === "/popup") return html(popupHtml);
+    if (url.pathname === "/frame") return html(sameFrameHtml);
+    if (url.pathname === "/xframe") return html(crossFrameHtml);
+    if (url.pathname === "/xinner") return html(crossInnerHtml);
+    if (url.pathname === "/nested-outer") return html(nestedOuterHtml);
+    if (url.pathname === "/nested-inner") return html(nestedInnerHtml);
+    if (url.pathname === "/hydrate") return html(hydrateHtml);
     if (url.pathname === "/search")
       return html(
         results((url.searchParams.get("q") ?? "").replace(/[^\w ]/g, "")),
@@ -186,7 +331,8 @@ if (!existsSync(program)) {
   process.exit(0);
 }
 
-const site = await serve();
+const crossSite = await serve();
+const site = await serve(crossSite.origin);
 const root = mkdtempSync(join(tmpdir(), "clawdtime-own-browser-"));
 const profile = join(root, "computer", "browser-profile");
 const driver = new OwnBrowser({
@@ -201,7 +347,7 @@ const step = async (title: string, run: () => Promise<void>) => {
     await run();
     checks += 1;
   } catch (error) {
-    console.log(`Own browser: FAILED: ${title}`);
+    console.log(`Own browser: FAILED: ${title}`, error);
     throw error;
   }
 };
@@ -384,6 +530,229 @@ try {
     },
   );
   await step(
+    "extended ARIA roles, opacity: 0 filtering, select options preview, and file input guard work in real Chromium",
+    async () => {
+      const page = await driver.open(`${origin}/peak`);
+      const byLabel = (label: string) =>
+        page.elements.find((item) => item.label === label);
+      assert.equal(byLabel("Country picker")?.role, "combobox");
+      assert.equal(byLabel("Country picker")?.value, "collapsed");
+      assert.equal(byLabel("Dark mode")?.role, "switch");
+      assert.equal(byLabel("Dark mode")?.value, "checked");
+      assert.equal(byLabel("Volume")?.role, "slider");
+      assert.equal(byLabel("Volume")?.value, "42");
+      // opacity: 0 ghost button and unlabeled opacity: 0 checkbox are dropped cleanly.
+      assert.equal(byLabel("Ghost button"), undefined);
+      assert.equal(byLabel("Orphan hidden checkbox"), undefined);
+      // opacity: 0 custom checkbox/radio WITH visible <label> stay visible and clickable!
+      const customCb = byLabel("Accept terms");
+      assert.ok(customCb, "opacity: 0 checkbox with visible label is listed");
+      assert.equal(customCb?.value, "not checked");
+      const afterCb = await driver.click(customCb!.index);
+      assert.equal(
+        afterCb.elements.find((item) => item.label === "Accept terms")?.value,
+        "checked",
+      );
+      const customRadio = afterCb.elements.find(
+        (item) => item.label === "Express shipping",
+      );
+      assert.ok(customRadio, "opacity: 0 radio with visible label is listed");
+      const afterRadio = await driver.click(customRadio!.index);
+      assert.equal(
+        afterRadio.elements.find((item) => item.label === "Express shipping")
+          ?.value,
+        "checked",
+      );
+      // Masked phone input is formatted once without fallback clobbering it.
+      const afterPhone = await driver.type(
+        number(afterRadio, "Phone number"),
+        "5551234567",
+        false,
+      );
+      assert.equal(
+        afterPhone.elements.find((item) => item.label === "Phone number")
+          ?.value,
+        "(555) 123-4567",
+      );
+      assert.match(afterPhone.text, /Phone number 1\b/);
+      // <select> surfaces option preview metadata without altering label/value.
+      const color = afterPhone.elements.find(
+        (item) => item.label === "Color",
+      ) as
+        (BrowserPage["elements"][number] & { options?: string[] }) | undefined;
+      assert.equal(color?.value, "Red");
+      assert.deepEqual(color?.options, ["Red", "Blue", "Green"]);
+      // Clicking <input type="file"> refuses cleanly instead of hanging on native dialog.
+      await assert.rejects(
+        driver.click(number(afterPhone, "Upload file")),
+        /file upload input.*native file picker dialog/i,
+      );
+    },
+  );
+  await step(
+    "MutationObserver quiescence settles after dynamic DOM updates while ignoring rapid CSS style flicker",
+    async () => {
+      const page = await driver.read();
+      const from = Date.now();
+      const after = await driver.click(number(page, "Trigger dynamic DOM"));
+      const elapsed = Date.now() - from;
+      assert.match(after.text, /Settled after mutations/);
+      // Must not hit the 3s navigation cap despite 15ms inline style spinner.
+      assert.ok(elapsed < 1200, `expected fast settle, got ${elapsed}ms`);
+    },
+  );
+  await step(
+    "same-origin and cross-origin (OOPIF) iframes are read, translated, clicked, typed, and password-masked",
+    async () => {
+      const page = await driver.read();
+      // Same-origin iframe elements appear with password value masked.
+      const frameBtn = page.elements.find(
+        (item) => item.label === "Frame action",
+      );
+      assert.ok(frameBtn, "same-origin iframe button listed");
+      const framePw = page.elements.find(
+        (item) => item.label === "Frame secret",
+      );
+      assert.ok(framePw?.password, "iframe password field marked");
+      assert.equal("value" in framePw!, false);
+      assert.ok(!JSON.stringify(page).includes("top-secret"));
+      // Clicking inside same-origin iframe translates coordinates accurately.
+      const afterClick = await driver.click(frameBtn!.index);
+      assert.match(afterClick.text, /Frame action 1/);
+      // Typing inside same-origin iframe works.
+      const afterType = await driver.type(
+        number(afterClick, "Frame note"),
+        "hello frame",
+        false,
+      );
+      assert.equal(
+        afterType.elements.find((item) => item.label === "Frame note")?.value,
+        "hello frame",
+      );
+      // Cross-origin OOPIF iframe button is read and clicked!
+      const xBtn = afterType.elements.find(
+        (item) => item.label === "Cross frame action",
+      );
+      assert.ok(xBtn, "cross-origin OOPIF button listed");
+      const afterCross = await driver.click(xBtn!.index);
+      assert.match(afterCross.text, /Cross frame action 1/);
+
+      // Nested same-origin iframe INSIDE cross-origin OOPIF inherits OOPIF session and works!
+      const nestedOopifBtn = afterCross.elements.find(
+        (item) => item.label === "Nested OOPIF action",
+      );
+      assert.ok(
+        nestedOopifBtn,
+        "nested same-origin-inside-OOPIF button listed",
+      );
+      const afterNestedOopif = await driver.click(nestedOopifBtn!.index);
+      assert.match(afterNestedOopif.text, /Nested OOPIF action 1/);
+
+      // Nested-iframe clickjacking overlay inside outer iframe is caught and refused!
+      const coveredNested = afterNestedOopif.elements.find(
+        (item) => item.label === "Covered nested button",
+      );
+      assert.ok(coveredNested, "nested covered button listed");
+      await assert.rejects(
+        driver.click(coveredNested!.index),
+        /under another element at its centre \(div\)\. Nothing was sent/,
+      );
+      assert.match((await driver.read()).text, /Covered nested button 0/);
+
+      // Deterministic key() focus walk: refuses password in same-origin iframe,
+      // cross-origin OOPIF, and nested 2-level iframe, while allowing normal iframe inputs!
+      const latest = await driver.read();
+      await driver.click(number(latest, "Frame secret"));
+      await assert.rejects(
+        driver.key("Space"),
+        /password field\. The worker never presses a key there/,
+      );
+      await driver.click(number(latest, "Cross secret"));
+      await assert.rejects(
+        driver.key("Space"),
+        /password field\. The worker never presses a key there/,
+      );
+      await driver.click(number(latest, "Nested secret"));
+      await assert.rejects(
+        driver.key("Space"),
+        /password field\. The worker never presses a key there/,
+      );
+      await driver.click(number(latest, "Frame note"));
+      await driver.key("Cmd+A");
+      const clearedFrameNote = await driver.key("Delete");
+      assert.equal(
+        clearedFrameNote.elements.find((item) => item.label === "Frame note")
+          ?.value,
+        "",
+      );
+    },
+  );
+  await step(
+    "fresh navigation waits real 80ms MutationObserver quiet window to capture post-load hydration",
+    async () => {
+      const hydrated = await driver.open(`${origin}/hydrate`);
+      assert.match(hydrated.text, /Hydrated after 35ms/);
+      const listed = await driver.tabs();
+      const peakTab = listed.tabs!.find(
+        (tab) => tab.title === "Peak controls",
+      )!;
+      await driver.switchTab(peakTab.index);
+    },
+  );
+  await step(
+    "native date input, Cmd+A and Delete keys work cleanly",
+    async () => {
+      const page = await driver.read();
+      const afterDate = await driver.type(
+        number(page, "Delivery date"),
+        "2026-11-14",
+        false,
+      );
+      assert.equal(
+        afterDate.elements.find((item) => item.label === "Delivery date")
+          ?.value,
+        "2026-11-14",
+      );
+      await driver.click(number(afterDate, "Edit box"));
+      await driver.key("Cmd+A");
+      const afterDel = await driver.key("Delete");
+      assert.equal(
+        afterDel.elements.find((item) => item.label === "Edit box")?.value,
+        "",
+      );
+    },
+  );
+  await step(
+    "clicking a target='_blank' link auto-tracks and switches to the popup tab",
+    async () => {
+      const page = await driver.read();
+      const popup = await driver.click(number(page, "Open popup"));
+      assert.equal(popup.title, "Popup page");
+      assert.equal(popup.url, `${origin}/popup`);
+      const listed = await driver.tabs();
+      assert.equal(listed.tabs?.find((tab) => tab.active)?.title, "Popup page");
+      assert.ok(
+        listed.tabs?.some((tab) => tab.title === "Peak controls"),
+        "opener tab still listed",
+      );
+      // Switch back to Peak controls to test nav error capture.
+      const peakTab = listed.tabs!.find(
+        (tab) => tab.title === "Peak controls",
+      )!;
+      const backToPeak = await driver.switchTab(peakTab.index);
+      const failed = await driver.click(number(backToPeak, "Broken link"));
+      assert.match(
+        pageError(failed) ?? "",
+        /ERR_CONNECTION_REFUSED|ERR_UNSAFE_PORT|ERR_/,
+      );
+      // chrome-error: pages offer zero elements and refuse all input actions!
+      assert.deepEqual(failed.elements, []);
+      await assert.rejects(driver.click(1), /one of its own pages/);
+      await assert.rejects(driver.key("Enter"), /one of its own pages/);
+      await assert.rejects(driver.scroll("down"), /one of its own pages/);
+    },
+  );
+  await step(
     "a browser that ended takes no input, and a read starts it again",
     async () => {
       const before = holder();
@@ -430,6 +799,16 @@ try {
 } finally {
   await driver.close();
   site.close();
-  rmSync(root, { recursive: true, force: true });
+  crossSite.close();
+  try {
+    rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
+  } catch {
+    // Ignore cleanup race if browser is still exiting after an earlier failure.
+  }
 }
 console.log(`Own browser: ${checks} checks passed`);

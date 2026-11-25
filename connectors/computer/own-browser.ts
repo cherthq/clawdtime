@@ -161,17 +161,23 @@ export const ownTiming = {
    * there, and is never taken for one that failed.
    */
   inputMs: 45_000,
-  /** After a step, the page gets this long before the first look. */
-  firstLookMs: 100,
-  lookEveryMs: 100,
+  /** After a step, the page gets this long before the first quiescence check. */
+  firstLookMs: 50,
+  lookEveryMs: 40,
   /** No network request that starts or ends for this long is quiet. */
-  quietMs: 400,
-  /** A request that is open this long, and not the page itself, no longer counts. */
+  quietMs: 100,
+  /** No meaningful DOM mutation for this long is idle. */
+  domIdleMs: 80,
+  /** A request opened before a step that stays open this long no longer counts. */
+  bgLongRequestMs: 650,
+  /** A request opened during an action step that stays open this long no longer counts. */
   longRequestMs: 1500,
-  /** The most that the driver waits for the page after a step. */
-  waitMs: 5000,
-  /** After an address opens. */
-  openWaitMs: 10_000,
+  /** A non-document request during a navigation may stay open this long before being ignored. */
+  navLongRequestMs: 1500,
+  /** The most that the driver waits for an in-page action to settle. */
+  waitMs: 2000,
+  /** The most that the driver waits for a navigation to settle. */
+  openWaitMs: 3000,
   /** browser_wait reads this often. */
   waitForEveryMs: 250,
   /** The most that browser_wait waits. */
@@ -184,6 +190,16 @@ export const ownTiming = {
 const mostText = 20_000;
 /** At most this many tabs are listed. */
 const mostTabs = 50;
+/** At most this many child frames are traversed per page read. */
+const maxChildFrames = 16;
+/** Network request types that never gate page settle. */
+const ignoredNetworkTypes = new Set([
+  "EventSource",
+  "WebSocket",
+  "Media",
+  "Ping",
+  "Manifest",
+]);
 
 const { oneLine } = pageHelpers;
 const me = "ClawdTime's browser";
@@ -258,9 +274,20 @@ const keySpecs: Record<string, KeySpec> = {
     keyCode: 8,
     command: "deleteBackward",
   },
+  delete: {
+    key: "Delete",
+    code: "Delete",
+    keyCode: 46,
+    command: "deleteForward",
+  },
   space: { key: " ", code: "Space", keyCode: 32, text: " " },
 };
 const shiftKey: KeySpec = { key: "Shift", code: "ShiftLeft", keyCode: 16 };
+const metaKey: KeySpec = { key: "Meta", code: "MetaLeft", keyCode: 91 };
+const metaCombos: Record<string, KeySpec> = {
+  a: { key: "a", code: "KeyA", keyCode: 65, command: "selectAll" },
+  z: { key: "z", code: "KeyZ", keyCode: 90, command: "undo" },
+};
 const shiftBit = 8;
 const metaBit = 4;
 
@@ -313,11 +340,24 @@ export function keyEvents(combo: string): KeyEvent[] {
     .split("+")
     .map((part) => part.trim());
   const shifted = parts.length === 2 && parts[0] === "shift";
+  const meta =
+    parts.length === 2 &&
+    (parts[0] === "meta" || parts[0] === "cmd" || parts[0] === "command");
+  if (meta) {
+    const metaSpec = metaCombos[parts[1] ?? ""];
+    if (metaSpec)
+      return [
+        down(metaKey, metaBit),
+        down(metaSpec, metaBit),
+        up(metaSpec, metaBit),
+        up(metaKey, 0),
+      ];
+  }
   const name = shifted ? parts[1]! : parts.length === 1 ? parts[0]! : "";
   const spec = keySpecs[name === "return" ? "enter" : name];
   if (!spec || (shifted && name !== "tab"))
     throw new Error(
-      `${me} presses one of these keys: Enter, Escape, Tab, Shift+Tab, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, PageUp, PageDown, Home, End, Backspace, Space.`,
+      `${me} presses one of these keys: Enter, Escape, Tab, Shift+Tab, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, PageUp, PageDown, Home, End, Backspace, Delete, Space, Meta+A, Meta+Z.`,
     );
   if (!shifted) return [down(spec, 0), up(spec, 0)];
   return [
@@ -354,6 +394,8 @@ const locateSchema = z
     readOnly: z.boolean(),
     password: z.boolean(),
     focused: z.boolean(),
+    file: z.boolean().optional(),
+    inputType: z.string().max(30).optional(),
     cover: z.string().max(40).optional(),
     /** Why a pointer at the centre does not reach it, besides an element on top of it. */
     blocked: z.enum(["frame", "control", "unsure"]).optional(),
@@ -361,19 +403,49 @@ const locateSchema = z
   .strict();
 type Located = z.infer<typeof locateSchema>;
 
+const settleSchema = z.object({
+  ok: z.literal(true),
+  readyState: z.string().optional(),
+  leaving: z.boolean().optional(),
+  domIdleMs: z.number().finite().optional(),
+  url: z.string().optional(),
+});
+
 const targetSchema = z.object({
   targetId: z.string().min(1).max(200),
   type: z.string(),
   title: z.string(),
   url: z.string(),
+  openerId: z.string().optional(),
+  openerFrameId: z.string().optional(),
 });
 const targetsSchema = z.object({ targetInfos: z.array(targetSchema) });
 type Target = z.infer<typeof targetSchema>;
 const processesSchema = z.object({
   processInfo: z.array(z.object({ type: z.string(), id: z.number() })),
 });
+interface FrameTreeNode {
+  frame: {
+    id: string;
+    parentId?: string;
+    url?: string;
+    name?: string;
+  };
+  childFrames?: FrameTreeNode[];
+}
+const frameNodeSchema: z.ZodType<FrameTreeNode> = z.lazy(() =>
+  z.object({
+    frame: z.object({
+      id: z.string().min(1).max(200),
+      parentId: z.string().optional(),
+      url: z.string().optional(),
+      name: z.string().optional(),
+    }),
+    childFrames: z.array(frameNodeSchema).optional(),
+  }),
+);
 const frameTreeSchema = z.object({
-  frameTree: z.object({ frame: z.object({ id: z.string().min(1).max(200) }) }),
+  frameTree: frameNodeSchema,
 });
 const historySchema = z.object({
   currentIndex: z.number().int(),
@@ -381,13 +453,18 @@ const historySchema = z.object({
 });
 
 const web = (url: string) => /^https?:\/\//i.test(url);
+const chromeError = (url: string) => /^chrome-error:/i.test(url);
 const blank = (url: string) =>
   url === "" ||
   url === "about:blank" ||
   /^[a-z]+:\/\/(newtab|new-tab-page)\/?$/i.test(url);
-/** A tab that the person sees: a web page or an empty one. Never a page of the browser itself. */
+const frameAllowedUrl = (url: string) =>
+  web(url) || blank(url) || url === "about:srcdoc";
+/** A tab that the person sees: a web page, an empty one, or a browser network error page. Never settings/extensions. */
 const listable = (target: Target) =>
-  target.type === "page" && (web(target.url) || blank(target.url));
+  target.type === "page" &&
+  (web(target.url) || blank(target.url) || chromeError(target.url));
+const nativePickerTypes = new Set(["date", "time", "datetime-local"]);
 
 function numbered(
   index: number,
@@ -427,6 +504,32 @@ interface Live {
   /** The program, when this driver started it. */
   launched: LaunchedBrowser | null;
 }
+interface OpenRequest {
+  document: boolean;
+  at: number;
+  frameId?: string;
+}
+interface ChildWorld {
+  session: string;
+  contextId: number;
+  documents: number;
+}
+interface ElementFrameRef {
+  frameId: string;
+  session: string;
+  /** Frame IDs from main frame down to this child frame: [mainFrameId, ..., frameId]. */
+  chain: string[];
+  /** Owning CDP session for each frame in `chain` (parallel to `chain`). */
+  sessions: string[];
+}
+interface FrameBox {
+  offsetX: number;
+  offsetY: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
 /** One page that the driver is attached to. */
 interface Tab {
   targetId: string;
@@ -434,8 +537,8 @@ interface Tab {
   url: string;
   /** When a network request of the page last started or ended. */
   lastRequestAt: number;
-  /** Requests that are open: whether each is a document, and when it started. */
-  open: Map<string, { document: boolean; at: number }>;
+  /** Requests that are open: whether each is a document, when it started, and its frame. */
+  open: Map<string, OpenRequest>;
   /** The words of a dialog that the page shows, or null. */
   dialog: string | null;
   /** Called when a dialog opens. */
@@ -450,10 +553,19 @@ interface Tab {
   world: number | "page" | null;
   /** Counts the documents of the tab, so that a world made for an earlier one is never kept. */
   documents: number;
+  /** Last top-level Document Network.loadingFailed errorText, cleared on new nav/load. */
+  navError: string | null;
+  /** True between Page.frameStartedLoading and Page.frameStoppedLoading for the main frame. */
+  frameLoading: boolean;
+  /** Isolated worlds cached per child frameId. */
+  childWorlds: Map<string, ChildWorld>;
+  /** Maps element index from the latest reading to its child frame (absent for main frame). */
+  elementFrames: Map<number, ElementFrameRef>;
 }
-/** One input step: whether a command with an effect went out. */
+/** One input step: whether a command with an effect went out, and when it started. */
 interface Step {
   sent: boolean;
+  startedAt: number;
 }
 
 const runnableFile = (path: string) => {
@@ -479,6 +591,13 @@ export class OwnBrowser implements BrowserPort {
   private current: string | null = null;
   private readonly tabsById = new Map<string, Tab>();
   private readonly tabsBySession = new Map<string, Tab>();
+  private readonly oopifsByFrameId = new Map<
+    string,
+    { frameId: string; session: string; parentSession: string | null }
+  >();
+  private readonly oopifsBySession = new Map<string, string>();
+  private readonly discoveredTargets = new Map<string, Target>();
+  private pendingPopup: { targetId: string; openerId: string } | null = null;
   /** The tabs of the last listing, by their number. */
   private listing: string[] | null = null;
   private readonly env: Record<string, string | undefined>;
@@ -570,7 +689,7 @@ export class OwnBrowser implements BrowserPort {
     const address = webAddress(url);
     if (address.length > pageLimits.address)
       throw new Error("The address is too long to open.");
-    const step: Step = { sent: false };
+    const step: Step = { sent: false, startedAt: this.clock.now() };
     try {
       // Nothing went out yet, so the first open may start the browser.
       const live = await this.started(true);
@@ -597,6 +716,7 @@ export class OwnBrowser implements BrowserPort {
       }
       const tab = await this.attach(live, target.targetId, target.url);
       this.current = tab.targetId;
+      tab.navError = null;
       await this.activate(live, tab.targetId);
       const navigated = await this.effect<{ errorText?: unknown }>(
         step,
@@ -604,12 +724,18 @@ export class OwnBrowser implements BrowserPort {
         "Page.navigate",
         { url: address },
       );
-      if (typeof navigated.errorText === "string" && navigated.errorText)
+      if (typeof navigated.errorText === "string" && navigated.errorText) {
+        tab.navError = oneLine(navigated.errorText, 200);
         throw new Error(
           `The page did not open: ${oneLine(navigated.errorText, 120)}.`,
         );
-      return await this.settled(tab, ownTiming.openWaitMs, (page) =>
-        web(page.url),
+      }
+      return await this.settled(
+        tab,
+        ownTiming.openWaitMs,
+        (page) => web(page.url) || chromeError(page.url),
+        true,
+        step.startedAt,
       );
     } catch (error) {
       throw this.lost(step, error);
@@ -623,15 +749,26 @@ export class OwnBrowser implements BrowserPort {
   async click(index: number): Promise<BrowserPage> {
     numbered(index);
     return this.input(async (tab, step) => {
+      this.assertOperable(tab);
       const box = await this.located(tab, index);
       if (box.disabled) throw new Error(`${box.name} is disabled now.`);
       if (box.tag === "select")
         throw new Error(
           `${box.name} is a list of choices. Use select with the text of one choice.`,
         );
+      if (box.file)
+        throw new Error(
+          `${box.name} is a file upload input. Clicking it opens a native file picker dialog, which ClawdTime cannot operate automatically. Ask the person to choose the file.`,
+        );
       reachable(box);
       await this.press(tab, step, box);
-      return this.settled(tab, ownTiming.waitMs);
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
     });
   }
 
@@ -653,13 +790,29 @@ export class OwnBrowser implements BrowserPort {
         "The text is too long for one step: send it in smaller parts.",
       );
     return this.input(async (tab, step) => {
+      this.assertOperable(tab);
+      const frameRef = tab.elementFrames.get(index);
+      const askTarget = (call: PageCall) =>
+        frameRef
+          ? this.askInFrame(tab, frameRef.session, frameRef.frameId, call)
+          : this.ask(tab, call);
       let box = await this.located(tab, index);
       takesText(box);
-      if (box.kind === "choice") {
+      const isNativePicker =
+        box.tag === "input" &&
+        box.inputType !== undefined &&
+        nativePickerTypes.has(box.inputType);
+      if (box.kind === "choice" || isNativePicker) {
         step.sent = true;
-        await this.ask(tab, { do: "type", index, text: said, submit: false });
+        await askTarget({ do: "type", index, text: said, submit: false });
         if (submit) await this.keys(tab, step, keyEvents("Enter"));
-        return this.settled(tab, ownTiming.waitMs);
+        return this.settled(
+          tab,
+          ownTiming.waitMs,
+          () => true,
+          false,
+          step.startedAt,
+        );
       }
       if (!box.focused) {
         reachable(box);
@@ -679,9 +832,33 @@ export class OwnBrowser implements BrowserPort {
       if (said !== "")
         await this.effect(step, tab, "Input.insertText", { text: said });
       if (submit) await this.keys(tab, step, keyEvents("Enter"));
-      const page = await this.settled(tab, ownTiming.waitMs);
-      if (!submit && box.kind === "text" && said !== "") {
-        const field = page.elements.find((item) => item.index === index);
+      let page = await this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
+      if (!submit && box.kind === "text" && !box.password && said.length > 0) {
+        let field = page.elements.find((item) => item.index === index);
+        if (field && !field.password && field.value === "") {
+          // React/Vue controlled input fallback: only when Input.insertText left
+          // the field empty, so masked/formatted fields are never clobbered.
+          try {
+            await askTarget({ do: "type", index, text: said, submit: false });
+            page = await this.settled(
+              tab,
+              ownTiming.waitMs,
+              () => true,
+              false,
+              step.startedAt,
+            );
+            field = page.elements.find((item) => item.index === index);
+          } catch (fallbackError) {
+            if (fallbackError instanceof DevToolsClosed) throw fallbackError;
+            // Input.insertText already succeeded; swallow script fallback errors.
+          }
+        }
         if (field && !field.password && field.value === "")
           throw new Error(
             `${box.name} did not take that text. A number or a date field takes only its own form.`,
@@ -695,9 +872,16 @@ export class OwnBrowser implements BrowserPort {
     if (direction !== "down" && direction !== "up")
       throw new Error("A page scrolls down or up.");
     return this.input(async (tab, step) => {
+      this.assertOperable(tab);
       step.sent = true;
       await this.ask(tab, { do: "scroll", direction });
-      return this.settled(tab, ownTiming.waitMs);
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
     });
   }
 
@@ -711,10 +895,17 @@ export class OwnBrowser implements BrowserPort {
       const earlier = entries[currentIndex - 1];
       if (currentIndex < 1 || !earlier)
         throw new Error("This tab has no earlier page.");
+      tab.navError = null;
       await this.effect(step, tab, "Page.navigateToHistoryEntry", {
         entryId: earlier.id,
       });
-      return this.settled(tab, ownTiming.waitMs);
+      return this.settled(
+        tab,
+        ownTiming.openWaitMs,
+        () => true,
+        true,
+        step.startedAt,
+      );
     });
   }
 
@@ -722,6 +913,7 @@ export class OwnBrowser implements BrowserPort {
   async hover(index: number): Promise<BrowserPage> {
     numbered(index);
     return this.input(async (tab, step) => {
+      this.assertOperable(tab);
       const box = await this.located(tab, index);
       reachable(box);
       await this.effect(step, tab, "Input.dispatchMouseEvent", {
@@ -731,7 +923,13 @@ export class OwnBrowser implements BrowserPort {
         button: "none",
         buttons: 0,
       });
-      return this.settled(tab, ownTiming.waitMs);
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
     });
   }
 
@@ -746,12 +944,28 @@ export class OwnBrowser implements BrowserPort {
     const want = oneLine(String(option), 400);
     if (!want) throw new Error("Give the text of one choice.");
     return this.input(async (tab, step) => {
+      this.assertOperable(tab);
+      const frameRef = tab.elementFrames.get(index);
       const box = await this.located(tab, index);
       if (box.disabled) throw new Error(`${box.name} is disabled now.`);
       if (box.tag === "select") {
         step.sent = true;
-        await this.ask(tab, { do: "type", index, text: want, submit: false });
-        return this.settled(tab, ownTiming.waitMs);
+        if (frameRef)
+          await this.askInFrame(tab, frameRef.session, frameRef.frameId, {
+            do: "type",
+            index,
+            text: want,
+            submit: false,
+          });
+        else
+          await this.ask(tab, { do: "type", index, text: want, submit: false });
+        return this.settled(
+          tab,
+          ownTiming.waitMs,
+          () => true,
+          false,
+          step.startedAt,
+        );
       }
       if (box.role !== "listbox" && box.role !== "combobox")
         throw new Error(
@@ -759,7 +973,13 @@ export class OwnBrowser implements BrowserPort {
         );
       reachable(box);
       await this.press(tab, step, box);
-      const opened = await this.settled(tab, ownTiming.waitMs);
+      const opened = await this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
       const choices = opened.elements.filter(
         (item) =>
           (item.role === "option" || item.role === "menuitem") &&
@@ -773,21 +993,49 @@ export class OwnBrowser implements BrowserPort {
       const choice = await this.located(tab, choices[0]!.index);
       reachable(choice);
       await this.press(tab, step, choice);
-      return this.settled(tab, ownTiming.waitMs);
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
     });
   }
 
   /**
    * One key or combo in the page: it goes to the element with the focus. The
-   * page script says first where the focus is: in a password field or in a
-   * frame, no key is pressed.
+   * page script says first where the focus is: in a password field or in an
+   * unverified frame, no key is pressed.
    */
   async key(combo: string): Promise<BrowserPage> {
     const events = keyEvents(combo);
     return this.input(async (tab, step) => {
-      await this.ask(tab, { do: "focus" });
+      this.assertOperable(tab);
+      if ((await this.world(tab)) === "page")
+        throw new Error(
+          "This browser gave no private world for the check before a key, so nothing was sent. Read the page again, or use the screen.",
+        );
+      try {
+        await this.ask(tab, { do: "focus" });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          /focus is in a frame of the page/i.test(error.message)
+        ) {
+          await this.verifyFocusedFrameChain(tab, error);
+        } else {
+          throw error;
+        }
+      }
       await this.keys(tab, step, events);
-      return this.settled(tab, ownTiming.waitMs);
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
     });
   }
 
@@ -860,7 +1108,13 @@ export class OwnBrowser implements BrowserPort {
       await this.activate(live, targetId);
       this.current = targetId;
       const tab = await this.attach(live, targetId, target.url);
-      return this.settled(tab, ownTiming.waitMs);
+      return this.settled(
+        tab,
+        ownTiming.waitMs,
+        () => true,
+        false,
+        step.startedAt,
+      );
     });
   }
 
@@ -1025,23 +1279,121 @@ export class OwnBrowser implements BrowserPort {
     connection.on("Network.requestWillBeSent", (params, session) => {
       const tab = tabOf(session);
       if (!tab || typeof params.requestId !== "string") return;
+      // Ignore streaming, media, beacon/ping, manifest, and worker requests.
+      if (
+        (typeof params.type === "string" &&
+          ignoredNetworkTypes.has(params.type)) ||
+        params.loaderId === ""
+      )
+        return;
       const now = this.clock.now();
       tab.lastRequestAt = now;
-      // A stream that stays open is not a page that loads.
-      if (params.type === "EventSource" || params.type === "WebSocket") return;
+      const isDocument = params.type === "Document";
+      const frameId =
+        typeof params.frameId === "string" ? params.frameId : undefined;
+      if (isDocument && (!frameId || !tab.frame || frameId === tab.frame)) {
+        tab.navError = null;
+      }
       tab.open.set(params.requestId, {
-        document: params.type === "Document",
+        document: isDocument,
         at: now,
+        ...(frameId ? { frameId } : {}),
       });
     });
-    for (const done of ["Network.loadingFinished", "Network.loadingFailed"])
-      connection.on(done, (params, session) => {
-        const tab = tabOf(session);
-        if (!tab || typeof params.requestId !== "string") return;
-        // An answer may lead the page to ask for more: the quiet starts again.
+    connection.on("Network.loadingFinished", (params, session) => {
+      const tab = tabOf(session);
+      if (!tab || typeof params.requestId !== "string") return;
+      const tracked = tab.open.get(params.requestId);
+      if (!tracked) return;
+      // An answer may lead the page to ask for more: the quiet starts again.
+      tab.lastRequestAt = this.clock.now();
+      tab.open.delete(params.requestId);
+      if (
+        tracked.document &&
+        (!tracked.frameId || !tab.frame || tracked.frameId === tab.frame)
+      ) {
+        tab.navError = null;
+      }
+    });
+    connection.on("Network.loadingFailed", (params, session) => {
+      const tab = tabOf(session);
+      if (!tab || typeof params.requestId !== "string") return;
+      const tracked = tab.open.get(params.requestId);
+      if (tracked) {
         tab.lastRequestAt = this.clock.now();
         tab.open.delete(params.requestId);
-      });
+      }
+      const paramFrameId =
+        typeof params.frameId === "string" ? params.frameId : undefined;
+      const isMainDoc =
+        tracked !== undefined &&
+        tracked.document === true &&
+        tab.frame !== null &&
+        tracked.frameId === tab.frame &&
+        (paramFrameId === undefined || paramFrameId === tab.frame);
+      const errorText =
+        typeof params.errorText === "string" ? params.errorText.trim() : "";
+      if (
+        isMainDoc &&
+        params.canceled !== true &&
+        errorText !== "" &&
+        errorText !== "net::ERR_ABORTED"
+      ) {
+        tab.navError = oneLine(errorText, 200);
+      }
+    });
+    connection.on("Page.frameStartedLoading", (params, session) => {
+      const tab = tabOf(session);
+      if (!tab) return;
+      const frameId =
+        typeof params.frameId === "string" ? params.frameId : undefined;
+      if (!frameId || !tab.frame || frameId === tab.frame) {
+        tab.frameLoading = true;
+      }
+    });
+    connection.on("Page.frameStoppedLoading", (params, session) => {
+      const tab = tabOf(session);
+      if (!tab) return;
+      const frameId =
+        typeof params.frameId === "string" ? params.frameId : undefined;
+      if (!frameId || !tab.frame || frameId === tab.frame) {
+        tab.frameLoading = false;
+      }
+      for (const [id, req] of tab.open) {
+        if (
+          req.document &&
+          (!frameId || !req.frameId || req.frameId === frameId)
+        ) {
+          tab.open.delete(id);
+        }
+      }
+    });
+    connection.on("Page.frameDetached", (params, session) => {
+      const tab = tabOf(session);
+      if (!tab) return;
+      const frameId =
+        typeof params.frameId === "string" ? params.frameId : undefined;
+      if (params.reason === "swap") {
+        // OOPIF / process swap: clear stale in-flight requests so settle never hangs.
+        for (const [id, req] of tab.open) {
+          if (!frameId || !req.frameId || req.frameId === frameId) {
+            tab.open.delete(id);
+          }
+        }
+        tab.lastRequestAt = Math.min(
+          tab.lastRequestAt,
+          this.clock.now() - ownTiming.quietMs,
+        );
+        if (!frameId || !tab.frame || frameId === tab.frame) {
+          tab.frameLoading = false;
+        }
+      } else if (frameId) {
+        for (const [id, req] of tab.open) {
+          if (req.frameId === frameId) tab.open.delete(id);
+        }
+      }
+      if (frameId) tab.childWorlds.delete(frameId);
+    });
     connection.on("Page.javascriptDialogOpening", (params, session) => {
       const tab = tabOf(session);
       if (!tab) return;
@@ -1057,12 +1409,116 @@ export class OwnBrowser implements BrowserPort {
       const tab = tabOf(session);
       const frame = params.frame;
       if (!tab || typeof frame !== "object" || frame === null) return;
-      if ((frame as { parentId?: unknown }).parentId !== undefined) return;
+      const frameRec = frame as {
+        id?: unknown;
+        parentId?: unknown;
+        url?: unknown;
+        unreachableUrl?: unknown;
+      };
+      if (frameRec.parentId !== undefined) {
+        if (typeof frameRec.id === "string")
+          tab.childWorlds.delete(frameRec.id);
+        return;
+      }
       tab.documents += 1;
       tab.world = null;
+      tab.childWorlds.clear();
+      tab.elementFrames.clear();
+      if (typeof frameRec.id === "string") tab.frame = frameRec.id;
+      const navUrl = typeof frameRec.url === "string" ? frameRec.url : "";
+      if (navUrl) tab.url = navUrl;
+      if (
+        web(navUrl) &&
+        !chromeError(navUrl) &&
+        typeof frameRec.unreachableUrl !== "string"
+      ) {
+        tab.navError = null;
+      }
+    });
+    connection.on("Target.targetCreated", (params) => {
+      const parsed = targetSchema.safeParse(params.targetInfo);
+      if (!parsed.success || parsed.data.type !== "page") return;
+      const info = parsed.data;
+      this.discoveredTargets.set(info.targetId, info);
+      const activeTab = this.current
+        ? this.tabsById.get(this.current)
+        : undefined;
+      const openedByActive =
+        (info.openerId !== undefined && info.openerId === this.current) ||
+        (info.openerFrameId !== undefined &&
+          activeTab !== undefined &&
+          (info.openerFrameId === activeTab.frame ||
+            activeTab.childWorlds.has(info.openerFrameId)));
+      if (openedByActive && this.current) {
+        this.pendingPopup = { targetId: info.targetId, openerId: this.current };
+      }
+    });
+    connection.on("Target.targetInfoChanged", (params) => {
+      const parsed = targetSchema.safeParse(params.targetInfo);
+      if (!parsed.success || parsed.data.type !== "page") return;
+      const info = parsed.data;
+      if (this.discoveredTargets.has(info.targetId)) {
+        this.discoveredTargets.set(info.targetId, info);
+      }
+      const existing = this.tabsById.get(info.targetId);
+      if (existing && (!chromeError(existing.url) || chromeError(info.url)))
+        existing.url = info.url;
+    });
+    connection.on("Target.targetDestroyed", (params) => {
+      if (typeof params.targetId !== "string") return;
+      this.discoveredTargets.delete(params.targetId);
+      if (this.pendingPopup?.targetId === params.targetId) {
+        this.pendingPopup = null;
+      }
+      const tab = this.tabsById.get(params.targetId);
+      if (tab) {
+        this.tabsById.delete(tab.targetId);
+        this.tabsBySession.delete(tab.session);
+      }
+    });
+    connection.on("Target.attachedToTarget", (params, parentSession) => {
+      const sessionId =
+        typeof params.sessionId === "string" ? params.sessionId : null;
+      const info =
+        typeof params.targetInfo === "object" && params.targetInfo !== null
+          ? (params.targetInfo as Record<string, unknown>)
+          : null;
+      if (!sessionId || !info) return;
+      const targetId = typeof info.targetId === "string" ? info.targetId : null;
+      if (info.type === "iframe" && targetId) {
+        this.oopifsByFrameId.set(targetId, {
+          frameId: targetId,
+          session: sessionId,
+          parentSession: parentSession ?? null,
+        });
+        this.oopifsBySession.set(sessionId, targetId);
+        void connection
+          .send(
+            "Page.enable",
+            {},
+            { session: sessionId, timeoutMs: ownTiming.callMs },
+          )
+          .catch(() => {});
+        void connection
+          .send(
+            "Target.setAutoAttach",
+            { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+            { session: sessionId, timeoutMs: ownTiming.callMs },
+          )
+          .catch(() => {});
+      }
     });
     connection.on("Target.detachedFromTarget", (params) => {
       if (typeof params.sessionId !== "string") return;
+      const oopifFrame = this.oopifsBySession.get(params.sessionId);
+      if (oopifFrame) {
+        this.oopifsBySession.delete(params.sessionId);
+        if (
+          this.oopifsByFrameId.get(oopifFrame)?.session === params.sessionId
+        ) {
+          this.oopifsByFrameId.delete(oopifFrame);
+        }
+      }
       const tab = this.tabsBySession.get(params.sessionId);
       if (!tab) return;
       this.tabsBySession.delete(tab.session);
@@ -1071,6 +1527,13 @@ export class OwnBrowser implements BrowserPort {
     connection.onClose(() => {
       if (this.live === live) this.forget(true);
     });
+    void connection
+      .send(
+        "Target.setDiscoverTargets",
+        { discover: true },
+        { timeoutMs: ownTiming.callMs },
+      )
+      .catch(() => {});
     return live;
   }
 
@@ -1080,8 +1543,12 @@ export class OwnBrowser implements BrowserPort {
     this.live = null;
     this.current = null;
     this.listing = null;
+    this.pendingPopup = null;
     this.tabsById.clear();
     this.tabsBySession.clear();
+    this.oopifsByFrameId.clear();
+    this.oopifsBySession.clear();
+    this.discoveredTargets.clear();
   }
 
   /** The process that holds the lock of this profile, on this computer, when it runs. */
@@ -1186,7 +1653,15 @@ export class OwnBrowser implements BrowserPort {
       ),
     );
     if (!listed.success) throw new Error(unreadable);
-    return listed.data.targetInfos.filter(listable);
+    const result = listed.data.targetInfos.filter(listable);
+    const seen = new Set(result.map((item) => item.targetId));
+    for (const target of this.discoveredTargets.values()) {
+      if (!seen.has(target.targetId) && listable(target)) {
+        result.push(target);
+        seen.add(target.targetId);
+      }
+    }
+    return result;
   }
 
   /** The tab that the driver works in, attached. Only a read may make one when none is there. */
@@ -1203,6 +1678,13 @@ export class OwnBrowser implements BrowserPort {
     );
     if (!all.success) throw new Error(unreadable);
     const pages = all.data.targetInfos.filter((item) => item.type === "page");
+    const seen = new Set(pages.map((item) => item.targetId));
+    for (const target of this.discoveredTargets.values()) {
+      if (!seen.has(target.targetId)) {
+        pages.push(target);
+        seen.add(target.targetId);
+      }
+    }
     let target =
       pages.find((item) => item.targetId === this.current) ??
       pages.find(listable);
@@ -1234,7 +1716,7 @@ export class OwnBrowser implements BrowserPort {
   ): Promise<Tab> {
     const known = this.tabsById.get(targetId);
     if (known) {
-      known.url = url;
+      if (!chromeError(known.url) || chromeError(url)) known.url = url;
       return known;
     }
     const attached = await live.connection.send<{ sessionId?: unknown }>(
@@ -1254,6 +1736,10 @@ export class OwnBrowser implements BrowserPort {
       frame: null,
       world: null,
       documents: 0,
+      navError: null,
+      frameLoading: false,
+      childWorlds: new Map(),
+      elementFrames: new Map(),
     };
     this.tabsById.set(targetId, tab);
     this.tabsBySession.set(tab.session, tab);
@@ -1261,6 +1747,12 @@ export class OwnBrowser implements BrowserPort {
       this.command(tab, "Page.enable"),
       this.command(tab, "Network.enable"),
     ]);
+    await this.mainFrame(tab).catch(() => {});
+    await this.command(tab, "Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: false,
+      flatten: true,
+    }).catch(() => {});
     return tab;
   }
 
@@ -1291,11 +1783,19 @@ export class OwnBrowser implements BrowserPort {
 
   /** A step with an effect. It never starts the browser and never sends anything twice. */
   private async input(run: (tab: Tab, step: Step) => Promise<BrowserPage>) {
-    const step: Step = { sent: false };
+    const step: Step = { sent: false, startedAt: this.clock.now() };
+    this.pendingPopup = null;
     try {
       return await run(await this.tab(false), step);
     } catch (error) {
       throw this.lost(step, error);
+    }
+  }
+
+  /** Refuses input on chrome-error: warning pages and any non-web/non-blank browser page. */
+  private assertOperable(tab: Tab) {
+    if (chromeError(tab.url) || (!web(tab.url) && !blank(tab.url))) {
+      throw new Error(ownPage);
     }
   }
 
@@ -1311,8 +1811,8 @@ export class OwnBrowser implements BrowserPort {
       : new Error(endedNothingSent);
   }
 
-  private command<T = Record<string, unknown>>(
-    tab: Tab,
+  private commandSession<T = Record<string, unknown>>(
+    session: string,
     method: string,
     params: Record<string, unknown> = {},
     timeoutMs: number = ownTiming.callMs,
@@ -1321,9 +1821,18 @@ export class OwnBrowser implements BrowserPort {
     if (!live)
       return Promise.reject(new DevToolsClosed(endedNothingSent, false));
     return live.connection.send<T>(method, params, {
-      session: tab.session,
+      session,
       timeoutMs,
     });
+  }
+
+  private command<T = Record<string, unknown>>(
+    tab: Tab,
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs: number = ownTiming.callMs,
+  ) {
+    return this.commandSession<T>(tab.session, method, params, timeoutMs);
   }
 
   /**
@@ -1479,22 +1988,842 @@ export class OwnBrowser implements BrowserPort {
     return answer;
   }
 
+  /**
+   * Creates or reuses an isolated world for a child frame on its owning CDP session.
+   * Never falls back to "page" (the top-level world): returns null if no isolated world can be created.
+   */
+  private async childWorld(
+    tab: Tab,
+    session: string,
+    frameId: string,
+  ): Promise<number | null> {
+    const cached = tab.childWorlds.get(frameId);
+    if (
+      cached &&
+      cached.session === session &&
+      cached.documents === tab.documents
+    ) {
+      return cached.contextId;
+    }
+    try {
+      const made = await this.commandSession<{ executionContextId?: unknown }>(
+        session,
+        "Page.createIsolatedWorld",
+        { frameId, worldName },
+      );
+      const id = made.executionContextId;
+      if (typeof id === "number" && Number.isSafeInteger(id)) {
+        tab.childWorlds.set(frameId, {
+          session,
+          contextId: id,
+          documents: tab.documents,
+        });
+        return id;
+      }
+      return null;
+    } catch (error) {
+      if (error instanceof DevToolsClosed) throw error;
+      return null;
+    }
+  }
+
+  /** Runs the page script inside a child frame's isolated world. */
+  private async evaluateInFrame(
+    tab: Tab,
+    session: string,
+    frameId: string,
+    call: PageCall,
+  ): Promise<string> {
+    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+    const expression = pageScript(call, {
+      session: this.session,
+      start: this.next,
+    });
+    for (let attempt = 0; ; attempt++) {
+      const world = await this.childWorld(tab, session, frameId);
+      if (world === null)
+        throw new Error(
+          "This browser gave no private world for the child frame, so nothing was sent.",
+        );
+      let result: { result?: { value?: unknown }; exceptionDetails?: unknown };
+      try {
+        result = await this.commandSession(session, "Runtime.evaluate", {
+          expression,
+          returnByValue: true,
+          silent: true,
+          includeCommandLineAPI: false,
+          contextId: world,
+        });
+      } catch (error) {
+        if (
+          attempt === 0 &&
+          error instanceof DevToolsError &&
+          /cannot find context with specified id/i.test(error.message)
+        ) {
+          tab.childWorlds.delete(frameId);
+          continue;
+        }
+        throw error;
+      }
+      if (
+        result.exceptionDetails !== undefined ||
+        typeof result.result?.value !== "string"
+      )
+        throw new Error(unreadable);
+      return result.result.value;
+    }
+  }
+
+  private async askInFrame(
+    tab: Tab,
+    session: string,
+    frameId: string,
+    call: PageCall,
+  ) {
+    const answer = parsePageAnswer(
+      await this.evaluateInFrame(tab, session, frameId, call),
+    );
+    if (!answer) throw new Error(unreadable);
+    if (!answer.ok) throw new Error(oneLine(answer.error, 300));
+    if (answer.next !== undefined) this.next = Math.max(this.next, answer.next);
+    return answer;
+  }
+
+  private findFrameNode(
+    root: FrameTreeNode,
+    frameId: string,
+  ): FrameTreeNode | null {
+    if (root.frame.id === frameId) return root;
+    for (const child of root.childFrames ?? []) {
+      const found = this.findFrameNode(child, frameId);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /**
+   * Resolves the exact direct child frame whose <iframe>/<frame> element owns
+   * focus inside (session, frameId, world). Returns null if focus cannot be
+   * deterministically mapped to a direct child frame.
+   */
+  private async resolveFocusedChildFrame(
+    session: string,
+    frameId: string,
+    world: number,
+  ): Promise<{ frameId: string; url: string } | null> {
+    let treeRaw: unknown;
+    try {
+      treeRaw = await this.commandSession(session, "Page.getFrameTree");
+    } catch (error) {
+      if (error instanceof DevToolsClosed) throw error;
+      return null;
+    }
+    const parsed = frameTreeSchema.safeParse(treeRaw);
+    if (!parsed.success) return null;
+    const node = this.findFrameNode(parsed.data.frameTree, frameId);
+    const directChildren = node?.childFrames ?? [];
+    if (directChildren.length === 0) return null;
+
+    let objectId: string | null = null;
+    try {
+      const evalRes = await this.commandSession<{
+        result?: { objectId?: unknown };
+        exceptionDetails?: unknown;
+      }>(session, "Runtime.evaluate", {
+        expression: `(function () {
+          if (typeof document.hasFocus === "function" && !document.hasFocus()) return null;
+          var active = document.activeElement;
+          for (var d = 0; active && active.shadowRoot && active.shadowRoot.activeElement && d < 30; d++) {
+            active = active.shadowRoot.activeElement;
+          }
+          if (!active) return null;
+          var tag = String(active.localName || "").toLowerCase();
+          if (tag !== "iframe" && tag !== "frame") return null;
+          return active;
+        })()`,
+        returnByValue: false,
+        silent: true,
+        includeCommandLineAPI: false,
+        contextId: world,
+      });
+      if (
+        evalRes.exceptionDetails === undefined &&
+        typeof evalRes.result?.objectId === "string" &&
+        evalRes.result.objectId
+      ) {
+        objectId = evalRes.result.objectId;
+      }
+    } catch (error) {
+      if (error instanceof DevToolsClosed) throw error;
+      return null;
+    }
+
+    if (!objectId) return null;
+
+    try {
+      const described = await this.commandSession<{
+        node?: { frameId?: unknown };
+      }>(session, "DOM.describeNode", { objectId });
+      const matchedId = described.node?.frameId;
+      if (typeof matchedId === "string" && matchedId && matchedId !== frameId) {
+        const childNode = directChildren.find((c) => c.frame.id === matchedId);
+        if (childNode) {
+          return {
+            frameId: childNode.frame.id,
+            url: childNode.frame.url ?? "",
+          };
+        }
+        // Focused element belongs to an unlisted/unknown frame: refuse.
+        return null;
+      }
+    } catch (error) {
+      if (error instanceof DevToolsClosed) throw error;
+    } finally {
+      void this.commandSession(session, "Runtime.releaseObject", {
+        objectId,
+      }).catch(() => {});
+    }
+
+    // Fallback when DOM.describeNode does not provide the owned child frameId:
+    // match direct children by resolving each owner element in `world` and
+    // checking strict identity with activeElement.
+    for (const childNode of directChildren) {
+      try {
+        const owner = await this.commandSession<{ backendNodeId?: unknown }>(
+          session,
+          "DOM.getFrameOwner",
+          { frameId: childNode.frame.id },
+        );
+        const backendNodeId = owner.backendNodeId;
+        if (
+          typeof backendNodeId !== "number" ||
+          !Number.isSafeInteger(backendNodeId)
+        )
+          continue;
+        const resolved = await this.commandSession<{
+          object?: { objectId?: unknown };
+        }>(session, "DOM.resolveNode", {
+          backendNodeId,
+          executionContextId: world,
+        });
+        const ownerObjId = resolved.object?.objectId;
+        if (typeof ownerObjId !== "string" || !ownerObjId) continue;
+        try {
+          const check = await this.commandSession<{
+            result?: { value?: unknown };
+          }>(session, "Runtime.callFunctionOn", {
+            objectId: ownerObjId,
+            returnByValue: true,
+            silent: true,
+            functionDeclaration: `function () {
+              if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+              var active = document.activeElement;
+              for (var d = 0; active && active.shadowRoot && active.shadowRoot.activeElement && d < 30; d++) {
+                active = active.shadowRoot.activeElement;
+              }
+              return active === this;
+            }`,
+          });
+          if (check.result?.value === true) {
+            return {
+              frameId: childNode.frame.id,
+              url: childNode.frame.url ?? "",
+            };
+          }
+        } finally {
+          void this.commandSession(session, "Runtime.releaseObject", {
+            objectId: ownerObjId,
+          }).catch(() => {});
+        }
+      } catch (error) {
+        if (error instanceof DevToolsClosed) throw error;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Deterministically walks DOWN the focused frame chain from the top frame
+   * to the leaf frame that actually owns focus, running focusCheck ONLY in that
+   * leaf frame. Refuses on any unresolved/unlisted/blocked frame or error.
+   */
+  private async verifyFocusedFrameChain(
+    tab: Tab,
+    frameError: Error,
+  ): Promise<void> {
+    const maxDepth = 10;
+    let currentSession = tab.session;
+    let currentFrameId = await this.mainFrame(tab);
+    const topWorld = await this.world(tab);
+    if (topWorld === "page") throw frameError;
+    let currentWorld: number = topWorld;
+
+    for (let depth = 0; depth < maxDepth; depth++) {
+      const child = await this.resolveFocusedChildFrame(
+        currentSession,
+        currentFrameId,
+        currentWorld,
+      );
+      if (!child || !frameAllowedUrl(child.url)) throw frameError;
+
+      const nextSession =
+        this.oopifsByFrameId.get(child.frameId)?.session ?? currentSession;
+      const nextWorld = await this.childWorld(tab, nextSession, child.frameId);
+      if (nextWorld === null) throw frameError;
+
+      try {
+        await this.askInFrame(tab, nextSession, child.frameId, {
+          do: "focus",
+          child: true,
+        });
+        return;
+      } catch (innerError) {
+        if (innerError instanceof DevToolsClosed) throw innerError;
+        if (
+          innerError instanceof Error &&
+          /password field/i.test(innerError.message)
+        ) {
+          throw innerError;
+        }
+        if (
+          innerError instanceof Error &&
+          /focus is in a frame of the page/i.test(innerError.message)
+        ) {
+          currentSession = nextSession;
+          currentFrameId = child.frameId;
+          currentWorld = nextWorld;
+          continue;
+        }
+        throw frameError;
+      }
+    }
+    throw frameError;
+  }
+
+  /**
+   * Computes a child iframe's content box relative to its parent frame's
+   * viewport, returning null if hidden, zero-sized, opacity: 0, or inert.
+   */
+  private async childFrameGeometry(
+    tab: Tab,
+    parentSession: string,
+    parentFrameId: string,
+    childFrameId: string,
+    scrollIntoView: boolean,
+  ): Promise<FrameBox | null> {
+    let owner: { backendNodeId?: unknown };
+    try {
+      owner = await this.commandSession<{ backendNodeId?: unknown }>(
+        parentSession,
+        "DOM.getFrameOwner",
+        { frameId: childFrameId },
+      );
+    } catch {
+      return null;
+    }
+    const backendNodeId = owner.backendNodeId;
+    if (
+      typeof backendNodeId !== "number" ||
+      !Number.isSafeInteger(backendNodeId)
+    )
+      return null;
+
+    // Prefer isolated-world getBoundingClientRect + checkVisibility so opacity:0,
+    // inert, and scroll offsets are handled accurately.
+    try {
+      const parentWorld =
+        parentFrameId === tab.frame
+          ? await this.world(tab)
+          : await this.childWorld(tab, parentSession, parentFrameId);
+      if (parentWorld !== "page" && parentWorld !== null) {
+        const resolved = await this.commandSession<{
+          object?: { objectId?: unknown };
+        }>(parentSession, "DOM.resolveNode", {
+          backendNodeId,
+          executionContextId: parentWorld,
+        });
+        const objectId = resolved.object?.objectId;
+        if (typeof objectId === "string" && objectId) {
+          try {
+            const measured = await this.commandSession<{
+              result?: { value?: unknown };
+            }>(parentSession, "Runtime.callFunctionOn", {
+              objectId,
+              arguments: [{ value: scrollIntoView }],
+              returnByValue: true,
+              silent: true,
+              functionDeclaration: `function(shouldScroll) {
+            var el = this;
+            if (!el || typeof el.getBoundingClientRect !== "function") return null;
+            if (shouldScroll && typeof el.scrollIntoView === "function") {
+              var pre = el.getBoundingClientRect();
+              if (pre.bottom <= 0 || pre.right <= 0 || pre.top >= (window.innerHeight || 0) || pre.left >= (window.innerWidth || 0)) {
+                el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+              }
+            }
+            var r = el.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) return { visible: false };
+            if (typeof el.checkVisibility === "function") {
+              try {
+                if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return { visible: false };
+              } catch (e) {}
+            }
+            var s = window.getComputedStyle(el);
+            if (s && (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse" || s.opacity === "0")) {
+              return { visible: false };
+            }
+            if (typeof el.closest === "function" && el.closest("[inert]")) return { visible: false };
+            var bl = parseFloat(s && s.borderLeftWidth || "0") || 0;
+            var bt = parseFloat(s && s.borderTopWidth || "0") || 0;
+            var br = parseFloat(s && s.borderRightWidth || "0") || 0;
+            var bb = parseFloat(s && s.borderBottomWidth || "0") || 0;
+            var pl = parseFloat(s && s.paddingLeft || "0") || 0;
+            var pt = parseFloat(s && s.paddingTop || "0") || 0;
+            var pr = parseFloat(s && s.paddingRight || "0") || 0;
+            var pb = parseFloat(s && s.paddingBottom || "0") || 0;
+            var left = r.left + bl + pl;
+            var top = r.top + bt + pt;
+            var right = r.right - br - pr;
+            var bottom = r.bottom - bb - pb;
+            if (!(right > left && bottom > top)) return { visible: false };
+            return { visible: true, offsetX: left, offsetY: top, left: left, top: top, right: right, bottom: bottom };
+          }`,
+            });
+            const val = measured.result?.value as
+              | {
+                  visible?: boolean;
+                  offsetX?: number;
+                  offsetY?: number;
+                  left?: number;
+                  top?: number;
+                  right?: number;
+                  bottom?: number;
+                }
+              | null
+              | undefined;
+            if (val && val.visible === false) return null;
+            if (
+              val &&
+              val.visible === true &&
+              typeof val.offsetX === "number" &&
+              typeof val.offsetY === "number" &&
+              typeof val.left === "number" &&
+              typeof val.top === "number" &&
+              typeof val.right === "number" &&
+              typeof val.bottom === "number"
+            ) {
+              return {
+                offsetX: val.offsetX,
+                offsetY: val.offsetY,
+                left: val.left,
+                top: val.top,
+                right: val.right,
+                bottom: val.bottom,
+              };
+            }
+          } finally {
+            void this.commandSession(parentSession, "Runtime.releaseObject", {
+              objectId,
+            }).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // Fall back to DOM.getBoxModel below.
+    }
+
+    // Fallback: DOM.getBoxModel (content quad [x1, y1, x2, y2, x3, y3, x4, y4]).
+    try {
+      const boxModel = await this.commandSession<{
+        model?: { content?: unknown };
+      }>(parentSession, "DOM.getBoxModel", { backendNodeId });
+      const content = boxModel.model?.content;
+      if (Array.isArray(content) && content.length >= 6) {
+        const [x1, y1, x2, , , y3] = content as number[];
+        if (
+          typeof x1 === "number" &&
+          typeof y1 === "number" &&
+          typeof x2 === "number" &&
+          typeof y3 === "number" &&
+          x2 > x1 &&
+          y3 > y1
+        ) {
+          return {
+            offsetX: x1,
+            offsetY: y1,
+            left: x1,
+            top: y1,
+            right: x2,
+            bottom: y3,
+          };
+        }
+      }
+    } catch {
+      // Frame not laid out.
+    }
+    return null;
+  }
+
+  /** Verifies that in a parent frame at local coordinates (x, y), the child iframe is not occluded. */
+  private async frameHitCheck(
+    tab: Tab,
+    parentSession: string,
+    parentFrameId: string,
+    childFrameId: string,
+    x: number,
+    y: number,
+  ): Promise<{ ok: true } | { ok: false; cover?: string }> {
+    try {
+      const owner = await this.commandSession(
+        parentSession,
+        "DOM.getFrameOwner",
+        { frameId: childFrameId },
+      );
+      const backendNodeId = (owner as { backendNodeId?: unknown })
+        .backendNodeId;
+      if (typeof backendNodeId !== "number") return { ok: true };
+      const world =
+        parentFrameId === tab.frame
+          ? await this.world(tab)
+          : await this.childWorld(tab, parentSession, parentFrameId);
+      if (world === "page" || world === null) return { ok: false };
+      const resolved = await this.commandSession<{
+        object?: { objectId?: unknown };
+      }>(parentSession, "DOM.resolveNode", {
+        backendNodeId,
+        executionContextId: world,
+      });
+      const objectId = resolved.object?.objectId;
+      if (typeof objectId !== "string" || !objectId) return { ok: true };
+      try {
+        const checked = await this.commandSession<{
+          result?: { value?: { ok?: boolean; cover?: string } };
+        }>(parentSession, "Runtime.callFunctionOn", {
+          objectId,
+          arguments: [{ value: x }, { value: y }],
+          returnByValue: true,
+          silent: true,
+          functionDeclaration: `function(px, py) {
+            var el = this;
+            var top = document.elementFromPoint(px, py);
+            for (var depth = 0; top && top !== el && top.shadowRoot && typeof top.shadowRoot.elementFromPoint === "function" && depth < 30; depth++) {
+              var below = top.shadowRoot.elementFromPoint(px, py);
+              if (!below || below === top) break;
+              top = below;
+            }
+            if (!top) return { ok: false };
+            if (top === el || (typeof el.contains === "function" && el.contains(top))) return { ok: true };
+            return { ok: false, cover: String(top.localName || "").toLowerCase().slice(0, 40) };
+          }`,
+        });
+        const val = checked.result?.value;
+        if (val && val.ok === false) {
+          return {
+            ok: false,
+            ...(typeof val.cover === "string" && val.cover
+              ? { cover: val.cover }
+              : {}),
+          };
+        }
+      } finally {
+        void this.commandSession(parentSession, "Runtime.releaseObject", {
+          objectId,
+        }).catch(() => {});
+      }
+    } catch (error) {
+      if (error instanceof DevToolsClosed) throw error;
+      // Mocked browsers without DOM.resolveNode skip parent occlusion check.
+    }
+    return { ok: true };
+  }
+
+  /** Traverses visible child frames (same-origin, OOPIFs, and nested frames inside OOPIFs) and merges their elements & text. */
+  private async readChildFrames(tab: Tab, page: BrowserPage): Promise<void> {
+    let rawTree: unknown;
+    try {
+      rawTree = await this.command(tab, "Page.getFrameTree");
+    } catch (error) {
+      if (error instanceof DevToolsClosed) throw error;
+      return;
+    }
+    const parsed = frameTreeSchema.safeParse(rawTree);
+    if (!parsed.success) return;
+    tab.frame = parsed.data.frameTree.frame.id;
+
+    const geomByFrame = new Map<string, FrameBox>();
+    geomByFrame.set(tab.frame, {
+      offsetX: 0,
+      offsetY: 0,
+      left: Number.NEGATIVE_INFINITY,
+      top: Number.NEGATIVE_INFINITY,
+      right: Number.POSITIVE_INFINITY,
+      bottom: Number.POSITIVE_INFINITY,
+    });
+
+    const elements = [...page.elements];
+    let text = page.text;
+    let visited = 0;
+
+    const walkChildren = async (
+      parentNode: FrameTreeNode,
+      parentSession: string,
+      ancestors: string[],
+      ancestorSessions: string[],
+    ): Promise<void> => {
+      for (const child of parentNode.childFrames ?? []) {
+        if (visited >= maxChildFrames || elements.length >= pageLimits.elements)
+          return;
+        const url = child.frame.url ?? "";
+        if (!frameAllowedUrl(url)) continue;
+        const parentId = child.frame.parentId ?? parentNode.frame.id;
+        const parentGeom = geomByFrame.get(parentId);
+        if (!parentGeom) continue;
+
+        visited += 1;
+        const localGeom = await this.childFrameGeometry(
+          tab,
+          parentSession,
+          parentId,
+          child.frame.id,
+          false,
+        );
+        if (!localGeom) continue;
+        const accum: FrameBox = {
+          offsetX: parentGeom.offsetX + localGeom.offsetX,
+          offsetY: parentGeom.offsetY + localGeom.offsetY,
+          left: Math.max(parentGeom.left, parentGeom.offsetX + localGeom.left),
+          top: Math.max(parentGeom.top, parentGeom.offsetY + localGeom.top),
+          right: Math.min(
+            parentGeom.right,
+            parentGeom.offsetX + localGeom.right,
+          ),
+          bottom: Math.min(
+            parentGeom.bottom,
+            parentGeom.offsetY + localGeom.bottom,
+          ),
+        };
+        if (!(accum.right > accum.left && accum.bottom > accum.top)) continue;
+        geomByFrame.set(child.frame.id, accum);
+
+        const childSession =
+          this.oopifsByFrameId.get(child.frame.id)?.session ?? parentSession;
+        const chain = [...ancestors, child.frame.id];
+        const sessions = [...ancestorSessions, childSession];
+
+        try {
+          const answer = await this.askInFrame(
+            tab,
+            childSession,
+            child.frame.id,
+            { do: "read" },
+          );
+          if (answer.page) {
+            const childPage = pageOfReading("own", answer.page);
+            for (const el of childPage.elements) {
+              if (elements.length >= pageLimits.elements) break;
+              elements.push(el);
+              tab.elementFrames.set(el.index, {
+                frameId: child.frame.id,
+                session: childSession,
+                chain,
+                sessions,
+              });
+            }
+            if (childPage.text && text.length < pageLimits.text) {
+              const sep = text ? "\n" : "";
+              text = (text + sep + childPage.text).slice(0, pageLimits.text);
+            }
+          }
+        } catch (error) {
+          if (error instanceof DevToolsClosed) throw error;
+          // Detached, navigating, unattached cross-origin frame, or no isolated world: skip safely.
+          continue;
+        }
+
+        let subNode: FrameTreeNode = child;
+        if (
+          childSession !== parentSession &&
+          (child.childFrames?.length ?? 0) === 0
+        ) {
+          try {
+            const oopifTreeRaw = await this.commandSession(
+              childSession,
+              "Page.getFrameTree",
+            );
+            const oopifParsed = frameTreeSchema.safeParse(oopifTreeRaw);
+            if (oopifParsed.success) {
+              subNode =
+                this.findFrameNode(
+                  oopifParsed.data.frameTree,
+                  child.frame.id,
+                ) ?? oopifParsed.data.frameTree;
+            }
+          } catch (error) {
+            if (error instanceof DevToolsClosed) throw error;
+          }
+        }
+        await walkChildren(subNode, childSession, chain, sessions);
+      }
+    };
+
+    await walkChildren(
+      parsed.data.frameTree,
+      tab.session,
+      [tab.frame],
+      [tab.session],
+    );
+
+    page.elements = elements;
+    page.text = text;
+  }
+
   private async look(tab: Tab) {
     const answer = await this.ask(tab, { do: "read" });
     if (!answer.page) throw new Error(unreadable);
     // The page may have gone to an address that is not a web page.
-    if (!web(answer.page.url) && !blank(answer.page.url))
+    if (
+      !web(answer.page.url) &&
+      !blank(answer.page.url) &&
+      !chromeError(answer.page.url)
+    )
       throw new Error(ownPage);
     tab.url = answer.page.url;
+    tab.elementFrames.clear();
+    const page = pageOfReading("own", answer.page);
+    if (chromeError(answer.page.url)) {
+      page.elements = [];
+    } else {
+      await this.readChildFrames(tab, page);
+    }
+    if (
+      tab.navError &&
+      (chromeError(answer.page.url) || blank(answer.page.url))
+    ) {
+      Object.assign(page, { navError: tab.navError });
+    }
     return {
       ready: answer.ready === true,
-      page: pageOfReading("own", answer.page),
+      page,
     };
   }
 
   /** Where element N is now, after it came into view. */
   private async located(tab: Tab, index: number): Promise<Located> {
-    if (!web(tab.url) && !blank(tab.url)) throw new Error(ownPage);
+    this.assertOperable(tab);
+    const frameRef = tab.elementFrames.get(index);
+    if (frameRef) {
+      if (
+        (await this.childWorld(tab, frameRef.session, frameRef.frameId)) ===
+        null
+      )
+        throw new Error(
+          "This browser gave no private world for the check before a click, so nothing was sent. Read the page again, or use the screen.",
+        );
+      // Pre-scroll ancestor iframes into view if needed, then locate inside the
+      // child frame (which may also scroll ancestor windows), then measure the
+      // final post-scroll viewport geometry for accurate coordinate translation.
+      for (let i = 1; i < frameRef.chain.length; i++) {
+        await this.childFrameGeometry(
+          tab,
+          frameRef.sessions[i - 1]!,
+          frameRef.chain[i - 1]!,
+          frameRef.chain[i]!,
+          true,
+        );
+      }
+      const text = await this.evaluateInFrame(
+        tab,
+        frameRef.session,
+        frameRef.frameId,
+        { do: "locate", index },
+      );
+      const refused = parsePageAnswer(text);
+      if (refused && !refused.ok) throw new Error(oneLine(refused.error, 300));
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(unreadable);
+      }
+      const box = locateSchema.safeParse(parsed);
+      if (!box.success) throw new Error(unreadable);
+      let accum: FrameBox = {
+        offsetX: 0,
+        offsetY: 0,
+        left: 0,
+        top: 0,
+        right: Number.POSITIVE_INFINITY,
+        bottom: Number.POSITIVE_INFINITY,
+      };
+      const locals: FrameBox[] = [];
+      for (let i = 1; i < frameRef.chain.length; i++) {
+        const parentSession = frameRef.sessions[i - 1]!;
+        const parentId = frameRef.chain[i - 1]!;
+        const childId = frameRef.chain[i]!;
+        const local = await this.childFrameGeometry(
+          tab,
+          parentSession,
+          parentId,
+          childId,
+          false,
+        );
+        if (!local)
+          throw new Error(
+            `Number ${index} is hidden now. Read the page again.`,
+          );
+        locals[i] = local;
+        accum = {
+          offsetX: accum.offsetX + local.offsetX,
+          offsetY: accum.offsetY + local.offsetY,
+          left: Math.max(accum.left, accum.offsetX + local.left),
+          top: Math.max(accum.top, accum.offsetY + local.top),
+          right: Math.min(accum.right, accum.offsetX + local.right),
+          bottom: Math.min(accum.bottom, accum.offsetY + local.bottom),
+        };
+      }
+      const topX = box.data.x + accum.offsetX;
+      const topY = box.data.y + accum.offsetY;
+      const inside =
+        box.data.inside &&
+        topX >= accum.left &&
+        topX <= accum.right &&
+        topY >= accum.top &&
+        topY <= accum.bottom;
+      let hit = box.data.hit;
+      let cover = box.data.cover;
+      if (hit && inside && frameRef.chain.length >= 2) {
+        // Walk EVERY parent level in the nested iframe chain in that parent's
+        // local coordinates to defeat nested-iframe clickjacking overlays.
+        let px = box.data.x;
+        let py = box.data.y;
+        for (let i = frameRef.chain.length - 1; i >= 1; i--) {
+          const local = locals[i]!;
+          px += local.offsetX;
+          py += local.offsetY;
+          const parentHit = await this.frameHitCheck(
+            tab,
+            frameRef.sessions[i - 1]!,
+            frameRef.chain[i - 1]!,
+            frameRef.chain[i]!,
+            px,
+            py,
+          );
+          if (!parentHit.ok) {
+            hit = false;
+            if (parentHit.cover) cover = parentHit.cover;
+            break;
+          }
+        }
+      }
+      return {
+        ...box.data,
+        x: topX,
+        y: topY,
+        inside,
+        hit,
+        ...(cover ? { cover } : {}),
+      };
+    }
     // The check before an input runs only in the private world, where the
     // page cannot change what it reads. A browser that gave no such world
     // gets no input: in doubt, nothing is sent.
@@ -1516,48 +2845,159 @@ export class OwnBrowser implements BrowserPort {
     return box.data;
   }
 
+  private hasOpenDocument(tab: Tab): boolean {
+    for (const request of tab.open.values()) {
+      if (request.document) return true;
+    }
+    return false;
+  }
+
   /** Whether the page is quiet: no new request for a while, and none that it waits for. */
-  private quiet(tab: Tab) {
+  private quiet(tab: Tab, isNavigation = false, stepStartedAt?: number) {
     const now = this.clock.now();
     if (now - tab.lastRequestAt < ownTiming.quietMs) return false;
-    for (const request of tab.open.values())
-      if (request.document || now - request.at < ownTiming.longRequestMs)
-        return false;
+    for (const request of tab.open.values()) {
+      const openedInStep =
+        stepStartedAt !== undefined && request.at >= stepStartedAt;
+      const maxOpen =
+        isNavigation || openedInStep
+          ? ownTiming.navLongRequestMs
+          : ownTiming.bgLongRequestMs;
+      if (request.document || now - request.at < maxOpen) return false;
+    }
     return true;
   }
 
+  /** Runs a lightweight quiescence probe in the isolated world without scraping the DOM. */
+  private async probeSettle(tab: Tab): Promise<{
+    readyState: string;
+    leaving: boolean;
+    domIdleMs: number;
+    url?: string;
+  }> {
+    const text = await this.evaluate(tab, { do: "settle" });
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error(unreadable);
+    }
+    const result = settleSchema.safeParse(parsed);
+    if (!result.success) throw new Error(unreadable);
+    return {
+      readyState: result.data.readyState ?? "complete",
+      leaving: result.data.leaving === true,
+      domIdleMs: result.data.domIdleMs ?? ownTiming.domIdleMs,
+      ...(result.data.url !== undefined ? { url: result.data.url } : {}),
+    };
+  }
+
+  /** Adopts a newly created popup/target="_blank" tab opened by the active tab. */
+  private async adoptPendingPopup(activeTab: Tab): Promise<Tab | null> {
+    const live = this.live;
+    if (
+      !live ||
+      !this.pendingPopup ||
+      this.pendingPopup.openerId !== activeTab.targetId
+    )
+      return null;
+    const popupId = this.pendingPopup.targetId;
+    this.pendingPopup = null;
+    const info = this.discoveredTargets.get(popupId);
+    if (info && !listable(info)) return null;
+    const popupTab = await this.attach(
+      live,
+      popupId,
+      info?.url ?? "about:blank",
+    );
+    this.current = popupId;
+    return popupTab;
+  }
+
   /**
-   * Waits until the page is ready again: loaded, not on its way out, and
-   * quiet on the network. The wait has an end. When it comes, the last
-   * reading is the answer, or the failure when the last look failed.
+   * Waits until readyState !== "loading", DOM mutations have been idle for
+   * >= 80ms, and network activity has been quiet for >= 100ms (bounded at
+   * 2000ms for in-page actions and 3000ms for navigations), then runs look()
+   * ONCE instead of polling full DOM scrapes.
    */
   private async settled(
-    tab: Tab,
+    initialTab: Tab,
     capMs: number,
     fits: (page: BrowserPage) => boolean = () => true,
+    isNavigation = false,
+    stepStartedAt?: number,
   ): Promise<BrowserPage> {
+    let tab = initialTab;
+    let navigation = isNavigation;
+    let effectiveCap = capMs;
     const from = this.clock.now();
-    let last: BrowserPage | null = null;
+    const docsBefore = tab.documents;
     let failed: unknown = null;
     await this.clock.sleep(ownTiming.firstLookMs);
     for (;;) {
-      if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
-      try {
-        const seen = await this.look(tab);
-        if (seen.ready && this.quiet(tab) && fits(seen.page)) return seen.page;
-        last = seen.page;
-      } catch (error) {
-        if (error instanceof DevToolsClosed) throw error;
-        // What was read before a failure is not the page now.
-        last = null;
-        failed = error;
+      const popup = await this.adoptPendingPopup(tab);
+      if (popup) {
+        tab = popup;
+        navigation = true;
+        effectiveCap = Math.max(effectiveCap, ownTiming.openWaitMs);
       }
-      const left = from + capMs - this.clock.now();
+      if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+      if (
+        !navigation &&
+        (tab.documents > docsBefore ||
+          tab.frameLoading ||
+          this.hasOpenDocument(tab))
+      ) {
+        navigation = true;
+        effectiveCap = Math.max(effectiveCap, ownTiming.openWaitMs);
+      }
+      if (this.quiet(tab, navigation, stepStartedAt)) {
+        try {
+          const probe = await this.probeSettle(tab);
+          failed = null;
+          if (
+            !navigation &&
+            (tab.documents > docsBefore ||
+              tab.frameLoading ||
+              this.hasOpenDocument(tab))
+          ) {
+            navigation = true;
+            effectiveCap = Math.max(effectiveCap, ownTiming.openWaitMs);
+          }
+          const ready = probe.readyState !== "loading" && !probe.leaving;
+          const domIdle = probe.domIdleMs >= ownTiming.domIdleMs;
+          const urlReady =
+            probe.url === undefined ||
+            !navigation ||
+            web(probe.url) ||
+            chromeError(probe.url);
+          if (
+            ready &&
+            domIdle &&
+            urlReady &&
+            this.quiet(tab, navigation, stepStartedAt)
+          ) {
+            const seen = await this.look(tab);
+            if (fits(seen.page)) return seen.page;
+          }
+        } catch (error) {
+          if (error instanceof DevToolsClosed) throw error;
+          failed = error;
+        }
+      }
+      const left = from + effectiveCap - this.clock.now();
       if (left <= 0) break;
       await this.clock.sleep(Math.min(ownTiming.lookEveryMs, left));
     }
-    if (last) return last;
-    throw failed ?? new Error(unreadable);
+    const popup = await this.adoptPendingPopup(tab);
+    if (popup) tab = popup;
+    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog));
+    try {
+      return (await this.look(tab)).page;
+    } catch (error) {
+      if (error instanceof DevToolsClosed) throw error;
+      throw failed ?? error;
+    }
   }
 }
 

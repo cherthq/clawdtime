@@ -2389,4 +2389,43 @@ describe("the page script: keys", () => {
     );
     expect(page.log).toEqual([]);
   });
+  it("initializes MutationObserver lastMutation to Date.now() so the first settle probe waits the real quiet window", () => {
+    const page = new FakePage(h("p", {}, "Hello"));
+    page.evaluate(`
+      window.MutationObserver = function (cb) { this.cb = cb; };
+      window.MutationObserver.prototype.observe = function () {};
+    `);
+    const first = page.run({ do: "settle" }) as Answer & {
+      domIdleMs?: number;
+    };
+    expect(first.ok).toBe(true);
+    expect(typeof first.domIdleMs).toBe("number");
+    expect(first.domIdleMs!).toBeGreaterThanOrEqual(0);
+    expect(first.domIdleMs!).toBeLessThan(80);
+  });
+  it("keeps opacity: 0 checkboxes/radios visible when their associated label is shown, and drops unlabeled ones", () => {
+    const wrappedCb = input({ id: "cb-wrap", type: "checkbox" });
+    const wrapLabel = h("label", {}, wrappedCb, "Accept terms");
+    const orphanCb = input({
+      id: "cb-orphan",
+      type: "checkbox",
+      "aria-label": "Orphan",
+    });
+    const ghostBtn = h("button", { id: "ghost-btn" }, "Ghost");
+    const page = new FakePage(wrapLabel, orphanCb, ghostBtn);
+    page.evaluate(`
+      var orig = window.getComputedStyle;
+      window.getComputedStyle = function (el) {
+        var s = orig(el);
+        var id = typeof el.getAttribute === "function" ? el.getAttribute("id") : "";
+        if (id === "cb-wrap" || id === "cb-orphan" || id === "ghost-btn") {
+          return Object.assign({}, s, { opacity: "0" });
+        }
+        return Object.assign({}, s, { opacity: "1" });
+      };
+    `);
+    const seen = page.run({ do: "read" });
+    expect(seen.ok).toBe(true);
+    expect(seen.page!.elements.map((el) => el.label)).toEqual(["Accept terms"]);
+  });
 });

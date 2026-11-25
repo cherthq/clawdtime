@@ -42,7 +42,9 @@ export type PageCall =
   /** Where element N is, for a driver that sends real input. It sends no event. */
   | { do: "locate"; index: number }
   /** Whether the focus may take a real key: not in a password field, not in a frame. It sends no event. */
-  | { do: "focus" };
+  | { do: "focus"; child?: boolean }
+  /** Lightweight readiness and DOM mutation quiescence check in the isolated world. */
+  | { do: "settle" };
 
 /** The keys that a page takes, as the planner names them. */
 export const pageKeys = [
@@ -188,7 +190,22 @@ function firstLine(candidates, max) {
   return "";
 }
 
-var LISTED_ROLES = { button: 1, link: 1, checkbox: 1, radio: 1, tab: 1, menuitem: 1, option: 1, "switch": 1 };
+var LISTED_ROLES = {
+  button: 1,
+  link: 1,
+  checkbox: 1,
+  radio: 1,
+  tab: 1,
+  menuitem: 1,
+  option: 1,
+  "switch": 1,
+  combobox: 1,
+  listbox: 1,
+  slider: 1,
+  spinbutton: 1,
+  treeitem: 1,
+  searchbox: 1
+};
 
 // The role of an element that a person could click or fill, or null for any
 // other element. A role that the page gives wins over the role of the tag.
@@ -322,12 +339,52 @@ function styleOf(el) {
     return null;
   }
 }
+function isChoiceInput(el) {
+  if (tagOf(el) !== "input") return false;
+  var t = typeOf(el);
+  return t === "checkbox" || t === "radio";
+}
+function visibleLabelOf(el) {
+  var labels = el.labels;
+  if (labels && labels.length) {
+    for (var i = 0; i < labels.length; i++) {
+      var lab = labels[i];
+      if (lab && typeof lab.getBoundingClientRect === "function" && shown(lab, lab.getBoundingClientRect())) return lab;
+    }
+  }
+  if (typeof el.closest === "function") {
+    var wrap = el.closest("label");
+    if (wrap && typeof wrap.getBoundingClientRect === "function" && shown(wrap, wrap.getBoundingClientRect())) return wrap;
+  }
+  return null;
+}
 function shown(el, rect) {
-  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return false;
+  if (typeof el.closest === "function" && el.closest("[inert]")) return false;
   var style = styleOf(el);
   if (style && (style.visibility === "hidden" || style.visibility === "collapse" || style.display === "none")) return false;
-  if (typeof el.closest === "function" && el.closest("[inert]")) return false;
+  var opacityZero = style && style.opacity === "0";
+  if (isChoiceInput(el) && opacityZero) {
+    if (typeof el.checkVisibility === "function") {
+      try {
+        if (!el.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })) return false;
+      } catch (problem) {}
+    }
+    return visibleLabelOf(el) !== null;
+  }
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return false;
+  if (typeof el.checkVisibility === "function") {
+    try {
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    } catch (problem) {}
+  }
+  if (opacityZero) return false;
   return true;
+}
+function checkOperablePage() {
+  var href = win.location && typeof win.location.href === "string" ? win.location.href : "";
+  if (/^chrome-error:/i.test(href)) {
+    fail("ClawdTime's browser shows one of its own pages, which ClawdTime does not read or operate: open a web page, then try again.");
+  }
 }
 // Disabled by the browser itself: it takes no click and no text.
 function off(el) {
@@ -430,10 +487,86 @@ function valueOf(el, kind) {
     return chosen ? oneLine(chosen.text, ${pageLimits.value}) : "";
   }
   if (kind === "check") return el.checked === true ? "checked" : "not checked";
+  var states = [];
   var checked = attr(el, "aria-checked");
-  if (checked) return checked === "true" ? "checked" : checked === "mixed" ? "partly checked" : "not checked";
-  if (attr(el, "aria-selected") === "true") return "selected";
+  if (checked) states.push(checked === "true" ? "checked" : checked === "mixed" ? "partly checked" : "not checked");
+  if (attr(el, "aria-selected") === "true") states.push("selected");
+  var expanded = attr(el, "aria-expanded");
+  if (expanded === "true") states.push("expanded");
+  else if (expanded === "false") states.push("collapsed");
+  if (states.length) return oneLine(states.join(", "), ${pageLimits.value});
+  var valueText = attr(el, "aria-valuetext");
+  if (valueText) return oneLine(valueText, ${pageLimits.value});
+  var valueNow = attr(el, "aria-valuenow");
+  if (valueNow) return oneLine(valueNow, ${pageLimits.value});
   return null;
+}
+function optionsOf(el) {
+  var list = el.options;
+  if (!list || !list.length) return null;
+  var out = [];
+  for (var i = 0; i < list.length && out.length < 12; i++) {
+    if (list[i].disabled === true) continue;
+    var label = oneLine(list[i].text, ${pageLimits.label});
+    if (label) out.push(label);
+  }
+  return out.length ? out : null;
+}
+
+// Lightweight DOM mutation quiescence tracker in the script's world.
+// Ignores unchanged attribute writes and debounces per-element style/class flicker (200ms).
+function ensureObserver(state) {
+  if (state.observer || typeof win.MutationObserver !== "function") return;
+  var root = doc.documentElement || doc.body;
+  if (!root) return;
+  var styleStamp = typeof win.WeakMap === "function" ? new win.WeakMap() : null;
+  var observer = new win.MutationObserver(function (records) {
+    var now = Date.now();
+    var meaningful = false;
+    for (var i = 0; i < records.length; i++) {
+      var rec = records[i];
+      if (rec.type === "attributes") {
+        var el = rec.target;
+        var name = rec.attributeName;
+        if (name && el && typeof el.getAttribute === "function") {
+          if (el.getAttribute(name) === rec.oldValue) continue;
+        }
+        if (name === "style" || name === "class") {
+          if (styleStamp && el && typeof el === "object") {
+            var prev = styleStamp.get(el) || 0;
+            if (now - prev < 200) continue;
+            styleStamp.set(el, now);
+          }
+        }
+        meaningful = true;
+        break;
+      }
+      if (rec.type === "childList") {
+        if ((rec.addedNodes && rec.addedNodes.length > 0) || (rec.removedNodes && rec.removedNodes.length > 0)) {
+          meaningful = true;
+          break;
+        }
+      } else if (rec.type === "characterData") {
+        if (rec.target && rec.target.nodeValue !== rec.oldValue) {
+          meaningful = true;
+          break;
+        }
+      }
+    }
+    if (meaningful) state.lastMutation = now;
+  });
+  try {
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      characterDataOldValue: true,
+      attributes: true,
+      attributeOldValue: true
+    });
+    state.observer = observer;
+    if (!state.lastMutation) state.lastMutation = Date.now();
+  } catch (problem) {}
 }
 
 // The state of this document for this driver. A document that starts to
@@ -443,13 +576,14 @@ function valueOf(el, kind) {
 function held() {
   var state = win[STATE];
   if (!state || state.session !== call.session) {
-    state = { session: call.session, next: 1, leaving: false, known: Object.create(null) };
+    state = { session: call.session, next: 1, leaving: false, known: Object.create(null), lastMutation: 0, observer: null };
     win[STATE] = state;
     if (typeof win.addEventListener === "function") {
       win.addEventListener("beforeunload", function () { state.leaving = true; });
       win.addEventListener("pageshow", function () { state.leaving = false; });
     }
   }
+  ensureObserver(state);
   if (!(state.next >= call.start)) state.next = call.start;
   return state;
 }
@@ -486,7 +620,12 @@ function read() {
     // is there and cannot be used yet" tells the planner to fill the form
     // first. Left out, the planner looked for a button that the page shows.
     if (!shown(el, rect)) return;
-    found.push({ el: el, facts: facts, near: inView(rect, width, height) });
+    var near = inView(rect, width, height);
+    if (!near && isChoiceInput(el)) {
+      var lab = visibleLabelOf(el);
+      if (lab) near = inView(lab.getBoundingClientRect(), width, height);
+    }
+    found.push({ el: el, facts: facts, near: near });
   });
   var kept = arrange(found, ${pageLimits.elements});
   var elements = [];
@@ -505,6 +644,10 @@ function read() {
     if (!hidden) {
       var value = valueOf(el, facts.kind);
       if (value !== null) entry.value = value;
+      if (facts.tag === "select") {
+        var opts = optionsOf(el);
+        if (opts) entry.options = opts;
+      }
     }
     if (facts.tag === "a" && typeof el.href === "string") entry.href = oneLine(el.href, ${pageLimits.link});
     entry.disabled = off(el) || hindered(el);
@@ -549,11 +692,13 @@ function bring(el) {
 }
 
 function click(index) {
+  checkOperablePage();
   var state = held();
   var el = find(index);
   var name = nameOf(index, el);
   if (off(el)) fail(name + " is disabled now.");
   if (tagOf(el) === "select") fail(name + " is a list of choices. Use type with the text of one choice.");
+  if (tagOf(el) === "input" && typeOf(el) === "file") fail(name + " is a file upload input. Clicking it opens a native file picker dialog, which ClawdTime cannot operate automatically. Ask the person to choose the file.");
   bring(el);
   var rect = el.getBoundingClientRect();
   if (!shown(el, rect)) fail(name + " is hidden now. Read the page again.");
@@ -676,6 +821,7 @@ function sendForm(el) {
   }
 }
 function type(index, text, submit) {
+  checkOperablePage();
   var state = held();
   var el = find(index);
   var kind = kindOf(el);
@@ -700,6 +846,7 @@ function canMove(el, sign) {
 }
 // Scrolls the page, or the largest scrolling part in view when the page itself does not move.
 function scroll(direction) {
+  checkOperablePage();
   var state = held();
   var sign = direction === "up" ? -1 : 1;
   var width = win.innerWidth || 0;
@@ -761,6 +908,7 @@ function holders(from) {
 // left hears out and leave, what it reaches hears over, enter and move. No
 // button goes down, so nothing is clicked.
 function hover(index) {
+  checkOperablePage();
   var state = held();
   var el = find(index);
   var name = nameOf(index, el);
@@ -852,6 +1000,7 @@ function press(target) {
 // the list. A select of the browser gets the choice and hears input and
 // change. An option of a list that the page draws is pressed.
 function select(index, wanted) {
+  checkOperablePage();
   var state = held();
   var el = find(index);
   var name = nameOf(index, el);
@@ -1014,6 +1163,7 @@ function keyAction(el, combo) {
 // One key in the element that has the focus: down, press for a key that
 // writes, the browser's own action when the page did not stop it, up.
 function key(combo) {
+  checkOperablePage();
   var state = held();
   var spec = Object.prototype.hasOwnProperty.call(KEYS, combo) ? KEYS[combo] : null;
   if (!spec) fail("The page was asked for a key that it does not take.");
@@ -1124,6 +1274,7 @@ function focusedNow() {
   return active;
 }
 function locate(index) {
+  checkOperablePage();
   var state = held();
   var el = find(index);
   var facts = factsOf(el);
@@ -1134,14 +1285,37 @@ function locate(index) {
   state.leaving = false;
   var x = rect.left + rect.width / 2;
   var y = rect.top + rect.height / 2;
+  var inside = x >= 0 && y >= 0 && x < (win.innerWidth || 0) && y < (win.innerHeight || 0);
   var top = topAt(x, y);
   var way = top === undefined ? { node: null, why: "unsure" } : top ? inTheWay(top, el) : { node: null, why: "" };
   var hit = way === null;
+  if ((!hit || !inside) && isChoiceInput(el)) {
+    var elStyle = styleOf(el);
+    if (elStyle && elStyle.opacity === "0") {
+      var visLabel = visibleLabelOf(el);
+      if (visLabel) {
+        bring(visLabel);
+        var lRect = visLabel.getBoundingClientRect();
+        var lx = lRect.left + lRect.width / 2;
+        var ly = lRect.top + lRect.height / 2;
+        var lInside = lx >= 0 && ly >= 0 && lx < (win.innerWidth || 0) && ly < (win.innerHeight || 0);
+        var lTop = topAt(lx, ly);
+        var lWay = lTop === undefined ? { node: null, why: "unsure" } : lTop ? inTheWay(lTop, el) : { node: null, why: "" };
+        if (lInside && lWay === null) {
+          x = lx;
+          y = ly;
+          inside = true;
+          hit = true;
+          way = null;
+        }
+      }
+    }
+  }
   var answer = {
     ok: true,
     x: x,
     y: y,
-    inside: x >= 0 && y >= 0 && x < (win.innerWidth || 0) && y < (win.innerHeight || 0),
+    inside: inside,
     hit: hit,
     tag: cut(tagOf(el), 40),
     role: facts ? facts.role : "",
@@ -1152,14 +1326,35 @@ function locate(index) {
     password: secret(el),
     focused: within(focusedNow(), el)
   };
+  if (tagOf(el) === "input") {
+    var inputType = typeOf(el);
+    if (inputType === "file") answer.file = true;
+    if (inputType) answer.inputType = cut(inputType, 30);
+  }
   if (way && way.node) answer.cover = cut(tagOf(way.node), 40);
   if (way && way.why) answer.blocked = way.why;
   return answer;
 }
+function settleCheck() {
+  var state = held();
+  var now = Date.now();
+  var domIdleMs = state.lastMutation ? Math.max(0, now - state.lastMutation) : 1000;
+  return {
+    ok: true,
+    readyState: String(doc.readyState || "complete"),
+    leaving: state.leaving === true,
+    domIdleMs: domIdleMs,
+    url: oneLine(win.location.href, ${pageLimits.address})
+  };
+}
 // Focus: for a driver that sends real keys. A key goes to the element that
 // has the focus, so the step says no when that is a password field, or a
 // frame, whose inside this script cannot see.
-function focusCheck() {
+function focusCheck(isChild) {
+  checkOperablePage();
+  if (isChild && typeof doc.hasFocus === "function" && !doc.hasFocus()) {
+    fail("The focus is not in this frame.");
+  }
   var el = focusedElement();
   if (!el) fail("The page has nothing that could take a key.");
   if (secret(el)) fail("The focus is in a password field. The worker never presses a key there: ask the person.");
@@ -1180,7 +1375,8 @@ try {
   else if (call.do === "key") answer = key(String(call.combo));
   else if (call.do === "ping") answer = { ok: true };
   else if (call.do === "locate") answer = locate(call.index);
-  else if (call.do === "focus") answer = focusCheck();
+  else if (call.do === "focus") answer = focusCheck(call.child === true);
+  else if (call.do === "settle") answer = settleCheck();
   else fail("The page was asked for a step that it does not know.");
 } catch (problem) {
   if (problem && typeof problem.told === "string") answer = { ok: false, error: problem.told };

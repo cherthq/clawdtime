@@ -27,6 +27,7 @@ import {
   type DevToolsDial,
   type DevToolsPipeHandlers,
 } from "../connectors/computer/devtools.js";
+import { pageError } from "../connectors/computer/error-page.js";
 import {
   OwnBrowser,
   keyEvents,
@@ -153,6 +154,28 @@ class PaperBrowser {
   ];
   page: Record<string, unknown> = { ...shop };
   locate: (index: number) => Record<string, unknown> = () => box();
+  /** Optional custom settle probe reply. */
+  settle: () => Record<string, unknown> = () => ({ ok: true });
+  /** Optional Page.getFrameTree response (default and per CDP session). */
+  frameTree: Record<string, unknown> | null = null;
+  frameTreeBySession = new Map<string, Record<string, unknown>>();
+  /** Optional per-frame owner backendNodeId and boxModel content quad. */
+  frameOwners = new Map<string, number>();
+  boxModels = new Map<number, number[]>();
+  /** Optional per-frame page/locate/focus overrides keyed by executionContextId. */
+  worldByFrame = new Map<string, number | null>();
+  pageByContext = new Map<number, Record<string, unknown>>();
+  locateByContext = new Map<
+    number,
+    (index: number) => Record<string, unknown>
+  >();
+  focusByContext = new Map<number, Record<string, unknown>>();
+  /** Optional custom reply for `{ do: "type" }` calls. */
+  typeReply: (() => Record<string, unknown>) | null = null;
+  /** Optional focused child frameId reported by activeElement + DOM.describeNode per parent contextId. */
+  focusedChildByContext = new Map<number, string | null>();
+  /** Optional frameHitCheck override keyed by iframe owner backendNodeId. */
+  frameHitByBackendNode = new Map<number, { ok: boolean; cover?: string }>();
   /** Returns true to close the connection instead of answering. */
   dieOn: (sent: Sent) => boolean = () => false;
   /** Called with each command before the answer, to emit events. */
@@ -233,12 +256,14 @@ class PaperBrowser {
   }
   /** The page script calls, in order. */
   calls(): PageCallSeen[] {
-    return this.of("Runtime.evaluate").map((item) => {
-      const expression = String(item.params.expression);
-      return JSON.parse(
-        expression.slice(expression.lastIndexOf("})(") + 3, -1),
-      ) as PageCallSeen;
-    });
+    return this.of("Runtime.evaluate")
+      .filter((item) => item.params.returnByValue !== false)
+      .map((item) => {
+        const expression = String(item.params.expression);
+        return JSON.parse(
+          expression.slice(expression.lastIndexOf("})(") + 3, -1),
+        ) as PageCallSeen;
+      });
   }
 
   private end(handlers: DevToolsPipeHandlers) {
@@ -274,7 +299,7 @@ class PaperBrowser {
       queueMicrotask(() => this.die());
   }
 
-  private answer({ method, params }: Sent): unknown {
+  private answer({ method, params, session }: Sent): unknown {
     switch (method) {
       case "SystemInfo.getProcessInfo":
         return {
@@ -310,22 +335,88 @@ class PaperBrowser {
         return { frameId: "F", loaderId: "L" };
       case "Page.getNavigationHistory":
         return this.history;
+      case "Page.getFrameTree":
+        return (
+          (session ? this.frameTreeBySession.get(session) : undefined) ??
+          this.frameTree ??
+          {}
+        );
+      case "DOM.getFrameOwner": {
+        const backendNodeId = this.frameOwners.get(String(params.frameId));
+        return backendNodeId !== undefined ? { backendNodeId } : {};
+      }
+      case "DOM.resolveNode": {
+        const backendNodeId = Number(params.backendNodeId);
+        if (this.frameHitByBackendNode.has(backendNodeId)) {
+          return { object: { objectId: `NODE-${backendNodeId}` } };
+        }
+        return {};
+      }
+      case "DOM.describeNode": {
+        const objectId = String(params.objectId ?? "");
+        if (objectId.startsWith("FOCUSED-")) {
+          return { node: { frameId: objectId.slice("FOCUSED-".length) } };
+        }
+        return {};
+      }
+      case "Runtime.callFunctionOn": {
+        const objectId = String(params.objectId ?? "");
+        const fn = String(params.functionDeclaration ?? "");
+        if (objectId.startsWith("NODE-") && fn.includes("elementFromPoint")) {
+          const backendNodeId = Number(objectId.slice("NODE-".length));
+          const hit = this.frameHitByBackendNode.get(backendNodeId);
+          if (hit) return { result: { value: hit } };
+        }
+        return { result: { value: null } };
+      }
+      case "DOM.getBoxModel": {
+        const content = this.boxModels.get(Number(params.backendNodeId));
+        return content ? { model: { content } } : {};
+      }
       case "Runtime.evaluate": {
+        const ctx = typeof params.contextId === "number" ? params.contextId : 7;
+        if (params.returnByValue === false) {
+          const focusedChild = this.focusedChildByContext.get(ctx);
+          return focusedChild
+            ? {
+                result: { type: "object", objectId: `FOCUSED-${focusedChild}` },
+              }
+            : { result: { type: "object", subtype: "null", value: null } };
+        }
         const expression = String(params.expression);
         const call = JSON.parse(
           expression.slice(expression.lastIndexOf("})(") + 3, -1),
         ) as PageCallSeen;
+        const ctxPage = this.pageByContext.get(ctx) ?? this.page;
+        const ctxLocate = this.locateByContext.get(ctx) ?? this.locate;
         const value =
           call.do === "read"
-            ? { ok: true, ready: true, next: 3, page: this.page }
+            ? {
+                ok: true,
+                ready: true,
+                next: (call.start as number) + 2,
+                page: ctxPage,
+              }
             : call.do === "locate"
-              ? this.locate(call.index!)
-              : { ok: true };
+              ? ctxLocate(call.index!)
+              : call.do === "focus"
+                ? (this.focusByContext.get(ctx) ?? { ok: true })
+                : call.do === "type" && this.typeReply
+                  ? this.typeReply()
+                  : call.do === "settle"
+                    ? this.settle()
+                    : { ok: true };
         return { result: { type: "string", value: JSON.stringify(value) } };
       }
       // A browser of the family names the private world of the page script.
-      case "Page.createIsolatedWorld":
+      case "Page.createIsolatedWorld": {
+        const frameId = String(params.frameId ?? "");
+        if (this.worldByFrame.has(frameId)) {
+          const mapped = this.worldByFrame.get(frameId);
+          return mapped === null ? {} : { executionContextId: mapped };
+        }
         return { executionContextId: 7 };
+      }
       default:
         return {};
     }
@@ -562,6 +653,7 @@ describe("ClawdTime's own browser: input", () => {
     expect(paper.calls().map((call) => call.do)).toEqual([
       "read",
       "locate",
+      "settle",
       "read",
     ]);
     expect(paper.inputs().map((item) => item.params)).toEqual([
@@ -793,7 +885,7 @@ describe("ClawdTime's own browser: input", () => {
     paper.locate = () =>
       box({ tag: "select", role: "combobox", kind: "choice" });
     await browser.select!(4, "Large");
-    expect(paper.calls().at(-2)).toMatchObject({
+    expect(paper.calls().find((call) => call.do === "type")).toMatchObject({
       do: "type",
       index: 4,
       text: "Large",
@@ -930,8 +1022,9 @@ describe("ClawdTime's own browser: waits", () => {
       });
     };
     await browser.click(1);
-    expect(steps.now() - from).toBeGreaterThanOrEqual(ownTiming.waitMs);
-    expect(steps.now() - from).toBeLessThan(ownTiming.waitMs + 500);
+    // A hanging Document request upgrades to the navigation cap (openWaitMs = 3000ms).
+    expect(steps.now() - from).toBeGreaterThanOrEqual(ownTiming.openWaitMs);
+    expect(steps.now() - from).toBeLessThan(ownTiming.openWaitMs + 500);
   });
 
   it("waits for text every 250 ms, and says whether it came", async () => {
@@ -1187,5 +1280,805 @@ describe("ClawdTime's own browser: its switch and the command line", () => {
       /browser +cannot be driven\. No browser for ClawdTime's own browser was found\./,
     );
     expect(fake.calls).toEqual([]);
+  });
+});
+
+describe("ClawdTime's own browser: fast settle, nav errors, popups, iframes and input upgrades", () => {
+  it("ignores EventSource, WebSocket, Media, Ping, Manifest and worker scripts (loaderId === '') during settle", async () => {
+    const { paper, steps, browser } = setup();
+    await browser.read();
+    let from = 0;
+    paper.before = (sent) => {
+      if (sent.params.type !== "mousePressed") return;
+      from = steps.now();
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "sse",
+        type: "EventSource",
+        loaderId: "L1",
+      });
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "ws",
+        type: "WebSocket",
+        loaderId: "L1",
+      });
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "vid",
+        type: "Media",
+        loaderId: "L1",
+      });
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "ping",
+        type: "Ping",
+        loaderId: "L1",
+      });
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "man",
+        type: "Manifest",
+        loaderId: "L1",
+      });
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "sw",
+        type: "Script",
+        loaderId: "",
+      });
+    };
+    await browser.click(1);
+    // Settled immediately on first quiescence probe without stalling.
+    expect(steps.now() - from).toBe(ownTiming.firstLookMs);
+  });
+
+  it("clears stale in-flight requests on OOPIF swap (Page.frameDetached reason === 'swap') and Page.frameStoppedLoading", async () => {
+    const { paper, steps, browser } = setup();
+    await browser.read();
+    let from = 0;
+    paper.before = (sent) => {
+      if (sent.params.type !== "mousePressed") return;
+      from = steps.now();
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "doc1",
+        type: "Document",
+        frameId: "F_SWAP",
+      });
+      steps.later(120, () => {
+        paper.emit("Page.frameDetached", { frameId: "F_SWAP", reason: "swap" });
+      });
+    };
+    await browser.click(1);
+    expect(steps.now() - from).toBeLessThan(ownTiming.waitMs);
+
+    paper.before = (sent) => {
+      if (sent.params.type !== "mousePressed") return;
+      from = steps.now();
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "doc2",
+        type: "Document",
+        frameId: "F_MAIN",
+      });
+      steps.later(120, () => {
+        paper.emit("Page.frameStoppedLoading", { frameId: "F_MAIN" });
+      });
+    };
+    await browser.click(1);
+    expect(steps.now() - from).toBeLessThan(ownTiming.waitMs);
+  });
+
+  it("waits for MutationObserver quiescence (domIdleMs >= 80) and scrapes full DOM once", async () => {
+    const { paper, steps, browser } = setup();
+    await browser.read();
+    let probes = 0;
+    paper.settle = () => {
+      probes += 1;
+      return {
+        ok: true,
+        readyState: probes === 1 ? "loading" : "complete",
+        leaving: false,
+        domIdleMs: probes < 4 ? 20 : 95,
+      };
+    };
+    paper.sent.length = 0;
+    const from = steps.now();
+    await browser.click(1);
+    expect(probes).toBe(4);
+    // Only ONE full `read` ran after 4 lightweight `settle` probes!
+    expect(paper.calls().filter((c) => c.do === "read")).toHaveLength(1);
+    expect(paper.calls().filter((c) => c.do === "settle")).toHaveLength(4);
+    expect(steps.now() - from).toBeLessThan(ownTiming.waitMs);
+  });
+
+  it("captures Network.loadingFailed errorText for Document loads and surfaces it to pageError", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+    paper.before = (sent) => {
+      if (sent.params.type !== "mousePressed") return;
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "nav1",
+        type: "Document",
+        frameId: "T1",
+      });
+      paper.emit("Network.loadingFailed", {
+        requestId: "nav1",
+        type: "Document",
+        errorText: "net::ERR_NAME_NOT_RESOLVED",
+        canceled: false,
+      });
+      paper.page = {
+        title: "",
+        url: "chrome-error://chromewebdata/",
+        text: "",
+        elements: [],
+      };
+    };
+    const failedPage = await browser.click(1);
+    expect(pageError(failedPage)).toBe(
+      "the server was not found (ERR_NAME_NOT_RESOLVED)",
+    );
+    // A subsequent successful navigation clears navError.
+    paper.before = () => {};
+    paper.page = { ...shop };
+    const recovered = await browser.open("https://shop.test/");
+    expect(pageError(recovered)).toBeNull();
+  });
+
+  it("auto-tracks target='_blank' popups opened by the active tab and exposes them in tabs()", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+    expect(paper.of("Target.setDiscoverTargets")).toEqual([
+      expect.objectContaining({ params: { discover: true } }),
+    ]);
+    paper.before = (sent) => {
+      if (sent.params.type !== "mouseReleased") return;
+      paper.page = {
+        title: "Popup Checkout",
+        url: "https://shop.test/checkout",
+        text: "Checkout popup",
+        elements: [element(10, "Pay")],
+      };
+      paper.emit("Target.targetCreated", {
+        targetInfo: {
+          targetId: "T_POPUP",
+          type: "page",
+          title: "Popup Checkout",
+          url: "https://shop.test/checkout",
+          openerId: "T1",
+        },
+      });
+    };
+    const popupPage = await browser.click(1);
+    expect(popupPage.title).toBe("Popup Checkout");
+    expect(popupPage.url).toBe("https://shop.test/checkout");
+    // The active tab switched to T_POPUP and tabs() sees it immediately.
+    paper.before = () => {};
+    const listed = await browser.tabs!();
+    expect(listed.tabs).toEqual([
+      expect.objectContaining({ url: "about:blank", active: false }),
+      expect.objectContaining({
+        title: "Popup Checkout",
+        url: "https://shop.test/checkout",
+        active: true,
+      }),
+    ]);
+  });
+
+  it("traverses child iframes recursively, translates coordinates via DOM.getFrameOwner/getBoxModel, and routes clicks & password masks", async () => {
+    const { paper, browser } = setup();
+    paper.frameTree = {
+      frameTree: {
+        frame: { id: "F_MAIN", url: "https://shop.test/" },
+        childFrames: [
+          {
+            frame: {
+              id: "F_CHILD",
+              parentId: "F_MAIN",
+              url: "https://shop.test/embed",
+            },
+          },
+        ],
+      },
+    };
+    paper.worldByFrame.set("F_MAIN", 7);
+    paper.worldByFrame.set("F_CHILD", 8);
+    paper.frameOwners.set("F_CHILD", 99);
+    // Iframe content box at (100, 200) -> (400, 500)
+    paper.boxModels.set(99, [100, 200, 400, 200, 400, 500, 100, 500]);
+    paper.pageByContext.set(8, {
+      title: "Embed",
+      url: "https://shop.test/embed",
+      text: "Inside iframe",
+      elements: [
+        element(3, "Frame Pay"),
+        element(4, "Card PIN", {
+          tag: "input",
+          role: "textbox",
+          password: true,
+          value: "9999",
+        }),
+      ],
+    });
+    paper.locateByContext.set(8, () =>
+      box({
+        x: 25,
+        y: 30,
+        name: 'Number 3, "Frame Pay",',
+      }),
+    );
+
+    const seen = await browser.read();
+    expect(seen.text).toContain("Kettles for sale.");
+    expect(seen.text).toContain("Inside iframe");
+    expect(seen.elements.map((el) => [el.index, el.label])).toEqual([
+      [1, "Buy"],
+      [2, "Name"],
+      [3, "Frame Pay"],
+      [4, "Card PIN"],
+    ]);
+    // Password value inside iframe is stripped too.
+    expect(seen.elements[3]).not.toHaveProperty("value");
+
+    // Clicking element 3 inside F_CHILD translates (25, 30) + (100, 200) => (125, 230).
+    paper.sent.length = 0;
+    await browser.click(3);
+    const pressed = paper
+      .of("Input.dispatchMouseEvent")
+      .find((item) => item.params.type === "mousePressed");
+    expect(pressed?.params).toMatchObject({ x: 125, y: 230 });
+  });
+
+  it("refuses clicking <input type='file'> before sending any mouse event", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+    paper.locate = () =>
+      box({
+        tag: "input",
+        role: "button",
+        kind: "press",
+        name: 'Number 5, "Upload",',
+        file: true,
+        inputType: "file",
+      });
+    paper.sent.length = 0;
+    await expect(browser.click(5)).rejects.toThrow(
+      /file upload input.*native file picker dialog/i,
+    );
+    expect(paper.inputs()).toEqual([]);
+  });
+
+  it("supports Delete, Meta+A / Cmd+A, and Meta+Z / Cmd+Z while still refusing unsafe shortcuts", () => {
+    expect(keyEvents("Delete")[0]).toMatchObject({
+      key: "Delete",
+      code: "Delete",
+      windowsVirtualKeyCode: 46,
+      commands: ["deleteForward"],
+    });
+    expect(
+      keyEvents("Cmd+A").map((e) => [e.type, e.key, e.modifiers, e.commands]),
+    ).toEqual([
+      ["rawKeyDown", "Meta", 4, undefined],
+      ["rawKeyDown", "a", 4, ["selectAll"]],
+      ["keyUp", "a", 4, undefined],
+      ["keyUp", "Meta", 0, undefined],
+    ]);
+    expect(keyEvents("Meta+A")).toEqual(keyEvents("Cmd+A"));
+    expect(keyEvents("Meta+Z")[1]).toMatchObject({
+      key: "z",
+      code: "KeyZ",
+      modifiers: 4,
+      commands: ["undo"],
+    });
+    expect(keyEvents("Cmd+Z")).toEqual(keyEvents("Meta+Z"));
+    for (const unsafe of ["Cmd+Q", "Meta+W", "Cmd+V"])
+      expect(() => keyEvents(unsafe), unsafe).toThrow(
+        /presses one of these keys/,
+      );
+  });
+
+  it("sets native date/time inputs via the page script, falls back only when field is empty, and never clobbers masked inputs", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+    paper.locate = () =>
+      box({
+        tag: "input",
+        role: "textbox",
+        kind: "text",
+        inputType: "date",
+        name: 'Number 2, "Date",',
+        focused: false,
+      });
+    paper.sent.length = 0;
+    await browser.type(2, "2026-11-14", false);
+    expect(paper.inputs()).toEqual([]);
+    expect(paper.calls().find((c) => c.do === "type")).toMatchObject({
+      do: "type",
+      index: 2,
+      text: "2026-11-14",
+      submit: false,
+    });
+
+    // Controlled input fallback: insertText leaves field empty (""), so fallback { do: "type" } runs.
+    paper.locate = () =>
+      box({
+        tag: "input",
+        role: "textbox",
+        kind: "text",
+        name: 'Number 2, "Name",',
+        focused: true,
+      });
+    paper.page = {
+      ...shop,
+      elements: [
+        element(1, "Buy"),
+        element(2, "Name", { tag: "input", role: "textbox", value: "" }),
+      ],
+    };
+    paper.before = (sent) => {
+      if (
+        sent.method === "Runtime.evaluate" &&
+        String(sent.params.expression).includes('"do":"type"')
+      ) {
+        paper.page = {
+          ...shop,
+          elements: [
+            element(1, "Buy"),
+            element(2, "Name", {
+              tag: "input",
+              role: "textbox",
+              value: "Updated",
+            }),
+          ],
+        };
+      }
+    };
+    paper.sent.length = 0;
+    const after = await browser.type(2, "Updated", false);
+    expect(after.elements[1]!.value).toBe("Updated");
+    expect(paper.calls().some((c) => c.do === "type")).toBe(true);
+
+    // Masked/formatted input: insertText succeeds and page formats "(555) 123-4567".
+    // Fallback { do: "type" } must NOT run so the mask is never clobbered.
+    paper.before = () => {};
+    paper.page = {
+      ...shop,
+      elements: [
+        element(1, "Buy"),
+        element(2, "Phone", {
+          tag: "input",
+          role: "textbox",
+          value: "(555) 123-4567",
+        }),
+      ],
+    };
+    paper.sent.length = 0;
+    const masked = await browser.type(2, "5551234567", false);
+    expect(masked.elements[1]!.value).toBe("(555) 123-4567");
+    expect(paper.calls().some((c) => c.do === "type")).toBe(false);
+
+    // Fallback script error is swallowed when Input.insertText already succeeded,
+    // reporting the standard empty-field error instead of leaking a raw script failure.
+    paper.page = {
+      ...shop,
+      elements: [
+        element(1, "Buy"),
+        element(2, "Name", { tag: "input", role: "textbox", value: "" }),
+      ],
+    };
+    paper.typeReply = () => ({
+      ok: false,
+      error: "The page script stopped with TypeError.",
+    });
+    await expect(browser.type(2, "Ada", false)).rejects.toThrow(
+      /did not take that text/,
+    );
+    paper.typeReply = null;
+  });
+
+  it("blocks all input actions on chrome-error: warning pages and strips elements while keeping error detection", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+    paper.before = (sent) => {
+      if (sent.params.type !== "mousePressed") return;
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "cert1",
+        type: "Document",
+        frameId: "T1",
+      });
+      paper.emit("Network.loadingFailed", {
+        requestId: "cert1",
+        type: "Document",
+        errorText: "net::ERR_CERT_AUTHORITY_INVALID",
+        canceled: false,
+      });
+      paper.page = {
+        title: "Privacy error",
+        url: "chrome-error://chromewebdata/",
+        text: "Your connection is not private",
+        elements: [
+          element(1, "Advanced"),
+          element(2, "Proceed to bad.test (unsafe)", {
+            tag: "a",
+            role: "link",
+          }),
+        ],
+      };
+    };
+    const warnPage = await browser.click(1);
+    expect(pageError(warnPage)).toBe(
+      "a certificate error (ERR_CERT_AUTHORITY_INVALID)",
+    );
+    // Warning links/buttons must never be offered to the planner.
+    expect(warnPage.elements).toEqual([]);
+
+    // Every input action on chrome-error: must be refused with zero input events sent.
+    paper.before = () => {};
+    paper.sent.length = 0;
+    await expect(browser.click(1)).rejects.toThrow(/one of its own pages/);
+    await expect(browser.type(1, "x", false)).rejects.toThrow(
+      /one of its own pages/,
+    );
+    await expect(browser.hover!(1)).rejects.toThrow(/one of its own pages/);
+    await expect(browser.select!(1, "Advanced")).rejects.toThrow(
+      /one of its own pages/,
+    );
+    await expect(browser.key!("Enter")).rejects.toThrow(/one of its own pages/);
+    await expect(browser.scroll("down")).rejects.toThrow(
+      /one of its own pages/,
+    );
+    expect(paper.inputs()).toEqual([]);
+
+    // back() remains allowed so the agent can leave the error page.
+    paper.history = {
+      currentIndex: 1,
+      entries: [
+        { id: 7, url: "https://shop.test/" },
+        { id: 8, url: "https://bad.test/" },
+      ],
+    };
+    paper.page = { ...shop };
+    const escaped = await browser.back();
+    expect(escaped.url).toBe("https://shop.test/");
+    expect(pageError(escaped)).toBeNull();
+  });
+
+  it("walks deterministically down the focused frame chain for key() and refuses password/uncached/unlisted frames", async () => {
+    const { paper, browser } = setup();
+    const frameRefusal = {
+      ok: false,
+      error:
+        "The focus is in a frame of the page, which ClawdTime cannot see into. No key was pressed. Click into the page itself, or use the screen.",
+    };
+    const passwordRefusal = {
+      ok: false,
+      error:
+        "The focus is in a password field. The worker never presses a key there: ask the person.",
+    };
+
+    paper.frameTree = {
+      frameTree: {
+        frame: { id: "F_MAIN", url: "https://shop.test/" },
+        childFrames: [
+          {
+            frame: {
+              id: "F_AD",
+              parentId: "F_MAIN",
+              url: "https://ads.test/banner",
+            },
+          },
+          {
+            frame: {
+              id: "F_OUTER",
+              parentId: "F_MAIN",
+              url: "https://shop.test/outer",
+            },
+            childFrames: [
+              {
+                frame: {
+                  id: "F_SECRET",
+                  parentId: "F_OUTER",
+                  url: "https://shop.test/secret",
+                },
+              },
+              {
+                frame: {
+                  id: "F_NO_WORLD",
+                  parentId: "F_OUTER",
+                  url: "https://shop.test/noworld",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    paper.worldByFrame.set("F_MAIN", 7);
+    paper.worldByFrame.set("F_AD", 8);
+    paper.worldByFrame.set("F_OUTER", 9);
+    paper.worldByFrame.set("F_SECRET", 10);
+    paper.frameOwners.set("F_AD", 81);
+    paper.boxModels.set(81, [0, 0, 200, 0, 200, 100, 0, 100]);
+    paper.pageByContext.set(8, {
+      title: "Ad",
+      url: "https://ads.test/banner",
+      text: "Ad",
+      elements: [],
+    });
+    // Only F_AD is cached by read() (F_OUTER has no boxModel yet).
+    await browser.read();
+
+    // Case 1: F_AD passes focusCheck, while focus is ACTUALLY in nested F_OUTER -> F_SECRET (password).
+    paper.focusByContext.set(7, frameRefusal);
+    paper.focusByContext.set(8, { ok: true });
+    paper.focusByContext.set(9, frameRefusal);
+    paper.focusByContext.set(10, passwordRefusal);
+    paper.focusedChildByContext.set(7, "F_OUTER");
+    paper.focusedChildByContext.set(9, "F_SECRET");
+    paper.sent.length = 0;
+    await expect(browser.key!("Space")).rejects.toThrow(/password field/);
+    expect(paper.of("Input.dispatchKeyEvent")).toEqual([]);
+
+    // Case 2: Focused child frame cannot be resolved (e.g. <object> or unlisted frame) -> REFUSE even though F_AD is cached!
+    paper.focusedChildByContext.set(7, "F_UNKNOWN");
+    paper.sent.length = 0;
+    await expect(browser.key!("Enter")).rejects.toThrow(
+      /focus is in a frame of the page/,
+    );
+    expect(paper.of("Input.dispatchKeyEvent")).toEqual([]);
+
+    // Case 3: Focused child frame has no isolated world -> REFUSE!
+    paper.focusedChildByContext.set(7, "F_OUTER");
+    paper.focusedChildByContext.set(9, "F_NO_WORLD");
+    paper.worldByFrame.set("F_NO_WORLD", null);
+    paper.sent.length = 0;
+    await expect(browser.key!("Enter")).rejects.toThrow(
+      /focus is in a frame of the page/,
+    );
+    expect(paper.of("Input.dispatchKeyEvent")).toEqual([]);
+
+    // Case 4: Focused leaf frame is non-password and owns focus -> ALLOWED!
+    paper.focusedChildByContext.set(9, "F_SECRET");
+    paper.worldByFrame.set("F_SECRET", 10);
+    paper.focusByContext.set(10, { ok: true });
+    paper.sent.length = 0;
+    await browser.key!("Enter");
+    expect(paper.of("Input.dispatchKeyEvent")).toHaveLength(2);
+  });
+
+  it("preserves 1500ms longRequestMs for POST/Fetch requests started during a click step without double-click settle", async () => {
+    const { paper, steps, browser } = setup();
+    await browser.read();
+    let from = 0;
+    paper.before = (sent) => {
+      if (sent.params.type !== "mousePressed") return;
+      from = steps.now();
+      paper.emit("Network.requestWillBeSent", {
+        requestId: "pay1",
+        type: "Fetch",
+        frameId: "T1",
+      });
+      steps.later(1000, () => {
+        paper.page = { ...shop, text: "Payment confirmed." };
+        paper.emit("Network.loadingFinished", { requestId: "pay1" });
+      });
+    };
+    const after = await browser.click(1);
+    expect(after.text).toBe("Payment confirmed.");
+    expect(steps.now() - from).toBeGreaterThanOrEqual(1000 + ownTiming.quietMs);
+    expect(steps.now() - from).toBeLessThan(ownTiming.waitMs);
+  });
+
+  it("ignores ERR_ABORTED, untracked, and ad-frame loadingFailed events and never attaches navError on healthy https pages", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+
+    // 1. net::ERR_ABORTED on main-frame Document (e.g. download / 204 / aborted prefetch) -> ignored.
+    paper.emit("Network.requestWillBeSent", {
+      requestId: "dl1",
+      type: "Document",
+      frameId: "T1",
+    });
+    paper.emit("Network.loadingFailed", {
+      requestId: "dl1",
+      type: "Document",
+      errorText: "net::ERR_ABORTED",
+      canceled: false,
+    });
+    expect(pageError(await browser.read())).toBeNull();
+
+    // 2. Untracked Network.loadingFailed (never seen in requestWillBeSent) -> ignored.
+    paper.emit("Network.loadingFailed", {
+      requestId: "ghost-req",
+      type: "Document",
+      errorText: "net::ERR_CONNECTION_REFUSED",
+      canceled: false,
+    });
+    expect(pageError(await browser.read())).toBeNull();
+
+    // 3. Sub-frame / ad-frame Document failure -> ignored.
+    paper.emit("Network.requestWillBeSent", {
+      requestId: "ad-doc",
+      type: "Document",
+      frameId: "F_AD_IFRAME",
+    });
+    paper.emit("Network.loadingFailed", {
+      requestId: "ad-doc",
+      type: "Document",
+      errorText: "net::ERR_BLOCKED_BY_CLIENT",
+      canceled: false,
+    });
+    expect(pageError(await browser.read())).toBeNull();
+
+    // 4. Even if main-frame Document fails, while tab stays on healthy https:// URL, navError is never attached.
+    paper.emit("Network.requestWillBeSent", {
+      requestId: "stale-nav",
+      type: "Document",
+      frameId: "T1",
+    });
+    paper.emit("Network.loadingFailed", {
+      requestId: "stale-nav",
+      type: "Document",
+      errorText: "net::ERR_CONNECTION_REFUSED",
+      canceled: false,
+    });
+    const healthy = await browser.read();
+    expect(healthy.url).toBe("https://shop.test/");
+    expect(pageError(healthy)).toBeNull();
+  });
+
+  it("checks frameHitCheck at every level of nested iframe chains to defeat nested clickjacking overlays", async () => {
+    const { paper, browser } = setup();
+    paper.frameTree = {
+      frameTree: {
+        frame: { id: "F_MAIN", url: "https://shop.test/" },
+        childFrames: [
+          {
+            frame: {
+              id: "F_OUTER",
+              parentId: "F_MAIN",
+              url: "https://shop.test/outer",
+            },
+            childFrames: [
+              {
+                frame: {
+                  id: "F_INNER",
+                  parentId: "F_OUTER",
+                  url: "https://shop.test/inner",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    paper.worldByFrame.set("F_MAIN", 7);
+    paper.worldByFrame.set("F_OUTER", 8);
+    paper.worldByFrame.set("F_INNER", 9);
+    paper.frameOwners.set("F_OUTER", 101);
+    paper.frameOwners.set("F_INNER", 102);
+    paper.boxModels.set(101, [50, 60, 450, 60, 450, 460, 50, 460]);
+    paper.boxModels.set(102, [20, 30, 320, 30, 320, 230, 20, 230]);
+    paper.pageByContext.set(8, {
+      title: "Outer",
+      url: "https://shop.test/outer",
+      text: "Outer",
+      elements: [],
+    });
+    paper.pageByContext.set(9, {
+      title: "Inner",
+      url: "https://shop.test/inner",
+      text: "Inner",
+      elements: [element(3, "Inner Pay")],
+    });
+    paper.locateByContext.set(9, () =>
+      box({ x: 15, y: 25, name: 'Number 3, "Inner Pay",' }),
+    );
+    // Top frame F_MAIN -> F_OUTER is unobstructed, but F_OUTER has a <div> overlay over F_INNER!
+    paper.frameHitByBackendNode.set(101, { ok: true });
+    paper.frameHitByBackendNode.set(102, { ok: false, cover: "div" });
+
+    await browser.read();
+    paper.sent.length = 0;
+    await expect(browser.click(3)).rejects.toThrow(
+      /under another element at its centre \(div\)\. Nothing was sent/,
+    );
+    expect(paper.inputs()).toEqual([]);
+  });
+
+  it("never falls back to top-level world for child frames and inherits OOPIF session for nested same-origin frames", async () => {
+    const { paper, browser } = setup();
+    await browser.read();
+
+    // Attach OOPIF F_OOPIF on session S-OOPIF.
+    paper.emit("Target.attachedToTarget", {
+      sessionId: "S-OOPIF",
+      targetInfo: {
+        targetId: "F_OOPIF",
+        type: "iframe",
+        url: "https://x.test/",
+      },
+    });
+
+    paper.frameTree = {
+      frameTree: {
+        frame: { id: "F_MAIN", url: "https://shop.test/" },
+        childFrames: [
+          {
+            frame: {
+              id: "F_BROKEN",
+              parentId: "F_MAIN",
+              url: "https://shop.test/broken",
+            },
+          },
+          {
+            frame: {
+              id: "F_OOPIF",
+              parentId: "F_MAIN",
+              url: "https://x.test/",
+            },
+            childFrames: [
+              {
+                frame: {
+                  id: "F_NESTED_IN_OOPIF",
+                  parentId: "F_OOPIF",
+                  url: "https://x.test/inner",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    paper.worldByFrame.set("F_MAIN", 7);
+    // F_BROKEN fails to produce an isolated world: must be skipped, NEVER run without contextId!
+    paper.worldByFrame.set("F_BROKEN", null);
+    paper.worldByFrame.set("F_OOPIF", 11);
+    paper.worldByFrame.set("F_NESTED_IN_OOPIF", 12);
+    paper.frameOwners.set("F_BROKEN", 200);
+    paper.frameOwners.set("F_OOPIF", 201);
+    paper.frameOwners.set("F_NESTED_IN_OOPIF", 202);
+    paper.boxModels.set(200, [0, 0, 100, 0, 100, 100, 0, 100]);
+    paper.boxModels.set(201, [100, 100, 500, 100, 500, 400, 100, 400]);
+    paper.boxModels.set(202, [10, 20, 210, 20, 210, 120, 10, 120]);
+    paper.pageByContext.set(11, {
+      title: "OOPIF",
+      url: "https://x.test/",
+      text: "OOPIF outer",
+      elements: [],
+    });
+    paper.pageByContext.set(12, {
+      title: "OOPIF Inner",
+      url: "https://x.test/inner",
+      text: "Nested inside OOPIF",
+      elements: [element(5, "Nested OOPIF Button")],
+    });
+    paper.locateByContext.set(12, () =>
+      box({ x: 30, y: 40, name: 'Number 5, "Nested OOPIF Button",' }),
+    );
+
+    paper.sent.length = 0;
+    const seen = await browser.read();
+    // F_BROKEN must never have triggered an evaluate without a contextId.
+    expect(
+      paper
+        .of("Runtime.evaluate")
+        .every((cmd) => typeof cmd.params.contextId === "number"),
+    ).toBe(true);
+    // F_NESTED_IN_OOPIF inherited S-OOPIF session (not S-T1)!
+    const nestedWorldCmd = paper
+      .of("Page.createIsolatedWorld")
+      .find((cmd) => cmd.params.frameId === "F_NESTED_IN_OOPIF");
+    expect(nestedWorldCmd?.session).toBe("S-OOPIF");
+    expect(seen.elements.map((el) => el.label)).toContain(
+      "Nested OOPIF Button",
+    );
+
+    // Clicking element 5 translates (30, 40) + (10, 20) + (100, 100) = (140, 160)
+    // and runs DOM.getFrameOwner for F_NESTED_IN_OOPIF on S-OOPIF.
+    paper.sent.length = 0;
+    await browser.click(5);
+    const ownerCmd = paper
+      .of("DOM.getFrameOwner")
+      .find((cmd) => cmd.params.frameId === "F_NESTED_IN_OOPIF");
+    expect(ownerCmd?.session).toBe("S-OOPIF");
+    const pressed = paper
+      .of("Input.dispatchMouseEvent")
+      .find((cmd) => cmd.params.type === "mousePressed");
+    expect(pressed?.params).toMatchObject({ x: 140, y: 160 });
   });
 });

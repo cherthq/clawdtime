@@ -435,6 +435,7 @@ const elementSchema = z
     label: z.string().max(pageLimits.label),
     value: z.string().max(pageLimits.value).optional(),
     href: z.string().max(pageLimits.link).optional(),
+    options: z.array(z.string().max(pageLimits.label)).max(20).optional(),
     disabled: z.boolean(),
     password: z.boolean(),
   })
@@ -508,16 +509,22 @@ export const browserSwitch = "CLAWDTIME_COMPUTER_BROWSER";
  * The driver, when the person turned one on. "on" drives the browser in
  * front, the person's own, with their sign-ins, through its scripting door.
  * "own" drives ClawdTime's own browser, with its own profile, which starts
- * at the first browser step. Any other value is off. Making a driver starts
- * nothing.
+ * at the first browser step. "auto" chooses ClawdTime's own browser when a
+ * supported Chromium binary is available on disk, and stays off otherwise.
+ * Any other value is off. Making a driver starts nothing.
  */
 export function browserFromEnvironment(
   env: Record<string, string | undefined>,
   make: () => BrowserPort = () => new AppleEventsBrowser(),
   makeOwn: () => BrowserPort = () => new OwnBrowser({ env }),
+  hasOwnBrowser: () => boolean = () =>
+    new OwnBrowser({ env }).program().path !== null,
 ): BrowserPort | undefined {
   const chosen = env[browserSwitch];
-  return chosen === "on" ? make() : chosen === "own" ? makeOwn() : undefined;
+  if (chosen === "on") return make();
+  if (chosen === "own") return makeOwn();
+  if (chosen === "auto") return hasOwnBrowser() ? makeOwn() : undefined;
+  return undefined;
 }
 
 export class AppleEventsBrowser implements BrowserPort {
