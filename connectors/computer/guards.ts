@@ -12,17 +12,26 @@ import type {
   Action,
   BrowserElement,
   BrowserPage,
+  BrowserPort,
+  BrowserTab,
+  DragEnd,
   HandCommand,
   Observation,
   ScreenElement,
 } from "./ports.js";
 import { webAddress } from "./navigation.js";
+import { parsePageKey, type PageKey } from "./browser-script.js";
 
 const finite = z.number().finite();
 const number = z.number().int().nonnegative();
 const words = (limit: number) => z.string().max(limit);
 const direction = z.enum(["up", "down"]);
 const flag = z.boolean().optional();
+/** One end of a drag: an element, or a point of the last image. Never both. */
+const dragEnd = z.union([
+  z.object({ element: number }).strict(),
+  z.object({ x: finite, y: finite }).strict(),
+]);
 
 /** One action, exactly as the contract lists it. Anything else is refused. */
 export const actionSchema = z.discriminatedUnion("kind", [
@@ -56,8 +65,24 @@ export const actionSchema = z.discriminatedUnion("kind", [
       kind: z.literal("scroll"),
       direction,
       element: number.optional(),
+      amount: z.number().int().min(1).max(10).optional(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("hover"),
+      element: number.optional(),
+      x: finite.optional(),
+      y: finite.optional(),
+    })
+    .strict()
+    // Exactly one of the two: an element, or a whole point.
+    .refine((action) =>
+      action.element !== undefined
+        ? action.x === undefined && action.y === undefined
+        : action.x !== undefined && action.y !== undefined,
+    ),
+  z.object({ kind: z.literal("drag"), from: dragEnd, to: dragEnd }).strict(),
   z
     .object({
       kind: z.literal("open_app"),
@@ -86,6 +111,29 @@ export const actionSchema = z.discriminatedUnion("kind", [
     .strict(),
   z.object({ kind: z.literal("browser_scroll"), direction }).strict(),
   z.object({ kind: z.literal("browser_back") }).strict(),
+  z.object({ kind: z.literal("browser_hover"), index: number }).strict(),
+  z
+    .object({
+      kind: z.literal("browser_select"),
+      index: number,
+      option: words(400),
+    })
+    .strict(),
+  z.object({ kind: z.literal("browser_key"), combo: words(40) }).strict(),
+  z
+    .object({
+      kind: z.literal("browser_wait"),
+      text: words(200).optional(),
+      ms: z.number().int().min(100).max(10_000),
+    })
+    .strict(),
+  z.object({ kind: z.literal("browser_tabs") }).strict(),
+  z
+    .object({
+      kind: z.literal("browser_switch_tab"),
+      tab: z.number().int().positive(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("wait"),
@@ -542,6 +590,8 @@ export interface View {
   fresh: boolean;
   /** A browser is connected. */
   browser: boolean;
+  /** The optional methods of the connected browser. Absent: it has none of them. */
+  browserMethods?: readonly BrowserMethod[];
   /** The person's own request, word for word. Only it can say that a close was asked for. */
   goal?: string;
 }
@@ -558,7 +608,66 @@ export type BrowserCall =
       element: BrowserElement;
     }
   | { name: "scroll"; direction: "up" | "down" }
-  | { name: "back" };
+  | { name: "back" }
+  | { name: "hover"; index: number; element: BrowserElement }
+  | {
+      name: "select";
+      index: number;
+      option: string;
+      element: BrowserElement;
+    }
+  | { name: "key"; combo: PageKey }
+  | { name: "wait"; text: string | null; ms: number }
+  | { name: "tabs" }
+  /** `listed` is the tab of the list that the planner read: it is found again before the switch. */
+  | { name: "switch_tab"; tab: number; listed: BrowserTab };
+
+/** The optional methods of a browser driver. */
+export const browserMethodNames = [
+  "hover",
+  "select",
+  "key",
+  "waitFor",
+  "tabs",
+  "switchTab",
+] as const;
+export type BrowserMethod = (typeof browserMethodNames)[number];
+/** The optional methods that this driver has. */
+export const browserMethods = (port: BrowserPort | undefined) =>
+  port
+    ? browserMethodNames.filter((name) => typeof port[name] === "function")
+    : [];
+/**
+ * The optional methods that each browser action needs. A switch needs the
+ * list of the tabs too: its numbers come from that list, and the worker lists
+ * the tabs again just before it switches.
+ */
+export const browserActionNeeds: Readonly<
+  Record<string, readonly BrowserMethod[]>
+> = {
+  browser_hover: ["hover"],
+  browser_select: ["select"],
+  browser_key: ["key"],
+  browser_wait: ["waitFor"],
+  browser_tabs: ["tabs"],
+  browser_switch_tab: ["tabs", "switchTab"],
+};
+/** True when a driver with these methods can do this kind of action. */
+export const browserCan = (
+  kind: string,
+  methods: readonly BrowserMethod[] = [],
+) => (browserActionNeeds[kind] ?? []).every((need) => methods.includes(need));
+/** A call that changes nothing on the page: a reading, a wait, a list of the tabs. */
+export const quietCall = (call: BrowserCall) =>
+  call.name === "read" || call.name === "wait" || call.name === "tabs";
+/** A call whose target is checked against a new reading just before it goes. */
+export const readsBeforeCall = (call: BrowserCall) =>
+  call.name === "click" ||
+  call.name === "type" ||
+  call.name === "hover" ||
+  call.name === "select" ||
+  call.name === "key" ||
+  call.name === "switch_tab";
 
 /** What goes out when the action runs. */
 export type Send =
@@ -594,6 +703,9 @@ export type Checked =
   | { verdict: "give_up"; reason: string };
 
 const refuse = (reason: string): Checked => ({ verdict: "refuse", reason });
+const noImageRefusal =
+  "The last observation has no image, so a point has no meaning.";
+const outsideRefusal = "That point is outside the last image.";
 const oneLine = /[\p{Cc}\u2028\u2029]/u;
 const lineRefusal =
   "Type one line with no line break or tab. Press Return or Tab as a key of its own.";
@@ -608,6 +720,32 @@ const pageName = (item: BrowserElement) => {
   const label = clean(item.label, 80);
   return label ? `"${label}"` : `the ${clean(item.tag, 20) || "element"}`;
 };
+/** A list of choices: a select, or what the page calls a listbox or a combobox. */
+const pageChoice = (item: BrowserElement) =>
+  /^select$/i.test(item.tag) || /^(?:listbox|combobox)$/i.test(item.role);
+/**
+ * Enter and Space in a page can press what has the focus, and Enter can
+ * submit the form of a field. A reading does not say which element has the
+ * focus, so either key asks while any control of the page that is not a
+ * field has a name that a click asks about.
+ */
+const pageKeyRisk = (key: PageKey, page: BrowserPage, goal?: string) => {
+  if (key !== "Enter" && key !== "Space") return null;
+  for (const item of page.elements) {
+    // A plain close control only takes a view away.
+    if (
+      item.disabled ||
+      pageTextEntry(item) ||
+      plainClose.test(clean(item.label, 80))
+    )
+      continue;
+    if (dangerRisk(item.label, goal))
+      return `This key can press "${clean(item.label, 40)}", which may be something that cannot be undone, or that speaks for you.`;
+  }
+  return null;
+};
+const secureDragRisk =
+  "This drag starts in a password field, and could take what it holds somewhere else.";
 
 /**
  * Checks one planned action against what the worker last saw. It sends
@@ -728,6 +866,12 @@ export function check(raw: unknown, view: View, why: string): Checked {
     case "browser_type":
     case "browser_scroll":
     case "browser_back":
+    case "browser_hover":
+    case "browser_select":
+    case "browser_key":
+    case "browser_wait":
+    case "browser_tabs":
+    case "browser_switch_tab":
       return checkBrowser(action, view);
     default:
       return checkScreen(action, view, why);
@@ -737,7 +881,16 @@ export function check(raw: unknown, view: View, why: string): Checked {
 function checkScreen(
   action: Extract<
     Action,
-    { kind: "click_element" | "click_at" | "type" | "key" | "scroll" }
+    {
+      kind:
+        | "click_element"
+        | "click_at"
+        | "type"
+        | "key"
+        | "scroll"
+        | "hover"
+        | "drag";
+    }
   >,
   view: View,
   why: string,
@@ -745,11 +898,12 @@ function checkScreen(
   const seen = view.observation;
   if (!seen || !view.fresh)
     return refuse("There is no fresh view of the screen. Nothing was sent.");
-  /** The element with this number, when it can take input. */
-  const pick = (id: number) => {
+  /** The element with this number, when it can take input. A hover may name a disabled one: it sends no input. */
+  const pick = (id: number, disabledToo = false) => {
     const found = seen.elements.find((item) => item.id === id);
     if (!found) return refuse(`The last observation has no element ${id}.`);
-    if (!found.enabled) return refuse(`Element ${id} is disabled.`);
+    if (!found.enabled && !disabledToo)
+      return refuse(`Element ${id} is disabled.`);
     if (!(found.w > 0 && found.h > 0) || !onScreen(seen, middle(found)))
       return refuse(`Element ${id} is off the screen.`);
     return found;
@@ -790,12 +944,8 @@ function checkScreen(
     }
     case "click_at": {
       const point = screenPoint(seen, action.x, action.y);
-      if (point === "no_image")
-        return refuse(
-          "The last observation has no image, so a point has no meaning.",
-        );
-      if (point === "outside")
-        return refuse("That point is outside the last image.");
+      if (point === "no_image") return refuse(noImageRefusal);
+      if (point === "outside") return refuse(outsideRefusal);
       const found = under(seen, point);
       const named = found && clean(found.title, 80) ? found : null;
       return {
@@ -914,7 +1064,131 @@ function checkScreen(
             y: point.y,
             dx: 0,
             // A positive number moves the content up, which shows what is below.
-            dy: action.direction === "down" ? 5 : -5,
+            dy: (action.direction === "down" ? 1 : -1) * (action.amount ?? 5),
+          },
+        },
+      };
+    }
+    case "hover": {
+      // No click and no key go out, so a hover needs no yes.
+      if (action.element !== undefined) {
+        const found = pick(action.element, true);
+        if ("verdict" in found) return found;
+        const point = middle(found);
+        return {
+          verdict: "run",
+          label: `Hover over ${nameOf(found)}`,
+          target: clean(found.title, 80),
+          risk: null,
+          signature: `hover|${found.role}|${found.title || `${Math.round(point.x)},${Math.round(point.y)}`}`,
+          send: {
+            via: "hands",
+            look: true,
+            command: { kind: "move", x: point.x, y: point.y },
+          },
+        };
+      }
+      const point = screenPoint(seen, action.x ?? Number.NaN, action.y ?? 0);
+      if (point === "no_image") return refuse(noImageRefusal);
+      if (point === "outside") return refuse(outsideRefusal);
+      const found = under(seen, point);
+      const named = found && clean(found.title, 80) ? found : null;
+      return {
+        verdict: "run",
+        label: named ? `Hover over ${nameOf(named)}` : "Hover at a point",
+        target: named ? clean(named.title, 80) : "",
+        risk: null,
+        signature: `hover_at|${Math.round(point.x / 8)}|${Math.round(point.y / 8)}`,
+        send: {
+          via: "hands",
+          look: true,
+          command: { kind: "move", x: point.x, y: point.y },
+        },
+      };
+    }
+    case "drag": {
+      /** One end: its place on the screen, what lies there, and its name. */
+      const end = (given: DragEnd) => {
+        if ("element" in given) {
+          const found = pick(given.element);
+          if ("verdict" in found) return found;
+          return {
+            point: middle(found),
+            item: found as ScreenElement | null,
+            words: false,
+            key: `${found.role}|${found.title}`,
+          };
+        }
+        const point = screenPoint(seen, given.x, given.y);
+        if (point === "no_image") return refuse(noImageRefusal);
+        if (point === "outside") return refuse(outsideRefusal);
+        const found = under(seen, point);
+        return {
+          point,
+          item: found,
+          // A point with no named element under it has no name to judge.
+          words: !(found && clean(found.title, 80)),
+          key: `${Math.round(point.x / 8)},${Math.round(point.y / 8)}`,
+        };
+      };
+      const from = end(action.from);
+      if ("verdict" in from) return from;
+      const to = end(action.to);
+      if ("verdict" in to) return to;
+      if (
+        Math.abs(from.point.x - to.point.x) < 4 &&
+        Math.abs(from.point.y - to.point.y) < 4
+      )
+        return refuse(
+          "A drag needs two places apart. For one place, use a click.",
+        );
+      // What is dropped into a password field is typed into it.
+      if (to.item?.secure)
+        return refuse(
+          "A drag never drops onto a password field. The person types it.",
+        );
+      const named = (side: typeof from) =>
+        side.item && !side.words ? side.item : null;
+      const source = named(from);
+      const goal = named(to);
+      /** A click at this end would ask: the same rule, at both ends. A field only takes what is dropped. */
+      const endRisk = (item: ScreenElement | null) =>
+        item && !textRoles.has(item.role)
+          ? dangerRisk(item.title, view.goal)
+          : null;
+      const risk =
+        (from.item?.secure ? secureDragRisk : null) ??
+        (inTerminal(seen) ||
+        (goal !== null && terminalName.test(clean(goal.title, 80)))
+          ? terminalRisk
+          : null) ??
+        endRisk(source) ??
+        endRisk(goal) ??
+        // With no name at an end, the planner's own words are the only name
+        // there is. They can add a question. They never remove one.
+        (from.words || to.words ? dangerRisk(why, view.goal, true) : null);
+      const fromName = source ? nameOf(source) : null;
+      const toName = goal ? nameOf(goal) : "a point";
+      return {
+        verdict: "run",
+        label: fromName
+          ? `Drag ${fromName} to ${toName}`
+          : `Drag from a point to ${toName}`,
+        target: [source, goal]
+          .map((item) => (item ? clean(item.title, 60) : ""))
+          .filter(Boolean)
+          .join(" to "),
+        risk,
+        signature: `drag|${from.key}|${to.key}`,
+        send: {
+          via: "hands",
+          look: true,
+          command: {
+            kind: "drag",
+            fromX: from.point.x,
+            fromY: from.point.y,
+            toX: to.point.x,
+            toY: to.point.y,
           },
         },
       };
@@ -928,6 +1202,10 @@ function checkBrowser(
 ): Checked {
   if (!view.browser)
     return refuse("No browser is connected here. Use the screen.");
+  if (!browserCan(action.kind, view.browserMethods))
+    return refuse(
+      "The browser that is connected cannot do that. Use another browser action or the screen.",
+    );
   const ready = (
     label: string,
     target: string,
@@ -1014,6 +1292,88 @@ function checkBrowser(
         },
       );
     }
+    case "browser_hover": {
+      // A hover may name a disabled element: it sends no click and no text.
+      const found = pick(action.index);
+      if ("verdict" in found) return found;
+      return ready(
+        `Hover over ${pageName(found)} on the page`,
+        clean(found.label, 80),
+        null,
+        `browser_hover|${found.tag}|${found.role}|${found.label}`,
+        { name: "hover", index: action.index, element: found },
+      );
+    }
+    case "browser_select": {
+      const found = pick(action.index);
+      if ("verdict" in found) return found;
+      if (found.disabled)
+        return refuse(`Element ${action.index} of the page is disabled.`);
+      if (found.password || !pageChoice(found))
+        return refuse(
+          `Element ${action.index} of the page is not a list of choices. Use browser_click.`,
+        );
+      if (/\p{C}/u.test(action.option) || !clean(action.option, 400))
+        return refuse("Name the option on one line, as the page shows it.");
+      const option = clean(action.option, 400);
+      return ready(
+        `Choose "${clean(option, 60)}" in ${pageName(found)} on the page`,
+        clean(found.label, 80),
+        // The choice is what a click on it would press: an option such as
+        // "Delete selected" asks, as a button with that name does.
+        dangerRisk(option, view.goal),
+        `browser_select|${found.tag}|${found.role}|${found.label}|${option}`,
+        { name: "select", index: action.index, option, element: found },
+      );
+    }
+    case "browser_key": {
+      const key = parsePageKey(action.combo);
+      if (!key)
+        return refuse(
+          "That is not a key that a page takes here: Enter, Escape, Tab, Shift+Tab, the arrow keys, PageUp, PageDown, Home, End, Backspace or Space.",
+        );
+      if (!view.page) return refuse("Read the page first, with browser_read.");
+      return ready(
+        `Press ${key} on the page`,
+        key,
+        pageKeyRisk(key, view.page, view.goal),
+        `browser_key|${key}`,
+        { name: "key", combo: key },
+      );
+    }
+    case "browser_wait": {
+      if (
+        action.text !== undefined &&
+        (/\p{C}/u.test(action.text) || !clean(action.text, 200))
+      )
+        return refuse(
+          "Give the words to wait for on one line, or leave them out.",
+        );
+      const text = action.text === undefined ? null : clean(action.text, 200);
+      // A wait changes nothing on the page: it may repeat, as a reading does.
+      return ready("Wait for the page", "", null, null, {
+        name: "wait",
+        text,
+        ms: action.ms,
+      });
+    }
+    case "browser_tabs":
+      return ready("List the tabs", "", null, null, { name: "tabs" });
+    case "browser_switch_tab": {
+      const listed = view.page?.tabs;
+      if (!listed) return refuse("List the tabs first, with browser_tabs.");
+      const tab = listed.find((item) => item.index === action.tab);
+      if (!tab)
+        return refuse(`The last list of tabs has no tab ${action.tab}.`);
+      const title = clean(tab.title, 80);
+      return ready(
+        title ? `Switch to the tab "${title}"` : "Switch to another tab",
+        title,
+        null,
+        `browser_switch_tab|${tab.url}|${tab.title}`,
+        { name: "switch_tab", tab: action.tab, listed: tab },
+      );
+    }
     default:
       return refuse("That is not one known action with valid arguments.");
   }
@@ -1089,6 +1449,46 @@ export function retarget(
       return gone;
     return { ok: true, action, observation };
   }
+  /** The number of the same element in the newer look. Null when it is gone or two could be it. */
+  const again = (id: number) => {
+    const was = before.elements.find((item) => item.id === id);
+    if (!was) return null;
+    const alike = after.elements.filter((item) => sameKind(item, was));
+    const found =
+      alike.find((item) => samePlace(item, was)) ??
+      (alike.length === 1 ? alike[0] : undefined);
+    return found ? found.id : null;
+  };
+  /** True when the same thing, or nothing, lies under this point of the last image. */
+  const stays = (x: number, y: number) => {
+    const point = screenPoint(before, x, y);
+    if (typeof point === "string") return false;
+    const was = under(before, point);
+    const is = under(after, point);
+    return was === null ? is === null : is !== null && sameKind(was, is);
+  };
+  if (action.kind === "hover") {
+    if (action.element === undefined)
+      return stays(action.x ?? Number.NaN, action.y ?? 0)
+        ? { ok: true, action, observation }
+        : gone;
+    const found = again(action.element);
+    if (found === null) return gone;
+    return { ok: true, action: { ...action, element: found }, observation };
+  }
+  if (action.kind === "drag") {
+    // Both ends must be where they were: a drag that lands elsewhere moves
+    // something to a place that nobody chose.
+    const end = (given: DragEnd): DragEnd | null => {
+      if (!("element" in given)) return stays(given.x, given.y) ? given : null;
+      const found = again(given.element);
+      return found === null ? null : { element: found };
+    };
+    const from = end(action.from);
+    const to = end(action.to);
+    if (!from || !to) return gone;
+    return { ok: true, action: { ...action, from, to }, observation };
+  }
   if (
     (action.kind === "click_element" ||
       action.kind === "type" ||
@@ -1105,6 +1505,39 @@ export function retarget(
     return { ok: true, action: { ...action, element: found.id }, observation };
   }
   return { ok: true, action, observation };
+}
+
+/** The tab of a newer list that is the same as this one: the same address and title. Null when it is gone or two could be it. */
+export function sameTab(was: BrowserTab, tabs: BrowserTab[] | undefined) {
+  const alike = (tabs ?? []).filter(
+    (item) => item.url === was.url && item.title === was.title,
+  );
+  return (
+    alike.find((item) => item.index === was.index) ??
+    (alike.length === 1 ? alike[0]! : null)
+  );
+}
+
+/**
+ * The same browser action against a newer reading, just before it is sent.
+ * An element is found again as `samePageElement` finds it, and a tab by its
+ * address and its title. A key has no target of its own: it is checked again
+ * against the newer reading. Null when the target is gone or two could be it.
+ */
+export function againstPage(
+  action: Action,
+  call: BrowserCall,
+  now: BrowserPage,
+): Action | null {
+  if ("element" in call) {
+    const same = samePageElement(call.element, now);
+    return same ? ({ ...action, index: same.index } as Action) : null;
+  }
+  if (call.name === "switch_tab") {
+    const same = sameTab(call.listed, now.tabs);
+    return same ? ({ ...action, tab: same.index } as Action) : null;
+  }
+  return action;
 }
 
 /** The element of a newer reading of the page that is the same as this one. Null when it is gone or two could be it. */

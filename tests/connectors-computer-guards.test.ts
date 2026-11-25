@@ -1,13 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  againstPage,
   askedToClose,
+  browserCan,
+  browserMethodNames,
+  browserMethods,
   check,
   dangerWords,
   parseCombo,
+  quietCall,
+  readsBeforeCall,
   retarget,
+  sameTab,
+  type BrowserCall,
   type View,
 } from "../connectors/computer/guards.js";
-import type { Observation } from "../connectors/computer/ports.js";
+import type {
+  BrowserPort,
+  BrowserTab,
+  Observation,
+} from "../connectors/computer/ports.js";
 import {
   element,
   observation,
@@ -1023,5 +1035,747 @@ describe("the look just before an action", () => {
       ok: true,
       observation: { imageWidth: 1280, imageHeight: 800 },
     });
+  });
+});
+
+/** A view where the browser has every optional method. */
+const able = (values: Partial<View> = {}, seen = observation()) =>
+  view(seen, { browserMethods: [...browserMethodNames], ...values });
+
+describe("the shape of the newer actions", () => {
+  it("takes a hover at exactly one of an element or a whole point", () => {
+    for (const raw of [
+      { kind: "hover", element: 1 },
+      { kind: "hover", x: 10, y: 20 },
+    ])
+      expect(check(raw, view(observation([element(1)])), "").verdict).toBe(
+        "run",
+      );
+    for (const raw of [
+      { kind: "hover" },
+      { kind: "hover", element: 1, x: 10, y: 20 },
+      { kind: "hover", element: 1, x: 10 },
+      { kind: "hover", x: 10 },
+      { kind: "hover", y: 10 },
+      { kind: "hover", element: -1 },
+      { kind: "hover", element: 1, extra: true },
+    ])
+      expect(refused(raw, view(observation([element(1)])))).toMatch(
+        /not one known action/,
+      );
+  });
+  it("takes a drag only with two whole ends, each an element or a point", () => {
+    const seen = observation([
+      element(1, { x: 100, y: 100 }),
+      element(2, { x: 600, y: 100 }),
+    ]);
+    for (const raw of [
+      { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+      { kind: "drag", from: { x: 100, y: 100 }, to: { element: 2 } },
+      { kind: "drag", from: { element: 1 }, to: { x: 700, y: 500 } },
+    ])
+      expect(check(raw, view(seen), "").verdict).toBe("run");
+    for (const raw of [
+      { kind: "drag" },
+      { kind: "drag", from: { element: 1 } },
+      { kind: "drag", to: { element: 2 } },
+      { kind: "drag", from: { element: 1, x: 1, y: 1 }, to: { element: 2 } },
+      { kind: "drag", from: { x: 1 }, to: { element: 2 } },
+      { kind: "drag", from: {}, to: { element: 2 } },
+      { kind: "drag", from: 1, to: 2 },
+      { kind: "drag", from: { element: 1 }, to: { element: 2 }, fast: true },
+      { kind: "drag", from: { element: 1 }, to: { element: 2, extra: 1 } },
+    ])
+      expect(refused(raw, view(seen))).toMatch(/not one known action/);
+  });
+  it("takes a scroll amount of whole notches from 1 to 10 only", () => {
+    for (const amount of [1, 5, 10])
+      expect(
+        check({ kind: "scroll", direction: "down", amount }, view(), "")
+          .verdict,
+      ).toBe("run");
+    for (const amount of [0, 11, -1, 2.5, "3"])
+      expect(
+        refused({ kind: "scroll", direction: "down", amount }, view()),
+      ).toMatch(/not one known action/);
+  });
+  it("takes a wait of the page from 100 to 10000 milliseconds only", () => {
+    for (const ms of [100, 2500, 10_000])
+      expect(check({ kind: "browser_wait", ms }, able(), "").verdict).toBe(
+        "run",
+      );
+    for (const raw of [
+      { kind: "browser_wait", ms: 99 },
+      { kind: "browser_wait", ms: 10_001 },
+      { kind: "browser_wait", ms: 1.5 },
+      { kind: "browser_wait" },
+      { kind: "browser_wait", ms: 500, text: 7 },
+      { kind: "browser_wait", ms: 500, text: "x".repeat(201) },
+    ])
+      expect(refused(raw, able())).toMatch(/not one known action/);
+  });
+  it("refuses the other new browser actions out of shape", () => {
+    for (const raw of [
+      { kind: "browser_hover" },
+      { kind: "browser_hover", index: -1 },
+      { kind: "browser_select", index: 1 },
+      { kind: "browser_select", index: 1, option: 3 },
+      { kind: "browser_key" },
+      { kind: "browser_key", combo: "x".repeat(41) },
+      { kind: "browser_tabs", all: true },
+      { kind: "browser_switch_tab" },
+      { kind: "browser_switch_tab", tab: 0 },
+      { kind: "browser_switch_tab", tab: 1.5 },
+    ])
+      expect(refused(raw, able())).toMatch(/not one known action/);
+  });
+});
+
+describe("a hover", () => {
+  const seen = observation([
+    element(1, { title: "File", x: 100, y: 100, w: 60, h: 20 }),
+    element(2, { title: "Delete all", x: 300, y: 100, w: 80, h: 20 }),
+    element(3, { title: "Greyed", enabled: false, x: 500, y: 100 }),
+  ]);
+  it("moves the pointer to the middle of an element, and needs no yes", () => {
+    const result = run({ kind: "hover", element: 1 }, view(seen));
+    expect(result).toMatchObject({
+      label: 'Hover over "File"',
+      target: "File",
+      risk: null,
+      send: {
+        via: "hands",
+        look: true,
+        command: { kind: "move", x: 130, y: 110 },
+      },
+    });
+    // No click goes out, so even a name that a click asks about needs no yes.
+    expect(run({ kind: "hover", element: 2 }, view(seen)).risk).toBeNull();
+  });
+  it("may rest on a disabled element, which can explain itself in a tooltip", () => {
+    expect(run({ kind: "hover", element: 3 }, view(seen)).send).toMatchObject({
+      command: { kind: "move" },
+    });
+  });
+  it("maps a point of the picture to the screen and names what is under it", () => {
+    // Image point (120, 98) is screen point (135, 110.25): inside File.
+    expect(run({ kind: "hover", x: 120, y: 98 }, view(seen))).toMatchObject({
+      label: 'Hover over "File"',
+      send: { command: { kind: "move", x: 135, y: 110.25 } },
+    });
+    expect(run({ kind: "hover", x: 1000, y: 700 }, view(seen)).label).toBe(
+      "Hover at a point",
+    );
+  });
+  it("refuses a missing element, a point outside the picture, and a stale view", () => {
+    expect(refused({ kind: "hover", element: 9 }, view(seen))).toMatch(
+      /no element 9/,
+    );
+    expect(refused({ kind: "hover", x: 1280, y: 10 }, view(seen))).toMatch(
+      /outside the last image/,
+    );
+    const { image, imageWidth, imageHeight, ...bare } = seen;
+    expect(refused({ kind: "hover", x: 10, y: 10 }, view(bare))).toMatch(
+      /no image/,
+    );
+    expect(
+      refused({ kind: "hover", element: 1 }, view(seen, { fresh: false })),
+    ).toMatch(/no fresh view/);
+  });
+  it("counts as a repeat when it rests on the same element again", () => {
+    const moved = observation([element(7, { title: "File", x: 10, y: 10 })]);
+    expect(run({ kind: "hover", element: 1 }, view(seen)).signature).toBe(
+      run({ kind: "hover", element: 7 }, view(moved)).signature,
+    );
+  });
+});
+
+describe("a drag", () => {
+  const card = element(1, { title: "Card", x: 100, y: 100, w: 100, h: 40 });
+  const done = element(2, { title: "Done", x: 600, y: 100, w: 200, h: 300 });
+  const seen = observation([card, done]);
+  it("presses at the middle of one end and lets go at the other", () => {
+    const result = run(
+      { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+      view(seen),
+    );
+    expect(result).toMatchObject({
+      label: 'Drag "Card" to "Done"',
+      target: "Card to Done",
+      risk: null,
+      send: {
+        via: "hands",
+        look: true,
+        command: { kind: "drag", fromX: 150, fromY: 120, toX: 700, toY: 250 },
+      },
+    });
+  });
+  it("maps a point end of the picture to the screen", () => {
+    // Image point (800, 400) is screen point (900, 450): under no element.
+    const result = run(
+      { kind: "drag", from: { element: 1 }, to: { x: 800, y: 400 } },
+      view(seen),
+    );
+    expect(result.label).toBe('Drag "Card" to a point');
+    expect(result.send).toMatchObject({
+      command: { kind: "drag", fromX: 150, fromY: 120, toX: 900, toY: 450 },
+    });
+    expect(
+      run(
+        { kind: "drag", from: { x: 800, y: 400 }, to: { element: 2 } },
+        view(seen),
+      ).label,
+    ).toBe('Drag from a point to "Done"');
+  });
+  it("checks both ends as a click: a missing, disabled or off-screen element, or a point outside the picture", () => {
+    const more = observation([
+      card,
+      done,
+      element(3, { title: "Off", enabled: false }),
+      element(4, { title: "Far", x: 5000 }),
+    ]);
+    for (const [raw, reason] of [
+      [{ from: { element: 9 }, to: { element: 2 } }, /no element 9/],
+      [{ from: { element: 1 }, to: { element: 9 } }, /no element 9/],
+      [{ from: { element: 3 }, to: { element: 2 } }, /disabled/],
+      [{ from: { element: 1 }, to: { element: 4 } }, /off the screen/],
+      [
+        { from: { element: 1 }, to: { x: 1280, y: 10 } },
+        /outside the last image/,
+      ],
+    ] as const)
+      expect(refused({ kind: "drag", ...raw }, view(more))).toMatch(reason);
+    expect(
+      refused(
+        { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        view(seen, { fresh: false }),
+      ),
+    ).toMatch(/no fresh view/);
+  });
+  it("refuses two ends at one place: that is a click", () => {
+    expect(
+      refused(
+        { kind: "drag", from: { element: 1 }, to: { element: 1 } },
+        view(seen),
+      ),
+    ).toMatch(/two places apart/);
+  });
+  it("asks before it drops onto Trash or another name that a click asks about, and before it drags such a name", () => {
+    const desk = observation([
+      card,
+      element(2, { role: "AXDockItem", title: "Trash", x: 1300, y: 860 }),
+      element(3, { title: "Delete", x: 400, y: 400 }),
+    ]);
+    expect(
+      run(
+        { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        view(desk),
+      ).risk,
+    ).toMatch(/"Trash" may be something that cannot be undone/);
+    expect(
+      run(
+        { kind: "drag", from: { element: 3 }, to: { element: 1 } },
+        view(desk),
+      ).risk,
+    ).toMatch(/"Delete" may be/);
+  });
+  it("asks before it drops onto a terminal app, or while a terminal is in front", () => {
+    const dock = observation([
+      card,
+      element(2, { role: "AXDockItem", title: "Terminal", x: 1200, y: 860 }),
+    ]);
+    expect(
+      run(
+        { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        view(dock),
+      ).risk,
+    ).toMatch(/terminal/);
+    const front = observation([card, done], { app: terminalApp });
+    expect(
+      run(
+        { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        view(front),
+      ).risk,
+    ).toMatch(/terminal/);
+  });
+  it("asks before it drags out of a password field, and never drops onto one", () => {
+    const form = observation([
+      element(1, {
+        role: "AXSecureTextField",
+        title: "Password",
+        secure: true,
+        x: 100,
+        y: 100,
+        w: 200,
+        h: 24,
+      }),
+      element(2, { role: "AXTextField", title: "Notes", x: 100, y: 300 }),
+    ]);
+    expect(
+      run(
+        { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        view(form),
+      ).risk,
+    ).toMatch(/starts in a password field/);
+    expect(
+      refused(
+        { kind: "drag", from: { element: 2 }, to: { element: 1 } },
+        view(form),
+      ),
+    ).toMatch(/never drops onto a password field/);
+    // A point over the field is the field too.
+    expect(
+      refused(
+        { kind: "drag", from: { element: 2 }, to: { x: 100, y: 95 } },
+        view(form),
+      ),
+    ).toMatch(/never drops onto a password field/);
+  });
+  it("does not ask for a field at either end, which only takes what is dropped", () => {
+    const fields = observation([
+      element(1, { role: "AXTextField", title: "Delete reason", x: 100 }),
+      element(2, { role: "AXTextArea", title: "Remove notes", x: 600 }),
+    ]);
+    expect(
+      run(
+        { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        view(fields),
+      ).risk,
+    ).toBeNull();
+  });
+  it("reads the planner's own words for an end with no named element", () => {
+    const at = { kind: "drag", from: { element: 1 }, to: { x: 800, y: 400 } };
+    expect(run(at, view(seen), "move the card to the trash").risk).toMatch(
+      /"trash" may be/,
+    );
+    expect(run(at, view(seen), "move the card right").risk).toBeNull();
+    // Named ends do not read those words.
+    expect(
+      run(
+        { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+        view(seen),
+        "delete it",
+      ).risk,
+    ).toBeNull();
+  });
+  it("has one signature for the same two ends, whatever their numbers", () => {
+    const again = observation([
+      element(5, { title: "Done", x: 600, y: 100, w: 200, h: 300 }),
+      element(6, { title: "Card", x: 100, y: 100, w: 100, h: 40 }),
+    ]);
+    const a = run(
+      { kind: "drag", from: { element: 1 }, to: { element: 2 } },
+      view(seen),
+    );
+    const b = run(
+      { kind: "drag", from: { element: 6 }, to: { element: 5 } },
+      view(again),
+    );
+    const c = run(
+      { kind: "drag", from: { element: 5 }, to: { element: 6 } },
+      view(again),
+    );
+    expect(a.signature).toBe(b.signature);
+    expect(a.signature).not.toBe(c.signature);
+  });
+});
+
+describe("a scroll by an amount", () => {
+  it("turns the wheel by that many notches, and by 5 without one", () => {
+    expect(
+      run({ kind: "scroll", direction: "down", amount: 2 }).send,
+    ).toMatchObject({ command: { kind: "scroll", dx: 0, dy: 2 } });
+    expect(
+      run({ kind: "scroll", direction: "up", amount: 10 }).send,
+    ).toMatchObject({ command: { dy: -10 } });
+    expect(run({ kind: "scroll", direction: "up" }).send).toMatchObject({
+      command: { dy: -5 },
+    });
+    expect(
+      run({ kind: "scroll", direction: "up", amount: 3 }).signature,
+    ).toBeNull();
+  });
+});
+
+describe("the newer browser actions", () => {
+  const read = page([
+    pageElement(0, { label: "Search", tag: "input", role: "searchbox" }),
+    pageElement(1, { label: "Menu" }),
+    pageElement(2, { label: "Size", tag: "select", role: "combobox" }),
+    pageElement(3, { label: "Password", tag: "input", password: true }),
+    pageElement(4, { label: "Off", tag: "select", disabled: true }),
+    pageElement(5, { label: "Colors", tag: "div", role: "listbox" }),
+    pageElement(6, { label: "Next", tag: "a", role: "link" }),
+  ]);
+  const shop = page([...read.elements, pageElement(7, { label: "Pay now" })]);
+  const tabs: BrowserTab[] = [
+    { index: 1, title: "Inbox", url: "https://mail.example/", active: false },
+    { index: 2, title: "Example", url: "https://example.com/", active: true },
+  ];
+  const listed = page([], { tabs });
+  it("refuses each one where no browser is connected, or where its driver lacks the method", () => {
+    const none = view(observation(), { browser: false, page: shop });
+    const lacking = view(observation(), { page: { ...shop, tabs } });
+    for (const raw of [
+      { kind: "browser_hover", index: 1 },
+      { kind: "browser_select", index: 2, option: "Large" },
+      { kind: "browser_key", combo: "Escape" },
+      { kind: "browser_wait", ms: 500 },
+      { kind: "browser_tabs" },
+      { kind: "browser_switch_tab", tab: 1 },
+    ]) {
+      expect(refused(raw, none)).toMatch(/no browser/i);
+      expect(refused(raw, lacking)).toMatch(/cannot do that/);
+    }
+    // A switch needs the list of the tabs too.
+    expect(
+      refused(
+        { kind: "browser_switch_tab", tab: 1 },
+        able({ page: listed, browserMethods: ["switchTab"] }),
+      ),
+    ).toMatch(/cannot do that/);
+    expect(browserCan("browser_switch_tab", ["tabs", "switchTab"])).toBe(true);
+    expect(browserCan("browser_read")).toBe(true);
+  });
+  it("hovers an element of the last page with no yes, also a disabled one", () => {
+    const at = able({ page: shop });
+    expect(run({ kind: "browser_hover", index: 1 }, at)).toMatchObject({
+      label: 'Hover over "Menu" on the page',
+      target: "Menu",
+      risk: null,
+      send: { via: "browser", call: { name: "hover", index: 1 } },
+    });
+    expect(run({ kind: "browser_hover", index: 7 }, at).risk).toBeNull();
+    expect(run({ kind: "browser_hover", index: 4 }, at).send).toMatchObject({
+      call: { name: "hover" },
+    });
+    expect(refused({ kind: "browser_hover", index: 9 }, at)).toMatch(
+      /no element 9/,
+    );
+    expect(refused({ kind: "browser_hover", index: 1 }, able())).toMatch(
+      /read the page first/i,
+    );
+  });
+  it("chooses an option of a list of choices by its text", () => {
+    const at = able({ page: shop });
+    expect(
+      run({ kind: "browser_select", index: 2, option: " Large " }, at),
+    ).toMatchObject({
+      label: 'Choose "Large" in "Size" on the page',
+      target: "Size",
+      risk: null,
+      send: {
+        via: "browser",
+        call: { name: "select", index: 2, option: "Large" },
+      },
+    });
+    expect(
+      run({ kind: "browser_select", index: 5, option: "Blue" }, at).send,
+    ).toMatchObject({ call: { name: "select", index: 5 } });
+  });
+  it("asks before an option that a click would ask about", () => {
+    const at = able({ page: shop });
+    expect(
+      run({ kind: "browser_select", index: 2, option: "Delete selected" }, at)
+        .risk,
+    ).toMatch(/"Delete" may be/);
+  });
+  it("refuses an element that is no list of choices, a disabled one, a password field, and an option that is not one line", () => {
+    const at = able({ page: shop });
+    expect(
+      refused({ kind: "browser_select", index: 1, option: "A" }, at),
+    ).toMatch(/not a list of choices/);
+    expect(
+      refused({ kind: "browser_select", index: 3, option: "A" }, at),
+    ).toMatch(/not a list of choices/);
+    expect(
+      refused({ kind: "browser_select", index: 4, option: "A" }, at),
+    ).toMatch(/disabled/);
+    for (const option of ["", "  ", "Large\nSmall"])
+      expect(refused({ kind: "browser_select", index: 2, option }, at)).toMatch(
+        /on one line/,
+      );
+  });
+  it("presses a key of the page, written one way", () => {
+    const at = able({ page: read });
+    for (const [said, key] of [
+      ["Enter", "Enter"],
+      ["return", "Enter"],
+      ["esc", "Escape"],
+      ["shift + tab", "Shift+Tab"],
+      ["arrowdown", "ArrowDown"],
+      ["Down", "ArrowDown"],
+      ["PAGEUP", "PageUp"],
+      ["space", "Space"],
+    ])
+      expect(run({ kind: "browser_key", combo: said! }, at)).toMatchObject({
+        label: `Press ${key} on the page`,
+        target: key,
+        signature: `browser_key|${key}`,
+        send: { via: "browser", call: { name: "key", combo: key } },
+      });
+    for (const combo of ["cmd+q", "a", "Delete", "F5", "ctrl+Enter", ""])
+      expect(refused({ kind: "browser_key", combo }, at)).toMatch(
+        /not a key that a page takes/,
+      );
+    expect(refused({ kind: "browser_key", combo: "Enter" }, able())).toMatch(
+      /read the page first/i,
+    );
+  });
+  it("asks before Enter or Space while the page has a control that a click asks about", () => {
+    const at = able({ page: shop });
+    for (const combo of ["Enter", "Space"])
+      expect(run({ kind: "browser_key", combo }, at).risk).toMatch(
+        /This key can press "Pay now"/,
+      );
+    for (const combo of ["Enter", "Space"])
+      expect(
+        run({ kind: "browser_key", combo }, able({ page: read })).risk,
+      ).toBeNull();
+    // Keys that press nothing do not ask.
+    for (const combo of ["Tab", "Escape", "ArrowDown", "PageDown", "Backspace"])
+      expect(run({ kind: "browser_key", combo }, at).risk).toBeNull();
+    // A plain close control only takes a view away; a close of something else asks.
+    const banner = page([pageElement(0, { label: "Close" })]);
+    expect(
+      run({ kind: "browser_key", combo: "Enter" }, able({ page: banner })).risk,
+    ).toBeNull();
+    const account = page([pageElement(0, { label: "Close account" })]);
+    expect(
+      run({ kind: "browser_key", combo: "Enter" }, able({ page: account }))
+        .risk,
+    ).toMatch(/This key can press "Close account"/);
+    // A field and a disabled control are not pressed by a key.
+    const fields = page([
+      pageElement(0, { label: "Delete reason", tag: "input", role: "textbox" }),
+      pageElement(1, { label: "Send", disabled: true }),
+    ]);
+    expect(
+      run({ kind: "browser_key", combo: "Enter" }, able({ page: fields })).risk,
+    ).toBeNull();
+  });
+  it("waits and lists the tabs with no effect: no yes, no row, no page needed", () => {
+    for (const raw of [
+      { kind: "browser_wait", ms: 2000 },
+      { kind: "browser_wait", ms: 2000, text: "Order placed" },
+      { kind: "browser_tabs" },
+    ]) {
+      const result = run(raw, able());
+      expect(result.risk).toBeNull();
+      expect(result.signature).toBeNull();
+      expect(result.target).toBe("");
+    }
+    expect(
+      run({ kind: "browser_wait", ms: 2000, text: " Order  placed " }, able())
+        .send,
+    ).toEqual({
+      via: "browser",
+      call: { name: "wait", text: "Order placed", ms: 2000 },
+    });
+    expect(run({ kind: "browser_wait", ms: 300 }, able()).send).toEqual({
+      via: "browser",
+      call: { name: "wait", text: null, ms: 300 },
+    });
+    for (const text of ["", " ", "a\nb"])
+      expect(refused({ kind: "browser_wait", ms: 300, text }, able())).toMatch(
+        /one line/,
+      );
+  });
+  it("switches to a tab of the last list, with no yes", () => {
+    expect(
+      run({ kind: "browser_switch_tab", tab: 1 }, able({ page: listed })),
+    ).toMatchObject({
+      label: 'Switch to the tab "Inbox"',
+      target: "Inbox",
+      risk: null,
+      send: {
+        via: "browser",
+        call: { name: "switch_tab", tab: 1, listed: tabs[0] },
+      },
+    });
+    expect(
+      refused({ kind: "browser_switch_tab", tab: 3 }, able({ page: listed })),
+    ).toMatch(/no tab 3/);
+    expect(
+      refused({ kind: "browser_switch_tab", tab: 1 }, able({ page: read })),
+    ).toMatch(/list the tabs first/i);
+  });
+  it("knows which calls change nothing, and which are checked against a new reading first", () => {
+    const element = pageElement(1);
+    const calls: [BrowserCall, boolean, boolean][] = [
+      [{ name: "read" }, true, false],
+      [{ name: "wait", text: null, ms: 100 }, true, false],
+      [{ name: "tabs" }, true, false],
+      [{ name: "scroll", direction: "down" }, false, false],
+      [{ name: "back" }, false, false],
+      [{ name: "open", url: "https://example.com" }, false, false],
+      [{ name: "click", index: 1, element }, false, true],
+      [
+        { name: "type", index: 1, text: "a", submit: false, element },
+        false,
+        true,
+      ],
+      [{ name: "hover", index: 1, element }, false, true],
+      [{ name: "select", index: 1, option: "A", element }, false, true],
+      [{ name: "key", combo: "Enter" }, false, true],
+      [{ name: "switch_tab", tab: 1, listed: tabs[0]! }, false, true],
+    ];
+    for (const [call, quiet, reads] of calls) {
+      expect(quietCall(call)).toBe(quiet);
+      expect(readsBeforeCall(call)).toBe(reads);
+    }
+  });
+  it("finds the target again in a newer reading, or says that it is gone", () => {
+    const menu = pageElement(1, { label: "Menu" });
+    const hover = { kind: "browser_hover", index: 1 } as const;
+    expect(
+      againstPage(
+        hover,
+        { name: "hover", index: 1, element: menu },
+        page([pageElement(4, { label: "Menu" })]),
+      ),
+    ).toEqual({ kind: "browser_hover", index: 4 });
+    expect(
+      againstPage(
+        hover,
+        { name: "hover", index: 1, element: menu },
+        page([pageElement(4, { label: "Other" })]),
+      ),
+    ).toBeNull();
+    const switching = { kind: "browser_switch_tab", tab: 1 } as const;
+    const call: BrowserCall = { name: "switch_tab", tab: 1, listed: tabs[0]! };
+    // The tab moved to another place: it is found by its address and title.
+    const moved = [
+      { ...tabs[1]!, index: 1 },
+      { ...tabs[0]!, index: 2 },
+    ];
+    expect(againstPage(switching, call, page([], { tabs: moved }))).toEqual({
+      kind: "browser_switch_tab",
+      tab: 2,
+    });
+    expect(
+      againstPage(switching, call, page([], { tabs: [tabs[1]!] })),
+    ).toBeNull();
+    expect(againstPage(switching, call, page([]))).toBeNull();
+    const twins = [
+      { ...tabs[0]!, index: 3 },
+      { ...tabs[0]!, index: 4 },
+    ];
+    expect(sameTab(tabs[0]!, twins)).toBeNull();
+    expect(sameTab(tabs[0]!, [...twins, tabs[0]!])).toEqual(tabs[0]);
+    // A key has no target: it is checked again against the newer reading.
+    const key = { kind: "browser_key", combo: "Enter" } as const;
+    expect(againstPage(key, { name: "key", combo: "Enter" }, page())).toBe(key);
+  });
+  it("reads which optional methods a driver has", () => {
+    const base = {
+      doctor: async () => ({ ok: true, browser: null, reason: "" }),
+      open: async () => page(),
+      read: async () => page(),
+      click: async () => page(),
+      type: async () => page(),
+      scroll: async () => page(),
+      back: async () => page(),
+    } satisfies BrowserPort;
+    expect(browserMethods(undefined)).toEqual([]);
+    expect(browserMethods(base)).toEqual([]);
+    expect(
+      browserMethods({
+        ...base,
+        tabs: async () => page(),
+        key: async () => page(),
+      }),
+    ).toEqual(["key", "tabs"]);
+  });
+});
+
+describe("the look just before a hover or a drag", () => {
+  const before = observation([
+    element(1, { title: "Card", x: 100, y: 100, w: 100, h: 40 }),
+    element(2, { title: "Done", x: 600, y: 100, w: 200, h: 300 }),
+  ]);
+  const drag = {
+    kind: "drag",
+    from: { element: 1 },
+    to: { element: 2 },
+  } as const;
+  it("finds both ends of a drag again under new numbers", () => {
+    const after = observation([
+      element(7, { title: "Done", x: 600, y: 100, w: 200, h: 300 }),
+      element(8, { title: "Card", x: 100, y: 100, w: 100, h: 40 }),
+    ]);
+    expect(retarget(drag, before, after)).toMatchObject({
+      ok: true,
+      action: { from: { element: 8 }, to: { element: 7 } },
+    });
+  });
+  it("refuses a drag when either end is gone, or when two could be it", () => {
+    for (const after of [
+      observation([
+        element(1, { title: "Card", x: 100, y: 100, w: 100, h: 40 }),
+      ]),
+      observation([
+        element(2, { title: "Done", x: 600, y: 100, w: 200, h: 300 }),
+      ]),
+      observation([
+        element(1, { title: "Card", x: 10, y: 500 }),
+        element(3, { title: "Card", x: 900, y: 500 }),
+        element(2, { title: "Done", x: 600, y: 100, w: 200, h: 300 }),
+      ]),
+    ])
+      expect(retarget(drag, before, after)).toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/no longer there/),
+      });
+  });
+  it("refuses a drag to a point when what lies there changed", () => {
+    // Image point (600, 200) is screen point (675, 225): inside Done.
+    const toPoint = {
+      kind: "drag",
+      from: { element: 1 },
+      to: { x: 600, y: 200 },
+    } as const;
+    expect(retarget(toPoint, before, before)).toMatchObject({ ok: true });
+    const replaced = observation([
+      element(1, { title: "Card", x: 100, y: 100, w: 100, h: 40 }),
+      element(2, { title: "Trash", x: 600, y: 100, w: 200, h: 300 }),
+    ]);
+    expect(retarget(toPoint, before, replaced)).toMatchObject({ ok: false });
+  });
+  it("finds the element of a hover again, and refuses one that is gone", () => {
+    const after = observation([
+      element(5, { title: "Card", x: 100, y: 100, w: 100, h: 40 }),
+    ]);
+    expect(
+      retarget({ kind: "hover", element: 1 }, before, after),
+    ).toMatchObject({ ok: true, action: { kind: "hover", element: 5 } });
+    expect(
+      retarget(
+        { kind: "hover", element: 1 },
+        before,
+        observation([element(5, { title: "Other" })]),
+      ),
+    ).toMatchObject({ ok: false });
+  });
+  it("refuses a hover at a point when what lies there changed", () => {
+    const hover = { kind: "hover", x: 120, y: 98 } as const;
+    expect(retarget(hover, before, before)).toMatchObject({ ok: true });
+    expect(
+      retarget(
+        hover,
+        before,
+        observation([
+          element(1, { title: "Delete", x: 100, y: 100, w: 100, h: 40 }),
+        ]),
+      ),
+    ).toMatchObject({ ok: false });
+  });
+  it("refuses a hover and a drag when another window came to the front", () => {
+    const other = { ...before, app: { ...before.app, window: "Other" } };
+    for (const action of [drag, { kind: "hover", element: 1 } as const])
+      expect(retarget(action, before, other)).toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/front/),
+      });
   });
 });

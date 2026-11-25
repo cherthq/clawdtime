@@ -20,6 +20,7 @@ import {
   type PresentationEvent,
 } from "./presentation.js";
 import { plannerFromEnvironment } from "./planner.js";
+import { browserMethods } from "./guards.js";
 import { recordTiming } from "./timing.js";
 import {
   handResultSchema,
@@ -166,6 +167,8 @@ export function buildComputer(options: ComputerOptions): {
   if (!chosen.enabled) return off(chosen.problem ?? offText);
   const planner = plannerFromEnvironment(options.env, {
     browser: options.browser !== undefined,
+    // A browser function is offered only when this driver has its method.
+    browserMethods: browserMethods(options.browser),
   });
   if (!planner) return off(noKeyText);
   const hands = new PanelHands();

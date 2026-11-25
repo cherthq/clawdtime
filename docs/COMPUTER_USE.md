@@ -47,7 +47,9 @@ in a reading of the page, marked as disabled.
 `npm run test:computer:browser` runs the driver with its real page script in a
 real page of Chromium and of WebKit, with no window: reading, numbers, clicks,
 typing into a field that a framework controls, a search that leads to the next
-page, and pages that change built-in functions to forge the answer.
+page, a hover that opens a menu, a choice by the text of its option, keys, a
+wait for words, the list of the tabs and a switch, and pages that change
+built-in functions to forge the answer.
 
 Without the switch, or when the browser does not answer, the worker uses the
 screen for web pages.
@@ -463,6 +465,59 @@ reaches the worker as the same words in the panel's chat do. See "One message
 from a command, and the desktop service" in [the supervisor page](SUPERVISOR.md)
 for how the command finds the service, and what it does when none answers.
 
+## The actions
+
+The planner answers with one of these actions. `ports.ts` holds their exact
+shapes.
+
+On the screen:
+
+- `click_element` and `click_at`: a click on an element by its number, or on a
+  point of the picture. A double click and a right click too.
+- `type`: one line of text at the caret, or into a field by its number.
+- `key`: one key with its modifiers, for example `cmd+s`.
+- `scroll`: at an element or at the middle of the screen. `amount` says how
+  far, from 1 to 10 notches of the wheel. Without it the wheel turns 5 notches.
+- `hover`: the pointer goes to an element or to a point and rests there, with
+  no click. A menu or a tooltip that shows on hover opens. The planner gives an
+  element or a point, never both.
+- `drag`: the hands press at one end, move to the other end and let go. Each
+  end is an element or a point. It is for a card, a slider, a file or a window
+  that must move.
+- `open_app`, `quit_app` and `open_url`: an app or a web address by its name,
+  with no pointer and no key.
+- `wait`, `ask`, `done` and `give_up`.
+
+In the browser, when the driver is on:
+
+- `browser_read`, `browser_open`, `browser_click`, `browser_type`,
+  `browser_scroll` and `browser_back`.
+- `browser_hover`: the pointer rests on an element of the page, with no click.
+  The page hears the events of a pointer that comes and goes.
+- `browser_select`: picks one option of a list of choices by the text that the
+  option shows. A select of the page takes the choice and hears input and
+  change, as with a person. In a list that the page draws itself, the option is
+  pressed.
+- `browser_key`: one key in the element of the page that has the focus: Enter,
+  Escape, Tab, Shift+Tab, the arrow keys, PageUp, PageDown, Home, End,
+  Backspace or Space. A key event of a script does nothing by itself, so the
+  page script does what the browser does: Enter in a field of a form submits
+  the form, Enter or Space presses a button, Space sets a checkbox, Tab moves
+  the focus, Backspace takes away one character, and the scroll keys move the
+  page. The page can stop the key, as with a person.
+- `browser_wait`: reads the page until its text holds the words, or until the
+  time runs out, from 100 to 10000 milliseconds. With no words it waits until
+  the page has loaded and holds still. It changes nothing. The planner reads
+  whether the words came.
+- `browser_tabs`: lists the tabs of the front window, with a number for each.
+  It changes nothing.
+- `browser_switch_tab`: brings one tab of the last list to the front of its
+  window. The browser itself does not come forward.
+
+The planner gets a browser action only when the driver has its method:
+`browserMethods` in `guards.ts` reads them from the driver. The checks refuse
+an action whose method the driver lacks.
+
 ## The guards
 
 The planner's output is an untrusted single-action plan. These rules are code
@@ -510,8 +565,9 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
 - **You take over.** When the hands report that you moved the mouse or pressed
   a key, the worker pauses and asks: continue or stop.
 - **No third time.** The same action with the same arguments is not sent a
-  third time in a row. The worker asks first. A scroll, a wait and a reading of
-  the page do not count, because repeating them is normal.
+  third time in a row. The worker asks first. A scroll, a wait, a reading of
+  the page and a list of its tabs do not count, because repeating them is
+  normal.
 - **Done is checked.** `done` counts only after an observation that came after
   the last action.
 - **Links.** Only http and https links are opened, with no login in the link.
@@ -537,6 +593,35 @@ in `guards.ts` and `worker.ts`. None of them depends on the prompt.
   among the apps in the usual app folders that open web addresses.
 - **Typed text is one line.** A line break or a tab in typed text is refused.
   Return and Tab are keys of their own, so the key rules see them.
+- **A hover.** It sends no click and no key, so it needs no yes. It may rest on
+  a disabled element, whose tooltip can say why it is off. The look just before
+  it finds the same element again, or the same thing under the point.
+- **A drag.** Each end is checked as a click: the element must be in the last
+  observation, enabled and on the screen, and a point must be inside the last
+  image. The two ends must be at least 4 points apart. The worker asks first
+  when either end has a name that a click asks about ("Trash", "Delete"), when
+  the drag ends on a terminal app or a terminal is in front, and when it starts
+  in a password field. It never drops onto a password field: what is dropped
+  there is typed there. For an end with no named element, the planner's own
+  reason is read for the words above. The look just before the drag finds both
+  ends again. When either one moved or is gone, nothing is sent.
+- **A choice in the page.** It follows the rule of a click: an option whose text
+  holds one of the words above asks ("Delete selected"). The element must be a
+  list of choices that is not disabled. Just before the choice the page is read
+  again and the same list is found again.
+- **A key in the page.** Enter and Space can press what has the focus, and a
+  reading does not say what has the focus. So either key asks while any
+  control of the page that is not a field has a name that a click asks about
+  ("Pay now", "Send"). The page script never presses a key while a password
+  field has the focus. Just before the key the page is read again and the
+  checks run again: when the page changed what the key can press, no key goes.
+- **A wait and a list of the tabs.** They change nothing. They need no yes,
+  they count as no repeat, and a wait or a list with no answer makes nothing
+  uncertain.
+- **A tab switch.** It needs no yes. Its number must be in the last list of the
+  tabs. Just before the switch the worker lists the tabs again and finds the
+  same tab by its address and its title. When it is gone, or two tabs could be
+  it, nothing is sent.
 
 ## Questions and answers
 
@@ -656,8 +741,8 @@ wait for the language model.
 
 ## The live cursor
 
-Before the hands click, scroll, drag, type, press a key, or open an app or a
-link, a cursor glides to the place and says what happens there. Only then does
+Before the hands click, hover, scroll, drag, type, press a key, or open an app
+or a link, a cursor glides to the place and says what happens there. Only then does
 the real event go. A person at the Mac sees each action before it happens, and
 so does a person who watches the shared screen on a phone.
 
@@ -682,7 +767,7 @@ so does a person who watches the shared screen on a phone.
   goes on.
 - **The label.** Each command for the hands comes with a short label from the
   worker: `Click "Save"`, `Type in "Search"`, `Press cmd+s`, `Scroll down`,
-  `Open Notes`. The cursor shows it in a pill beside the pointer, as one line of
+  `Open Notes`, `Hover over "File"`, `Drag "Card" to "Done"`. The cursor shows it in a pill beside the pointer, as one line of
   at most 44 characters. The label of typed text never holds that text. The
   label of a key names the key, and the label of a click names the element as
   the screen names it.
@@ -911,6 +996,12 @@ the real screen, draws the cursor or calls a language model.
   request, the budget, an abort during a wait and during a request, each kind
   of repair, a refusal, the breaker from closed to open to closed, the model
   fallback with retries, and errors that never hold the key or the goal.
+- `actions` (15): a hover, a drag and a scroll by an amount through the real
+  worker, with the question before a drag onto Trash and the look that holds
+  back a drag or a hover whose target moved; and each newer browser action,
+  with the new reading before it, the question before Enter, the wait that did
+  not see its words, the switch to a tab that moved, a driver that lacks the
+  method, and a key with no answer, which is uncertain.
 
 15 tests in `tests/connectors-agents-desktop-chat.test.ts`: where
 `clawdtime chat TEXT` looks for the service, each reason to answer by itself,
@@ -962,6 +1053,12 @@ Not tested, and so not proven:
   That case is not asked about.
 - The worker does not judge where a link leads, or what a page does with a
   click on a plain name.
+- A hover in the page sends the events of a pointer. A menu that only a style
+  rule of the page opens on hover does not open that way: `hover` on the
+  screen opens it.
+- Enter and Space in a page ask while any control of the page has a name that
+  a click asks about, also when the focus is in a search field. A page that
+  sends on Enter with no such button, as some chats do, is not asked about.
 - Between the look just before an input and the input itself, the screen can
   still change. The hands are the last place that can refuse. The glide of the
   cursor and its wait add up to one second to that time. A command for the

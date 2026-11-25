@@ -34,7 +34,8 @@ import {
   parseNavigationCalls,
   type NavigationIntent,
 } from "./navigation.js";
-import { actionSchema } from "./guards.js";
+import { pageKeys } from "./browser-script.js";
+import { actionSchema, browserCan, type BrowserMethod } from "./guards.js";
 import {
   callWithRetries,
   CircuitBreaker,
@@ -64,7 +65,39 @@ export const defaultComputerModel = "gpt-5.4";
  */
 export const fallbackComputerModel = "gpt-4.1";
 
-const rules = (browser: boolean) =>
+/**
+ * Rules for the actions that came after the planner test of November 22.
+ * They follow every rule above them, which stay word for word: run the
+ * planner test before one of those changes. A browser line is there only
+ * when its function is offered.
+ */
+const laterRules = (browser: boolean, methods: readonly BrowserMethod[]) => {
+  const offered = (name: string) => browser && browserCan(name, methods);
+  return [
+    `To open a menu or a tooltip that shows on hover, call ${offered("browser_hover") ? "hover (on a web page, browser_hover)" : "hover"} first, then click what it shows.`,
+    "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
+    ...(offered("browser_select")
+      ? [
+          "For a dropdown of a web page, prefer browser_select with the text of its option.",
+        ]
+      : []),
+    ...(offered("browser_key")
+      ? [
+          "To submit a search on a web page, call browser_key with Enter once the words are in the field.",
+        ]
+      : []),
+    ...(offered("browser_wait")
+      ? ["While a web page is still loading, call browser_wait."]
+      : []),
+    ...(offered("browser_tabs")
+      ? [
+          `When the web page in front is not the one the goal is about, call browser_tabs${offered("browser_switch_tab") ? ", then browser_switch_tab" : ""}.`,
+        ]
+      : []),
+  ];
+};
+
+const rules = (browser: boolean, methods: readonly BrowserMethod[] = []) =>
   [
     "You operate a Mac for its owner, one action at a time.",
     "Each turn you get the goal, your last steps, what is on the screen now and a picture of it. Answer with exactly one tool call.",
@@ -84,6 +117,7 @@ const rules = (browser: boolean) =>
     "When the same action did not work twice, try another way or call ask.",
     "A program checks every action before it runs. Some actions need the person's yes, and the program asks for it. When an outcome says refused or not sent, read the reason and choose again.",
     "Call done only when the screen shows that the goal is met, and say in one or two plain sentences what was done or found. Call give_up when the goal cannot be met. Call ask when only the person can decide or supply something.",
+    ...laterRules(browser, methods),
   ].join("\n");
 
 type Properties = Record<string, Record<string, unknown>>;
@@ -116,6 +150,28 @@ const elementNumber = {
   description: "The number of an element in the list of this turn.",
 };
 const directionProperty = { type: "string", enum: ["up", "down"] };
+/** One end of a drag: exactly one of the two shapes. */
+const dragEnd = {
+  description:
+    "An element by its number, or a point of the picture in its pixels.",
+  anyOf: [
+    {
+      type: "object",
+      properties: { element: { type: "integer", minimum: 0 } },
+      required: ["element"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        x: { type: "number", minimum: 0 },
+        y: { type: "number", minimum: 0 },
+      },
+      required: ["x", "y"],
+      additionalProperties: false,
+    },
+  ],
+};
 const screenTools = [
   tool(
     "click_element",
@@ -153,7 +209,16 @@ const screenTools = [
   tool(
     "scroll",
     "Scroll, at an element or at the middle of the screen.",
-    { direction: directionProperty, element: elementNumber },
+    {
+      direction: directionProperty,
+      element: elementNumber,
+      amount: {
+        type: "integer",
+        minimum: 1,
+        maximum: 10,
+        description: "How far, in notches of the wheel. Leave it out for 5.",
+      },
+    },
     ["direction"],
   ),
   tool(
@@ -214,6 +279,27 @@ const screenTools = [
   tool("give_up", "The goal cannot be met.", { reason: { type: "string" } }, [
     "reason",
   ]),
+  tool(
+    "hover",
+    "Move the pointer over one element, or over a point of the picture, with no click: a menu or a tooltip that shows on hover opens. Give element, or x and y.",
+    {
+      element: elementNumber,
+      x: {
+        type: "number",
+        minimum: 0,
+        description:
+          "A point of the picture in its pixels, with y. Only when no element fits.",
+      },
+      y: { type: "number", minimum: 0 },
+    },
+    [],
+  ),
+  tool(
+    "drag",
+    "Press at one place, move to another and let go: to move a card, a slider, a file or a window. Each end is an element or a point of the picture.",
+    { from: dragEnd, to: dragEnd },
+    ["from", "to"],
+  ),
 ];
 const pageNumber = {
   type: "integer",
@@ -253,6 +339,117 @@ const browserTools = [
   ]),
   tool("browser_back", "Go back one page.", {}, []),
 ];
+/** Browser functions that a driver may lack. Each is offered only when the driver has its methods. */
+const laterBrowserTools = [
+  tool(
+    "browser_hover",
+    "Move the pointer over one element of the page by its number, with no click: a menu or a tooltip that shows on hover opens.",
+    { index: pageNumber },
+    ["index"],
+  ),
+  tool(
+    "browser_select",
+    "Choose one option of a dropdown or a list of the page, by the text that the option shows.",
+    {
+      index: pageNumber,
+      option: {
+        type: "string",
+        description: "The text of the option, as the page shows it.",
+      },
+    },
+    ["index", "option"],
+  ),
+  tool(
+    "browser_key",
+    "Press one key in the page, where its focus is. Enter submits the field that has the focus. Escape closes a menu or a dialog of the page.",
+    { combo: { type: "string", enum: [...pageKeys] } },
+    ["combo"],
+  ),
+  tool(
+    "browser_wait",
+    "Wait until the page shows some words, or, with no words, until it has loaded. It changes nothing on the page.",
+    {
+      text: {
+        type: "string",
+        description:
+          "Words that the page shows once it is ready. Leave it out to wait for the page to load.",
+      },
+      ms: {
+        type: "integer",
+        minimum: 100,
+        maximum: 10000,
+        description: "The longest wait, in milliseconds.",
+      },
+    },
+    ["ms"],
+  ),
+  tool(
+    "browser_tabs",
+    "List the tabs of the front browser window, with their numbers.",
+    {},
+    [],
+  ),
+  tool(
+    "browser_switch_tab",
+    "Bring one tab of the last list of tabs to the front, by its number.",
+    {
+      tab: {
+        type: "integer",
+        minimum: 1,
+        description: "The number of a tab in the last list of tabs.",
+      },
+    },
+    ["tab"],
+  ),
+];
+/** The functions of one turn: the browser ones only where the browser can be used, and only those that its driver can do. */
+const toolsFor = (browser: boolean, methods: readonly BrowserMethod[]) =>
+  browser
+    ? [
+        ...screenTools,
+        ...browserTools,
+        ...laterBrowserTools.filter((item) =>
+          browserCan(item.function.name, methods),
+        ),
+      ]
+    : screenTools;
+const toolNames = new Set(
+  [...screenTools, ...browserTools, ...laterBrowserTools].map(
+    (item) => item.function.name,
+  ),
+);
+/** An object whose arguments that are null are left out. */
+const withoutNulls = (value: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null));
+
+/**
+ * One function call of the model as the shape of an action. A model writes
+ * null for an argument that it leaves out, also inside an end of a drag: such
+ * an argument is dropped. Nothing else is changed or filled in, so a call out
+ * of shape stays out of shape for the checks to refuse. `problem` says so in
+ * fixed words, with no word of the arguments: null when the shape is right.
+ */
+export function actionFromCall(
+  name: string,
+  args: Record<string, unknown>,
+): { action: Action; problem: string | null } {
+  const given = withoutNulls(args);
+  if (name === "drag")
+    for (const side of ["from", "to"]) {
+      const end = given[side];
+      if (end !== null && typeof end === "object" && !Array.isArray(end))
+        given[side] = withoutNulls(end as Record<string, unknown>);
+    }
+  const action = { ...given, kind: name } as unknown as Action;
+  return {
+    action,
+    problem: actionSchema.safeParse(action).success
+      ? null
+      : toolNames.has(name)
+        ? `The arguments of ${name} are not valid.`
+        : "That function does not exist.",
+  };
+}
 
 const line = (value: string, limit: number) =>
   value.replace(/\p{C}/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
@@ -335,7 +532,7 @@ function stepLine(record: StepRecord) {
   const detail =
     action.kind === "type" || action.kind === "browser_type"
       ? ` "${line(action.text, 60)}"`
-      : action.kind === "key"
+      : action.kind === "key" || action.kind === "browser_key"
         ? ` ${line(action.combo, 40)}`
         : action.kind === "open_app" || action.kind === "quit_app"
           ? ` ${line(action.name, 60)}`
@@ -343,11 +540,17 @@ function stepLine(record: StepRecord) {
             ? ` ${line(action.url, 120)}${action.browser ? ` in ${line(action.browser, 60)}` : ""}`
             : action.kind === "browser_open"
               ? ` ${line(action.url, 120)}`
-              : action.kind === "scroll" || action.kind === "browser_scroll"
-                ? ` ${action.direction}`
-                : action.kind === "ask"
-                  ? ` "${line(action.question, 120)}"`
-                  : "";
+              : action.kind === "scroll"
+                ? ` ${action.direction}${action.amount ? ` ${action.amount}` : ""}`
+                : action.kind === "browser_scroll"
+                  ? ` ${action.direction}`
+                  : action.kind === "ask"
+                    ? ` "${line(action.question, 120)}"`
+                    : action.kind === "browser_select"
+                      ? ` "${line(action.option, 60)}"`
+                      : action.kind === "browser_wait" && action.text
+                        ? ` for "${line(action.text, 60)}"`
+                        : "";
   const why = line(record.why, 120);
   // The hands say ok when the address went to the browser. That is not the page.
   const outcome =
@@ -376,6 +579,24 @@ function pageLines(page: BrowserPage) {
               : ""
           }${item.password ? " password" : ""}${item.disabled ? " disabled" : ""}`,
       ),
+    ...(page.found === undefined
+      ? []
+      : [
+          page.found
+            ? "The words that you waited for are on the page."
+            : "The words that you waited for did not show in that time.",
+        ]),
+    ...(page.tabs?.length
+      ? [
+          "Tabs of the front window (number, title, address):",
+          ...page.tabs
+            .slice(0, 100)
+            .map(
+              (tab) =>
+                `[${tab.index}] "${quoted(tab.title, 120)}" ${line(tab.url, 200)}${tab.active ? " in front" : ""}`,
+            ),
+        ]
+      : []),
   ];
 }
 
@@ -502,13 +723,9 @@ function toAction(
   parsed: Record<string, unknown>,
 ): { action: Action; why: string } {
   const { why, ...rest } = parsed;
-  // A model writes null for an argument that it leaves out.
-  const given = Object.fromEntries(
-    Object.entries(rest).filter(([, value]) => value !== null),
-  );
   return {
     // The shape of an action only. The worker checks it before anything runs.
-    action: { ...given, kind: name } as unknown as Action,
+    action: actionFromCall(name, rest).action,
     why: typeof why === "string" ? why : "",
   };
 }
@@ -644,6 +861,7 @@ export class OpenAIPlanner implements Planner {
   /** One for each planner: it counts failures across calls. */
   private readonly breaker: CircuitBreaker;
   private readonly onAttempt: AttemptReport | undefined;
+  private readonly browserMethods: readonly BrowserMethod[];
   constructor(options: {
     key: string;
     model?: string;
@@ -651,6 +869,8 @@ export class OpenAIPlanner implements Planner {
     request?: typeof fetch;
     /** A browser is connected, so the browser functions are offered. */
     browser?: boolean;
+    /** The optional methods of that browser: a function that needs another one is not offered. */
+    browserMethods?: readonly BrowserMethod[];
     /** The time for one request to the language model. */
     timeoutMs?: number;
     /** The time for one whole call: every request, every wait and the repair. */
@@ -667,6 +887,7 @@ export class OpenAIPlanner implements Planner {
     this.fallback = options.model ? null : fallbackComputerModel;
     this.request = options.request ?? fetch;
     this.browser = options.browser === true;
+    this.browserMethods = options.browserMethods ?? [];
     const attemptTimeoutMs =
       options.timeoutMs ?? defaultRetryPolicy.attemptTimeoutMs;
     this.policy = {
@@ -829,7 +1050,7 @@ export class OpenAIPlanner implements Planner {
     return this.decide(
       {
         messages: [
-          { role: "system", content: rules(browser) },
+          { role: "system", content: rules(browser, this.browserMethods) },
           {
             role: "user",
             content: [
@@ -848,7 +1069,7 @@ export class OpenAIPlanner implements Planner {
             ],
           },
         ],
-        tools: browser ? [...screenTools, ...browserTools] : screenTools,
+        tools: toolsFor(browser, this.browserMethods),
         // One action for each turn: a function call, and only one.
         tool_choice: "required",
         parallel_tool_calls: false,
@@ -956,7 +1177,11 @@ export function directOpening(planner: Planner): Planner {
 /** The planner that the environment asks for. Null when no key is there. */
 export function plannerFromEnvironment(
   env: Record<string, string | undefined>,
-  options: { request?: typeof fetch; browser?: boolean } = {},
+  options: {
+    request?: typeof fetch;
+    browser?: boolean;
+    browserMethods?: readonly BrowserMethod[];
+  } = {},
 ) {
   const key = env.CLAWDTIME_OPENAI_API_KEY || env.OPENAI_API_KEY;
   if (!key) return null;

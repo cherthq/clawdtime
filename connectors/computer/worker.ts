@@ -58,11 +58,14 @@ import { interpret } from "../agents/call.js";
 import { looksSecret } from "../agents/memory.js";
 import {
   actionSchema,
+  againstPage,
+  browserMethods,
   check,
   clean,
   focusedSecure,
+  quietCall,
+  readsBeforeCall,
   retarget,
-  samePageElement,
   type BrowserCall,
   type Checked,
   type View,
@@ -723,10 +726,10 @@ const focusMovedToField = (seen: Observation | null, focus: FocusClicks) =>
       item.focused && item.role === focus.role && item.title === focus.title,
   );
 
-/** True for what changes nothing on the Mac: a wait, a look, and a reading of the page. */
+/** True for what changes nothing on the Mac: a wait, a look, and a reading of the page or of its tabs. */
 const sendsNoInput = (send: Ready["send"]) =>
   send.via === "browser"
-    ? send.call.name === "read"
+    ? quietCall(send.call)
     : send.command.kind === "wait" || send.command.kind === "observe";
 
 /**
@@ -2301,6 +2304,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       page: run.page,
       fresh: run.fresh,
       browser: this.drives(run),
+      browserMethods: this.browserMethods,
       goal: this.spoken(run),
     };
     const parsed = actionSchema.safeParse(raw);
@@ -3284,7 +3288,15 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.page = null;
     return `${lead}: ${reason} The browser functions are off for this request. Use the screen.`;
   }
+  /** The optional methods of the connected browser. The checks refuse an action that needs another one. */
+  private get browserMethods() {
+    return browserMethods(this.browser);
+  }
   private call(browser: BrowserPort, call: BrowserCall): Promise<BrowserPage> {
+    // The checks offer no action whose method the driver lacks. This is the
+    // second line: nothing is sent, and the step reads why.
+    const lacking = () =>
+      Promise.reject(new Error("The browser cannot do that. Use the screen."));
     switch (call.name) {
       case "read":
         return browser.read();
@@ -3298,6 +3310,18 @@ export class ComputerWorker implements DesktopExecutorPort {
         return browser.scroll(call.direction);
       case "back":
         return browser.back();
+      case "hover":
+        return browser.hover?.(call.index) ?? lacking();
+      case "select":
+        return browser.select?.(call.index, call.option) ?? lacking();
+      case "key":
+        return browser.key?.(call.combo) ?? lacking();
+      case "wait":
+        return browser.waitFor?.(call.text, call.ms) ?? lacking();
+      case "tabs":
+        return browser.tabs?.() ?? lacking();
+      case "switch_tab":
+        return browser.switchTab?.(call.tab) ?? lacking();
     }
   }
   private async viaBrowser(
@@ -3309,14 +3333,17 @@ export class ComputerWorker implements DesktopExecutorPort {
     const browser = this.browser;
     if (!browser || first.send.via !== "browser") return;
     let call = first.send.call;
-    if (call.name === "click" || call.name === "type") {
+    if (readsBeforeCall(call)) {
       // Just before the input: read the page again and find the same element.
-      // Its number names it inside one reading only.
+      // Its number names it inside one reading only. A tab is found again in
+      // a new list of the tabs.
       if (this.halted(run)) return;
       let now: BrowserPage;
       try {
         const got = await withinOrHalted(
-          browser.read(),
+          call.name === "switch_tab"
+            ? this.call(browser, { name: "tabs" })
+            : browser.read(),
           this.browserMs,
           run.halted,
         );
@@ -3359,15 +3386,16 @@ export class ComputerWorker implements DesktopExecutorPort {
           first,
           run.hold ? heldByWordReason : saidMoreText,
         );
-      const same = samePageElement(call.element, now);
-      const again = same
+      const moved = againstPage(action, call, now);
+      const again = moved
         ? check(
-            { ...action, index: same.index },
+            moved,
             {
               observation: run.observation,
               page: now,
               fresh: run.fresh,
               browser: true,
+              browserMethods: this.browserMethods,
               goal: this.spoken(run),
             },
             why,
@@ -3402,14 +3430,16 @@ export class ComputerWorker implements DesktopExecutorPort {
         first,
         run.hold ? heldByWordReason : saidMoreText,
       );
-    // A scroll changes what the screen shows, but silence after it loses nothing.
-    const effect = call.name !== "read" && call.name !== "scroll";
+    // A scroll changes what the screen shows, but silence after it loses
+    // nothing. A reading, a wait and a list of the tabs change nothing.
+    const quiet = quietCall(call);
+    const effect = !quiet && call.name !== "scroll";
     const pageBefore = call.name === "read" ? null : pagePrint(run.page);
     if (call.name !== "read") run.fresh = false;
     this.count(run, first.signature);
     if (effect) run.inFlight = true;
     try {
-      if (call.name === "read") {
+      if (quiet) {
         const got = await withinOrHalted(
           this.call(browser, call),
           this.browserMs,
@@ -3439,8 +3469,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           lostText(first.label),
         );
       }
-      if (call.name !== "read" && !(error instanceof BrowserClosed))
-        this.wentOut(run);
+      if (!quiet && !(error instanceof BrowserClosed)) this.wentOut(run);
       this.note(
         run,
         action,
@@ -3458,7 +3487,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
     // An input that went out ends the row of held steps only when the page or
     // screen actually changed.
-    if (call.name !== "read") {
+    if (!quiet) {
       this.wentOut(run);
       delete run.grace;
       if (first.signature !== null) delete run.focusClicks;
@@ -3469,7 +3498,17 @@ export class ComputerWorker implements DesktopExecutorPort {
       }
     }
     run.tried = "sent";
-    this.note(run, action, why, first.target, "ok", "ok");
+    this.note(
+      run,
+      action,
+      why,
+      first.target,
+      // A wait for words that did not come is no failure, but it is not ok either.
+      call.name === "wait" && run.page?.found === false
+        ? "the words did not show on the page in that time"
+        : "ok",
+      "ok",
+    );
     this.halted(run);
   }
 }
