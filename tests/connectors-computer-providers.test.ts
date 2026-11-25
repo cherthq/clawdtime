@@ -678,7 +678,7 @@ describe("the Anthropic provider", () => {
     options: Partial<PlannerOptions> = {},
   ) => planner(request, { provider: "anthropic", ...options });
 
-  it("sends the Messages request: cached rules, strict tools, the picture, auto choice, low effort, the refusal fallback", async () => {
+  it("sends the Messages request: cached rules, non-strict tools, the picture, auto choice, low effort, the refusal fallback", async () => {
     const net = service(
       json(message([toolUse("click_element", { element: 1, why: "Open" })])),
     );
@@ -725,11 +725,8 @@ describe("the Anthropic provider", () => {
     }[];
     expect(tools.map((tool) => tool.name)).toContain("click_element");
     for (const tool of tools) {
-      expect(tool.strict).toBe(true);
+      expect(tool.strict).toBeUndefined();
       expect(tool.input_schema.additionalProperties).toBe(false);
-      expect(JSON.stringify(tool.input_schema)).not.toMatch(
-        /"minimum"|"maximum"/,
-      );
     }
     expect(body.messages).toHaveLength(1);
     const turn = body.messages[0]!.content as {
@@ -769,14 +766,14 @@ describe("the Anthropic provider", () => {
     expect(
       (old.body.tools as { strict?: boolean }[]).some((tool) => tool.strict),
     ).toBe(false);
-    // A model that takes the effort and strict tools, but no fast mode and no fallback.
+    // A model that takes the effort, but no fast mode and no fallback.
     const haiku = await body({ model: "claude-haiku-5-5", speed: "fast" });
     expect(haiku.body.output_config).toEqual({ effort: "low" });
     expect(haiku.body).not.toHaveProperty("speed");
     expect(haiku.body).not.toHaveProperty("fallbacks");
     expect(
-      (haiku.body.tools as { strict?: boolean }[]).every((tool) => tool.strict),
-    ).toBe(true);
+      (haiku.body.tools as { strict?: boolean }[]).some((tool) => tool.strict),
+    ).toBe(false);
   });
 
   it("keeps the tools and the rules the same bytes from step to step", async () => {
@@ -1101,6 +1098,35 @@ describe("the strict tools of Anthropic", () => {
       messagesTools(optional, true).map((tool) => tool.strict === true),
     ).toEqual([true, true, true, true, false]);
     expect(messagesTools(many, false).some((tool) => tool.strict)).toBe(false);
+    expect(messagesTools(many, false)).toBe(messagesTools(many, false));
+  });
+
+  it("caps real Anthropic planner requests at zero strict tools and bounded schema size", async () => {
+    for (const withBrowser of [false, true]) {
+      const net = service(json(message([toolUse("wait", { ms: 1, why: "w" })])));
+      const model = planner(net.request, {
+        provider: "anthropic",
+        browser: withBrowser,
+        browserMethods: withBrowser ? browserMethodNames : [],
+      });
+      await model.next(input("Shopping"));
+      const body = net.sent[0]!.body;
+      const tools = body.tools as {
+        name: string;
+        strict?: boolean;
+        input_schema: unknown;
+      }[];
+      const strictTools = tools.filter((tool) => tool.strict === true);
+      const strictBytes = Buffer.byteLength(
+        JSON.stringify(strictTools.map((tool) => tool.input_schema)),
+        "utf8",
+      );
+      const totalSchemaBytes = Buffer.byteLength(JSON.stringify(tools), "utf8");
+      expect(tools.length).toBe(withBrowser ? 20 : 16);
+      expect(strictTools).toHaveLength(0);
+      expect(strictBytes).toBe(2);
+      expect(totalSchemaBytes).toBeLessThan(20_000);
+    }
   });
 
   it("marks every offered planner tool strict when browser and all browser methods are enabled", () => {
@@ -1236,7 +1262,7 @@ describe("the merged planner features through every provider", () => {
     const [c, d, e] = messages.sent.map((item) => item.body);
     const anthropicTools = c!.tools as { name: string; strict?: boolean }[];
     expect(anthropicTools).toHaveLength(20);
-    expect(anthropicTools.every((tool) => tool.strict === true)).toBe(true);
+    expect(anthropicTools.some((tool) => tool.strict === true)).toBe(false);
     expect(anthropicTools.map((tool) => tool.name)).toContain("plan_update");
     expect(JSON.stringify([c!.tools, c!.system, c!.tool_choice])).toBe(
       JSON.stringify([d!.tools, d!.system, d!.tool_choice]),
@@ -1278,7 +1304,7 @@ describe("the merged planner features through every provider", () => {
         tool.name,
         tool.strict,
       ]),
-    ).toEqual([["outline", true]]);
+    ).toEqual([["outline", undefined]]);
     expect(
       (body.messages[0]!.content as { type: string }[]).map(
         (part) => part.type,
