@@ -129,11 +129,21 @@ public struct DesktopAppCandidate: Sendable {
   public init(path: String, names: [String]) { self.path = path; self.names = names }
 }
 public enum DesktopAppSelection {
+  /// The folders of the apps that a person opens by their names: the apps of the Mac and of its owner, with
+  /// their Utilities, and the place of the system browser, where /Applications leads it. A helper of macOS in
+  /// CoreServices, an app in a home folder or a copy in another folder comes after them.
+  static let appFolders = ["/Applications/", "/System/Applications/",
+                           "/System/Volumes/Preboot/Cryptexes/App/System/Applications/", "/System/Cryptexes/App/System/Applications/"]
+  /// The one app whose name is the name that was said, in any case. macOS gives some of its helpers the Finder
+  /// name of an app: "Tips" and "Contacts" are also helpers in CoreServices. So of several apps with the name,
+  /// the one in the app folders wins. Two there, or two outside them and none there, open nothing.
   public static func path(named name: String, candidates: [DesktopAppCandidate]) -> Result<String, HandError> {
     let paths = Set(candidates.filter { $0.names.contains { $0.caseInsensitiveCompare(name) == .orderedSame } }.map(\.path))
-    guard paths.count <= 1 else { return .failure(.ambiguousTarget) }
     guard let path = paths.first else { return .failure(.notFound) }
-    return .success(path)
+    guard paths.count > 1 else { return .success(path) }
+    let inFolders = paths.filter { path in appFolders.contains { path.hasPrefix($0) } }
+    guard inFolders.count == 1, let chosen = inFolders.first else { return .failure(.ambiguousTarget) }
+    return .success(chosen)
   }
   /// The app that a person means by a name, among the apps that open a web address. A person says less than
   /// the full name of a browser. The whole name wins. Else every word that was said is a word of the app's

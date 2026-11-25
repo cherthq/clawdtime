@@ -132,6 +132,36 @@ final class DesktopTransitionTests: XCTestCase {
       XCTAssertEqual(error as? HandError, .notFound)
     }
   }
+  func testAnAppOfTheAppFoldersWinsOverAHelperOfTheSystemWithTheSameName() throws {
+    // macOS keeps small helpers in CoreServices whose name in Finder is the name of an app:
+    // "Tips" is also the Finder name of a helper there. The app of the app folders is the one a person means.
+    let app = DesktopAppCandidate(path: "/System/Applications/Fixture.app", names: ["Fixture", "Fixture"])
+    let helper = DesktopAppCandidate(path: "/System/Library/CoreServices/FixtureHandler.app", names: ["FixtureHandler", "Fixture"])
+    let mine = DesktopAppCandidate(path: "/Applications/Mine.app", names: ["Mine", "Mine"])
+    let mineHelper = DesktopAppCandidate(path: "/System/Library/CoreServices/MineAgent.app", names: ["MineAgent", "Mine"])
+    let utility = DesktopAppCandidate(path: "/System/Applications/Utilities/Meter.app", names: ["Meter", "Meter"])
+    let meterHelper = DesktopAppCandidate(path: "/Users/someone/Applications/Meter.app", names: ["Meter", "Meter"])
+    // The system browser lives in its own place, which is where /Applications leads it.
+    let browser = DesktopAppCandidate(path: "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Browser.app", names: ["Browser", "Browser"])
+    let browserCopy = DesktopAppCandidate(path: "/Users/someone/Downloads/Browser.app", names: ["Browser", "Browser"])
+    let all = [helper, app, mineHelper, mine, meterHelper, utility, browserCopy, browser]
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Fixture", candidates: all).get(), app.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "fixture", candidates: all).get(), app.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Mine", candidates: all).get(), mine.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Meter", candidates: all).get(), utility.path)
+    XCTAssertEqual(try DesktopAppSelection.path(named: "Browser", candidates: all).get(), browser.path)
+    // A helper is still found by its own name.
+    XCTAssertEqual(try DesktopAppSelection.path(named: "FixtureHandler", candidates: all).get(), helper.path)
+    // Two apps of the app folders with that name are still two: nothing is chosen.
+    let twin = DesktopAppCandidate(path: "/Applications/Fixture.app", names: ["Fixture", "Fixture"])
+    XCTAssertThrowsError(try DesktopAppSelection.path(named: "Fixture", candidates: all + [twin]).get()) { error in
+      XCTAssertEqual(error as? HandError, .ambiguousTarget)
+    }
+    // A part of a name is no name.
+    XCTAssertThrowsError(try DesktopAppSelection.path(named: "Fix", candidates: all).get()) { error in
+      XCTAssertEqual(error as? HandError, .notFound)
+    }
+  }
   func testABrowserIsFoundByTheWordsThatAPersonSaysAndNeverByAGuess() throws {
     let full = DesktopAppCandidate(path: "/fixture/Fixture Browser.app", names: ["Fixture Browser", "Fixture Browser"])
     let beta = DesktopAppCandidate(path: "/fixture/Fixture Browser Beta.app", names: ["Fixture Browser Beta"])
