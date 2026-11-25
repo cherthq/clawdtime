@@ -113,6 +113,8 @@ const laterRules = (browser: boolean, methods: readonly BrowserMethod[]) => {
           `When the web page in front is not the one the goal is about, call browser_tabs${offered("browser_switch_tab") ? ", then browser_switch_tab" : ""}.`,
         ]
       : []),
+    "Do the goal without asking first: open the apps and sites that it needs, read, scroll, search, fill in forms, add to a cart and close what is in the way. Never call ask only to get a yes: the program asks the person itself before a payment, a loss that cannot be undone, a send that the goal did not ask for, and a change of security or privacy.",
+    "On a cookie banner, choose the option that shares the least, such as Reject all or Only necessary.",
   ];
 };
 

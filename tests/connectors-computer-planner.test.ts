@@ -102,6 +102,12 @@ const input = (values: Partial<Parameters<OpenAIPlanner["next"]>[0]> = {}) => ({
   ...values,
 });
 
+/** The rules that keep a question for what needs one: the last lines, after every function rule. */
+const askRules = [
+  "Do the goal without asking first: open the apps and sites that it needs, read, scroll, search, fill in forms, add to a cart and close what is in the way. Never call ask only to get a yes: the program asks the person itself before a payment, a loss that cannot be undone, a send that the goal did not ask for, and a change of security or privacy.",
+  "On a cookie banner, choose the option that shares the least, such as Reject all or Only necessary.",
+];
+
 /** The rules of the planner test of November 22, word for word, in their order. */
 const earlierRules = (browser: boolean) => [
   "You operate a Mac for its owner, one action at a time.",
@@ -1101,6 +1107,7 @@ describe("the newer actions in the planner", () => {
     expect(screen.slice(earlierRules(false).length)).toEqual([
       "To open a menu or a tooltip that shows on hover, call hover first, then click what it shows.",
       "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
+      ...askRules,
     ]);
     const all = (
       await offered({
@@ -1116,6 +1123,7 @@ describe("the newer actions in the planner", () => {
       "To submit a search on a web page, call browser_key with Enter once the words are in the field.",
       "While a web page is still loading, call browser_wait.",
       "When the web page in front is not the one the goal is about, call browser_tabs, then browser_switch_tab.",
+      ...askRules,
     ]);
     const listing = (
       await offered({ key: "k", browser: true, browserMethods: ["tabs"] })
