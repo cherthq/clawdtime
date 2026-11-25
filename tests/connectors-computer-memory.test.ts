@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Memory, memoryDirectory } from "../connectors/agents/memory.js";
-import { ComputerJournal } from "../connectors/computer/journal.js";
+import {
+  ComputerJournal,
+  setComputerSwitch,
+} from "../connectors/computer/journal.js";
 import type { Action, Observation } from "../connectors/computer/ports.js";
 import {
   computerMemory,
@@ -11,6 +14,7 @@ import {
   type ComputerMemory,
   type Lesson,
 } from "../connectors/computer/remembered.js";
+import { buildComputer } from "../connectors/computer/service.js";
 import { ComputerWorker } from "../connectors/computer/worker.js";
 import {
   element,
@@ -345,5 +349,75 @@ describe("what a computer request teaches memory", () => {
     ).toEqual([
       'Worked on the request "Find a phone case". It did not finish.',
     ]);
+  });
+});
+
+describe("the service", () => {
+  /** Serves the commands of the hands through the port, as the panel does. */
+  async function serve(
+    built: ReturnType<typeof buildComputer>,
+    screen: Observation,
+  ) {
+    let last = 0;
+    for (
+      let turn = 0;
+      turn < 400 && built.worker!.snapshot().state === "running";
+      turn++
+    ) {
+      const { command } = built.port.next(last);
+      if (!command) {
+        await new Promise((go) => setTimeout(go, 2));
+        continue;
+      }
+      last = command.seq;
+      built.port.result({
+        seq: command.seq,
+        ok: true,
+        ...(command.command.kind === "observe"
+          ? {
+              observation: command.command.image
+                ? screen
+                : {
+                    ...screen,
+                    image: undefined,
+                    imageWidth: undefined,
+                    imageHeight: undefined,
+                  },
+            }
+          : {}),
+      });
+    }
+    await built.worker!.idle();
+  }
+  const withKey = { CLAWDTIME_OPENAI_API_KEY: "test-key-that-is-never-sent" };
+
+  it("feeds the worker from the memory of its state folder, behind the memory's switch", async () => {
+    const { root, memory } = memoryOf(true);
+    setComputerSwitch(root, true);
+    memory.remember({
+      text: "Shop for a phone case on flipkart.com, not instagram.com.",
+      kind: "preference",
+    });
+    const planner = new ScriptedPlanner([done]);
+    const built = buildComputer({ root, env: withKey, planner, memory });
+    await built.worker!.submit("r1", "Find a phone case");
+    await serve(built, shop);
+    expect(planner.inputs[0]!.remembered).toEqual([
+      "Shop for a phone case on flipkart.com, not instagram.com.",
+    ]);
+    expect(built.worker!.snapshot().state).toBe("completed");
+    expect(current(memory).map((fact) => fact.text)).toContain(
+      'Worked on the request "Find a phone case". It was done.',
+    );
+
+    // A service with no memory store reads and keeps nothing.
+    const bare = home();
+    setComputerSwitch(bare, true);
+    const alone = new ScriptedPlanner([done]);
+    const plain = buildComputer({ root: bare, env: withKey, planner: alone });
+    await plain.worker!.submit("r1", "Find a phone case");
+    await serve(plain, shop);
+    expect(alone.inputs[0]).not.toHaveProperty("remembered");
+    expect(existsSync(memoryDirectory(bare))).toBe(false);
   });
 });
