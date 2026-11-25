@@ -160,10 +160,9 @@ describe("what a computer request teaches memory", () => {
       return {};
     };
     await run.worker.submit("r1", "Find a phone case on flipkart.com");
+    // The correction steers the task, and the task goes on by itself.
     await run.worker.submit("r2", "not instagram, flipkart");
     release();
-    await run.waiting();
-    await run.worker.answer("continue");
     await run.worker.idle();
     expect(run.planner.inputs[0]).toMatchObject({
       guidance: ["not instagram, flipkart"],
@@ -252,7 +251,7 @@ describe("what a computer request teaches memory", () => {
     await run.waiting();
     // The worker refuses a credential as an answer: it is never taught.
     expect((await run.worker.answer("the password is hunter22")).message).toBe(
-      "I do not take a password or a key in the chat. Type it into the field on the Mac yourself, then tell me to go on.",
+      "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself.",
     );
     await run.worker.answer("ask me again later, I am away");
     await run.worker.idle();
