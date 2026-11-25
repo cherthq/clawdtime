@@ -25,7 +25,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { pageError } from "../connectors/computer/error-page.js";
-import { OwnBrowser } from "../connectors/computer/own-browser.js";
+import {
+  BrowserInputUnknown,
+  OwnBrowser,
+} from "../connectors/computer/own-browser.js";
 import type { BrowserPage } from "../connectors/computer/ports.js";
 
 const desk = `<!doctype html>
@@ -273,6 +276,67 @@ const hydrateHtml = `<!doctype html>
 </script>
 </body></html>`;
 
+const wave2Html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Wave 2 desk</title>
+<style>
+  .spacer { height: 2800px; }
+</style></head><body>
+<h1>Wave 2 desk</h1>
+<p><button id="confirm-btn">Ask confirm</button> <span id="confirm-out">Confirm result: none</span></p>
+<p><button id="prompt-btn">Ask prompt</button> <span id="prompt-out">Prompt result: none</span></p>
+<form id="batch-form">
+  <p><label for="f-name">Customer name</label> <input id="f-name" type="text" value=""></p>
+  <p><label for="f-tier">Plan tier</label>
+    <select id="f-tier"><option>Starter</option><option>Pro</option><option>Team</option></select></p>
+  <p><label for="f-notes">Delivery notes</label> <textarea id="f-notes"></textarea></p>
+  <p id="notes-lines">lines:0</p>
+  <p><label for="f-pw">Account password</label> <input id="f-pw" type="password" value=""></p>
+  <p><label for="f-lock-a">Lock trigger</label> <input id="f-lock-a" type="text" value=""></p>
+  <p><label for="f-lock-b">Locked target</label> <input id="f-lock-b" type="text" value=""></p>
+</form>
+<div class="spacer">Spacer content</div>
+<p><button id="far-btn">Far below button</button> <span id="far-out">far:0</span></p>
+<script>
+  var byId = function (id) { return document.getElementById(id); };
+  byId("confirm-btn").addEventListener("click", function () {
+    byId("confirm-out").textContent = "Confirm result: " + (window.confirm("Proceed with order?") ? "confirmed" : "cancelled");
+  });
+  byId("prompt-btn").addEventListener("click", function () {
+    var val = window.prompt("Order tag?");
+    byId("prompt-out").textContent = "Prompt result: tag=" + String(val);
+  });
+  byId("f-notes").addEventListener("input", function () {
+    var val = byId("f-notes").value;
+    var parts = val.split("\\n");
+    byId("notes-lines").textContent = "lines:" + parts.length + "|" + parts.join(" / ");
+  });
+  byId("f-lock-a").addEventListener("input", function () {
+    if (byId("f-lock-a").value) byId("f-lock-b").disabled = true;
+  });
+  byId("far-btn").addEventListener("click", function () {
+    byId("far-out").textContent = "far:" + (window.scrollY > 1000 ? "scrolled" : "top");
+  });
+</script>
+</body></html>`;
+
+const longTextParagraphs = Array.from(
+  { length: 120 },
+  (_, i) =>
+    `<p>Section ${i + 1}: Riverchat order handbook entry number ${i + 1} with plain prose for pagination verification.</p>`,
+).join("\n");
+
+const longHtml = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Long handbook</title>
+<style>.hidden-css-marker { display: none; }</style></head><body>
+<h1>Long handbook</h1>
+<script>var SECRET_SCRIPT_MARKER = "do-not-extract";</script>
+<div class="hidden-css-marker">HIDDEN_DIV_MARKER</div>
+<div style="opacity: 0">HIDDEN_OPACITY_INJECTION</div>
+<div aria-hidden="true"><span>HIDDEN_ARIA_INJECTION</span></div>
+<input type="password" value="HIDDEN_PW_MARKER">
+${longTextParagraphs}
+</body></html>`;
+
 function serve(crossOrigin = "") {
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -292,6 +356,8 @@ function serve(crossOrigin = "") {
     if (url.pathname === "/nested-outer") return html(nestedOuterHtml);
     if (url.pathname === "/nested-inner") return html(nestedInnerHtml);
     if (url.pathname === "/hydrate") return html(hydrateHtml);
+    if (url.pathname === "/wave2") return html(wave2Html);
+    if (url.pathname === "/long") return html(longHtml);
     if (url.pathname === "/search")
       return html(
         results((url.searchParams.get("q") ?? "").replace(/[^\w ]/g, "")),
@@ -750,6 +816,154 @@ try {
       await assert.rejects(driver.click(1), /one of its own pages/);
       await assert.rejects(driver.key("Enter"), /one of its own pages/);
       await assert.rejects(driver.scroll("down"), /one of its own pages/);
+    },
+  );
+  await step(
+    "read() and tabs() still throw dialogText on open dialogs while handleDialog answers confirm() and prompt() cleanly in real Chromium",
+    async () => {
+      const page = await driver.open(`${origin}/wave2`);
+      await assert.rejects(
+        driver.click(number(page, "Ask confirm")),
+        /Proceed with order\?/,
+      );
+      await assert.rejects(driver.read(), /Proceed with order\?/);
+      await assert.rejects(driver.tabs(), /Proceed with order\?/);
+      const acceptedConfirm = await driver.handleDialog(true);
+      assert.equal(acceptedConfirm.dialog, undefined);
+      assert.match(acceptedConfirm.text, /Confirm result: confirmed/);
+
+      await assert.rejects(
+        driver.click(number(acceptedConfirm, "Ask confirm")),
+        /Proceed with order\?/,
+      );
+      const dismissedConfirm = await driver.handleDialog(false);
+      assert.match(dismissedConfirm.text, /Confirm result: cancelled/);
+
+      await assert.rejects(
+        driver.click(number(dismissedConfirm, "Ask prompt")),
+        /Order tag\?/,
+      );
+      await assert.rejects(driver.read(), /Order tag\?/);
+      const answeredPrompt = await driver.handleDialog(true, "RUSH-9");
+      assert.equal(answeredPrompt.dialog, undefined);
+      assert.match(answeredPrompt.text, /Prompt result: tag=RUSH-9/);
+    },
+  );
+  await step(
+    "fillForm fills a 3-field form including multiline textarea, rejects single-line newlines, fails closed on password fields, and throws BrowserInputUnknown on mid-form failure",
+    async () => {
+      const page = await driver.read();
+      const nameIdx = number(page, "Customer name");
+      const tierIdx = number(page, "Plan tier");
+      const notesIdx = number(page, "Delivery notes");
+      const pwIdx = number(page, "Account password");
+      const lockAIdx = number(page, "Lock trigger");
+      const lockBIdx = number(page, "Locked target");
+
+      // Single-line input rejects newlines with nothing typed.
+      await assert.rejects(
+        driver.type(nameIdx, "Ada\nBrook", false),
+        /single-line field/,
+      );
+
+      // Batch form fill fails closed BEFORE any input when any field is a password field.
+      await assert.rejects(
+        driver.fillForm([
+          { index: nameIdx, text: "ShouldNotWrite" },
+          { index: pwIdx, text: "secret-pw" },
+        ]),
+        /password field/,
+      );
+      const stillEmpty = await driver.read();
+      assert.equal(
+        stillEmpty.elements.find((item) => item.label === "Customer name")
+          ?.value,
+        "",
+      );
+
+      // 3-field batch fill including multiline <textarea>.
+      const filled = await driver.fillForm([
+        { index: nameIdx, text: "Ada Brook" },
+        { index: tierIdx, text: "Pro" },
+        { index: notesIdx, text: "Line one\nLine two\nLine three" },
+      ]);
+      assert.equal(
+        filled.elements.find((item) => item.label === "Customer name")?.value,
+        "Ada Brook",
+      );
+      assert.equal(
+        filled.elements.find((item) => item.label === "Plan tier")?.value,
+        "Pro",
+      );
+      assert.match(filled.text, /lines:3\|Line one \/ Line two \/ Line three/);
+
+      // Mid-form failure after field 1 was filled wraps in BrowserInputUnknown.
+      await assert.rejects(
+        driver.fillForm([
+          { index: lockAIdx, text: "Trigger" },
+          { index: lockBIdx, text: "Blocked" },
+        ]),
+        (error) =>
+          error instanceof BrowserInputUnknown &&
+          /already filling 1 field\(s\)/.test(error.message) &&
+          /is disabled now/.test(error.message),
+      );
+    },
+  );
+  await step(
+    "scrollToElement scrolls an off-screen button into view and lets it be clicked",
+    async () => {
+      const page = await driver.read();
+      const farIdx = number(page, "Far below button");
+      const scrolled = await driver.scrollToElement(farIdx);
+      const clicked = await driver.click(number(scrolled, "Far below button"));
+      assert.match(clicked.text, /far:scrolled/);
+    },
+  );
+  await step(
+    "newTab and closeTab manage tabs and extract paginates a long document without script, style, hidden or password text",
+    async () => {
+      const beforeTabs = (await driver.tabs()).tabs?.length ?? 0;
+      const longTab = await driver.newTab(`${origin}/long`);
+      assert.equal(longTab.title, "Long handbook");
+      const afterNewTabs = (await driver.tabs()).tabs?.length ?? 0;
+      assert.equal(afterNewTabs, beforeTabs + 1);
+
+      let offset = 0;
+      let combined = "";
+      let chunks = 0;
+      let totalChars = 0;
+      for (;;) {
+        const slice = await driver.extract({ offset, maxChars: 2000 });
+        assert.equal(slice.title, "Long handbook");
+        assert.equal(slice.url, `${origin}/long`);
+        assert.equal(slice.offset, offset);
+        assert.ok(slice.text.length <= 2000);
+        totalChars = slice.totalChars;
+        combined += slice.text;
+        offset += slice.text.length;
+        chunks += 1;
+        if (!slice.hasMore) break;
+        assert.ok(chunks < 20, "pagination terminates");
+      }
+      assert.ok(totalChars > 5000, `expected >5000 chars, got ${totalChars}`);
+      assert.ok(chunks >= 3, `expected >=3 chunks, got ${chunks}`);
+      assert.equal(combined.length, totalChars);
+      assert.match(combined, /Section 1:/);
+      assert.match(combined, /Section 120:/);
+      assert.ok(!combined.includes("SECRET_SCRIPT_MARKER"));
+      assert.ok(!combined.includes("hidden-css-marker"));
+      assert.ok(!combined.includes("HIDDEN_DIV_MARKER"));
+      assert.ok(!combined.includes("HIDDEN_OPACITY_INJECTION"));
+      assert.ok(!combined.includes("HIDDEN_ARIA_INJECTION"));
+      assert.ok(!combined.includes("HIDDEN_PW_MARKER"));
+
+      // Close the newly opened /long tab and verify tab count drops cleanly and stale listing is cleared.
+      const afterClose = await driver.closeTab();
+      assert.notEqual(afterClose.title, "Long handbook");
+      await assert.rejects(driver.switchTab(1), /from the last list of tabs/);
+      const remainingCount = (await driver.tabs()).tabs?.length ?? 0;
+      assert.equal(remainingCount, beforeTabs);
     },
   );
   await step(

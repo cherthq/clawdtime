@@ -426,6 +426,22 @@ function tabsOf(printed: string, browser: SupportedBrowser): BrowserTab[] {
 /** Text as a wait compares it: one line, in small letters. */
 const folded = (value: string) => oneLine(value, 20_000).toLowerCase();
 
+/** Schema for an open JavaScript dialog reported by a browser driver. */
+export const browserDialogSchema = z
+  .object({
+    type: z.string().max(40),
+    message: z.string().max(200),
+  })
+  .strict();
+
+/** Schema for a browser download entry reported by a browser driver. */
+export const browserDownloadSchema = z
+  .object({
+    filename: z.string().max(200),
+    state: z.enum(["in_progress", "completed", "canceled"]),
+  })
+  .strict();
+
 /** What the page script answers. The limits are checked again here: a page is not trusted. */
 const elementSchema = z
   .object({

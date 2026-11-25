@@ -277,6 +277,28 @@ export interface BrowserTab {
   active: boolean;
 }
 
+/** An open JavaScript dialog on the page. */
+export interface BrowserDialog {
+  type: string;
+  message: string;
+}
+
+/** One browser download tracked by the driver, with a sanitized basename only. */
+export interface BrowserDownload {
+  filename: string;
+  state: "in_progress" | "completed" | "canceled";
+}
+
+/** One paginated slice of clean visible page text. */
+export interface BrowserExtract {
+  url: string;
+  title: string;
+  text: string;
+  offset: number;
+  totalChars: number;
+  hasMore: boolean;
+}
+
 /** One reading of the front page of the browser. */
 export interface BrowserPage {
   /** "own" is ClawdTime's own browser profile. */
@@ -291,6 +313,10 @@ export interface BrowserPage {
   found?: boolean;
   /** Tabs of the front window, set by browser_tabs. */
   tabs?: BrowserTab[];
+  /** Present when a JavaScript dialog is open on the page. */
+  dialog?: BrowserDialog;
+  /** Recent browser downloads when non-empty, with sanitized basenames only. */
+  downloads?: readonly BrowserDownload[];
 }
 
 /** The browser, driven through its scripting door. */
@@ -324,6 +350,23 @@ export interface BrowserPort {
   tabs?(): Promise<BrowserPage>;
   /** Brings one tab of the front window to the front, by its place. */
   switchTab?(tab: number): Promise<BrowserPage>;
+  /** Answers an open JavaScript dialog (alert, confirm, prompt or beforeunload) and reads the page. */
+  handleDialog?(accept: boolean, promptText?: string): Promise<BrowserPage>;
+  /** Opens a new tab at `url` (or an empty tab) and switches to it. */
+  newTab?(url?: string): Promise<BrowserPage>;
+  /** Closes the named tab (or the current tab) and switches to a remaining tab. */
+  closeTab?(tabId?: string): Promise<BrowserPage>;
+  /** Validates and fills multiple form fields sequentially, settling once at the end. */
+  fillForm?(
+    fields: readonly { index: number; text: string }[],
+  ): Promise<BrowserPage>;
+  /** Reads clean visible page text in bounded chunks. */
+  extract?(options?: {
+    offset?: number;
+    maxChars?: number;
+  }): Promise<BrowserExtract>;
+  /** Scrolls a numbered element into view and reads the settled page. */
+  scrollToElement?(index: number): Promise<BrowserPage>;
   /** Releases resources at service stop. */
   close?(): Promise<void>;
 }
