@@ -799,7 +799,7 @@ request ends as `blocked` and the message names the permission to grant.
 ### Give it a task
 
 Talk to ClawdTime: in the chat of the panel, by voice, or on a phone call. Your
-own words are the task. Two ways lead to the worker, and both are code in
+own words are the task. Three ways lead to the worker, and all are code in
 `connectors/agents/brain.ts`:
 
 - **At once, before the language model.** The worker reports the mode
@@ -819,6 +819,14 @@ own words are the task. Two ways lead to the worker, and both are code in
   go, scroll, select, switch, focus, bring, show, refresh, reload, press.
   "Scroll down in Slack", "refresh the browser" and "read my Slack messages"
   go this way. The supervisor needs its own language model for this.
+- **When the code reads the road.** With the worker on and free, the code
+  reads which road your words take, before the language model (see "Which
+  road a request takes" in [the supervisor page](SUPERVISOR.md)). Work in an
+  app, on a web page or in an account goes to the worker, also when your words
+  do not name the screen: "follow up on my latest X posts", "reply to Sam on
+  Slack", "book the 3pm slot". The worker gets your words whole, and plans.
+  Code work goes to a job, and a message with both parts starts the job first
+  and then hands the screen part to the worker.
 
 A question, a bare yes or no, a request for the state and a sentence about a
 session or an agent are never handed over, whatever the model asks. A question
@@ -826,13 +834,18 @@ about what ClawdTime can do, in the form of a polite request with a generic
 object and no target ("Can you click buttons on my screen?", "can u use my
 mac?", "are you able to open apps"), is answered and starts nothing, on every
 road to the worker (`asksWhatItCanDo` in `orders.ts`). "Can you click the Send
-button?" names a target and starts a task.
+button?" names a target and starts a task. A
+question that asks for a reading of an app or a page ("did Sam reply on
+Slack?") goes to the worker by the code's road.
 
 The supervisor also has a tool for the browser that runs (reload, back,
-forward, tabs, read a page) and one that reads the screen from a picture. For
-"refresh the browser" and "read my Slack messages" its language model chooses
-between those tools and the worker. Both do what you asked. Only the worker
-shows the cursor.
+forward, tabs, read a page) and one that reads the screen from a picture.
+While the worker is on, neither is offered to its language model, and a call
+of one goes to the worker. They stay for when the worker is off.
+
+After a task ends done, ClawdTime may offer one next step that follows from
+the result, as a question in the chat. Only your plain yes to it starts the
+step. See [the supervisor page](SUPERVISOR.md).
 
 **From a phone call.** A call asks through `clawdtime chat TEXT`. That command
 now hands the text to the running desktop service, so a caller's request
@@ -1712,9 +1725,20 @@ Not tested, and so not proven:
   When neither is there, the call and the text name no place.
 - A request that ended blocked is reached after 45 seconds also when you sit
   at the Mac and read it. Start a new request in that time, and no call comes.
-- Two tools of the supervisor overlap with the worker: the browser tool and
-  the tool that reads the screen from a picture. Which one its language model
-  picks for "refresh the browser" is not fixed in code.
+- The road of a message is read from its words, in English. A sentence that
+  can be code work or screen work ("make the button blue", "open the login
+  page and add a forgot password link") goes to the language model, and which
+  tool it picks for it is not fixed in code. An app that the reader does not
+  know by name counts only after "on", "from", "via" or "using", with a
+  capital letter.
+- With another engine than ClawdTime's own worker (the bundled runtime, the
+  connection to a chat), the supervisor's language model still chooses
+  between that engine and the browser tool and the tool that reads the
+  screen from a picture.
+- A message with code work and screen work starts the screen part right after
+  the job starts. It does not wait for the answer of the job.
+- The offer of a next step is said in the chat only. On a phone call nothing
+  says it by itself.
 - The route before the language model has no check for a request of an agent
   that waits at the desk. "Click the Approve button" goes to the worker. The
   worker then asks for your yes before the click, because of the name.
@@ -1723,8 +1747,6 @@ Not tested, and so not proven:
 - A second desktop service of the same user builds a second worker. The switch
   and the journal are one for each user, so its start marks a request of the
   first as uncertain.
-- The tool that reads the screen from a picture shows the cursor and its label
-  when it runs during a task of the worker.
 - `clawdtime chat TEXT` sends the panel credential with its first read, before
   the service has shown that it is the one that wrote the files. A process of
   the same user that takes the port after a crash would get it.

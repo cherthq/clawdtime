@@ -1,10 +1,13 @@
 # Supervisor
 
-ClawdTime supervises the coding agents on this Mac. The [agent board](AGENT_BOARD.md)
-shows them. This page is about what ClawdTime can do for you: answer an agent,
-remember your decisions, reach you by phone, talk with you in text or by voice,
-type into a terminal, report on the agent commands you use, and work with the
-browser.
+ClawdTime is first of all a computer use agent: it uses this Mac for you, in
+its apps, its web pages and your accounts, through its
+[computer engine](COMPUTER_USE.md). It also supervises the coding agents on this
+Mac, and starts one for code work. The [agent board](AGENT_BOARD.md) shows them.
+This page is about what ClawdTime can do for you: work on the screen, answer an
+agent, remember your decisions, reach you by phone, talk with you in text or by
+voice, type into a terminal, report on the agent commands you use, and work
+with the browser.
 
 Every action here starts with you: a click, a command, or your voice on a call.
 The one exception is a standing rule, and only you can make one.
@@ -269,10 +272,12 @@ reply and no command. It runs inside the desktop service; with no service,
 
 ## Talk to ClawdTime
 
-The supervisor has no direct mailbox or email-provider integration. With the
-optional [desktop execution connection](DESKTOP_EXECUTOR.md), it can delegate your
-exact inbox/browser request to a selected existing Codex chat; that chat's actual
-tools and permissions determine what it can do. Without that connection it can
+The supervisor has no direct mailbox or email-provider integration: mail, chat,
+posts and calendars are read and changed on the screen, by the computer engine.
+With the optional [desktop execution connection](DESKTOP_EXECUTOR.md), it can
+delegate your exact inbox/browser request to a selected existing Codex chat;
+that chat's actual tools and permissions determine what it can do. With no
+engine on, it says what it would do and how to turn computer use on, and it can
 summarize email text you provide. Approval cannot create missing capabilities.
 Approval prompts must refer to an actual waiting request. The tested connection
 requires an active chat; automatic idle-chat wake remains unqualified.
@@ -289,6 +294,9 @@ conversation:
 
 What it can do when you ask:
 
+- Do work on the screen of this Mac, in any app or web page and in your
+  accounts: "follow up on my latest X posts", "reply to Sam on Slack", "book
+  the 3pm slot". See "Which road a request takes" below.
 - Say what every agent does and what waits for you.
 - Allow or deny a waiting request, or answer a question with one of its choices.
 - Bring a session's terminal to the front. You can name the session, or say
@@ -306,13 +314,15 @@ What it can do when you ask:
   are open", "bring tab three forward", "read this page". It uses the
   browser's own scripting: no key and no click, and it starts no browser.
   Reading the text of a page needs the browser's own setting View, Developer,
-  Allow JavaScript from Apple Events.
+  Allow JavaScript from Apple Events. With ClawdTime's own computer engine on,
+  the engine does this instead.
 - Read what is on the screen, in any application: "read through my Slack
   messages", "what does that error say". ClawdTime takes one picture of the
   main screen and a vision model reads it for your question. See "What it
-  sees" below.
-- Hand any other work to a new coding session and say its answer when it is
-  done. See "Give it a job" below.
+  sees" below. With ClawdTime's own computer engine on, the engine does this
+  instead.
+- Hand code work, and any other work that no tool does, to a new coding
+  session and say its answer when it is done. See "Give it a job" below.
 - Type your words into a session's terminal.
 - Search the trove, and keep a critical decision that you state.
 - Turn away mode on or off.
@@ -767,6 +777,81 @@ and are said as they are. When your message speaks of a session that runs
 ("deploy fix needs a dark mode"), the check asks only for a true answer: it
 names no tool, so that no new agent starts for it.
 
+### Which road a request takes
+
+ClawdTime is a computer use agent first. The code reads your own words and
+picks one of four roads (`connectors/agents/route.ts`):
+
+| Road           | When                                                                                                                                                                                            | For example                                                                                                           |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| The engine     | Work that is done on this Mac: in an app, on a web page, in an account such as X, Gmail, Google or Slack, on a file in an app, or in a setting. Also when your words do not name the screen.    | "follow up on my latest X posts", "reply to Sam on Slack", "book the 3pm slot", "what's on my calendar today?"        |
+| A job          | Code work: a repository, a build, a test, a script, a pull request, work in a terminal, or work for a coding agent that you name.                                                               | "fix the failing test", "run the tests", "use Claude to fix the login bug"                                            |
+| Both, in order | Code work and screen work in one message. The code part starts as a job first, then the screen part goes to the engine. The answer says both, in that order.                                    | "fix the failing test and then open the PR page"                                                                      |
+| An answer      | A question about the state, a session or a job, thanks, a question about what ClawdTime can do, words that hold work or take it back, words in quotes, and every message the code cannot place. | "what is every agent doing?", "can you click buttons on my screen?", "don't reply to Sam yet", "make the button blue" |
+
+How the code reads a message:
+
+- A message can have several parts, joined by "then", "and then", "after
+  that", or "and" before a verb. Each part is read by its verb and by the last
+  words of its thing: "open the PR page" is a page, and "open the button
+  component" is code. A part whose thing the code cannot place makes the whole
+  message one for the language model.
+- A question goes to the engine only when it asks for a reading of an app or a
+  page: "did Sam reply on Slack?", "any new emails?". A question about whether
+  something is open or done, about code, or about how to do something is an
+  answer.
+- An answer is no refusal. The language model reads the message with the tools
+  of the turn, and picks one.
+
+When the code takes a road by itself:
+
+- With ClawdTime's own computer engine on and free (no task of it runs or
+  waits for you), the code hands screen work to the engine before the
+  language model. The worker gets your words whole, and plans. Both roads run
+  there too.
+- Only when nothing else waits for you: no request of an agent, no question of
+  a task and no computer action. Words for a session, words with the name of a
+  coding agent, and a stop by itself keep their own roads.
+- When the language model picks a road and your words say another, the road
+  of your words wins. Screen work that it hands to a job goes to the engine.
+  Code work that it hands to the engine is not handed over.
+- With ClawdTime's own engine on, the older tool for the browser and the tool
+  that reads the screen from a picture are not offered, and a call of one goes
+  to the engine. They stay for when the engine is off.
+
+**When computer use is off.** ClawdTime never answers that it cannot. For
+screen work it says what it would do and the one command that turns computer
+use on:
+
+> I'd reply to Sam on Slack on the screen, but computer use is off. Turn it on
+> with: clawdtime computer on. Then ask me again.
+
+Where no worker was built at all (the desktop service started with the switch
+off, or `clawdtime chat` with no desktop service), the sentence also says to
+start the desktop service again. ClawdTime says it when the language model
+would start a coding job for screen work, when it would answer that it cannot
+do it, and for a request to read your mail. A reading of the screen still goes
+to the older tools where they are there. With both parts, the job starts and
+the sentence stands for the screen part. Work that no tool fits still goes to a
+coding session, as before.
+
+**A next step after a task that ended done.** When the engine reports "Done.",
+ClawdTime may offer one short, concrete next step that follows from the
+result, as one question in the chat: "Want me to reply to Sam's newest
+message?". The language model words it from your request and the report, as
+data. The code keeps only a question in that form, with one step on the
+screen. It is never a general offer, never a step that pays, buys, orders,
+deletes, signs in or touches a password, and never code work. A report or a
+request that holds a credential is never sent to the language model.
+
+- The step starts only on your plain yes ("yes", "yeah", "go ahead", "do
+  it"), while the question is the newest message, is at most five minutes old,
+  and nothing else waits for you.
+- A no starts nothing. Any other message ends the offer, and the step never
+  starts later.
+- The offer is said in the chat only, and only while the report is still the
+  newest message there.
+
 ### Give it a task
 
 While the desktop service runs, you can hand ClawdTime a task in the same
@@ -1061,11 +1146,13 @@ to a private folder, read once and removed. Nothing of it is kept.
 
 ### Give it a job
 
-ClawdTime answers and decides. It does not build, run or browse by itself. When
-you ask for work that none of its own tools does, it starts a new session of
-your coding agent in a terminal window that you can see, with your request as
-its first message. Build or fix software, run a command, start a server, open
-a tunnel and get its link, find something out: all of these are jobs.
+ClawdTime does work on the screen itself, through the computer engine. It does
+not build or run code by itself. When you ask for code work, or for work that
+none of its own tools does, it starts a new session of your coding agent in a
+terminal window that you can see, with your request as its first message.
+Build or fix software, run a command, start a server, open a tunnel and get its
+link, find something out: all of these are jobs. Work in an app, on a web page
+or in an account is no job: see "Which road a request takes" above.
 
 - The job is your own sentence. The language model chooses the tool. It does
   not choose the words.
@@ -1532,8 +1619,8 @@ clawdtime browser text         # the visible text of the front page
 
 Chrome, Safari, Arc, Brave and Edge. macOS asks once for permission to control
 each browser. Reading page text also needs the browser's "Allow JavaScript from
-Apple Events" setting. Work inside a page, such as filling a form, stays with an
-agent that has a browser tool; ClawdTime supervises that agent.
+Apple Events" setting. Work inside a page, such as filling a form, is work for
+the computer engine: see [computer use](COMPUTER_USE.md).
 
 ## What is stored
 
