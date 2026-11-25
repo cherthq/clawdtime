@@ -27,6 +27,7 @@
     "agents": "tsx cli/index.ts agents",
     "cua:install-browser": "playwright install chromium",
     "test:computer:browser": "tsx tests/computer-browser.browser.ts",
+    "test:computer:own-browser": "tsx tests/computer-own-browser.browser.ts",
     "eval:computer:planner": "tsx tests/computer-planner.eval.ts",
     "eval:computer:request": "tsx tests/computer-request.eval.ts",
     "cua:qualify": "npm run build && node dist/scripts/qualify-bundled-cua.js",
