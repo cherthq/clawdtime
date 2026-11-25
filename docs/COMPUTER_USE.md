@@ -395,6 +395,36 @@ that the app does not confirm counts as a failure. The person of the test
 answers the worker's questions, and types the password into the field when the
 worker hands that over.
 
+Some requests meet trouble on the way, as a real Mac and a real service give
+it. A fault layer puts it in front of the planner's network call and of the
+hands, and changes nothing in the worker or the planner: a rate limit (429
+with a retry-after) and an outage (503) at chosen calls, an answer with no
+function call, an answer whose arguments are not JSON, a window that moves at
+its first four looks and then settles, a New note button that never works
+while Command-N does, and a switch that ignores the first click. One more
+request needs a fact that only the person knows (their work email): the
+right way is a question, not a give up. These requests measure recovery. A
+request counts as done only when the app holds the result at the end, as for
+every other request.
+
+`--new-actions` adds requests for the actions of the next planner: a menu
+that opens only while the pointer rests on it, a card dragged to another
+column, a slider dragged to 80 percent, one long scroll down a list, a list
+of choices on a web page, a page that shows its result after a moment, and
+the right one of three browser tabs. The browser requests drive tabs of the
+headless browser with the browser driver and the page script of the product.
+The planner test has the same flag for the same kinds of decision.
+
+`--check` runs both tests with no model and no key. Each request plays
+scripted paths through the same worker, apps, hands, faults and checks: an
+ideal path must end done, and a wrong path (a guess, a done too early, the
+wrong row) must not. Each planner task does the same with an ideal answer and
+wrong answers. So the check proves that each case can be done and that its
+check tells right from wrong, before any model is measured. A path that needs
+an action that this build does not offer yet is skipped, and the line says
+which. Run it after every change to a test or an app:
+`npx tsx tests/computer-request.eval.ts --check --new-actions`.
+
 Results of November 22, 2026, 13 requests, 3 runs of each, `gpt-5.4`:
 
 | What                        | Result                                            |
