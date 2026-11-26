@@ -21,6 +21,7 @@ export interface ProactiveRuntimeState extends ProactiveBinding {
   message?: string;
   expiresAt: number;
   sharingAllowed: boolean;
+  computerAllowed?: boolean;
   ended?: boolean;
 }
 export interface ProactiveFrame {
@@ -48,6 +49,8 @@ export interface ProactiveCallClient {
   snapshot(): ProactiveRuntimeState | null;
   answer(text: string, context?: { requestId?: string }): Promise<string>;
   stopSharing(): Promise<string>;
+  computer(text: string, context?: { requestId?: string }): Promise<string>;
+  stopComputer(): Promise<string>;
   windowFrame(): Promise<ProactiveFrame | null>;
   greeting(): string;
   close(): Promise<unknown>;

@@ -57,14 +57,24 @@ const viewSchema = z
   .object({
     id: bounded,
     scope: bounded,
-    windowId: bounded,
+    windowId: bounded.optional(),
+    displayId: bounded.optional(),
     title: bounded,
     sourceFingerprint: digest,
     frameObservedAt: z.number().finite().nonnegative(),
     artifactId: bounded.optional(),
     artifactDigest: digest.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (view) => (view.windowId !== undefined) !== (view.displayId !== undefined),
+    "One exact window or display is required.",
+  )
+  .refine(
+    (view) =>
+      (view.scope === "selected-display") === (view.displayId !== undefined),
+    "Selected-display scope requires an exact display identity.",
+  );
 export type ProactivePreparedView = z.infer<typeof viewSchema>;
 export interface ProactiveReviewPacket {
   id: string;
@@ -379,7 +389,13 @@ export class ProactivePreparationService {
   ) {
     if (
       views.length !== evidence.views.length ||
-      new Set(views.map((view) => view.windowId)).size !== views.length ||
+      new Set(
+        views.map((view) =>
+          view.displayId
+            ? `display:${view.displayId}`
+            : `window:${view.windowId}`,
+        ),
+      ).size !== views.length ||
       new Set(views.map((view) => view.id)).size !== views.length
     )
       throw new DomainError(409, "exact_views_required");

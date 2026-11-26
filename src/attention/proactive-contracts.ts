@@ -133,7 +133,7 @@ export interface CallAttemptGrant {
   expiresAt: number;
   /** Viewing permission is bounded metadata, never an input grant or capture itself. */
   viewScope: string[];
-  inputAllowed: false;
+  inputAllowed: boolean;
 }
 
 export const callAttemptGrantSchema = z
@@ -151,6 +151,6 @@ export const callAttemptGrantSchema = z
     issuedAt: z.number().finite().nonnegative(),
     expiresAt: z.number().finite().nonnegative(),
     viewScope: z.array(z.string().min(1).max(2000)).max(32),
-    inputAllowed: z.literal(false),
+    inputAllowed: z.boolean(),
   })
   .strict();

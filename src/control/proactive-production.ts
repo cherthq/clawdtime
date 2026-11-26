@@ -10,6 +10,7 @@ import {
   unlinkSync,
   realpathSync,
   readdirSync,
+  appendFileSync,
 } from "node:fs";
 import { dirname, join, relative, isAbsolute, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -110,6 +111,7 @@ export interface ProductionDeliveryDependencies {
     program: string;
     cwd: string;
     env: NodeJS.ProcessEnv;
+    diagnostic?: (record: Record<string, string | number>) => void;
   }): Promise<ProductionWorker>;
   request?: typeof fetch;
   now?: () => number;
@@ -184,7 +186,87 @@ async function launchWorker(
   const child = spawn(input.nodeBinary, [input.program, "start"], {
     cwd: input.cwd,
     env: input.env,
-    stdio: ["ignore", "ignore", "ignore"],
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  // Keep only bounded startup codes. Never persist SDK output, transcripts,
+  // participant identities, error messages, or arbitrary worker output.
+  let buffered = "",
+    diagnosticCount = 0;
+  const events = new Set([
+    "startup",
+    "startup_failed",
+    "caller_wait_ended",
+    "caller_departed_before_start",
+    "warm_audio_failed",
+    "call_started",
+    "call_ended",
+    "call_cleanup",
+    "session_closed",
+  ]);
+  const stages = new Set([
+    "entry",
+    "room_connecting",
+    "room_connected",
+    "video_prepared",
+    "audio_published",
+    "camera_published",
+    "warm_frame",
+    "warm_frame_failed",
+    "media_ready",
+    "caller_waiting",
+    "caller_resolved",
+    "call_bound",
+    "video_created",
+    "session_starting",
+    "session_started",
+    "ready_waiting",
+    "unspecified",
+    "room_disconnected",
+    "caller_or_session_closed",
+    "status_failed",
+    "greeting_authority_failed",
+    "error",
+    "job_shutdown",
+    "participant_disconnected",
+    "user_initiated",
+  ]);
+  child.stdout.on("data", (bytes: Buffer) => {
+    buffered += bytes.toString("utf8");
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    if (buffered.length > 8192) buffered = "";
+    for (const line of lines) {
+      if (diagnosticCount >= 64 || line.length > 8192) continue;
+      try {
+        const value = JSON.parse(line);
+        if (!events.has(value.clawdtime_line)) continue;
+        const record: Record<string, string | number> = {
+          at: Date.now(),
+          event: value.clawdtime_line,
+        };
+        if (stages.has(value.code)) record.stage = value.code;
+        if (
+          [
+            "TypeError",
+            "ReferenceError",
+            "Error",
+            "RangeError",
+            "TimeoutError",
+            "AbortError",
+          ].includes(value.error_name)
+        )
+          record.error = value.error_name;
+        if (
+          typeof value.source === "string" &&
+          /^(?:agent\.mjs|call-end\.mjs|call-video\.mjs|job\.js|room\.js|video_source\.js|track\.js|agent_session\.js):[0-9]{1,7}$/.test(
+            value.source,
+          )
+        )
+          record.source = value.source;
+        input.diagnostic?.(record);
+        diagnosticCount++;
+      } catch {}
+    }
   });
   let joined = false;
   const exit = new Promise<void>((resolve) => {
@@ -508,6 +590,12 @@ export function createProductionDelivery(
                     program: join(config.lineDirectory, "proactive-agent.mjs"),
                     cwd: config.lineDirectory,
                     env: processEnv,
+                    diagnostic: (record) =>
+                      appendFileSync(
+                        join(directory, "worker-diagnostics.jsonl"),
+                        `${JSON.stringify(record)}\n`,
+                        { mode: 0o600 },
+                      ),
                   });
                   if (
                     !Number.isSafeInteger(worker.pid) ||

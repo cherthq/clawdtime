@@ -141,6 +141,7 @@ private struct Request: Decodable { let id: String; let op: String; let target: 
         try FileHandle.standardOutput.write(contentsOf: result)
         return
       }
+      if try await handleDisplayCaptureArguments(args) { return }
       if args.count == 3, args[1] == "--resolve-target" {
         let state = preflight()
         guard state["screenPermission"] == true else { throw ResolutionRefused(reason: "screen_permission_required") }

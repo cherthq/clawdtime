@@ -16,19 +16,26 @@ import {
   type ProactiveSourceEvidence,
 } from "./proactive-preparation.js";
 import { ProactiveReviewViews } from "./proactive-views.js";
+import { walkthroughArtifactSchema } from "./proactive-artifact.js";
+import {
+  ProactiveDisplayViews,
+  sharedDisplayTargetSchema,
+  displayViewScope,
+} from "./proactive-display-views.js";
 import {
   ProactiveService,
   type ProactiveDeliveryPort,
 } from "./proactive-service.js";
 import { ProactiveLineSessions } from "./proactive-line.js";
 import { createProductionDelivery } from "./proactive-production.js";
-import { hash } from "../storage/security.js";
+import { hash, DomainError } from "../storage/security.js";
 import type { TaskService } from "./task-service.js";
 import {
   managedReviewTrigger,
   type TaskReviewService,
 } from "./task-review-service.js";
 import type { DesktopExecutionSnapshot } from "./desktop-executor.js";
+import type { PhoneDesktop } from "./phone-desktop.js";
 import {
   validateVerificationPlan,
   type VerificationPlan,
@@ -40,11 +47,21 @@ export const proactiveConfigSchema = z
     version: z.literal(2),
     policies: z.array(proactivePolicySchema).max(64).default([]),
     jobChecksPath: privatePath.optional(),
+    jobChecksByRunPath: privatePath.optional(),
     preparedViews: z
       .object({
         rendererBinary: privatePath,
         captureBinary: privatePath,
         directory: privatePath,
+      })
+      .strict()
+      .optional(),
+    sharedDisplay: z
+      .object({
+        captureBinary: privatePath,
+        directory: privatePath,
+        target: sharedDisplayTargetSchema,
+        artifacts: z.array(walkthroughArtifactSchema).max(64).optional(),
       })
       .strict()
       .optional(),
@@ -66,7 +83,11 @@ export const proactiveConfigSchema = z
       ])
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => !(value.preparedViews && value.sharedDisplay),
+    "Choose a review window or a display, not both.",
+  );
 
 /** A question of the computer worker on this Mac, as the line asks about it. */
 export interface ProactiveComputerSource {
@@ -87,6 +108,7 @@ export function createProactiveSetup(options: {
   origin?: string;
   board(): BoardFeed | undefined;
   execution(): DesktopExecutionSnapshot | undefined;
+  phoneDesktop?: PhoneDesktop;
   /** Integration port for a provider with proved in-place receipt retention. */
   delivery?: ProactiveDeliveryPort;
 }) {
@@ -131,7 +153,24 @@ export function createProactiveSetup(options: {
         return value;
       })()
     : undefined;
-  let views: ProactiveReviewViews | undefined;
+  const plansByRun = config.jobChecksByRunPath
+    ? (() => {
+        if (!plan) throw Error("Run checks require a default job check plan.");
+        outside(config.jobChecksByRunPath);
+        const value = z
+          .record(z.string().uuid(), z.unknown())
+          .parse(readDesktopPrivateJSON(config.jobChecksByRunPath)) as Record<
+          string,
+          VerificationPlan
+        >;
+        if (Object.keys(value).length > 64)
+          throw Error("At most 64 run-specific check plans are allowed.");
+        for (const checks of Object.values(value))
+          validateVerificationPlan(checks);
+        return value;
+      })()
+    : undefined;
+  let views: ProactiveReviewViews | ProactiveDisplayViews | undefined;
   let production: ReturnType<typeof createProductionDelivery> | undefined;
   const assertIdle = () => {
     const execution = options.execution();
@@ -150,15 +189,23 @@ export function createProactiveSetup(options: {
       throw Error("Retained phone uncertainty requires reconciliation.");
   };
   const viewRequests = (intent: ProactiveCallIntent) =>
-    intent.channel === "phone_walkthrough" && config.preparedViews
+    intent.channel === "phone_walkthrough" && config.sharedDisplay
       ? [
           {
-            id: "prepared-review",
-            scope: "prepared-review",
-            title: "Prepared review",
+            id: displayViewScope,
+            scope: displayViewScope,
+            title: "Mac display",
           },
         ]
-      : [];
+      : intent.channel === "phone_walkthrough" && config.preparedViews
+        ? [
+            {
+              id: "prepared-review",
+              scope: "prepared-review",
+              title: "Prepared review",
+            },
+          ]
+        : [];
   const sources = new ProactiveSourceAdapter({
     root: options.root,
     coordinator,
@@ -169,6 +216,7 @@ export function createProactiveSetup(options: {
           jobVerification: {
             projectRoot: options.projectRoot,
             plan,
+            ...(plansByRun ? { plansByRun } : {}),
             authorize: () => {
               assertIdle();
               if (views?.occupied)
@@ -213,15 +261,23 @@ export function createProactiveSetup(options: {
     },
     viewEvidence: () => ({
       artifacts: [],
-      views: config.preparedViews
+      views: config.sharedDisplay
         ? [
             {
-              id: "prepared-review",
-              scope: "prepared-review",
-              title: "Prepared review",
+              id: displayViewScope,
+              scope: displayViewScope,
+              title: "Mac display",
             },
           ]
-        : [],
+        : config.preparedViews
+          ? [
+              {
+                id: "prepared-review",
+                scope: "prepared-review",
+                title: "Prepared review",
+              },
+            ]
+          : [],
     }),
   });
   // The computer worker attaches its questions after the setup is built.
@@ -253,12 +309,14 @@ export function createProactiveSetup(options: {
       return false;
     }
   };
-  if (config.preparedViews) {
-    for (const path of Object.values(config.preparedViews)) outside(path);
-    for (const binary of [
-      config.preparedViews.rendererBinary,
-      config.preparedViews.captureBinary,
-    ]) {
+  if (config.preparedViews || config.sharedDisplay) {
+    const viewConfig = (config.sharedDisplay ?? config.preparedViews)!;
+    const binaries = [
+      viewConfig.captureBinary,
+      ...(config.preparedViews ? [config.preparedViews.rendererBinary] : []),
+    ];
+    for (const path of [...binaries, viewConfig.directory]) outside(path);
+    for (const binary of binaries) {
       const stat = lstatSync(binary);
       if (
         !stat.isFile() ||
@@ -269,7 +327,7 @@ export function createProactiveSetup(options: {
       )
         throw Error("Protected prepared-view executable required.");
     }
-    const state = lstatSync(config.preparedViews.directory);
+    const state = lstatSync(viewConfig.directory);
     if (
       !state.isDirectory() ||
       state.isSymbolicLink() ||
@@ -277,9 +335,9 @@ export function createProactiveSetup(options: {
       state.mode & 0o077
     )
       throw Error("Private prepared-view directory required.");
-    views = new ProactiveReviewViews(config.preparedViews, {
+    const viewPorts = {
       assertIdle,
-      authorize(intent) {
+      authorize(intent: ProactiveCallIntent) {
         const actual = coordinator.get(intent.id);
         const grant = actual.grantId
           ? authority.grant(actual.grantId)
@@ -294,8 +352,11 @@ export function createProactiveSetup(options: {
         )
           throw Error("Prepared view authority is no longer current.");
       },
-      evidence: async (intent) => evidence(intent),
-    });
+      evidence: async (intent: ProactiveCallIntent) => evidence(intent),
+    };
+    views = config.sharedDisplay
+      ? new ProactiveDisplayViews(config.sharedDisplay, viewPorts)
+      : new ProactiveReviewViews(config.preparedViews!, viewPorts);
   }
   const preparation = new ProactivePreparationService(
     tasks.store,
@@ -315,7 +376,78 @@ export function createProactiveSetup(options: {
     // actual frame age immediately before dialing and on every exported frame.
     5000,
   );
+  const computerCalls = new Set<string>();
+  const phone = options.phoneDesktop;
   const line = new ProactiveLineSessions(authority, {
+    ...(phone && config.sharedDisplay
+      ? {
+          computer: {
+            async submit(
+              intent: ProactiveCallIntent,
+              words: string,
+              turnId: string,
+            ) {
+              const callId = intent.attemptId!;
+              if (
+                !line.permitsComputer(callId) ||
+                !(views instanceof ProactiveDisplayViews) ||
+                !views.owns(intent.id)
+              )
+                return "This call no longer owns the shared display. No action was sent.";
+              phone.open(callId);
+              computerCalls.add(callId);
+              phone.renew(callId);
+              // Provider speech identity, not model arguments, supplies these words.
+              const requestId = `turn_${hash(turnId)}`;
+              try {
+                return await phone.run(callId, requestId, words, async () => {
+                  const before = phone.execution.snapshot();
+                  const result =
+                    before.state === "waiting_for_person" &&
+                    before.canStop &&
+                    phone.execution.answer
+                      ? await phone.execution.answer(words)
+                      : await phone.execution.submit(requestId, words);
+                  if (result.message) return result.message;
+                  // Await observed completion or a question while independent
+                  // status heartbeats maintain the call lease. Never resubmit.
+                  const deadline = Date.now() + 45000;
+                  while (Date.now() < deadline) {
+                    const state = phone.execution.snapshot();
+                    if (state.state !== "running" && state.state !== "queued")
+                      return state.message;
+                    await new Promise((resolve) => setTimeout(resolve, 200));
+                  }
+                  return (
+                    phone.execution.snapshot().message ||
+                    "The computer request is still running; completion is not confirmed."
+                  );
+                });
+              } catch (error) {
+                if (
+                  error instanceof DomainError &&
+                  error.message === "phone_request_cancelled"
+                )
+                  return "This call's computer request was stopped.";
+                throw error;
+              }
+            },
+            renew(intent: ProactiveCallIntent) {
+              if (computerCalls.has(intent.attemptId!))
+                phone.renew(intent.attemptId!);
+            },
+            stop(intent: ProactiveCallIntent) {
+              return computerCalls.has(intent.attemptId!)
+                ? phone.stop(intent.attemptId!).reply.text
+                : "No computer work is owned by this call.";
+            },
+            close(intent: ProactiveCallIntent) {
+              if (computerCalls.has(intent.attemptId!))
+                phone.close(intent.attemptId!);
+            },
+          },
+        }
+      : {}),
     sourceCurrent: current,
     async answer(intent, words, turnId) {
       if (/^(?:please\s+)?stop calling(?:\s+me)?[.!]?$/i.test(words.trim())) {
@@ -428,6 +560,16 @@ export function createProactiveSetup(options: {
     deliveryConfigured: () => !!options.delivery || !!production,
     probe: () => production?.probe(),
     viewOccupied: () => views?.occupied ?? false,
+    permitsComputer: (attemptId: string) => {
+      const intent = coordinator.list().find((i) => i.attemptId === attemptId);
+      return (
+        !!intent &&
+        intent.state === "connected" &&
+        line.permitsComputer(attemptId) &&
+        views instanceof ProactiveDisplayViews &&
+        views.owns(intent.id)
+      );
+    },
     status: () => ({
       sources: sources.status(),
       provider: production

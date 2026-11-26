@@ -9,6 +9,7 @@ export function makeCallerTools({
   binding,
   ended,
   ask,
+  computer,
   stop,
   showScreen,
   setZoom,
@@ -39,6 +40,26 @@ export function makeCallerTools({
     });
   };
   return [
+    ...(computer
+      ? [
+          tool({
+            name: "use_computer",
+            description:
+              "Carry out the caller's current request on the shared Mac, such as clicking, typing, opening an app, navigating or searching the web. The complete original authenticated speech is supplied automatically. No arguments, no paraphrasing. Use once for an explicit computer request, including follow-up instructions. Never use for a hypothetical, quoted request or coding work. Submission is not proof of success.",
+            parameters: z.object({}).strict(),
+            execute: async (_args, options) => {
+              const closed = active();
+              if (closed) return closed;
+              return binding
+                .forward(options, computer)
+                .catch(
+                  () =>
+                    "The computer request has an unknown outcome. It was not sent again.",
+                );
+            },
+          }),
+        ]
+      : []),
     tool({
       name: "ask_clawdtime",
       description:

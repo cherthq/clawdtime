@@ -41,6 +41,12 @@ private final class OneFrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 /// child rather than allowing a late start to survive into another request.
 @MainActor func captureStreamFrame(window: SCWindow, configuration: SCStreamConfiguration,
                                   phase: @escaping @MainActor (TaskCaptureTiming.Phase) -> Void) async throws -> (CGImage, Double) {
+  try await captureStreamFrame(filter: SCContentFilter(desktopIndependentWindow: window), configuration: configuration, phase: phase)
+}
+
+/// The caller binds this filter to its separate exact-window or selected-display grant.
+@MainActor func captureStreamFrame(filter: SCContentFilter, configuration: SCStreamConfiguration,
+                                  phase: @escaping @MainActor (TaskCaptureTiming.Phase) -> Void) async throws -> (CGImage, Double) {
   let requestedAt = mach_absolute_time()
   let output = OneFrameOutput(requestedAt: requestedAt, width: configuration.width, height: configuration.height)
   let queue = DispatchQueue(label: "clawdtime.task.exact-frame", qos: .userInitiated)
@@ -48,7 +54,7 @@ private final class OneFrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
   configuration.queueDepth = 3
   configuration.pixelFormat = kCVPixelFormatType_32BGRA
   configuration.capturesAudio = false
-  let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: window), configuration: configuration, delegate: output)
+  let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
   try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: queue)
   let deadline = TaskCaptureDeadline()
   let terminate = DispatchWorkItem {

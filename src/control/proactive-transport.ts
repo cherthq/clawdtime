@@ -313,6 +313,17 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
           !endSubmitted
         ) {
           endSubmitted = true;
+          const endReason = active.stopped
+            ? "local_stop"
+            : closed
+              ? "runtime_closed"
+              : !coordinator.authority.validateGrant(grant)
+                ? "authority_ended"
+                : now() >= grant.expiresAt
+                  ? "grant_expired"
+                  : terminal
+                    ? "provider_terminal"
+                    : "media_or_provider_inspection_failed";
           cleanupDeadline = Math.min(cleanupDeadline, now() + 15000);
           // A lost end response is not retried. Read-only observation of this exact
           // known call may still establish its eventual terminal cleanup.
@@ -325,7 +336,7 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
                   providerCallId!,
                   `end_${grant.attemptId}`,
                 ),
-              "end_submission_acknowledged",
+              `end_acknowledged:${endReason}`,
             );
           } catch {}
         }
