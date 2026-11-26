@@ -1706,6 +1706,12 @@ How it works:
   reader as the chat above) stops the computer task before the model reads it,
   ends the turn that runs, and nothing new starts in that turn. The Stop button
   of the panel ends the turn that runs too.
+- An answer never says the opposite of a result that is in the chat. The
+  computer task that a turn started can end, and say its result in the chat,
+  before the model has its answer. Then code drops each sentence of the answer
+  that says the task still runs, has just started or has no result yet. The
+  rest is the answer. When nothing is left, the result is the answer: the chat
+  shows it once, and a call or a voice turn says it.
 
 Its tools are thin adapters over the code that exists:
 

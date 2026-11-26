@@ -5,8 +5,9 @@
  * the live task graph and the notes of memory that fit, and acts at once
  * through the tools. Code keeps the rules that must hold whatever the model
  * says: Stop first, no credential to the model or to memory, a strict yes
- * for an approval, and no claim that a task is done unless its node says so
- * (the graph is fed only from the real sources).
+ * for an approval, no claim that a task is done unless its node says so
+ * (the graph is fed only from the real sources), and no answer that says a
+ * task of the turn still runs once its result is in the chat.
  *
  * It answers the same calls as the older `Supervisor` of `brain.ts`, so the
  * desktop service, the call and the texts can use either one. Which one runs
@@ -14,6 +15,7 @@
  * older one (`chatBrain` below).
  */
 import { randomBytes } from "node:crypto";
+import type { DesktopExecutionSnapshot } from "../../src/control/desktop-executor.js";
 import type { PhoneTurnContext } from "../../src/phone-desktop-contracts.js";
 import {
   runAgentLoop,
@@ -22,6 +24,7 @@ import {
   type LoopModel,
 } from "./agent-loop.js";
 import {
+  ChatLog,
   computerStopKind,
   credentialMarker,
   Supervisor,
@@ -52,7 +55,7 @@ import {
 import { userMessageLimit, userMessageTooLong } from "./request-text.js";
 import { realSystemDesk } from "./system-tools.js";
 import type { ProcessDesk } from "../system/act.js";
-import { TaskGraph } from "./task-graph.js";
+import { isActive, TaskGraph } from "./task-graph.js";
 import { clean } from "../computer/guards.js";
 import {
   looksBareSecret,
@@ -169,6 +172,53 @@ const plainYes = (words: string) =>
 
 /** How many messages of the chat file go to the model whole. */
 const historyMessages = 30;
+
+/** Words for work that goes on now. */
+const working =
+  "(?:opening|checking|looking|searching|counting|launching|starting|reading|working|finding|pulling|getting|loading|running|scanning|heading|trying|fetching|navigating|switching|grabbing|waiting|processing)";
+/**
+ * A sentence that says the work still goes on, has just started or has no
+ * result yet: "The Photos check is still running.", "Opening Photos now.",
+ * "I haven't confirmed the count yet.", "I'll tell you once it's done." A
+ * sentence that only tells a fact is none of these.
+ */
+const workGoesOn = new RegExp(
+  [
+    String.raw`\bstill\s+(?:\w+ing|in\s+progress|on\s+it|at\s+it|open|busy|going|under\s?way|pending)\b`,
+    String.raw`\b(?:in\s+progress|under\s?way|on\s+it|at\s+it)\b`,
+    String.raw`(?:\bnot|n't)\s+(?:yet\s+)?(?:been\s+)?(?:confirm|verif|finish|done|complete|know|seen|see|sure|got|heard|checked|counted|found|read|ended|returned|reported)`,
+    String.raw`\bnot\s+yet\b|\byet\s+to\b|\bunconfirmed\b|\bno\s+(?:result|answer|count|number|word|news|reply)s?\s+yet\b`,
+    String.raw`\b(?:i'm|i\s+am|it's|it\s+is|that's|that\s+is|this\s+is|is|are)\s+(?:now\s+|currently\s+|just\s+|still\s+)?${working}\b`,
+    String.raw`^(?:now\s+|just\s+)?(?:${working}|started)\b`,
+    String.raw`\b(?:i've|i\s+have|i|we|it|it's|it\s+has|has|have|just)\s+(?:just\s+)?(?:started|begun|began|kicked\s+(?:it\s+)?off|launched)\b`,
+    String.raw`\b(?:i'll|i\s+will|will|i\s+can)\s+(?:let\s+you\s+know|tell\s+you|report|update\s+you|get\s+back|confirm|share|send\s+you|keep\s+(?:you|an\s+eye))\b`,
+    String.raw`\bkeep\s+you\s+posted\b|\bstand\s+by\b|\bhold\s+on\b|\bshortly\b|\bin\s+a\s+(?:moment|minute|bit|sec(?:ond)?)\b`,
+    String.raw`\b(?:once|when|as\s+soon\s+as)\s+(?:it|it's|that|that's|this|the\s+\w+(?:\s+\w+)?)\s+(?:is\s+|has\s+)?(?:done|finish(?:es|ed)?|ends|ended|completes?|completed|ready)\b`,
+    String.raw`\bwait(?:ing)?\s+(?:for|on)\s+(?:it|the|its|that)\b`,
+  ].join("|"),
+  "i",
+);
+/** A sentence with no news in it. */
+const onlyAWord =
+  /^(?:ok(?:ay)?|sure|got\s+it|alright|all\s+right|right|no\s+problem|will\s+do|understood|noted|on\s+it)[.!]*$/i;
+/**
+ * What of a reply stays true once the task ended and its result is in the
+ * chat: each sentence that does not say the work goes on. The reply as it is
+ * when no sentence says so; "" when the sentences left say nothing.
+ */
+export function trueAfterTheEnd(reply: string): string {
+  const sentences = reply
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => sentence.trim());
+  const kept = sentences.filter(
+    (sentence) =>
+      !workGoesOn.test(sentence.trim().replace(/[\u2018\u2019]/g, "'")),
+  );
+  if (kept.length === sentences.length) return reply;
+  return kept.every((sentence) => onlyAWord.test(sentence.trim()))
+    ? ""
+    : kept.join(" ");
+}
 
 export interface ChatAgentOptions {
   world: SupervisorWorld;
@@ -594,9 +644,67 @@ export class ChatAgent implements ChatBrain {
       snapshot.waiting === "approval"
         ? ["Yes", "No"]
         : [];
+    const text = clean(result.text, 2000);
+    // The model may answer after the task that this turn started ended and
+    // said its result in the chat. Then no sentence may say it still runs.
+    const told = this.toldResult(requestNode, snapshot);
+    if (told) {
+      const kept = trueAfterTheEnd(text);
+      // The result is the answer when nothing else is left: the feed writes
+      // no answer twice that already follows the owner's message, and a call
+      // or a voice turn says it.
+      if (kept !== text)
+        return { text: kept || (told.newest ? told.text : ""), choices };
+    }
+    return { text: text || this.silentAnswer(), choices };
+  }
+
+  /**
+   * The result of the work that this turn started, as the chat holds it,
+   * when all that work ended and the computer engine already said a result
+   * of it there. `newest`: no message of the owner came after it. Null when
+   * the turn started no computer task, one still runs, or no result of one
+   * is in the chat yet.
+   */
+  private toldResult(
+    requestNode: string | null,
+    snapshot: DesktopExecutionSnapshot | undefined,
+  ): { text: string; newest: boolean } | null {
+    if (!requestNode) return null;
+    const spawned = this.graph
+      .nodes()
+      .filter((node) => node.links.spawnedBy === requestNode);
+    if (spawned.some((node) => isActive(node.state))) return null;
+    const plain = (text: string) => clean(text, 400);
+    const results = new Set<string>();
+    for (const node of spawned) {
+      if (node.kind !== "computer") continue;
+      if (node.result) results.add(node.result);
+      if (
+        snapshot?.requestId &&
+        node.source === `computer:${snapshot.requestId}`
+      )
+        results.add(plain(snapshot.message));
+    }
+    results.delete("");
+    if (!results.size) return null;
+    let chat: ChatMessage[];
+    try {
+      chat = new ChatLog(this.options.root).recent(20);
+    } catch {
+      return null;
+    }
+    const index = chat.findLastIndex(
+      (message) =>
+        message.role === "assistant" &&
+        !message.news &&
+        !message.engine &&
+        results.has(plain(message.text)),
+    );
+    if (index < 0) return null;
     return {
-      text: clean(result.text, 2000) || this.silentAnswer(),
-      choices,
+      text: chat[index]!.text,
+      newest: !chat.slice(index + 1).some((message) => message.role === "user"),
     };
   }
 
