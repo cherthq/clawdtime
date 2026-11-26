@@ -26,6 +26,9 @@ import DeviceCore
     p.executableURL=executable ?? Bundle.main.executableURL
     p.arguments=arguments
     p.standardInput=incoming; p.standardOutput=outgoing; p.standardError=FileHandle.nullDevice
+    // Stop kills the child at any time. A later write to its closed input must
+    // fail with EPIPE, never raise SIGPIPE and kill the companion.
+    guard fcntl(incoming.fileHandleForWriting.fileDescriptor,F_SETNOSIGPIPE,1) == 0 else { throw HelperError(503,"native_child_pipe") }
     try p.run();process=p;input=incoming.fileHandleForWriting;output=outgoing.fileHandleForReading
   }
   private func join() async {

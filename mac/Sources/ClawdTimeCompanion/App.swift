@@ -602,6 +602,9 @@ struct HelperStatus: Codable {
 @main struct Main {
   @MainActor static func main() {
     umask(0o077)
+    // Stop kills disposable children at any time. A write to a closed pipe or
+    // socket must fail with EPIPE, never raise SIGPIPE and kill the companion.
+    signal(SIGPIPE, SIG_IGN)
     do {
       let args = CommandLine.arguments
       let localOnly = Bundle.main.bundleIdentifier == "com.clawdtime.local-control"

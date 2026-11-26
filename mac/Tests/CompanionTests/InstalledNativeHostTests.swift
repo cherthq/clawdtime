@@ -85,4 +85,14 @@ for line in sys.stdin:
     XCTAssertNil(result["terminalEvidence"])
     XCTAssertEqual(host.store.unresolved, 1)
   }
+  @MainActor func testReplyToAChildThatClosedItsInputDoesNotKillTheCompanion() async throws {
+    // The child asks for local authority and is gone before the reply, as after
+    // Stop. The reply meets a closed pipe: it must fail, not raise SIGPIPE.
+    let host = try host("epipe")
+    do {
+      _ = try await host.run(envelope(dispatch: false), dispatch: false, allowed: { true })
+      XCTFail("A child that closed its input returned a preparation")
+    } catch {}
+    XCTAssertEqual(host.store.unresolved, 0)
+  }
 }
