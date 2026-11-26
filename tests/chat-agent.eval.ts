@@ -275,6 +275,19 @@ const cases: Case[] = [
     setup: "question",
     expect: ["answer_question"],
   },
+  // A terminal the owner wants to see on the screen is computer work.
+  {
+    name: "screen: open the terminal and run a command",
+    say: "open Terminal, run echo hello there, and tell me what it printed",
+    setup: "idle",
+    expect: ["computer_do"],
+  },
+  {
+    name: "screen: show me the terminal",
+    say: "open a terminal window and show me the files in my Downloads folder",
+    setup: "idle",
+    expect: ["computer_do"],
+  },
   // Code.
   {
     name: "code: fix a test",

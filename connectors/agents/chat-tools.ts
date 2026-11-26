@@ -645,7 +645,7 @@ export function chatTools(
       {
         name: "start_job",
         description:
-          "Hand code work to a coding agent in a new terminal session on this Mac: a repository, a bug, a test, a build, a script, a pull request, a server, a terminal command. Never for work in apps or web pages. work: the owner's request in their words, made whole. agent: only when the owner names one.",
+          "Hand code work to a coding agent in a new terminal session on this Mac: a repository, a bug, a test, a build, a script, a pull request, a server, a terminal command. Never for work in apps or web pages, and never when the owner asks to open Terminal or a terminal window to see the work on the screen: that is computer_do. work: the owner's request in their words, made whole. agent: only when the owner names one.",
         parameters: schema(
           {
             work: text("The code work, whole, in the owner's words."),
