@@ -237,6 +237,7 @@ export const act = {
     ...(element !== undefined ? { element } : {}),
   }),
   wait: (ms: number): ScriptAction => ({ kind: "wait", ms }),
+  openApp: (name: string): ScriptAction => ({ kind: "open_app", name }),
   ask: (question: string): ScriptAction => ({ kind: "ask", question }),
   done: (summary: string): ScriptAction => ({ kind: "done", summary }),
   giveUp: (reason: string): ScriptAction => ({ kind: "give_up", reason }),

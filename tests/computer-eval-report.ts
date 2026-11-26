@@ -31,6 +31,8 @@ export interface EvalFlags {
   repeat?: number;
   split: Split;
   out?: string;
+  /** `--only WORDS`: only the cases whose name holds these words. */
+  only?: string;
   /** `--compare A.json B.json`: the file before and the file after. */
   compare?: [string, string];
   /** The words that are not flags: the models. */
@@ -38,7 +40,7 @@ export interface EvalFlags {
 }
 
 const usage =
-  "Flags: --check, --new-actions, --repeat N, --split dev|held|all, --out FILE.json, --compare A.json B.json.";
+  "Flags: --check, --new-actions, --repeat N, --split dev|held|all, --out FILE.json, --only WORDS, --compare A.json B.json.";
 
 /** Reads the flags of an eval. A flag with a value takes it as the next word or after "=". */
 export function evalFlags(words: readonly string[]): EvalFlags {
@@ -78,6 +80,7 @@ export function evalFlags(words: readonly string[]): EvalFlags {
         throw new Error(`--split takes dev, held or all. Got: ${given}`);
       flags.split = given as Split;
     } else if (flag === "--out") flags.out = value();
+    else if (flag === "--only") flags.only = value();
     else if (flag === "--compare") {
       if (inline !== undefined)
         throw new Error("--compare takes two files: --compare A.json B.json.");

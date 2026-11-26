@@ -493,6 +493,553 @@ const trip = page(
    window.state = function () { return held; };`,
 );
 
+/*
+ * Apps for long requests: 30 to 60 steps each, often across two apps. A
+ * request can put more than one app on its desk (`desk` in
+ * computer-request.eval.ts): the first is in front, and open_app brings
+ * another one forward.
+ */
+
+/** A pop-up button: a click opens its menu under it, a click on a choice takes it. Any other click closes the menu. */
+const popupStyle = `
+  .popup { min-width: 180px; height: 30px; border: 1px solid #c4c4c4; border-radius: 6px; background: #fff; text-align: left; padding: 0 10px; font: inherit; }
+  .menu { position: fixed; min-width: 180px; background: #fff; border: 1px solid #c8c8c8; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.2); padding: 5px; z-index: 9; }
+  .menu[hidden] { display: none; } .menu div { padding: 6px 12px; border-radius: 5px; } .menu div:hover { background: #0a7aff; color: #fff; }`;
+const popupScript = `
+  var menus = [];
+  function set(el, text) { el.textContent = text; el.setAttribute("data-title", text); }
+  function popup(button, choices, chosen) {
+    var menu = document.createElement("div"); menu.className = "menu"; menu.hidden = true; menus.push(menu);
+    function show(value) { button.textContent = value || "Choose"; button.setAttribute("data-value", value || "Choose"); }
+    choices.forEach(function (choice) {
+      var item = document.createElement("div"); item.textContent = choice;
+      item.setAttribute("data-role", "AXMenuItem"); item.setAttribute("data-title", choice);
+      item.onclick = function (event) { event.stopPropagation(); menu.hidden = true; show(choice); chosen(choice); };
+      menu.appendChild(item);
+    });
+    button.onclick = function (event) {
+      event.stopPropagation(); var closed = menu.hidden; menus.forEach(function (other) { other.hidden = true; });
+      var r = button.getBoundingClientRect(); menu.style.left = r.left + "px"; menu.style.top = (r.bottom + 3) + "px"; menu.hidden = !closed;
+    };
+    document.body.appendChild(menu); show("");
+    return show;
+  }
+  document.addEventListener("click", function () { menus.forEach(function (menu) { menu.hidden = true; }); });`;
+const field = (label: string, id: string) =>
+  `<label>${label}</label><input id="${id}" data-role="AXTextField" data-title="${label}">`;
+const choose = (label: string, id: string) =>
+  `<label>${label}</label><button class="popup" id="${id}" data-role="AXPopUpButton" data-title="${label}"></button>`;
+const formStyle = `.step { margin: 34px auto; width: 420px; } .step label { display: block; margin: 12px 0 4px; color: #444; }
+   .step input { width: 100%; height: 30px; border: 1px solid #c4c4c4; border-radius: 7px; padding: 0 9px; font: inherit; }
+   .step .next { margin-top: 20px; } .problem { color: #b3261e; } .summary p { margin: 3px 0; }`;
+const problemLine = `<p class="problem" data-role="AXStaticText" data-title=""></p>`;
+
+/** A lease application: twelve fields on three pages, a review, and the reference typed back to confirm it. */
+const lease = page(
+  "Lease application",
+  `${formStyle}${popupStyle}`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Lease application</div></div><div class="content">
+     <div class="step" id="one"><h2 data-role="AXStaticText" data-title="Step 1 of 3: about you">Step 1 of 3: about you</h2>
+       ${field("First name", "first")}${field("Last name", "last")}${field("Email", "email")}${field("Phone", "phone")}
+       <button class="push primary next" id="next1" data-role="AXButton" data-title="Next">Next</button>${problemLine}</div>
+     <div class="step" id="two" hidden><h2 data-role="AXStaticText" data-title="Step 2 of 3: the home">Step 2 of 3: the home</h2>
+       ${field("Street", "street")}${field("City", "city")}${field("Postcode", "postcode")}${field("Move-in date", "movein")}
+       <button class="push primary next" id="next2" data-role="AXButton" data-title="Next">Next</button>${problemLine}</div>
+     <div class="step" id="three" hidden><h2 data-role="AXStaticText" data-title="Step 3 of 3: details">Step 3 of 3: details</h2>
+       ${choose("Occupants", "occupants")}${choose("Pets", "pets")}${choose("Contact time", "contact")}${field("Note to the landlord", "note")}
+       <button class="push primary next" id="next3" data-role="AXButton" data-title="Review">Review</button>${problemLine}</div>
+     <div class="step" id="review" hidden><h2 data-role="AXStaticText" data-title="Check your application">Check your application</h2><div class="summary" id="summary"></div>
+       <button class="push next" id="back" data-role="AXButton" data-title="Back">Back</button>
+       <button class="push primary next" id="send" data-role="AXButton" data-title="Send application">Send application</button></div>
+     <div class="step" id="sent" hidden><h2 data-role="AXStaticText" data-title="Application sent">Application sent</h2>
+       <p data-role="AXStaticText" data-title="Your reference is HA-48213.">Your reference is HA-48213.</p>
+       <p data-role="AXStaticText" data-title="To confirm the application, type its reference here.">To confirm the application, type its reference here.</p>
+       ${field("Reference", "reference")}
+       <button class="push primary next" id="confirm" data-role="AXButton" data-title="Confirm">Confirm</button>${problemLine}</div>
+   </div></div>`,
+  `${popupScript}
+   var held = { first: "", last: "", email: "", phone: "", street: "", city: "", postcode: "", movein: "", occupants: "", pets: "", contact: "", note: "", sent: false, confirmed: false, reference: "" };
+   var labels = { first: "First name", last: "Last name", email: "Email", phone: "Phone", street: "Street", city: "City", postcode: "Postcode", movein: "Move-in date", occupants: "Occupants", pets: "Pets", contact: "Contact time", note: "Note to the landlord" };
+   function show(id) { ["one", "two", "three", "review", "sent"].forEach(function (step) { document.getElementById(step).hidden = step !== id; }); }
+   function problem(id, text) { set(document.querySelector("#" + id + " .problem"), text); }
+   // A page goes on only with every field filled in.
+   function take(id, keys) {
+     var missing = keys.filter(function (key) { var el = document.getElementById(key); if (el.tagName === "INPUT") held[key] = el.value.trim(); return !held[key]; });
+     problem(id, missing.length ? "Fill in every field on this page." : "");
+     return !missing.length;
+   }
+   popup(document.getElementById("occupants"), ["1 person", "2 people", "3 people", "4 people"], function (value) { held.occupants = value; });
+   popup(document.getElementById("pets"), ["No pets", "A cat", "A dog"], function (value) { held.pets = value; });
+   popup(document.getElementById("contact"), ["Mornings", "Afternoons", "Evenings"], function (value) { held.contact = value; });
+   document.getElementById("next1").onclick = function () { if (take("one", ["first", "last", "email", "phone"])) show("two"); };
+   document.getElementById("next2").onclick = function () { if (take("two", ["street", "city", "postcode", "movein"])) show("three"); };
+   document.getElementById("next3").onclick = function () {
+     if (!take("three", ["occupants", "pets", "contact", "note"])) return;
+     var summary = document.getElementById("summary"); summary.innerHTML = "";
+     Object.keys(labels).forEach(function (key) { var line = document.createElement("p"); line.setAttribute("data-role", "AXStaticText"); set(line, labels[key] + ": " + held[key]); summary.appendChild(line); });
+     show("review");
+   };
+   document.getElementById("back").onclick = function () { show("three"); };
+   document.getElementById("send").onclick = function () { held.sent = true; show("sent"); };
+   document.getElementById("confirm").onclick = function () {
+     held.reference = document.getElementById("reference").value.trim();
+     if (held.reference !== "HA-48213") return problem("sent", "That is not the reference above.");
+     held.confirmed = true; problem("sent", "Confirmed. Application HA-48213 is complete.");
+   };
+   window.state = function () { return held; };`,
+);
+
+/** Kettles and more, each with its price and its delivery: name, price, delivery (0.00 is free). */
+const products = [
+  ["Brightwave K2 kettle", "29.00", "9.00"],
+  ["Brightwave toaster", "45.00", "5.00"],
+  ["Stonepad Steel kettle", "35.50", "0.00"],
+  ["Stonepad Steel pan", "22.00", "4.00"],
+  ["Cobalt One kettle", "31.00", "3.50"],
+  ["Cobalt teapot", "18.00", "3.00"],
+  ["Riverstone Mini kettle", "27.50", "12.00"],
+  ["Riverstone fan", "39.00", "6.00"],
+  ["Granite blender", "59.00", "0.00"],
+  ["Amber mug", "9.00", "2.50"],
+];
+/** A shop: a search shows the products whose names hold its words. A product page shows its price, and its delivery on a tab of its own. */
+const market = page(
+  "Market",
+  `.pane { flex: 1; padding: 20px 30px; } .search { width: 320px; height: 28px; border: 1px solid #c8c8c8; border-radius: 6px; padding: 0 8px; font: inherit; }
+   .row { padding: 10px 4px; border-bottom: 1px solid #e6e6e6; color: #0a66d8; } .tabs { display: flex; gap: 8px; margin: 14px 0; }
+   .tab { padding: 5px 14px; border: 1px solid #c8c8c8; border-radius: 6px; } .tab.on { background: #dbe8ff; border-color: #0a7aff; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Market</div></div><div class="content">
+     <div class="pane" id="results"><input class="search" id="search" data-role="AXSearchField" data-title="Search" placeholder="Search"><div id="list"></div></div>
+     <div class="pane" id="product" hidden><button class="push" id="back" data-role="AXButton" data-title="Back to results">Back to results</button>
+       <h2 id="name" data-role="AXStaticText" data-title=""></h2><p id="price" data-role="AXStaticText" data-title=""></p>
+       <div class="tabs"><span class="tab" id="tab-overview" data-role="AXRadioButton" data-title="Overview">Overview</span><span class="tab" id="tab-delivery" data-role="AXRadioButton" data-title="Delivery">Delivery</span></div>
+       <div id="overview"><p data-role="AXStaticText" data-title="In stock.">In stock.</p></div>
+       <div id="delivery" hidden><p id="fee" data-role="AXStaticText" data-title=""></p><p data-role="AXStaticText" data-title="Arrives in 3 to 5 days.">Arrives in 3 to 5 days.</p></div>
+     </div></div></div>`,
+  `var products = ${JSON.stringify(products)};
+   var held = { opened: [], delivery: [] }, current = null;
+   function el(id) { return document.getElementById(id); }
+   function set(node, text) { node.textContent = text; node.setAttribute("data-title", text); }
+   function draw() {
+     var words = el("search").value.toLowerCase().split(/\\s+/).filter(Boolean), list = el("list");
+     list.innerHTML = "";
+     // As in a large shop, the products show only for a search.
+     if (!words.length) { var hint = document.createElement("p"); hint.setAttribute("data-role", "AXStaticText"); set(hint, "Search for a product by its name."); list.appendChild(hint); return; }
+     products.forEach(function (product) {
+       var name = product[0].toLowerCase();
+       if (!words.every(function (word) { return name.indexOf(word) >= 0; })) return;
+       var row = document.createElement("div"); row.className = "row"; row.setAttribute("data-role", "AXLink"); set(row, product[0]);
+       row.onclick = function () { open(product); }; list.appendChild(row);
+     });
+   }
+   function tab(which) {
+     el("overview").hidden = which !== "overview"; el("delivery").hidden = which !== "delivery";
+     ["overview", "delivery"].forEach(function (name) { var t = el("tab-" + name); t.className = "tab" + (name === which ? " on" : ""); t.setAttribute("data-value", name === which ? "1" : "0"); });
+   }
+   function open(product) {
+     current = product; held.opened.push(product[0]);
+     set(el("name"), product[0]); set(el("price"), "Price $" + product[1]);
+     set(el("fee"), product[2] === "0.00" ? "Free delivery" : "Delivery $" + product[2]);
+     tab("overview"); el("results").hidden = true; el("product").hidden = false;
+   }
+   el("tab-overview").onclick = function () { tab("overview"); };
+   el("tab-delivery").onclick = function () { tab("delivery"); if (current && held.delivery.indexOf(current[0]) < 0) held.delivery.push(current[0]); };
+   el("back").onclick = function () { el("product").hidden = true; el("results").hidden = false; };
+   el("search").oninput = draw; draw();
+   window.state = function () { return held; };`,
+);
+
+/** Lists of things: a list in the sidebar opens it, New item adds a name and a note to the open list. */
+const lists = page(
+  "Lists",
+  `.sidebar { width: 220px; border-right: 1px solid #ddd; background: #f6f6f6; } .name { padding: 10px 14px; border-bottom: 1px solid #e6e6e6; font-weight: 600; }
+   .name.chosen { background: #ffe08a; } .pane { flex: 1; padding: 20px 30px; } .item { padding: 8px 0; border-bottom: 1px solid #eee; }
+   .form { margin-top: 16px; width: 360px; } .form label { display: block; margin: 10px 0 4px; color: #444; }
+   .form input { width: 100%; height: 30px; border: 1px solid #c4c4c4; border-radius: 7px; padding: 0 9px; font: inherit; } .form .buttons { margin-top: 14px; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Lists</div></div><div class="content">
+     <div class="sidebar" id="names" data-role="AXScrollArea" data-title=""></div>
+     <div class="pane"><h2 id="heading" data-role="AXStaticText" data-title=""></h2><div id="items"></div>
+       <button class="push" id="new-item" data-role="AXButton" data-title="New item">New item</button>
+       <div class="form" id="form" hidden>${field("Item", "item")}${field("Note", "note")}
+         <div class="buttons"><button class="push" id="cancel" data-role="AXButton" data-title="Cancel">Cancel</button><button class="push primary" id="add" data-role="AXButton" data-title="Add">Add</button></div></div>
+     </div></div></div>`,
+  `var lists = { "Kitchen": [{ name: "Bread board", note: "maple, 40 cm" }], "Garden": [{ name: "Seeds", note: "tomato" }], "Gifts": [{ name: "Scarf", note: "blue" }] };
+   var open = "Garden";
+   function el(id) { return document.getElementById(id); }
+   function set(node, text) { node.textContent = text; node.setAttribute("data-title", text); }
+   function draw() {
+     el("names").innerHTML = "";
+     Object.keys(lists).forEach(function (name) {
+       var row = document.createElement("div"); row.className = "name" + (name === open ? " chosen" : ""); row.setAttribute("data-role", "AXStaticText"); set(row, name);
+       row.onclick = function () { open = name; el("form").hidden = true; draw(); }; el("names").appendChild(row);
+     });
+     set(el("heading"), open); el("items").innerHTML = "";
+     lists[open].forEach(function (item) {
+       var line = document.createElement("div"); line.className = "item"; line.setAttribute("data-role", "AXStaticText");
+       set(line, item.name + (item.note ? " (" + item.note + ")" : "")); el("items").appendChild(line);
+     });
+   }
+   function add() { var name = el("item").value.trim(); if (!name) return; lists[open].push({ name: name, note: el("note").value.trim() }); el("form").hidden = true; draw(); }
+   el("new-item").onclick = function () { el("form").hidden = false; el("item").value = ""; el("note").value = ""; el("item").focus(); };
+   el("cancel").onclick = function () { el("form").hidden = true; };
+   el("add").onclick = add;
+   ["item", "note"].forEach(function (id) { el(id).addEventListener("keydown", function (event) { if (event.key === "Enter") { event.preventDefault(); add(); } }); });
+   draw();
+   window.state = function () { return { open: open, lists: lists }; };`,
+);
+
+/** Receipts of two months, oldest first: date, shop, amount. */
+export const receiptRows = [
+  ["29 Oct", "Ink House", "15.00"],
+  ["31 Oct", "Taxi Blue", "22.40"],
+  ["2 Nov", "Paper Mill", "12.40"],
+  ["4 Nov", "Ink House", "31.00"],
+  ["5 Nov", "Corner Cafe", "7.85"],
+  ["8 Nov", "Train North", "64.20"],
+  ["11 Nov", "Desk Lamp Co", "18.99"],
+  ["13 Nov", "Post Office", "5.50"],
+  ["17 Nov", "Print Hall", "120.00"],
+  ["20 Nov", "Cable Shop", "43.75"],
+  ["24 Nov", "Corner Cafe", "9.10"],
+  ["27 Nov", "Taxi Blue", "27.30"],
+];
+const tableStyle = `table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: 8px 16px; border-bottom: 1px solid #e6e6e6; }
+   th { background: #f3f3f3; font-weight: 600; } .wrap { flex: 1; padding: 10px 14px; overflow: hidden; }`;
+/** A table of plain text with a head row: every cell an element. */
+const textTable = (head: string[], rows: string[][]) =>
+  `<table><tr>${head.map((name) => `<th>${name}</th>`).join("")}</tr>${rows
+    .map(
+      (row) =>
+        `<tr>${row.map((cell) => `<td data-role="AXStaticText" data-title="${cell}">${cell}</td>`).join("")}</tr>`,
+    )
+    .join("")}</table>`;
+const receipts = page(
+  "Receipts",
+  tableStyle,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Receipts</div></div><div class="content">
+     <div class="wrap">${textTable(["Date", "Shop", "Amount"], receiptRows)}</div></div></div>`,
+  `window.state = function () { return {}; };`,
+);
+
+/**
+ * A sheet: a click selects a cell and typing replaces what it holds. Tab
+ * goes right, Return goes down to the column where the row of Tabs began, as
+ * in a spreadsheet. A cell that starts with = is a formula: SUM of a range,
+ * cells, numbers and + - * /.
+ */
+const sheets = page(
+  "Expenses November",
+  `.wrap { flex: 1; padding: 16px; } table { border-collapse: collapse; } th { background: #f3f3f3; font-weight: 600; width: 40px; border: 1px solid #ddd; padding: 3px; }
+   td { border: 1px solid #ddd; padding: 0; } th.col { width: 200px; } input.cell { width: 200px; height: 26px; border: 0; padding: 0 6px; font: inherit; outline: 0; }
+   input.cell:focus { box-shadow: inset 0 0 0 2px #0a7aff; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Expenses November</div></div><div class="content">
+     <div class="wrap"><table id="grid"></table></div></div></div>`,
+  `var cols = ["A", "B", "C"], rows = 13, raw = { A1: "Shop", B1: "Amount" }, cells = {}, tabStart = null;
+   var grid = document.getElementById("grid");
+   var head = document.createElement("tr"); head.appendChild(document.createElement("th"));
+   cols.forEach(function (col) { var th = document.createElement("th"); th.className = "col"; th.textContent = col; head.appendChild(th); });
+   grid.appendChild(head);
+   function number(address) { var n = parseFloat(String(shown(address)).replace(/[$,\\s]/g, "")); return isFinite(n) ? n : 0; }
+   function shown(address) {
+     var text = raw[address] || "";
+     if (text.charAt(0) !== "=") return text;
+     var expr = text.slice(1).toUpperCase().replace(/SUM\\(([A-C])(\\d+):([A-C])(\\d+)\\)/g, function (_, c1, r1, c2, r2) {
+       var sum = 0;
+       for (var c = cols.indexOf(c1); c <= cols.indexOf(c2); c++) for (var r = Number(r1); r <= Number(r2); r++) if (cols[c] + r !== address) sum += number(cols[c] + r);
+       return "(" + sum + ")";
+     }).replace(/\\b([A-C])(\\d+)\\b/g, function (_, c, r) { return c + r === address ? "0" : "(" + number(c + r) + ")"; });
+     if (!/^[\\d+\\-*\\/(). ]+$/.test(expr)) return "#ERROR";
+     try { var n = Function("return (" + expr + ")")(); return isFinite(n) ? String(Math.round(n * 100) / 100) : "#ERROR"; } catch (error) { return "#ERROR"; }
+   }
+   function redraw() { Object.keys(cells).forEach(function (address) { if (document.activeElement !== cells[address]) cells[address].value = shown(address); }); }
+   function go(col, row) { var next = cells[cols[col] + row]; if (next) { next.focus(); next.select(); } }
+   for (var r = 1; r <= rows; r++) {
+     var line = document.createElement("tr"), num = document.createElement("th"); num.textContent = String(r); line.appendChild(num);
+     cols.forEach(function (col, c) {
+       var td = document.createElement("td"), input = document.createElement("input"), address = col + r, row = r;
+       input.className = "cell"; input.setAttribute("data-role", "AXCell"); input.setAttribute("data-title", address);
+       input.addEventListener("mousedown", function () { tabStart = null; });
+       input.addEventListener("focus", function () { input.value = raw[address] || ""; input.select(); });
+       input.addEventListener("input", function () { if (input.value) raw[address] = input.value; else delete raw[address]; });
+       input.addEventListener("blur", redraw);
+       input.addEventListener("keydown", function (event) {
+         if (event.key === "Tab") { event.preventDefault(); if (event.shiftKey) { tabStart = null; go(c - 1, row); } else { if (tabStart === null) tabStart = c; go(c + 1, row); } }
+         else if (event.key === "Enter") { event.preventDefault(); var to = tabStart === null ? c : tabStart; tabStart = null; go(to, row + 1); }
+         else if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); tabStart = null; go(c, row + (event.key === "ArrowDown" ? 1 : -1)); }
+       });
+       cells[address] = input; td.appendChild(input); line.appendChild(td);
+     });
+     grid.appendChild(line);
+   }
+   redraw();
+   window.state = function () {
+     var values = {};
+     Object.keys(raw).forEach(function (address) { values[address] = shown(address); });
+     return { cells: raw, values: values };
+   };`,
+);
+
+/** Messages, newest first: subject, sender, the first line, and the rest that Show the rest opens. */
+const mail = [
+  [
+    "Offsite: sign-up",
+    "Theo Park",
+    "We need numbers for the caterer.",
+    "Sign up by Friday 2 May on the team board.",
+  ],
+  [
+    "Lunch on Friday?",
+    "Mia Chen",
+    "Shall we try the new place by the river?",
+    "It opens at noon.",
+  ],
+  [
+    "Offsite: the bus",
+    "Lena Ortiz",
+    "We go there together.",
+    "The bus leaves at 8:15 from the main door, and comes back at 18:00.",
+  ],
+  [
+    "Your order has shipped",
+    "Market",
+    "Your parcel is on its way.",
+    "It arrives in 3 to 5 days.",
+  ],
+  [
+    "Offsite: budget",
+    "Ada Brook",
+    "Finance answered about the money.",
+    "The budget is 900 euros for the whole team, food included.",
+  ],
+  [
+    "Printer is fixed",
+    "Omar Diaz",
+    "The printer on the second floor works again.",
+    "Use tray 2 for labels.",
+  ],
+  [
+    "Offsite: new date",
+    "Sam Reed",
+    "The hall had a clash with our first date.",
+    "So the offsite moves to 14 May. Please update your calendars.",
+  ],
+  [
+    "Team notes",
+    "Ivy Laurent",
+    "The notes of Monday are in the shared folder.",
+    "Add your points before Thursday.",
+  ],
+  [
+    "Offsite: the venue",
+    "Lena Ortiz",
+    "A short update on the place for the offsite.",
+    "We booked Hall B at the river museum. It has room for the whole team.",
+  ],
+];
+/** A mailbox: a message in the list opens it, Show the rest opens the rest of it, Flag flags it. */
+const mailbox = page(
+  "Mailbox",
+  `.sidebar { width: 320px; border-right: 1px solid #ddd; background: #f6f6f6; } .row { padding: 10px 14px; border-bottom: 1px solid #e6e6e6; font-weight: 600; }
+   .row small { display: block; font-weight: 400; color: #888; margin-top: 3px; } .row.chosen { background: #dbe8ff; } .row.flagged::after { content: " \\2691"; color: #e8590c; }
+   .reader { flex: 1; padding: 22px 28px; font-size: 15px; } .reader button { margin: 8px 8px 8px 0; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Inbox</div></div><div class="content">
+     <div class="sidebar" id="list" data-role="AXScrollArea" data-title=""></div>
+     <div class="reader"><p id="empty" data-role="AXStaticText" data-title="Choose a message to read it.">Choose a message to read it.</p>
+       <div id="message" hidden><h2 id="subject" data-role="AXStaticText" data-title=""></h2><p id="from" data-role="AXStaticText" data-title=""></p>
+         <p id="first" data-role="AXStaticText" data-title=""></p><p id="rest" data-role="AXStaticText" data-title="" hidden></p>
+         <button class="push" id="more" data-role="AXButton" data-title="Show the rest">Show the rest</button>
+         <button class="push" id="flag" data-role="AXButton" data-title="Flag">Flag</button></div></div>
+   </div></div>`,
+  `var mail = ${JSON.stringify(mail)};
+   var held = { opened: [], expanded: [], flagged: [] }, open = -1;
+   function el(id) { return document.getElementById(id); }
+   function set(node, text) { node.textContent = text; node.setAttribute("data-title", text); }
+   function draw() {
+     el("list").innerHTML = "";
+     mail.forEach(function (message, index) {
+       var row = document.createElement("div"), flagged = held.flagged.indexOf(message[0]) >= 0;
+       row.className = "row" + (index === open ? " chosen" : "") + (flagged ? " flagged" : "");
+       row.setAttribute("data-role", "AXStaticText"); row.setAttribute("data-title", message[0]); if (flagged) row.setAttribute("data-value", "Flagged");
+       row.appendChild(document.createTextNode(message[0]));
+       var small = document.createElement("small"); small.textContent = message[1]; row.appendChild(small);
+       row.onclick = function () { show(index); }; el("list").appendChild(row);
+     });
+   }
+   function show(index) {
+     open = index; var message = mail[index]; if (held.opened.indexOf(message[0]) < 0) held.opened.push(message[0]);
+     el("empty").hidden = true; el("message").hidden = false;
+     set(el("subject"), message[0]); set(el("from"), "From " + message[1]); set(el("first"), message[2]); set(el("rest"), message[3]);
+     el("rest").hidden = true; el("more").hidden = false;
+     el("flag").setAttribute("data-title", held.flagged.indexOf(message[0]) >= 0 ? "Unflag" : "Flag"); el("flag").textContent = el("flag").getAttribute("data-title");
+     draw();
+   }
+   el("more").onclick = function () { el("rest").hidden = false; el("more").hidden = true; var subject = mail[open][0]; if (held.expanded.indexOf(subject) < 0) held.expanded.push(subject); };
+   el("flag").onclick = function () {
+     var subject = mail[open][0], at = held.flagged.indexOf(subject);
+     if (at >= 0) held.flagged.splice(at, 1); else held.flagged.push(subject);
+     show(open); if (held.expanded.indexOf(subject) >= 0) { el("rest").hidden = false; el("more").hidden = true; }
+   };
+   draw();
+   window.state = function () { return held; };`,
+);
+
+/** The people of two teams, as the directory lists them: name, team, extension. */
+export const people = [
+  ["Ada Brook", "Design", "4021"],
+  ["Noah Grant", "Sales", "5012"],
+  ["Lena Ortiz", "Design", "4022"],
+  ["Sam Reed", "Design", "4030"],
+  ["Ella Stone", "Sales", "5018"],
+  ["Theo Park", "Design", "4034"],
+  ["Leo Marsh", "Sales", "5020"],
+  ["Mia Chen", "Design", "4041"],
+  ["Zoe Hart", "Sales", "5033"],
+  ["Omar Diaz", "Design", "4047"],
+  ["Max Wren", "Sales", "5041"],
+  ["Ivy Laurent", "Design", "4052"],
+];
+const directory = page(
+  "Directory",
+  tableStyle,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Directory</div></div><div class="content">
+     <div class="wrap">${textTable(["Name", "Team", "Extension"], people)}</div></div></div>`,
+  `window.state = function () { return {}; };`,
+);
+
+/** Invoices: number, customer, amount, category. */
+export const bookInvoices = [
+  ["INV-1041", "Amber Mill", "$1,240.00", "Office"],
+  ["INV-1042", "Fjord Logistics", "$5,120.00", "Travel"],
+  ["INV-1043", "Cedar Works", "$2,315.75", "Office"],
+  ["INV-1044", "Fjord Logistics", "$860.50", "Office"],
+  ["INV-1045", "Fjord Logistics", "$410.00", "Software"],
+  ["INV-1046", "Dune Trading", "$96.20", "Travel"],
+  ["INV-1047", "Fjord Logistics", "$734.90", "Office"],
+  ["INV-1048", "Harbor Print", "$1,999.99", "Office"],
+  ["INV-1049", "Fjord Logistics", "$58.00", "Travel"],
+  ["INV-1050", "Fjord Logistics", "$3,402.10", "Office"],
+  ["INV-1051", "Ivory Lane", "$77.00", "Software"],
+  ["INV-1052", "Fjord Logistics", "$1,150.00", "Travel"],
+];
+/**
+ * Books of invoices: Edit opens one, its Category menu and Save change it.
+ * After the third save the session ends: a sign-in stands in front of the
+ * books until someone signs in again.
+ */
+const books = page(
+  "Ledger",
+  `${tableStyle}${popupStyle} a { color: #0a66d8; } .edit, .signin { margin: 50px auto; width: 380px; } .edit button { margin: 18px 8px 0 0; }
+   .signin label { display: block; margin: 12px 0 4px; color: #444; } .signin input { width: 100%; height: 30px; border: 1px solid #c4c4c4; border-radius: 7px; padding: 0 9px; font: inherit; }
+   .signin button { margin-top: 18px; width: 100%; height: 32px; } .problem { color: #b3261e; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Ledger</div></div><div class="content">
+     <div class="wrap" id="books"><table id="table"><tr><th>Number</th><th>Customer</th><th>Amount</th><th>Category</th><th></th></tr></table></div>
+     <div class="edit" id="edit" hidden><h2 id="heading" data-role="AXStaticText" data-title=""></h2><p id="who" data-role="AXStaticText" data-title=""></p>
+       ${choose("Category", "category")}<br>
+       <button class="push" id="cancel" data-role="AXButton" data-title="Cancel">Cancel</button><button class="push primary" id="save" data-role="AXButton" data-title="Save">Save</button></div>
+     <div class="signin" id="signin" hidden><h2 data-role="AXStaticText" data-title="Your session ended">Your session ended</h2>
+       <p data-role="AXStaticText" data-title="Sign in again to go on.">Sign in again to go on.</p>
+       <label>Email</label><input id="email" data-role="AXTextField" data-title="Email">
+       <label>Password</label><input id="password" type="password" data-role="AXSecureTextField" data-title="Password">
+       <button class="push primary" id="go" data-role="AXButton" data-title="Sign in">Sign in</button>${problemLine}</div>
+   </div></div>`,
+  `${popupScript}
+   var invoices = ${JSON.stringify(bookInvoices)};
+   var held = { categories: {}, saves: 0, signIns: 0, email: "", password: "", changes: [] }, editing = null, chosen = "";
+   invoices.forEach(function (row) { held.categories[row[0]] = row[3]; });
+   function el(id) { return document.getElementById(id); }
+   function view(id) { ["books", "edit", "signin"].forEach(function (name) { el(name).hidden = name !== id; }); }
+   var showCategory = popup(el("category"), ["Freight", "Office", "Software", "Travel"], function (value) { chosen = value; });
+   function draw() {
+     var table = el("table"); while (table.rows.length > 1) table.deleteRow(1);
+     invoices.forEach(function (row) {
+       var line = table.insertRow();
+       [row[0], row[1], row[2], held.categories[row[0]]].forEach(function (text) { var cell = line.insertCell(); cell.setAttribute("data-role", "AXStaticText"); set(cell, text); });
+       var link = document.createElement("a"); link.href = "#"; link.setAttribute("data-role", "AXLink"); set(link, "Edit");
+       link.onclick = function (event) { event.preventDefault(); edit(row); }; line.insertCell().appendChild(link);
+     });
+   }
+   function edit(row) { editing = row; chosen = held.categories[row[0]]; set(el("heading"), "Invoice " + row[0]); set(el("who"), row[1] + ", " + row[2]); showCategory(chosen); view("edit"); }
+   el("cancel").onclick = function () { view("books"); };
+   el("save").onclick = function () {
+     if (chosen !== held.categories[editing[0]]) held.changes.push(editing[0]);
+     held.categories[editing[0]] = chosen; held.saves += 1; draw();
+     view(held.saves === 3 ? "signin" : "books");
+   };
+   el("go").onclick = function () {
+     var email = el("email").value.trim(), password = el("password").value;
+     if (!email || !password) return set(document.querySelector("#signin .problem"), "Give the email and the password.");
+     held.email = email; held.password = password; held.signIns += 1; view("books");
+   };
+   draw();
+   window.state = function () { return held; };`,
+);
+
+/** The people of the rota, A to Z by first name, and the three that another person adds while the request runs. */
+export const rotaPeople = [
+  "Ada Brook",
+  "Ella Stone",
+  "Finn Shaw",
+  "Ivy Laurent",
+  "Lena Ortiz",
+  "Leo Marsh",
+  "Max Wren",
+  "Mia Chen",
+  "Noah Grant",
+  "Omar Diaz",
+  "Ruth Vale",
+  "Sam Reed",
+  "Theo Park",
+  "Zoe Hart",
+];
+export const rotaNewcomers = ["Kai Moss", "Bea Lund", "Dan Holt"];
+/**
+ * A rota: a person in the list opens their shift, the Shift menu and Save
+ * change it. `window.sync()` is another person's change: three people more,
+ * and the list sorted by last name, with a banner that says so.
+ */
+const rota = page(
+  "Rota",
+  `${popupStyle} .list { width: 420px; border-right: 1px solid #ddd; overflow: hidden; } .person { display: flex; justify-content: space-between; padding: 7px 16px; border-bottom: 1px solid #eee; }
+   .person.chosen { background: #dbe8ff; } .shift { color: #666; } .detail { flex: 1; padding: 70px 40px 30px; } .detail button.push { margin: 18px 8px 0 0; }
+   .banner { position: absolute; left: 440px; top: 12px; right: 20px; padding: 10px 14px; background: #fff4cc; border: 1px solid #e6cf7a; border-radius: 8px; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Rota</div></div><div class="content">
+     <div class="list" id="list"></div>
+     <div class="detail"><p id="hint" data-role="AXStaticText" data-title="Choose a person to change their shift.">Choose a person to change their shift.</p>
+       <div id="form" hidden><h2 id="who" data-role="AXStaticText" data-title=""></h2>${choose("Shift", "shift")}<br>
+         <button class="push" id="cancel" data-role="AXButton" data-title="Cancel">Cancel</button><button class="push primary" id="save" data-role="AXButton" data-title="Save">Save</button></div></div>
+     <div class="banner" id="banner" hidden data-role="AXStaticText" data-title="Another person changed the rota. The list is now sorted by last name.">Another person changed the rota. The list is now sorted by last name.</div>
+   </div></div>`,
+  `${popupScript}
+   var people = ${JSON.stringify(rotaPeople)}, newcomers = ${JSON.stringify(rotaNewcomers)};
+   var held = { shifts: {}, saves: 0, synced: false, changes: [] }, open = "", chosen = "";
+   people.forEach(function (name) { held.shifts[name] = "Weekday"; });
+   function el(id) { return document.getElementById(id); }
+   var showShift = popup(el("shift"), ["Weekday", "Weekend", "Nights"], function (value) { chosen = value; });
+   function draw() {
+     el("list").innerHTML = "";
+     people.forEach(function (name) {
+       var row = document.createElement("div"); row.className = "person" + (name === open ? " chosen" : "");
+       var label = document.createElement("span"); label.setAttribute("data-role", "AXStaticText"); set(label, name);
+       var shift = document.createElement("span"); shift.className = "shift"; shift.setAttribute("data-role", "AXStaticText"); set(shift, held.shifts[name]);
+       row.appendChild(label); row.appendChild(shift); row.onclick = function () { pick(name); }; el("list").appendChild(row);
+     });
+   }
+   function pick(name) { open = name; chosen = held.shifts[name]; set(el("who"), name); showShift(chosen); el("hint").hidden = true; el("form").hidden = false; draw(); }
+   function close() { open = ""; el("form").hidden = true; el("hint").hidden = false; draw(); }
+   el("cancel").onclick = close;
+   el("save").onclick = function () { if (chosen !== held.shifts[open]) held.changes.push(open); held.shifts[open] = chosen; held.saves += 1; close(); };
+   window.sync = function () {
+     if (held.synced) return;
+     held.synced = true;
+     newcomers.forEach(function (name) { people.push(name); held.shifts[name] = "Weekday"; });
+     var last = function (name) { return name.split(" ").slice(-1)[0]; };
+     people.sort(function (a, b) { return last(a) < last(b) ? -1 : last(a) > last(b) ? 1 : 0; });
+     el("banner").hidden = false; draw();
+   };
+   draw();
+   window.state = function () { return held; };`,
+);
+
 export interface App {
   app: { name: string; bundleId: string; window: string };
   html: string;
@@ -561,6 +1108,59 @@ export const apps = {
       window: "Trip request",
     },
     html: trip,
+  },
+  // The apps of the long requests.
+  lease: {
+    app: {
+      name: "Homes",
+      bundleId: "com.example.homes",
+      window: "Lease application",
+    },
+    html: lease,
+  },
+  market: {
+    app: { name: "Market", bundleId: "com.example.market", window: "Market" },
+    html: market,
+  },
+  lists: {
+    app: { name: "Lists", bundleId: "com.example.lists", window: "Lists" },
+    html: lists,
+  },
+  receipts: {
+    app: {
+      name: "Receipts",
+      bundleId: "com.example.receipts",
+      window: "Receipts",
+    },
+    html: receipts,
+  },
+  sheets: {
+    app: {
+      name: "Sheets",
+      bundleId: "com.example.sheets",
+      window: "Expenses November",
+    },
+    html: sheets,
+  },
+  mailbox: {
+    app: { name: "Mailbox", bundleId: "com.example.mailbox", window: "Inbox" },
+    html: mailbox,
+  },
+  directory: {
+    app: {
+      name: "Directory",
+      bundleId: "com.example.directory",
+      window: "Directory",
+    },
+    html: directory,
+  },
+  books: {
+    app: { name: "Ledger", bundleId: "com.example.ledger", window: "Ledger" },
+    html: books,
+  },
+  rota: {
+    app: { name: "Rota", bundleId: "com.example.rota", window: "Rota" },
+    html: rota,
   },
 } satisfies Record<string, App>;
 
