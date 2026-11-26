@@ -31,7 +31,7 @@
  * takes the dev tasks, the held tasks (`held: true`, a fixed quarter) or
  * all. `--out FILE.json` (or OUT) writes the result of each task and every
  * answer; `--compare A.json B.json` prints what changed from A to B and
- * runs nothing. ONLY names a part of a task's name.
+ * runs nothing. `--only WORDS` (or ONLY) names a part of a task's name.
  *
  * A task can come with a closer picture, as after look_closer: one part of
  * its screen three times larger, rendered as the hands take it (zoom).
@@ -1262,8 +1262,8 @@ const tasks: Task[] = [
   },
 ];
 
-/** ONLY: run the tasks whose id holds these words, and no other. */
-const only = process.env.ONLY?.toLowerCase();
+/** --only (or ONLY): run the tasks whose id holds these words, and no other. */
+const only = (flags.only ?? process.env.ONLY)?.toLowerCase();
 const chosen = tasks.filter(
   (task) =>
     (withNew || !task.newActions) &&

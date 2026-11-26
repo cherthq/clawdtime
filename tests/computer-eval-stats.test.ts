@@ -207,6 +207,10 @@ describe("the flags of the evals", () => {
       split: "all",
       models: [],
     });
+    expect(evalFlags(["--only", "long:", "gpt-x"])).toMatchObject({
+      only: "long:",
+      models: ["gpt-x"],
+    });
     expect(evalFlags(["--compare", "a.json", "b.json"]).compare).toEqual([
       "a.json",
       "b.json",
@@ -219,6 +223,7 @@ describe("the flags of the evals", () => {
     expect(() => evalFlags(["--repeat"])).toThrow(/needs a value/);
     expect(() => evalFlags(["--repeat", "--check"])).toThrow(/needs a value/);
     expect(() => evalFlags(["--out="])).toThrow(/needs a value/);
+    expect(() => evalFlags(["--only"])).toThrow(/needs a value/);
     expect(() => evalFlags(["--split", "test"])).toThrow(/dev, held or all/);
     expect(() => evalFlags(["--compare", "a.json"])).toThrow(/two files/);
     expect(() => evalFlags(["--compare", "a", "b", "gpt-x"])).toThrow(
