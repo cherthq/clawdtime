@@ -42,15 +42,57 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.host.run('media',dispatch,True)),a);self.assertEqual(self.effects,1)
             changed=copy.deepcopy(dispatch);changed['binding']['pairingId']='foreign'
             with self.assertRaises(ValueError):await self.host.run('media',changed,True)
-    async def test_revoked_cloud_callback_prevents_effect_and_preserves_uncertain(self):
+    async def test_revoked_cloud_callback_before_dispatch_refuses_without_an_unresolved_row(self):
         with patch('native_activation.gateway_request',self.gateway):
             dispatch=await self.prepared()
             async def revoke(path,payload):self.session.closing=True;return payload['envelope']
             self.owner.backend=revoke
+            # Authority is refused before any dispatch is sent: nothing is uncertain.
+            with self.assertRaises(ValueError):await self.host.run('media',dispatch,True)
+            self.assertEqual(self.effects,0)
+            row=self.db.execute('SELECT phase FROM native_activation_receipts').fetchone()
+            self.assertEqual(row[0],'prepared')
+            self.session.closing=False
+            async def allow(path,payload):return payload['envelope']
+            self.owner.backend=allow
+            other=copy.deepcopy(self.value);other['operation']['operationId']='new';other['fingerprint']=fingerprint(other['operation'])
+            await self.host.run('media',other,False)
+    async def test_revoked_cloud_callback_after_dispatch_preserves_uncertain(self):
+        with patch('native_activation.gateway_request',self.gateway):
+            dispatch=await self.prepared()
+            calls=0
+            async def revoke_after(path,payload):
+                nonlocal calls;calls+=1
+                if calls==2:self.session.closing=True
+                return payload['envelope']
+            self.owner.backend=revoke_after
             answer=await self.host.run('media',dispatch,True)
-            self.assertEqual(answer['state'],'uncertain');self.assertEqual(self.effects,0)
+            self.assertEqual(answer['state'],'uncertain');self.assertEqual(self.effects,1)
             self.session.closing=False;self.host=ProductionNative(self.owner)
-            self.assertEqual((await self.host.run('media',dispatch,True))['state'],'uncertain');self.assertEqual(self.effects,0)
+            self.assertEqual((await self.host.run('media',dispatch,True))['state'],'uncertain');self.assertEqual(self.effects,1)
+    def uncertain_row(self,expires_in):
+        dispatch={**self.value,'nativeExpiresAt':time.time()*1000+expires_in,'preparedObservation':self.observed}
+        pending={'operationId':'operation','state':'uncertain','reason':'native_completion_unknown'}
+        self.db.execute('INSERT INTO native_activation_receipts VALUES (?,?,?,?,?,?)',('media/operation','device',json.dumps(dispatch),'a'*64,'uncertain',json.dumps(pending)));self.db.commit()
+        return dispatch
+    async def test_gateway_404_after_the_deadline_resolves_a_never_sent_dispatch(self):
+        dispatch=self.uncertain_row(-5000)
+        async def missing(owner,method,path,value=None,device=None):return 404,b'{}',{}
+        with patch('native_activation.gateway_request',missing):
+            answer=await self.host.receipt('media','operation',dispatch['fingerprint'])
+        self.assertEqual(answer,{'operationId':'operation','state':'rejected','reason':'native_not_dispatched'})
+        self.assertEqual(self.db.execute('SELECT phase FROM native_activation_receipts').fetchone()[0],'complete')
+        with patch('native_activation.gateway_request',self.gateway):
+            other=copy.deepcopy(self.value);other['operation']['operationId']='new';other['fingerprint']=fingerprint(other['operation'])
+            await self.host.run('media',other,False)
+    async def test_gateway_404_before_the_deadline_keeps_the_dispatch_uncertain(self):
+        # A dispatch still in flight may reach the gateway until its deadline.
+        dispatch=self.uncertain_row(1500)
+        async def missing(owner,method,path,value=None,device=None):return 404,b'{}',{}
+        with patch('native_activation.gateway_request',missing):
+            answer=await self.host.receipt('media','operation',dispatch['fingerprint'])
+        self.assertEqual(answer['state'],'uncertain')
+        self.assertEqual(self.db.execute('SELECT phase FROM native_activation_receipts').fetchone()[0],'uncertain')
     async def test_unknown_fences_replacement_session_device(self):
         with patch('native_activation.gateway_request',self.gateway):
             dispatch=await self.prepared()

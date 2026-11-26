@@ -2276,6 +2276,12 @@ operation identity across duplicates, Stop and restart. Preparation of a retired
 operation cannot overwrite its result. Read-only receipt reconciliation is
 available after session removal and validates the retained fingerprint, host,
 operation and original completion interval before clearing an uncertainty fence.
+Media checks the authority callback before it marks a dispatch, so a refused
+callback sends nothing and leaves the row prepared. When a receipt read finds no
+gateway record (404) two seconds after the dispatch deadline, the dispatch was
+never sent: the gateway records a dispatch before it forwards one and refuses one
+after the deadline. Media then stores the row as `rejected` with reason
+`native_not_dispatched`, which clears its fence.
 The online encrypted media backup includes and validates the new optional table.
 
 Gateway WSS permits only the fixed native prepare/dispatch POSTs and receipt GETs.

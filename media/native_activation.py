@@ -11,6 +11,10 @@ from devices import gateway_request
 from preview_native import operation, fingerprint, valid_id, HASH, NativePreviewController
 
 
+# Clock difference allowed between the media service and the gateway.
+DISPATCH_SKEW_MS=2000
+
+
 def observation(value,op,fresh=True):
     if fresh:return NativePreviewController._observation(None,value,op)
     if not isinstance(value,dict) or set(value)!={'window','observedAt','processIdentity','windowBounds','appActive','windowFocused','windowOnScreen'} or value.get('window')!=op['window'] or not valid_id(value.get('processIdentity')) or type(value.get('observedAt')) not in (int,float) or not math.isfinite(value['observedAt']) or value['observedAt']<0 or value['observedAt']>time.time()*1000+100:raise ValueError('observation_unavailable')
@@ -81,10 +85,12 @@ class ProductionNative:
         if dispatch and (not old or old[1]!='prepared' or json.loads(old[2])!=value['preparedObservation']):raise ValueError('native_preparation_changed')
         self.guard(sid,value);self.busy.add(device)
         pending={'operationId':value['operation']['operationId'],'state':'uncertain','reason':'native_completion_unknown'}
+        marked=False
         try:
-            if dispatch:
-                self.owner.db.execute("UPDATE native_activation_receipts SET phase='dispatching',binding=?,result=? WHERE id=?",(json.dumps(value),json.dumps(pending),key));self.owner.db.commit()
+            # A refused authority sends nothing, so it leaves the row prepared.
             await self.authority(sid,value)
+            if dispatch:
+                self.owner.db.execute("UPDATE native_activation_receipts SET phase='dispatching',binding=?,result=? WHERE id=?",(json.dumps(value),json.dumps(pending),key));self.owner.db.commit();marked=True
             status,raw,_=await gateway_request(self.owner,'POST',f"/v1/leases/{value['operation']['expected']['leaseId']}/native/"+('dispatch' if dispatch else 'prepare'),value,device=device)
             if status!=200 or len(raw)>16384:raise ValueError('native_helper_unavailable')
             answer=json.loads(raw)
@@ -94,7 +100,7 @@ class ProductionNative:
             self.owner.db.execute('INSERT OR REPLACE INTO native_activation_receipts VALUES (?,?,?,?,?,?)',(key,device,json.dumps(value),mark,'uncertain' if dispatch and answer['state'] in ('uncertain','submitted') else 'complete' if dispatch else 'prepared',json.dumps(answer)));self.owner.db.commit()
             return answer
         except BaseException:
-            if dispatch:
+            if marked:
                 self.owner.db.execute("UPDATE native_activation_receipts SET phase='uncertain',result=? WHERE id=?",(json.dumps(pending),key));self.owner.db.commit();return pending
             raise
         finally:self.busy.discard(device)
@@ -111,6 +117,12 @@ class ProductionNative:
                     answer=result(json.loads(raw),value,False)
                     if answer['state'] not in ('uncertain','submitted'):
                         self.owner.db.execute("UPDATE native_activation_receipts SET phase='complete',result=? WHERE id=?",(json.dumps(answer),self.key(sid,op)));self.owner.db.commit();return answer
+                elif status==404 and time.time()*1000>value.get('nativeExpiresAt',math.inf)+DISPATCH_SKEW_MS:
+                    # The gateway records a dispatch before it sends one and refuses
+                    # one after its deadline. No record after the deadline proves
+                    # that the dispatch was never sent.
+                    answer={'operationId':op,'state':'rejected','reason':'native_not_dispatched'}
+                    self.owner.db.execute("UPDATE native_activation_receipts SET phase='complete',result=? WHERE id=?",(json.dumps(answer),self.key(sid,op)));self.owner.db.commit();return answer
             except Exception:pass
         if row[1]=='prepared':raise web.HTTPConflict()
         return json.loads(row[2])
