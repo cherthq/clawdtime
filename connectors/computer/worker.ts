@@ -72,6 +72,7 @@ import {
   check,
   clean,
   focusedSecure,
+  pressesElement,
   quietCall,
   readsBeforeCall,
   retarget,
@@ -2282,7 +2283,9 @@ export class ComputerWorker implements DesktopExecutorPort {
   /**
    * Fast pre-action visual re-verify: when eligible (non-typing/non-key, did
    * not pause for user approval, observation is <= 8s old, no secure elements
-   * on screen, and prior look carried a real JPEG), take an image-only observe
+   * on screen, no element under the press (`pressesElement`: its name and
+   * role are read again in the walk of the tree), and prior look carried a
+   * real JPEG), take an image-only observe
    * first and skip the AX walk only when the surface is the same, the
    * target's own region (zero cursor mask) is unchanged, and fewer than
    * `DIFF_MIN_CELLS` other cells changed outside the menu bar status area
@@ -2309,6 +2312,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.observedAt !== undefined &&
       this.now() - run.observedAt <= fastReverifyMaxAgeMs &&
       !before.elements.some((el) => el.secure) &&
+      !pressesElement(action, before) &&
       luminanceGridOf(before) !== null;
     if (canFastReverify) {
       const quick = async (): Promise<Observation | null | "over" | "held"> => {

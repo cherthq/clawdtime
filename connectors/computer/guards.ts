@@ -2481,6 +2481,32 @@ export function retarget(
   return { ok: true, action, observation };
 }
 
+/**
+ * True when the input presses an element of the look: a click on an
+ * element, a click at a point inside one, or a drag from or onto one. A
+ * label can change in place with no change that a picture shows (Cancel
+ * becomes Delete), so the worker reads the element's own name and role
+ * again, with a walk of the tree, just before such an input goes.
+ */
+export function pressesElement(action: Action, observation: Observation) {
+  const at = (x: number, y: number) => {
+    const point = screenPoint(observation, x, y);
+    return typeof point !== "string" && under(observation, point) !== null;
+  };
+  switch (action.kind) {
+    case "click_element":
+      return true;
+    case "click_at":
+      return at(action.x, action.y);
+    case "drag":
+      return [action.from, action.to].some((end) =>
+        "element" in end ? true : at(end.x, end.y),
+      );
+    default:
+      return false;
+  }
+}
+
 /** The tab of a newer list that is the same as this one: the same address and title. Null when it is gone or two could be it. */
 export function sameTab(was: BrowserTab, tabs: BrowserTab[] | undefined) {
   const alike = (tabs ?? []).filter(

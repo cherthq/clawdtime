@@ -111,14 +111,18 @@ computer.
 3. The worker checks that action in code. An action that is not valid is
    refused and not run, and the planner is told why.
 4. When the action needs your yes, the worker asks and waits.
-5. Just before an input, the worker looks again. For a click, a hover, a
-   scroll or a drag it first takes a quick picture with no walk of the tree.
-   When the window is the same and the screen looks as it did (see
-   [The quick picture](#the-quick-picture)), the input goes with the elements
-   of the planner's look. Otherwise, and for keys and text, it looks with no
-   image. It finds the same element again by its role, its name and its
-   place, and it checks the action again against that look. If another
-   window is in front or the target is gone, nothing is sent.
+5. Just before an input, the worker looks again. For a hover, a scroll, or
+   a click or a drag at a point where no element is, it first takes a quick
+   picture with no walk of the tree. When the window is the same and the
+   screen looks as it did (see [The quick picture](#the-quick-picture)), the
+   input goes with the elements of the planner's look. Otherwise, and for
+   keys, text and every click or drag on an element, it looks with no image.
+   A label can change in place with no change that a picture shows (Cancel
+   becomes Delete, Save Draft becomes Send), so a press on an element always
+   reads the element's own name and role again. It finds the same element
+   again by its role, its name and its place, and it checks the action again
+   against that look. If another window is in front, the target is gone or
+   its name changed, nothing is sent and the planner chooses again.
 6. The action goes to the hands or to the browser. Then the worker looks again
    and the planner picks the next action.
 
@@ -141,7 +145,10 @@ takes no picture.
 ### The quick picture
 
 The worker compares two pictures on a grid of 64 by 36 cells, by their
-brightness. The code is in `connectors/computer/visual-diff.ts`.
+brightness. The code is in `connectors/computer/visual-diff.ts`. A grid this
+coarse does not see a label that changed in place, so the quick picture is
+never the only check before a click or a drag on an element: those always
+read the element's name and role again.
 
 - **The target.** The place of the target counts with a margin of one cell,
   and one changed cell there is a change. A target in the menu bar counts
@@ -2173,7 +2180,8 @@ the real screen, draws the cursor or calls a language model.
   pictures: an animation beside a static button, a blinking dot beside a
   target in the menu bar, a ticking timer in the menu bar status area, and a
   change at the target, a change that held, a large change and a large region
-  that keeps changing, which still hold.
+  that keeps changing, which still hold. A button whose label changed in place
+  (Cancel to Delete) under the same picture is not clicked.
 - `progress` (18): the swing of two and of three actions, the still screen,
   no alarm while the screen changes, the order of notes, questions and the
   end, and the other ways that fit what is in front.
