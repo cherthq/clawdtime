@@ -780,6 +780,143 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
         ).toBeNull();
       }
     });
+
+    describe("a reply in a thread of a chat app", () => {
+      const chat = {
+        name: "Slack",
+        bundleId: "com.tinyspeck.slackmacgap",
+        window: "riverchat-team (Channel) - Stonepad - Slack",
+      };
+      // Screen points. A point of the image is 8/9 of its screen point.
+      const frame: Partial<ScreenElement> = {
+        role: "AXWindow",
+        title: chat.window,
+        x: 0,
+        y: 0,
+        w: 1440,
+        h: 900,
+      };
+      const box: Partial<ScreenElement> = {
+        role: "AXTextArea",
+        title: "Reply…",
+        x: 900,
+        y: 765,
+        w: 450,
+        h: 45,
+      };
+      const placeholder: Partial<ScreenElement> = {
+        role: "AXStaticText",
+        title: "Reply…",
+        x: 909,
+        y: 774,
+        w: 90,
+        h: 27,
+      };
+      const thread = (
+        items: Partial<ScreenElement>[] = [frame, box, placeholder],
+      ) => screen(items, { app: chat });
+      // The request asks for the reply and for its send, in two sentences.
+      const goal =
+        "Write a reply in the thread of the last message: on it. Send it.";
+      const into = "Click the Reply… box of the thread";
+      /** The question of an action, with its reason, so that a failure shows both. */
+      const asks = (raw: unknown, at: Observation, why = into, said = goal) => {
+        const result = run(raw, view(at, { goal: said }), why);
+        return { policy: result.policy, risk: result.risk };
+      };
+      const none = { policy: null, risk: null };
+
+      it("asks nothing for a click into the reply box, on the box or on its placeholder", () => {
+        for (const said of [goal, "Read the thread", ""])
+          for (const raw of [
+            { kind: "click_element", element: 2 },
+            { kind: "click_element", element: 3 },
+            // The box beside its placeholder, and the placeholder.
+            { kind: "click_at", x: 1000, y: 700 },
+            { kind: "click_at", x: 840, y: 696 },
+          ])
+            expect(
+              asks(raw, thread(), into, said),
+              `${JSON.stringify(raw)}: ${said}`,
+            ).toEqual(none);
+        // A box with no name: the planner's words name the box, no button.
+        for (const why of [
+          into,
+          "Focus the reply field",
+          'Click into the "Reply…" text area',
+        ])
+          expect(
+            asks(
+              { kind: "click_at", x: 1000, y: 700 },
+              thread([frame, { ...box, title: "" }]),
+              why,
+            ),
+            why,
+          ).toEqual(none);
+        // Every role that takes text, and a text box of a web page.
+        for (const role of ["AXTextField", "AXComboBox", "AXSearchField"])
+          expect(
+            asks(
+              { kind: "click_element", element: 2 },
+              thread([frame, { ...box, role }]),
+            ),
+            role,
+          ).toEqual(none);
+        const web = page([
+          pageElement(0, { tag: "div", role: "textbox", label: "Reply…" }),
+        ]);
+        expect(
+          run(
+            { kind: "browser_click", index: 0 },
+            view(null, { page: web, goal: "Read the thread" }),
+            into,
+          ).policy,
+        ).toBeNull();
+      });
+
+      it("still asks before a real Send, Reply, Post or Share that the request did not ask for", () => {
+        const said = "Read the thread of the last message";
+        for (const item of [
+          { role: "AXButton", title: "Send" },
+          { role: "AXButton", title: "Post" },
+          { role: "AXLink", title: "Reply" },
+          { role: "AXMenuItem", title: "Share message" },
+        ])
+          expect(
+            asks(
+              { kind: "click_element", element: 2 },
+              thread([frame, item]),
+              "",
+              said,
+            ).policy,
+            item.title,
+          ).toBe("send");
+        // A Send button inside the frame of the box, hit on its own text.
+        const inside = thread([
+          frame,
+          box,
+          { role: "AXButton", title: "Send", x: 1300, y: 772, w: 45, h: 30 },
+          {
+            role: "AXStaticText",
+            title: "Send",
+            x: 1305,
+            y: 777,
+            w: 35,
+            h: 20,
+          },
+        ]);
+        expect(
+          asks({ kind: "click_at", x: 1168, y: 700 }, inside, "", said).policy,
+        ).toBe("send");
+        // The window holds the point: the planner's words still count.
+        for (const why of ["Press Send", "Click the Send button"])
+          expect(
+            asks({ kind: "click_at", x: 400, y: 300 }, thread(), why, said)
+              .policy,
+            why,
+          ).toBe("send");
+      });
+    });
   });
 
   describe("public", () => {

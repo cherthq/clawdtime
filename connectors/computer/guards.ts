@@ -1328,11 +1328,16 @@ const nameOf = (item: ScreenElement) => {
     ? `"${title}"`
     : `the ${item.role.replace(/^AX/, "").toLowerCase() || "element"}`;
 };
-/** The smallest element that holds the point. */
-function under(observation: Observation, point: { x: number; y: number }) {
+/** The smallest element that holds the point, of those that `take` keeps. */
+function under(
+  observation: Observation,
+  point: { x: number; y: number },
+  take = (_item: ScreenElement) => true,
+) {
   let best: ScreenElement | null = null;
   for (const item of observation.elements)
     if (
+      take(item) &&
       item.w > 0 &&
       item.h > 0 &&
       point.x >= item.x &&
@@ -1344,6 +1349,24 @@ function under(observation: Observation, point: { x: number; y: number }) {
       best = item;
   return best;
 }
+/**
+ * A click at the point goes into a text field: on the field, or on a text
+ * that it shows, such as its placeholder "Reply\u2026". It gives the field the
+ * focus and presses nothing. A text of a button inside the field is the
+ * button's.
+ */
+const intoField = (
+  observation: Observation,
+  item: ScreenElement | null,
+  point: { x: number; y: number },
+) =>
+  !!item &&
+  (textRoles.has(item.role) ||
+    (item.role === "AXStaticText" &&
+      textRoles.has(
+        under(observation, point, (each) => each.role !== "AXStaticText")
+          ?.role ?? "",
+      )));
 /** A point of the last image as a point of the screen. Null when it has no image or the point is outside it. */
 function screenPoint(observation: Observation, x: number, y: number) {
   const { imageWidth, imageHeight } = observation;
@@ -1838,7 +1861,7 @@ function checkScreen(
         // with no name, or one that only holds others, the planner's own
         // words count too. They can add a question. They never remove one.
         ...asking(
-          textRoles.has(found.role)
+          intoField(seen, found, point)
             ? null
             : (screenRisk(found, seen, view.goal) ??
                 (nameless(found, seen)
@@ -1869,7 +1892,7 @@ function checkScreen(
         // control, the planner's own words count too. They can add a
         // question. They never remove one.
         ...asking(
-          named && textRoles.has(named.role)
+          intoField(seen, found, point)
             ? null
             : ((named ? screenRisk(named, seen, view.goal) : null) ??
                 (nameless(found, seen)
