@@ -370,10 +370,15 @@ const asksPermission = (scene: Scene) => {
 /** The fillers in front of a verb of a request: "please", "can you", "and then". */
 const fillers =
   /^(?:(?:please|pls|kindly|just|now|also|then|and|so|ok|okay|hey|clawdtime|can you|could you|would you|will you|you can|you may|go ahead and|i want you to|i need you to|i'd like you to|i would like you to|help me|try to|remember to|make sure to|make sure you|feel free to|be sure to)\s+)*/;
+/** A dash between two parts of the request: "on it - send it". A hyphen inside a word stays: e-mail. */
+const dashBreak = /\s[-\u2013\u2014]+\s|\u2014/g;
+/** Quotation marks and brackets: "Send it", (send it). An apostrophe inside a word stays: don't, Sam's. */
+const quoteMarks = /["\u201c\u201d\u201e()[\]]|(?<![a-z0-9])'|'(?![a-z0-9])/g;
 /** The parts of the request, each with no filler in front: "reply to sam", "send it". */
 const requestParts = (goal: string) =>
   goal
-    ? plain(goal)
+    ? plain(goal.replace(dashBreak, "; "))
+        .replace(quoteMarks, " ")
         .split(/[.;:!?,\n]|\b(?:and|then|also|but|after that|afterwards)\b/)
         .map((part) => part.trim().replace(fillers, ""))
     : [];
@@ -697,6 +702,13 @@ const compiled = nameRules.map((rule) => ({
 }));
 /** A button whose whole name is a price: it buys. */
 const priceOnly = new RegExp(`^(?:${money.source})$`);
+/**
+ * A text field in the planner's words, named by what it takes: "the reply
+ * box", "the Reply\u2026 field". A click there gives it the focus and sends
+ * nothing, so these words name no control.
+ */
+const fieldWords =
+  /\b(?:send|reply|respond|answer|post|comment|message|share|tweet|chat|compose)(?:\u2026|\.\.\.)?["'\u201d]?\s+(?:text\s+)?(?:box|field|area|input|composer)\b/g;
 
 const moneyWords: Record<string, string> = {
   $: "dollars",
@@ -760,7 +772,8 @@ type NameOf = "control" | "menu" | "words";
 function askFor(raw: string, scene: Scene, of: NameOf = "control"): Ask | null {
   const words = of === "words";
   const dots = !words && trailingDots.test(clean(raw, 200));
-  const name = plain(clean(raw, 200).replace(trailingDots, ""));
+  const said = plain(clean(raw, 200).replace(trailingDots, ""));
+  const name = words ? said.replace(fieldWords, " ").trim() : said;
   if (!name) return null;
   const pay = (found: Ask) => {
     if (found.kind !== "pay") return found;
@@ -887,7 +900,10 @@ function screenRisk(
 ) {
   const name = clean(item.title, 80);
   return (
-    askFor(item.title, screenScene(observation, goal), nameOfItem(item)) ??
+    // The name of a window is its title: it says what the window shows, not what a click presses.
+    (item.role === "AXWindow"
+      ? null
+      : askFor(item.title, screenScene(observation, goal), nameOfItem(item))) ??
     (plainClose.test(name) ||
     quitName.test(name) ||
     item.role === "AXCloseButton"
@@ -1328,11 +1344,16 @@ const nameOf = (item: ScreenElement) => {
     ? `"${title}"`
     : `the ${item.role.replace(/^AX/, "").toLowerCase() || "element"}`;
 };
-/** The smallest element that holds the point. */
-function under(observation: Observation, point: { x: number; y: number }) {
+/** The smallest element that holds the point, of those that `take` keeps. */
+function under(
+  observation: Observation,
+  point: { x: number; y: number },
+  take = (_item: ScreenElement) => true,
+) {
   let best: ScreenElement | null = null;
   for (const item of observation.elements)
     if (
+      take(item) &&
       item.w > 0 &&
       item.h > 0 &&
       point.x >= item.x &&
@@ -1344,6 +1365,24 @@ function under(observation: Observation, point: { x: number; y: number }) {
       best = item;
   return best;
 }
+/**
+ * A click at the point goes into a text field: on the field, or on a text
+ * that it shows, such as its placeholder "Reply\u2026". It gives the field the
+ * focus and presses nothing. A text of a button inside the field is the
+ * button's.
+ */
+const intoField = (
+  observation: Observation,
+  item: ScreenElement | null,
+  point: { x: number; y: number },
+) =>
+  !!item &&
+  (textRoles.has(item.role) ||
+    (item.role === "AXStaticText" &&
+      textRoles.has(
+        under(observation, point, (each) => each.role !== "AXStaticText")
+          ?.role ?? "",
+      )));
 /** A point of the last image as a point of the screen. Null when it has no image or the point is outside it. */
 function screenPoint(observation: Observation, x: number, y: number) {
   const { imageWidth, imageHeight } = observation;
@@ -1838,7 +1877,7 @@ function checkScreen(
         // with no name, or one that only holds others, the planner's own
         // words count too. They can add a question. They never remove one.
         ...asking(
-          textRoles.has(found.role)
+          intoField(seen, found, point)
             ? null
             : (screenRisk(found, seen, view.goal) ??
                 (nameless(found, seen)
@@ -1869,7 +1908,7 @@ function checkScreen(
         // control, the planner's own words count too. They can add a
         // question. They never remove one.
         ...asking(
-          named && textRoles.has(named.role)
+          intoField(seen, found, point)
             ? null
             : ((named ? screenRisk(named, seen, view.goal) : null) ??
                 (nameless(found, seen)
