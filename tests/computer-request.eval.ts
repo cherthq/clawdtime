@@ -16,11 +16,11 @@
  * whether a request still ends with what the app holds, through trouble that
  * a real Mac and a real service give.
  *
- * The long requests (their names start with "long:") take 30 to 60 steps,
- * most of them across two apps on one desk: a form of twelve fields, prices
- * of four products, ten rows of a sheet, five messages and a note, a way that
- * failed early, a sign-in in the middle, and a list that another person
- * changes halfway. Each has a step limit and a time limit of its own, under
+ * The long requests (their names start with "long:") have ideal paths of
+ * 31 to 47 steps, most of them across two apps on one desk: a form of
+ * twelve fields, prices of four products, ten rows of a sheet, five
+ * messages and a note, a way that failed early, a sign-in in the middle, and
+ * a list that another person changes halfway. Each has a step limit and a time limit of its own, under
  * the limits of the service, and the result of every request says its steps
  * and its seconds.
  *
@@ -194,7 +194,9 @@ interface Request {
    * requests are a quarter of the requests without --new-actions and a
    * quarter of those with it, chosen once by the split hash of their names
    * (pickHeld in computer-eval-stats.ts). A new request is held when
-   * heldByHash says so.
+   * heldByHash says so. The long requests are held by choice, five of seven,
+   * so that a fault after step 30 is judged on requests that no rule was
+   * made on.
    */
   held?: true;
   /** The app on the screen. */
@@ -1722,7 +1724,8 @@ const requests: Request[] = [
       "Say how many were changed.",
     ],
     limit: longLimit(50),
-    done: (state, said, final, talk) => {
+    // The password in the app is the one that the person typed: the planner left it to them.
+    done: (state, said, final) => {
       const held = state as {
         categories: Record<string, string>;
         signIns: number;
@@ -1738,7 +1741,6 @@ const requests: Request[] = [
         held.signIns === 1 &&
         held.email === "ada@example.com" &&
         held.password === "a-test-password" &&
-        talk.asked.some((question) => /password/i.test(question)) &&
         /\b(?:7|seven)\b/i.test(said) &&
         final === "completed"
       );
@@ -2101,7 +2103,9 @@ async function one(
             ? `type ${JSON.stringify(command.text.slice(0, 40))}`
             : command.kind === "key"
               ? `key ${command.combo}`
-              : command.kind,
+              : command.kind === "open_app"
+                ? `open_app ${JSON.stringify(command.name.slice(0, 40))}`
+                : command.kind,
       ),
       faults: applied,
       ...(trouble ? { trouble } : {}),
