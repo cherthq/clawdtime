@@ -599,6 +599,27 @@ struct HelperStatus: Codable {
   }
 }
 
+/// The packaged companion is a release build. Modes that read the pixels of any
+/// window, or act on one, with no armed share or owner grant exist only in a
+/// debug build, which the local preview runs from `.build/debug`.
+enum CompanionModes {
+  static let debugOnly: Set<String> = ["--camera-frame", "--camera-stream", "--preview-native-executor"]
+  #if DEBUG
+  static let developmentBuild = true
+  #else
+  static let developmentBuild = false
+  #endif
+  /// Camera modes of this build. The release keeps only those that return metadata.
+  static func camera(developmentBuild: Bool = developmentBuild) -> [String] {
+    ["--camera-list", "--camera-probe", "--camera-check", "--camera-local-status", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
+      + (developmentBuild ? ["--camera-frame", "--camera-stream"] : [])
+  }
+  static func refusal(_ args: [String], developmentBuild: Bool = developmentBuild) -> HelperError? {
+    guard !developmentBuild, args.contains(where: debugOnly.contains) else { return nil }
+    return HelperError(400, "This development mode exists only in a debug build of the helper.")
+  }
+}
+
 @main struct Main {
   @MainActor static func main() {
     umask(0o077)
@@ -607,6 +628,7 @@ struct HelperStatus: Codable {
     signal(SIGPIPE, SIG_IGN)
     do {
       let args = CommandLine.arguments
+      if let refusal = CompanionModes.refusal(args) { throw refusal }
       let localOnly = Bundle.main.bundleIdentifier == "com.clawdtime.local-control"
       if args.contains("--native-observe") {
         guard args.count == 4, args[1] == "--native-observe", args[2] == "--target",
@@ -644,11 +666,16 @@ struct HelperStatus: Codable {
         guard args.count == 2 else { throw HelperError(400, "Invalid native preview arguments.") }
         let application = NSApplication.shared
         application.setActivationPolicy(.prohibited)
+        #if DEBUG
         PreviewNativeExecutor(installed: args.contains("--installed-native-executor")).run()
+        #else
+        // Only the installed parent's child: every effect asks it for local authority.
+        PreviewNativeExecutor(installed: true).run()
+        #endif
         application.run()
         return
       }
-      let cameraModes = ["--camera-list", "--camera-frame", "--camera-stream", "--camera-probe", "--camera-check", "--camera-local-status", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
+      let cameraModes = CompanionModes.camera()
       if args.contains(where: { $0.hasPrefix("--camera-") && !cameraModes.contains($0) }) {
         throw HelperError(400, "Unsupported camera development mode; rebuild the development helper.")
       }
@@ -686,10 +713,12 @@ struct HelperStatus: Codable {
               guard let index = args.firstIndex(of: "--surface"), index + 1 < args.count,
                 let bytes = args[index + 1].data(using: .utf8) else { throw HelperError(400, "Explicit --surface JSON required.") }
               let surface = try JSONDecoder().decode(CameraSurface.self, from: bytes)
+              #if DEBUG
               if args.contains("--camera-stream") {
                 try await CameraDisplayStream().run(surface)
                 return
               }
+              #endif
               if args.contains("--camera-check") {
                 // Run current exact-target guards without starting a capture.
                 _ = try await capture.cameraTarget(surface)
@@ -730,6 +759,7 @@ struct HelperStatus: Codable {
                 print("{\"frames\":\(frames),\"completed\":true,\"elapsedMs\":\(Int((ProcessInfo.processInfo.systemUptime - started) * 1000))}")
                 exit(0)
               }
+              #if DEBUG
               let started = Date()
               guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
               let frame = try await capture.cameraFrame(surface)
@@ -737,6 +767,9 @@ struct HelperStatus: Codable {
               struct Output: Encodable { var frameId: String; var capturedAt: String; var camera: CameraFrameMetadata; var jpegBase64: String }
               print(String(data: try JSONEncoder().encode(Output(frameId: UUID().uuidString,
                 capturedAt: frameCaptureTimestamp(started), camera: frame.metadata, jpegBase64: frame.jpeg.base64EncodedString())), encoding: .utf8)!)
+              #else
+              throw HelperError(400, "Invalid camera preview arguments.")
+              #endif
             }
             exit(0)
           } catch {

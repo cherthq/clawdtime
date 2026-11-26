@@ -866,6 +866,12 @@ create no listener or receipt store, never grant privacy permissions, and submit
 input. They require the active unlocked session. See the media README for the local
 preview with visible Start/Stop and synthetic fixtures.
 
+`--camera-frame`, `--camera-stream` and `--preview-native-executor` read the pixels
+of any window, or act on one, with no armed share or owner grant. Only a debug
+build (`.build/debug`, which the local preview runs) has them. The packaged release
+build refuses them, and its native executor always asks the installed parent for
+local authority before an effect.
+
 For an explicitly authorized disposable surface, `--camera-probe --surface '<exact
 JSON>'` repeatedly captures that same identity in one process, stopping at 120
 frames or 30 seconds plus completion of the current bounded frame. Explicit

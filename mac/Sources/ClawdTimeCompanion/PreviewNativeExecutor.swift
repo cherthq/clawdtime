@@ -10,7 +10,11 @@ import DeviceCore
   private let installed: Bool
   init(installed: Bool = false) { self.installed = installed }
   private func localAuthority() -> Bool {
+    // Only a debug build's local preview runs without a parent that answers for
+    // local authority. A release build always asks the installed parent.
+    #if DEBUG
     guard installed else { return true }
+    #endif
     FileHandle.standardOutput.write(Data("{\"localAuthority\":1}\n".utf8))
     return FileHandle.standardInput.readData(ofLength: 2) == Data("1\n".utf8)
   }
