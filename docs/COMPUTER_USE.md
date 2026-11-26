@@ -1796,12 +1796,17 @@ weekday" or a day by name, with "at" and an hour, as in "at 9", "at 8:30 am",
   the state folder, for its owner only. A request that looks like a password
   or a key is not kept.
 - At its time the routine hands its request to the worker in your words, as a
-  request of its own. Every rule of the worker holds for it.
+  request of its own. Every rule of the worker holds for it. The routine keeps
+  your whole sentence with its schedule, and the worker reads the request as
+  put off by it: you said it earlier, not now, so it says no yes ahead of time
+  and every action of the table asks (see "Your request" in
+  [The guards](#the-guards)). The planner reads the request alone.
 - It starts only when no other request runs and no call is live on the line.
   Otherwise it waits once, up to five minutes, then skips that time and texts
   you that it skipped.
 - A time that passed more than 15 minutes ago, while the Mac slept or the
-  service was stopped, is not run late. The next time counts.
+  service was stopped, is not run late, also when the routine waited for the
+  way to be free. The next time counts.
 - The same time never starts a second request: the id of the run is made from
   the routine and its time.
 - When the request ends, the routine texts you its result. When the request

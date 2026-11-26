@@ -677,6 +677,11 @@ interface Run {
   id: string;
   /** The person's words, for the planner. */
   goal: string;
+  /**
+   * The owner's words when they put the request off to a time (a routine),
+   * with the schedule. Such a request says no yes ahead of time.
+   */
+  putOff?: string;
   /** The same as the journal keeps them, for the panel. */
   shown: string;
   /** What the person said for this request after it began, oldest first. */
@@ -1423,11 +1428,26 @@ export class ComputerWorker implements DesktopExecutorPort {
   ): Promise<{ message: string }> {
     return this.begin(eventId, text, undefined, authority);
   }
+  /**
+   * A request that the owner said earlier and put off to a time, as a
+   * routine (`routines.ts`). `said` is their whole sentence, with the
+   * schedule: "every day at 18:00, reply to the team thread". The planner
+   * reads the request alone. The checks read it as put off: it says no yes
+   * ahead of time, and every action of the table asks.
+   */
+  submitPutOff(
+    eventId: string,
+    text: string,
+    said: string,
+  ): Promise<{ message: string }> {
+    return this.begin(eventId, text, undefined, undefined, said);
+  }
   private async begin(
     eventId: string,
     text: string,
     reading?: NavigationIntent,
     authority?: DesktopExecutionAuthority,
+    putOff?: string,
   ): Promise<{ message: string }> {
     if (!this.ownsScreen()) return { message: ownershipText };
     if (authority?.isLive() === false) return { message: stoppedText };
@@ -1463,6 +1483,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       authority,
       id,
       goal,
+      ...(putOff !== undefined ? { putOff: clean(putOff, 2000) } : {}),
       shown,
       guidance: [],
       ...(remembered.length ? { remembered } : {}),
@@ -1808,12 +1829,17 @@ export class ComputerWorker implements DesktopExecutorPort {
    */
   /**
    * The request as the checks read it, to see what it asked for already. It
-   * says no yes ahead of time when the person said more since, or when its
-   * own words hold the work back, put it off or make it hang on something
-   * ("hang on, reply to Sam", "reply to Sam tomorrow").
+   * says no yes ahead of time when the person said more since, when its own
+   * words hold the work back, put it off or make it hang on something
+   * ("hang on, reply to Sam", "reply to Sam tomorrow"), or when the owner put
+   * it off to a time (a routine: "every day at 18:00, reply to Sam").
    */
   private spoken(run: Run) {
-    return run.guidance.length || defersWork(run.goal) ? "" : run.goal;
+    return run.guidance.length ||
+      run.putOff !== undefined ||
+      defersWork(run.goal)
+      ? ""
+      : run.goal;
   }
   /** All that the person said for the request: its goal and their words after it. */
   private saidAll(run: Run) {

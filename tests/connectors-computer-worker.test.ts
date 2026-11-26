@@ -5895,6 +5895,35 @@ describe("the browser", () => {
   });
 });
 
+describe("a request that the owner put off to a time", () => {
+  it("reads a routine's request as put off: every action of the table asks", async () => {
+    const reply = observation([element(1, { title: "Reply" })]);
+    // As a request of now, the request asks for the reply: no question.
+    const now = setup([click, done], { screens: [reply] });
+    await now.worker.submit("r1", "Reply to Sam that I am late");
+    await now.worker.idle();
+    expect(now.hands.sent).toHaveLength(1);
+    // A routine's run of the same words asks first: the owner said them
+    // earlier, with a time.
+    const later = setup([click, done], { screens: [reply] });
+    await later.worker.submitPutOff(
+      "r2",
+      "Reply to Sam that I am late",
+      "every day at 18:00, reply to Sam that I am late",
+    );
+    await later.waiting();
+    expect(later.hands.sent).toEqual([]);
+    expect(later.worker.snapshot()).toMatchObject({
+      state: "waiting_for_person",
+      goal: "Reply to Sam that I am late",
+    });
+    // The planner reads the request, not the schedule.
+    expect(later.planner.inputs[0]!.goal).toBe("Reply to Sam that I am late");
+    later.worker.stop();
+    await later.worker.idle();
+  });
+});
+
 describe("what the panel shows", () => {
   it("says what runs, for the banner and for the state route", async () => {
     const send = observation([element(1, { title: "Send" })]);
