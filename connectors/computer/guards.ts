@@ -370,10 +370,15 @@ const asksPermission = (scene: Scene) => {
 /** The fillers in front of a verb of a request: "please", "can you", "and then". */
 const fillers =
   /^(?:(?:please|pls|kindly|just|now|also|then|and|so|ok|okay|hey|clawdtime|can you|could you|would you|will you|you can|you may|go ahead and|i want you to|i need you to|i'd like you to|i would like you to|help me|try to|remember to|make sure to|make sure you|feel free to|be sure to)\s+)*/;
+/** A dash between two parts of the request: "on it - send it". A hyphen inside a word stays: e-mail. */
+const dashBreak = /\s[-\u2013\u2014]+\s|\u2014/g;
+/** Quotation marks and brackets: "Send it", (send it). An apostrophe inside a word stays: don't, Sam's. */
+const quoteMarks = /["\u201c\u201d\u201e()[\]]|(?<![a-z0-9])'|'(?![a-z0-9])/g;
 /** The parts of the request, each with no filler in front: "reply to sam", "send it". */
 const requestParts = (goal: string) =>
   goal
-    ? plain(goal)
+    ? plain(goal.replace(dashBreak, "; "))
+        .replace(quoteMarks, " ")
         .split(/[.;:!?,\n]|\b(?:and|then|also|but|after that|afterwards)\b/)
         .map((part) => part.trim().replace(fillers, ""))
     : [];

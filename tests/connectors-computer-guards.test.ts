@@ -892,6 +892,28 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
         }
       });
 
+      it("reads Send it in the request as the yes for Return in the reply box, and a denial as no yes", () => {
+        const writing = thread([frame, { ...box, focused: true }]);
+        const enter = { kind: "key", combo: "return" };
+        for (const said of [
+          goal,
+          "Send it",
+          'Write a reply in the thread of the last message: on it, and "Send it"',
+          "Write a reply in the thread of the last message saying on it \u2014 Send it",
+          "Write a reply in the thread of the last message saying on it - send it",
+          "Reply in the thread with on it",
+        ])
+          expect(asks(enter, writing, "", said), said).toEqual(none);
+        for (const said of [
+          "Write a reply in the thread of the last message: on it. Do not send it.",
+          'Write a reply in the thread: on it, but "don\'t send it"',
+          "Write a reply in the thread saying on it \u2014 do not send it",
+          "Read the thread",
+          "",
+        ])
+          expect(asks(enter, writing, "", said).policy, said).toBe("send");
+      });
+
       it("still asks before a real Send, Reply, Post or Share that the request did not ask for", () => {
         const said = "Read the thread of the last message";
         for (const item of [
