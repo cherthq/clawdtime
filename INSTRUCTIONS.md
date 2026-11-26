@@ -145,6 +145,11 @@ CLAWDTIME_CHAT=agent npm run task:desktop -- \
   [Settings](#18-settings).
 - `--tucked true` starts the panel as the mascot alone, and takes no focus.
 
+`clawdtime start` runs this command for you, with the same state folder. With
+no `--project`, the first start uses `~/clawdtime-work`, and later starts keep
+the project of the first one. `clawdtime start --tucked true` starts the
+mascot alone.
+
 The mascot appears on your desktop. Click it to open the chat. The bar under
 the mascot has two buttons: **Chat** and **Talk**. The mascot's menu picks its
 style and size.
