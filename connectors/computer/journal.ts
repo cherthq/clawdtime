@@ -341,6 +341,23 @@ const keptRequests = 30;
 const keptSteps = 200;
 const maximumBytes = 2 * 1024 * 1024;
 
+/**
+ * A request whose only unknown is whether an app came to the front: an open
+ * or a switch of an app sends no input to any app, and the next request starts
+ * from a fresh look. It keeps its record, and the planner of that request does
+ * not try the open again; it does not hold new work.
+ */
+const openKinds = new Set(["open_app", "switch_previous_app"]);
+function onlyAnOpenUnknown(request: JournalRequest) {
+  const last = request.steps.at(-1);
+  return (
+    request.reason === "transition_unknown" &&
+    !!last &&
+    openKinds.has(last.kind) &&
+    last.outcome === "transition_unknown"
+  );
+}
+
 export class ComputerJournal {
   readonly file: string;
   /** What the person said for requests while they ran. */
@@ -453,7 +470,9 @@ export class ComputerJournal {
     return (
       requests.find(
         (request) =>
-          request.state === "uncertain" && request.clearedAt === undefined,
+          request.state === "uncertain" &&
+          request.clearedAt === undefined &&
+          !onlyAnOpenUnknown(request),
       ) ?? null
     );
   }

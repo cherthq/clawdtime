@@ -376,6 +376,38 @@ describe("the journal of computer requests", () => {
     expect(second.recover()).toEqual([]);
   });
 
+  it("holds no new work after an app opened with an unknown result, but holds it after unknown input", () => {
+    const journal = new ComputerJournal(root(), () => 1);
+    journal.open("r1", "Open Contacts and count them");
+    journal.step("r1", {
+      kind: "open_app",
+      target: "Contacts",
+      outcome: "transition_unknown",
+    });
+    journal.set("r1", "uncertain", "transition_unknown");
+    expect(journal.unresolved()).toBeNull();
+    expect(journal.get("r1")).toMatchObject({
+      state: "uncertain",
+      reason: "transition_unknown",
+    });
+
+    journal.open("r2", "Type a line in the note");
+    journal.step("r2", { kind: "open_app", target: "Notes", outcome: "ok" });
+    journal.step("r2", { kind: "type", target: "", outcome: "input_unknown" });
+    journal.set("r2", "uncertain", "input_unknown");
+    expect(journal.unresolved()?.id).toBe("r2");
+
+    const other = new ComputerJournal(root(), () => 1);
+    other.open("r3", "Open the page and press the button");
+    other.step("r3", {
+      kind: "click_element",
+      target: "Pay",
+      outcome: "transition_unknown",
+    });
+    other.set("r3", "uncertain", "transition_unknown");
+    expect(other.unresolved()?.id).toBe("r3");
+  });
+
   it("holds an uncertain request until the person clears it, and keeps its record", () => {
     const home = root();
     let now = 1;
