@@ -1,0 +1,154 @@
+import { z } from "zod";
+import type { Pairing } from "./contracts.js";
+
+export const routingId = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
+const expiresAt = z.number().int().positive();
+
+// These are OUTPUTS of trusted adapters, never request-body attestations.
+export const accountIdentitySchema = z
+  .object({
+    memberId: routingId,
+    expiresAt,
+  })
+  .strict();
+export const verifiedAliasSchema = z
+  .object({
+    memberId: routingId,
+    lineId: routingId,
+    // The adapter supplies the exact canonical, separately verified alias.
+    recipient: z.union([z.string().regex(/^\+[1-9]\d{7,14}$/), z.email()]),
+    conversationId: z.string().min(1).max(320),
+    expiresAt,
+  })
+  .strict();
+const providerBinding = {
+  eventId: routingId,
+  lineId: routingId,
+  providerCallId: routingId,
+  roomId: routingId,
+  participantId: routingId,
+  expiresAt,
+};
+export const routingProviderEventSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("incoming"), ...providerBinding }).strict(),
+  z
+    .object({ kind: z.literal("cleanup_complete"), ...providerBinding })
+    .strict(),
+]);
+export type RoutingProviderEvent = z.infer<typeof routingProviderEventSchema>;
+export type AccountIdentity = z.infer<typeof accountIdentitySchema>;
+export type VerifiedAlias = z.infer<typeof verifiedAliasSchema>;
+export const callProofTurnSchema = z
+  .object({
+    lineId: routingId,
+    providerCallId: routingId,
+    roomId: routingId,
+    participantId: routingId,
+    turnId: routingId,
+    code: z.string().max(32),
+    expiresAt,
+  })
+  .strict();
+export type CallProofTurn = z.infer<typeof callProofTurnSchema>;
+
+/** No default verifier exists. Webhook signatures establish event provenance,
+ * not human identity. The provider adapter must bind its room participant to
+ * the exact call and distinguish cleanup completion from media disconnect. */
+export interface SharedNumberVerifiers {
+  account(proof: unknown): Promise<AccountIdentity>;
+  alias(proof: unknown): Promise<VerifiedAlias>;
+  provider(proof: unknown): Promise<RoutingProviderEvent>;
+  // An original turn received from the pinned call participant. Do not accept
+  // identity fields or a reconstructed transcript supplied by a model tool.
+  callProofTurn(proof: unknown): Promise<CallProofTurn>;
+}
+
+export interface SharedMember {
+  id: string;
+  alias: VerifiedAlias;
+  pairingId?: string;
+  revokedAt?: number;
+}
+export interface SharedDeviceCredential {
+  id: string;
+  pairingId: string;
+  memberId: string;
+  deviceId: string;
+  digest: string;
+  createdAt: number;
+  revokedAt?: number;
+}
+export interface SharedConnection {
+  id: string;
+  credentialId: string;
+  memberId: string;
+  pairingId: string;
+  deviceId: string;
+  desktopInstanceId: string;
+  expiresAt: number;
+}
+export interface SharedCallScope {
+  memberId: string;
+  pairingId: string;
+  deviceId: string;
+  displayId: string;
+  desktopInstanceId: string;
+  connectionId: string;
+  grantId: string;
+  allowView: boolean;
+  allowControl: boolean;
+  // Reply destinations come from this persisted pairing snapshot only.
+  recipient: string;
+  conversationId: string;
+}
+export type SharedCallState =
+  | "unknown_identity"
+  | "unauthorized"
+  | "offline"
+  | "busy"
+  | "admitted"
+  | "ended"
+  | "outcome_unknown";
+export interface SharedCall {
+  id: string;
+  lineId: string;
+  providerCallId: string;
+  roomId: string;
+  participantId: string;
+  state: SharedCallState;
+  createdAt: number;
+  authorizationExpiresAt?: number;
+  scope?: SharedCallScope;
+  cleanupAt?: number;
+}
+export interface SharedCallProof {
+  id: string;
+  callId: string;
+  memberId: string;
+  pairing: Pairing;
+  digest: string;
+  attempts: number;
+  expiresAt: number;
+  consumedAt?: number;
+}
+export interface SharedTaskOwnership {
+  id: string;
+  callId: string;
+  lineId: string;
+  providerCallId: string;
+  scope: SharedCallScope;
+  userTurnId: string;
+  requestDigest: string;
+  createdAt: number;
+  resultId?: string;
+}
+export interface SharedCallbackOwnership {
+  id: string;
+  taskId: string;
+  resultId: string;
+  callId: string;
+  lineId: string;
+  scope: SharedCallScope;
+  state: "queued";
+  createdAt: number;
+}
