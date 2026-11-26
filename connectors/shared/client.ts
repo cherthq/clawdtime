@@ -37,6 +37,7 @@ export function validateOrigin(raw: string): string {
 }
 export class ClawdTimeClient {
   readonly origin: string;
+  private presentationSupport = new Map<string, boolean>();
   constructor(
     origin: string,
     private token: string,
@@ -154,8 +155,8 @@ export class ClawdTimeClient {
       text,
     });
   }
-  conversationTurns(id: string, after = 0, timeoutMs = 12_000) {
-    return this.api<{
+  async conversationTurns(id: string, after = 0, timeoutMs = 12_000) {
+    const result = await this.api<{
       turns: unknown[];
       request?: { state: string };
       conversation?: { state: string };
@@ -165,13 +166,24 @@ export class ClawdTimeClient {
       undefined,
       timeoutMs,
     );
+    const capabilities = result.capabilities as
+      { presentationVersion?: unknown } | undefined;
+    if (
+      this.presentationSupport.size >= 100 &&
+      !this.presentationSupport.has(id)
+    )
+      this.presentationSupport.delete(
+        this.presentationSupport.keys().next().value!,
+      );
+    this.presentationSupport.set(id, capabilities?.presentationVersion === 1);
+    return result;
   }
   conversationExecution(id: string) {
     return this.api(
       `/api/attention/${encodeURIComponent(id)}/conversation/execution`,
     );
   }
-  conversationOperation(
+  async conversationOperation(
     id: string,
     operation:
       | "ack"
@@ -184,6 +196,19 @@ export class ClawdTimeClient {
       | "act",
     body: unknown,
   ) {
+    if (
+      operation === "progress" &&
+      body &&
+      typeof body === "object" &&
+      "presentation" in body
+    ) {
+      // Negotiate with this exact request. Never retry an effect after a failed write.
+      if (!this.presentationSupport.has(id)) await this.conversationTurns(id);
+      if (!this.presentationSupport.get(id)) {
+        const { presentation: _omitted, ...legacy } = body;
+        body = legacy;
+      }
+    }
     return this.api(
       `/api/attention/${encodeURIComponent(id)}/conversation/${operation}`,
       body,

@@ -444,6 +444,7 @@ export async function startSetupSession(options: {
                 ...status,
                 readiness: summarizeReadiness(backend),
                 session: backend.session,
+                capabilities: backend.capabilities,
                 protocolVersion: run.session?.protocolVersion ?? 1,
                 localRunId: options.runId,
               };

@@ -108,3 +108,52 @@ Record repository commit, exact helper hash/signature, client/OS versions, nativ
 worker build, separate backend/media deployment IDs, line ownership evidence,
 measured timings and every remaining gap in STATUS.md plus private operator records.
 Do not replace the word pending with passed until the actual observation exists.
+
+## Improvements A–F qualification — unrun (November 13, 2026)
+
+The `improvements` branch has isolated source/test authorization only, plus an
+explicit push authorization. Nothing in its automated results qualifies installed
+components or handset behavior. Package G remains deferred. Do not rerun legacy
+calling, messaging, connector spikes or installation commands as part of local
+validation. A future operator must obtain separate scope for each physical run.
+
+For a separately authorized one-call run:
+
+1. Record exact source/helper/client/OS versions and select the intended originating
+   chat, paired Mac and display. Check readiness; permission changes and local
+   Enable are explicit local actions. No recheck grants a lease or resets TCC.
+2. Place only the authorized call. Verify compact/expanded Mac controls, no focus
+   theft, keyboard/VoiceOver access, both display geometries, and phone portrait and
+   landscape readability. Check for duplicate panel/phone overlays.
+3. Account for ten predefined synthetic turns: short instruction; pause within a
+   sentence; continuation after final recognition; correction while working;
+   background noise followed by speech; a Unicode label; delayed agent receipt;
+   native approval request; long spoken reply; observed result. Record counts,
+   stage timings and failures only, never transcript/screens/audio in Git.
+4. Native input needs exclusive ownership and separate explicit authorization,
+   uses a disposable local fixture, and must be followed by observation of the
+   actual result. No real message is a fixture. Submitted input is not success.
+5. Verify local Stop, mute/unmute, cooperative pause and explicit end. Check pending
+   versus acknowledged controls and actual provider cleanup. Test remote hangup in
+   a separately scoped run if the one call has already ended. A later conversation
+   must inherit no task text, command, executor or capture permission.
+
+Separately authorize clean-install, upgrade/rollback, a second Mac, repeated
+sessions, gateway loss/restart and long-call qualification; do not silently add
+these to a single-call authorization. Record every scripted turn, zero duplicate
+or cross-session delivery, zero unauthorized effects, no false success, cleanup,
+median/p95 with denominators and missing/failure counts. Ten turns are a small
+qualification sample, not a reliability claim. Signed/notarized distribution,
+per-device credential isolation, monitoring and broader release gates remain open.
+
+Offline commands added by this branch:
+
+```sh
+npx vitest run tests/backend-improvements.test.ts tests/connectors-improvements.test.ts
+npx tsx scripts/inspect-session.ts
+(cd mac && swift run PanelPreview /tmp/clawdtime-panel-preview)
+media/.venv/bin/python media/preview_activity.py /tmp/clawdtime-visuals
+```
+
+The inspector defaults to a deterministic calculation fixture. Its example
+median/p95 are not measured product latency or a comparison with FaceTimeOS.

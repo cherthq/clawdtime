@@ -19,6 +19,7 @@ class Device extends SimulatedDevice {
   revision = 1;
   controlAllowed = true;
   armed = true;
+  presentationVersion: number | undefined;
   panelCommand: unknown;
   panels: Record<string, unknown>[] = [];
   async panel(_id: string, payload: Record<string, unknown>) {
@@ -26,6 +27,7 @@ class Device extends SimulatedDevice {
   }
   async readiness() {
     return {
+      presentationVersion: this.presentationVersion,
       controlAllowed: this.controlAllowed,
       armed: this.armed,
       available: true,
@@ -430,6 +432,106 @@ describe("version 2 sharing and execution", () => {
     };
     await expect(h.transition(0, "native")).rejects.toThrow("uncertain");
     expect(h.execution.status(h.s.token, h.r.id).state).toBe("uncertain");
+    h.store.close();
+  });
+});
+
+describe("activity qualification journey through actual routes and panel", () => {
+  it("negotiates old/new helper, explains local readiness, forwards outcomes and ends only explicitly", async () => {
+    const h = await fixture(),
+      panel = new PanelSynchronizer(h.service, h.control);
+    const effects = h.store.effects().length,
+      leases = h.store.all("lease").length;
+    await panel.tick();
+    expect(h.device.panels.at(-1)?.activity).toBeUndefined();
+    const policyUrl = `/media/${mediaSessionId(h.r.id)}/policy`;
+    const oldPolicy = await (
+      await h.app.request(policyUrl, {
+        headers: { authorization: "Bearer " + "m".repeat(64) },
+      })
+    ).json();
+    expect(oldPolicy.presentationBinding).toBeUndefined();
+    const newPolicy = await (
+      await h.app.request(policyUrl, {
+        headers: {
+          authorization: "Bearer " + "m".repeat(64),
+          "X-ClawdTime-Presentation": "1",
+        },
+      })
+    ).json();
+    expect(newPolicy.presentationBinding).toMatchObject({
+      sessionId: h.s.session.id,
+      deviceId: "fixture",
+      displayId: 1,
+    });
+    h.device.presentationVersion = 1;
+    h.device.armed = false;
+    await panel.tick();
+    expect(h.device.panels.at(-1)?.readiness).toMatchObject({
+      reason: "sharing_disabled",
+    });
+    expect(h.device.armed).toBe(false);
+    expect(h.store.effects()).toHaveLength(effects);
+    h.device.armed = true;
+    await h.send("activity-first", "Inspect synthetic fixture");
+    const turn = (await (await h.api("turns")).json()).turns[0];
+    await h.api("ack", { turnId: turn.id });
+    expect(
+      (
+        await h.api("progress", {
+          turnId: turn.id,
+          state: "pending_approval",
+          presentation: {
+            version: 1,
+            activity: {
+              activityId: "approval",
+              kind: "approval_needed",
+              summary: "Review in the coding client",
+            },
+          },
+        })
+      ).status,
+    ).toBe(200);
+    await panel.tick();
+    expect(h.device.panels.at(-1)?.readiness).toMatchObject({
+      reason: "native_approval",
+    });
+    expect(h.device.panels.at(-1)?.activity).toMatchObject({
+      work: "pending_approval",
+      delivery: "acknowledged",
+    });
+    const completed = await h.api("progress", {
+      turnId: turn.id,
+      state: "completed",
+      presentation: {
+        version: 1,
+        outcome: {
+          outcomeId: "result",
+          summary: "Synthetic test observed",
+          verification: "agent_observed",
+          evidenceKind: "test_result",
+        },
+      },
+    });
+    expect(completed.status).toBe(200);
+    await panel.tick();
+    expect(h.device.panels.at(-1)?.activity).toMatchObject({
+      work: "completed",
+      outcome: { verification: "agent_observed" },
+    });
+    expect(h.store.effects()).toHaveLength(effects);
+    expect(h.store.all("lease")).toHaveLength(leases);
+    expect(h.device.inputs).toEqual([]);
+    const wrong = await h.app.request(`/api/attention/${h.r.id}/diagnostics`, {
+      headers: { authorization: "Bearer wrong" },
+    });
+    expect(wrong.status).toBe(401);
+    expect((await h.api("end", {})).status).toBe(200);
+    await h.service.drain();
+    expect((h.service.transport as SimulationTransport).messages).toHaveLength(
+      0,
+    );
+    expect((h.service.transport as SimulationTransport).ended).toHaveLength(1);
     h.store.close();
   });
 });

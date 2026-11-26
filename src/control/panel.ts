@@ -1,3 +1,8 @@
+import {
+  readinessReasons,
+  type ReadinessReason,
+} from "../../connectors/shared/readiness.js";
+import { presentationFor } from "../attention/presentation.js";
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -35,6 +40,7 @@ export class PanelSynchronizer {
       Partial<PanelDevice>;
     if (this.busy || !device.readiness || !device.panel) return;
     this.busy = true;
+    presentationFor(this.service).prune();
     try {
       for (const r of this.service.store.all<AttentionRequest>("attention")) {
         const s = this.service.store.get<AgentSession>("session", r.sessionId);
@@ -53,12 +59,21 @@ export class PanelSynchronizer {
           p.displayId,
         );
         const policy = localPolicySchema.parse(local);
+        if (
+          !policy.armed ||
+          !policy.available ||
+          !policy.screenPermission ||
+          !policy.displayAttached ||
+          !policy.viewAllowed
+        )
+          presentationFor(this.service).clear(r.id);
         let e = this.service.store.get<ExecutionOwnership>("execution", r.id);
         const lease = this.service.store
           .all<ControlLease>("lease")
           .find((l) => l.requestId === r.id && l.state === "active");
         const invalidate = async () => {
           this.service.store.saveState(`view-stopped:${r.id}`, true);
+          presentationFor(this.service).clear(r.id);
           if (e) {
             e = {
               ...e,
@@ -111,12 +126,14 @@ export class PanelSynchronizer {
         const executionState =
           e?.state === "uncertain"
             ? "uncertain"
-            : turns.some((t) => t.state === "pending_approval")
-              ? "pending_approval"
-              : e?.state === "working" ||
-                  turns.some((t) => t.state === "executing")
-                ? "working"
-                : "waiting";
+            : turns.some((t) => t.state === "uncertain")
+              ? "uncertain"
+              : turns.some((t) => t.state === "pending_approval")
+                ? "pending_approval"
+                : e?.state === "working" ||
+                    turns.some((t) => t.state === "executing")
+                  ? "working"
+                  : "waiting";
         // The panel expiry and helper checks prevent stale status from authorizing anything.
         const currentRequest = this.service.store.get<AttentionRequest>(
           "attention",
@@ -127,7 +144,38 @@ export class PanelSynchronizer {
           currentCall?.state !== "connected" ||
           !currentRequest ||
           !["connected", "awaiting_input"].includes(currentRequest.state);
+        const reason: ReadinessReason | undefined =
+          this.service.clock() - (s.lastSeenAt ?? s.createdAt) >= 20000
+            ? "agent_stale"
+            : !policy.armed
+              ? "sharing_disabled"
+              : !policy.available
+                ? "gateway_unavailable"
+                : !policy.screenPermission
+                  ? "screen_permission"
+                  : !policy.displayAttached || !policy.viewAllowed
+                    ? "binding_mismatch"
+                    : executionState === "uncertain"
+                      ? "unresolved_effect"
+                      : executionState === "pending_approval"
+                        ? "native_approval"
+                        : undefined;
         await device.panel(p.deviceId, {
+          ...(local.presentationVersion === 1
+            ? {
+                presentationVersion: 1,
+                activity: presentationFor(this.service).projection(r.id),
+                ...(reason
+                  ? {
+                      readiness: {
+                        reason,
+                        checkedAt: new Date(this.service.clock()).toISOString(),
+                        nextAction: readinessReasons[reason].nextAction,
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
           sessionId: s.id,
           callId: c.id,
           memberId: p.memberId,
@@ -135,9 +183,9 @@ export class PanelSynchronizer {
           expiresAt: new Date(this.service.clock() + 5000).toISOString(),
           agent: s.adapter,
           projectLabel: `${
-            basename(s.projectRoot)
-              .replace(/[\x00-\x1f\x7f]/g, "")
-              .slice(0, 100) || "Project"
+            Array.from(basename(s.projectRoot).replace(/[\p{Cc}\p{Cs}]/gu, ""))
+              .slice(0, 30)
+              .join("") || "Project"
           } · Chat ${createHash("sha256").update(s.id).digest("hex").slice(0, 6)}`,
           personLabel: /^\+[1-9]\d{7,14}$/.test(p.recipient)
             ? `Paired contact ••${p.recipient.slice(-4)}`

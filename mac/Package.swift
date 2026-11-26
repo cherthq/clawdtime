@@ -6,6 +6,7 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
     .library(name: "DeviceCore", targets: ["DeviceCore"]),
     .executable(name: "ClawdTimeTaskPanel", targets: ["ClawdTimeTaskPanel"]),
     .executable(name: "ClawdTimeReviewWindow", targets: ["ClawdTimeReviewWindow"]),
+    .executable(name: "PanelPreview", targets: ["PanelPreview"]),
 ], targets: [
     .target(name: "DeviceCore"),
     .target(name: "TaskPanelCore"),
@@ -22,4 +23,5 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
     .executableTarget(name: "ClawdTimeCompanion", dependencies: ["DeviceCore"]),
     .executableTarget(name: "ClawdTimeTaskCapture", dependencies: ["DeviceCore"]),
     .testTarget(name: "DeviceCoreTests", dependencies: ["DeviceCore"]),
+    .executableTarget(name: "PanelPreview", dependencies: ["DeviceCore"]),
 ], swiftLanguageModes: [.v5])

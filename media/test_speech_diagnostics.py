@@ -56,3 +56,42 @@ class SpeechDiagnosticsTests(unittest.TestCase):
         with self.assertLogs(level='INFO') as logs:self.d.flush(force=True)
         self.assertNotIn('PRIVATE',' '.join(logs.output))
         self.assertIn('speech_diagnostic_unavailable',' '.join(logs.output))
+
+
+class SpeechCorrelationTests(unittest.TestCase):
+    def test_process_scope_correlation_and_reset_prevent_mixed_durations(self):
+        now=[10.0];saved=[]
+        diagnostic=SpeechDiagnostics('synthetic-session',saved.append,clock=lambda:now[0])
+        diagnostic.event('queue_accepted',generation=2,segment=1)
+        first_process=diagnostic.process_id
+        now[0]=10.2
+        diagnostic.event('callback_accepted',generation=2,segment=1)
+        diagnostic.flush(force=True)
+        first,second=saved[-1]['events']
+        self.assertEqual(first['correlationId'],second['correlationId'])
+        self.assertGreaterEqual(second['elapsedMs'],199)
+        self.assertNotIn('synthetic-session',json.dumps(saved))
+        now[0]=1
+        diagnostic.event('capture_open',generation=3)
+        diagnostic.flush(force=True)
+        self.assertNotEqual(first_process,saved[-1]['processId'])
+        self.assertEqual(len(saved[-1]['events']),1)
+        self.assertEqual(saved[-1]['events'][0]['elapsedMs'],0)
+        for bad in ('SECRET', 'f'*25, None):
+            if bad is not None:
+                with self.assertRaises(ValueError):diagnostic.event('capture_open',correlation_id=bad)
+        other=SpeechDiagnostics('synthetic-session',lambda value:None)
+        self.assertNotEqual(diagnostic.process_id,other.process_id)
+
+
+    def test_day_rollover_starts_new_duration_scope(self):
+        now=[0.0];saved=[]
+        diagnostic=SpeechDiagnostics('fixture',saved.append,clock=lambda:now[0])
+        initial=diagnostic.process_id
+        now[0]=86400
+        diagnostic.event('callback_started',segment=1)
+        now[0]+=0.25
+        diagnostic.event('callback_accepted',segment=1)
+        diagnostic.flush(force=True)
+        self.assertNotEqual(initial,saved[-1]['processId'])
+        self.assertEqual([event['elapsedMs'] for event in saved[-1]['events']],[0,250])
