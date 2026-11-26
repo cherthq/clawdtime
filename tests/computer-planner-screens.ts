@@ -179,6 +179,21 @@ const login = (typed: boolean) =>
     </div></div></div>`,
   );
 
+// A booking that was sent: the screen shows its reference, and a field takes it back to confirm it.
+const booking = page(
+  "Booking request",
+  `.form { margin: 80px auto; width: 380px; } .form label { display: block; margin: 14px 0 5px; color: #444; }
+   .form input { width: 100%; height: 32px; border: 1px solid #c4c4c4; border-radius: 7px; padding: 0 9px; font: inherit; }
+   .form button { margin-top: 22px; width: 100%; height: 34px; } .form p { color: #333; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">Booking request</div></div><div class="content"><div class="form">
+    <h2 data-role="AXStaticText" data-title="Booking sent">Booking sent</h2>
+    <p data-role="AXStaticText" data-title="Your booking reference is ST-60412.">Your booking reference is ST-60412.</p>
+    <p data-role="AXStaticText" data-title="To confirm the booking, type its reference here.">To confirm the booking, type its reference here.</p>
+    <label>Reference</label><input data-role="AXTextField" data-title="Reference" data-key="reference">
+    <button class="push primary" data-role="AXButton" data-title="Confirm" data-key="confirm">Confirm</button>
+  </div></div></div>`,
+);
+
 // A board app: what is on the board is drawn, and the Accessibility tree names none of it. Only a click at a
 // point in the picture reaches a sticky note, a tool of the floating bar, the x of the banner or a star.
 const tool = (name: string, drawing: string) =>
@@ -470,6 +485,14 @@ export const screens: Record<string, Screen> = {
       window: "Sign in to Ledger",
     },
     html: login(true),
+  },
+  booking: {
+    app: {
+      name: "Stays",
+      bundleId: "com.example.stays",
+      window: "Booking request",
+    },
+    html: booking,
   },
   // For the new kinds of action.
   menuClosed: {

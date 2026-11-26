@@ -627,6 +627,17 @@ confirm it, report it. The code is in `connectors/computer/plan.ts`.
    abort as every other call to the model. It gets a small picture: the
    elements carry the names. The outline also holds `say`, the first line for
    the person (see [What you hear first, and on the way](#what-you-hear-first-and-on-the-way)).
+   A goal that names two apps or more waits for its outline before its first
+   turn, for at most 15 seconds (`namesTwoApps` in `plan.ts`). The outline
+   came after the second to fourth turn of the planner. A turn with no plan
+   can keep no fact, so on a goal that reads one app and writes in another,
+   the first turns went from one app to the other and back 3 to 5 times
+   until the plan came. An app counts when the goal names the app in front,
+   names a common app of a Mac (Notes, Mail, Calendar), puts a name before
+   "app", or puts a name with a capital after "in", "into", "open", "using" or
+   "from the". A month or a day of the week is no app. The reading only
+   orders the work: a goal that it reads wrong waits a few seconds for nothing,
+   or does not wait, as before. Stop and a hold do not wait for the outline.
 2. With every turn after that, the planner gets the plan: each subgoal as
    open, done with what the screen showed, or skipped with why, and the one to
    work on now.
@@ -659,11 +670,21 @@ The planner's rules for the outline and for each turn with a plan say:
   before a close.
 - Carry the task to its natural end: after a post, see the post; after a save
   or a change of a setting, see the saved state.
-- When a password, a code or another secret is needed, ask, and say what is
-  needed and where. The person types it on the Mac. A name or an email
-  address that only the person knows is no secret: the planner asks for it
-  and types it itself. The rule that made the person type every part of a
-  sign-in left the request test asking 7 times in a row for a work email.
+- When a password, a PIN, a code that the person receives (a sign-in code, a
+  one-time code) or another secret is needed, ask, and say what is needed and
+  where. The person types it on the Mac. A name or an email address that only
+  the person knows is no secret: the planner asks for it and types it itself.
+  The rule that made the person type every part of a sign-in left the request
+  test asking 7 times in a row for a work email. A reference, order, booking
+  or confirmation number that the screen shows or the goal names is no secret
+  either: the planner reads it, keeps it and types it itself. The rule that
+  said only "a code" made `gpt-6.2-sol` ask the person to type the reference
+  of the lease form.
+- Before the planner leaves an app, a window or a page, it keeps in facts
+  what it read there and still needs: the next screen does not show it. One
+  fact may hold several short values. Without this rule, a subgoal "identify
+  the ten receipts" was marked done with no fact, and the planner went back
+  to the first app for every one or two values.
 
 The outline alone also reads two lines on `say`: one line in the language of
 the goal, in the first person and the present tense, about what the planner
@@ -676,6 +697,7 @@ the same rules.
 | Bound                                                  | Value                     |
 | ------------------------------------------------------ | ------------------------- |
 | Subgoals of an outline, or of a new rest               | 8                         |
+| Wait of the first turn for the outline, two apps       | 15 seconds                |
 | Subgoals of one request in all                         | 12                        |
 | Revisions of the rest of the plan                      | 3                         |
 | `plan_update` calls in one request                     | 16                        |
@@ -1094,10 +1116,15 @@ Results of November 26, 2026, the seven long requests:
 | ---------------------------------- | -------- | ------------------- | -------------------- |
 | `gpt-6.2-sol`, 2 runs              | 13 of 14 | 18 to 41, median 29 | 49 to 101, median 73 |
 | `anthropic/claude-opus-5-5`, 1 run | 7 of 7   | 21 to 39, median 29 | 39 to 78, median 57  |
+| `gpt-6.2-sol`, 3 runs, before      | 20 of 21 | 19 to 42, median 30 | 47 to 100, median 75 |
+| `gpt-6.2-sol`, 3 runs, after       | 21 of 21 | 19 to 38, median 29 | 53 to 102, median 81 |
+
+The last two rows measure the two changes of the same day: the rule on
+references and the order of the outline and the first turn.
 
 No run reached its step limit or its time limit. What the runs showed:
 
-- `gpt-6.2-sol` takes the reference of the lease form for a code that the
+- `gpt-6.2-sol` took the reference of the lease form for a code that the
   person must type. After the send it asked the person to type HA-48213 into
   the Reference field, twice, in each of 4 runs (two rounds of 2). The person
   of the test says yes and types nothing. In 3 of the 4 runs it then gave up:
@@ -1105,15 +1132,34 @@ No run reached its step limit or its time limit. What the runs showed:
   confirmed yet: enter the reference in the Reference field in Homes and
   click Confirm." In 1 run it typed the reference itself after the second
   yes. The goal says to type the reference. `claude-opus-5-5` typed it itself
-  in 2 of 2 runs, with no question.
-- Both models spend 3 to 5 steps at the start of the two requests that read
+  in 2 of 2 runs, with no question. Its reason was "The reference is required
+  as a confirmation code": the rule said "never type a password, a code or
+  any other secret". The rule now names what only the person types (a
+  password, a PIN, a code that the person receives) and says that a
+  reference, order, booking or confirmation number that the screen shows or
+  the goal names is data. Before it, 6 more runs asked in 3 and gave up in 2.
+  After it, 10 of 10 runs were done with no question. The planner test has a
+  task for it: a booking that shows its reference, where the goal says to
+  type it back. It went from 0 of 6 right (6 questions) to 6 of 6.
+- Both models spent 3 to 5 steps at the start of the two requests that read
   one app and write in another: open_app Sheets, Receipts, Sheets, Receipts,
-  Sheets, and the same with Notes and Directory. The first turn runs before
-  the outline arrives: it keeps the facts and opens the second app. The
-  outline then names the first app in its first subgoal ("Read the ten
-  November receipts from the Receipts list"), so the planner opens that app
-  again to meet it ("read receipts list"), marks it done ("receipts read")
-  and opens the second app again ("open target sheet").
+  Sheets, and the same with Notes and Directory. The outline came after the
+  second to fourth turn. The turns before it had no plan, so they could keep
+  no fact: a plan_update that came with an action was dropped. They opened
+  the second app, found nothing to type there and went back. When the plan
+  came, a subgoal "identify the ten receipts" was once marked done with no
+  fact, and the planner then went back to Receipts for every one or two
+  values: 15 open_app in one run. Now a goal that names two apps waits for
+  its outline before its first turn, and the planner keeps what it read in
+  facts before it leaves an app (see [Plans and multi-step tasks](#plans-and-multi-step-tasks)).
+  In 3 runs before and 3 after, the open_app of the ten rows went from 5, 5
+  and 5 to 1, 1 and 1, and its steps from 28, 28 and 30 to 25, 24 and 25.
+  The seven notes went from 5, 3 and 3 open_app to 1, 1 and 1, and from 42,
+  33 and 33 steps to 38, 31 and 31. The five messages took 37, 29 and 29
+  steps, then 29, 29 and 29. The shop took 19, 19 and 19 steps, then 28, 28
+  and 19: with the outline at its first turn, the planner searched for each
+  of the four kettles by name, as its subgoals said, in place of one search
+  for "kettle".
 - The models take fewer steps than the ideal paths. They type into a field by
   its name, one step for each field. The form took 22 to 24 steps and the
   sheet 28 to 29. The shop took 18 to 21 while it listed every product, and
