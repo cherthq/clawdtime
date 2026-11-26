@@ -2204,3 +2204,90 @@ describe("same-chat streaming voice dial readiness", () => {
     f.store.close();
   });
 });
+
+describe("pre-dial refusals release the line", () => {
+  // Each refusal comes before any media session or dial. The call never
+  // started, so it must end as not dispatched and free the line, never unknown.
+  const expectReleased = (
+    f: ReturnType<typeof fixture>,
+    attention: AttentionRequest,
+  ) => {
+    const mediaId = mediaSessionId(attention.id);
+    expect(f.store.effects("unknown")).toHaveLength(0);
+    expect(f.store.effect(`${attention.id}:call`)?.state).toBe("failed");
+    expect(f.store.effect(`${attention.id}:call`)?.result).toMatchObject({
+      dialSent: false,
+    });
+    expect(
+      f.store.get<AttentionRequest>("attention", attention.id)?.state,
+    ).toBe("failed");
+    expect(f.store.get<CallSession>("call", mediaId)?.state).toBe("ended");
+    expect(f.store.get("media", mediaId)).toBeUndefined();
+    expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+  };
+  it.each(["revoked", "expired"] as const)(
+    "ends a document call whose grant is %s before the dial as not dispatched",
+    async (change) => {
+      const f = documentCallFixture();
+      f.store.put(
+        "document_root_grant",
+        change === "revoked"
+          ? { ...f.grant, state: "revoked" }
+          : { ...f.grant, expiresAt: Date.now() - 1 },
+      );
+      await f.app.drain();
+      expectReleased(f, f.documentAttention);
+      f.store.put("document_root_grant", f.grant);
+      const next = f.app.requestAttention(f.documentAgent.token, {
+        taskId: "preview",
+        idempotencyKey: "documents-again",
+        reason: "review",
+        question: "Second synthetic document preview",
+      });
+      expect(next.state).toBe("queued");
+      f.store.close();
+    },
+  );
+  it("ends a document call whose listening stopped before the dial as not dispatched", async () => {
+    const f = documentCallFixture();
+    f.store.saveState(`listening-stopped:${f.documentAttention.id}`, true);
+    await f.app.drain();
+    expectReleased(f, f.documentAttention);
+    f.store.close();
+  });
+  it("ends an ordinary call refused because audio qualification holds the line as not dispatched", async () => {
+    const f = fixture();
+    f.store.put("session", {
+      ...f.agent.session,
+      id: "qualification-holder",
+      audioQualification: {
+        version: 1,
+        executionDisabled: true,
+        expiresAt: Date.now() + 60_000,
+      },
+      state: "active",
+    });
+    await f.app.drain();
+    expectReleased(f, f.attention);
+    f.store.close();
+  });
+  it("ends a qualification call that changes during its readiness read as not dispatched", async () => {
+    const f = qualificationFixture();
+    const transport = f.transport as unknown as {
+      audioQualificationReadiness: () => Promise<unknown>;
+    };
+    const readiness = transport.audioQualificationReadiness.bind(f.transport);
+    transport.audioQualificationReadiness = async () => {
+      const value = await readiness();
+      // The exact qualification request is no longer queued after the read.
+      f.store.put("attention", {
+        ...f.store.get<AttentionRequest>("attention", f.q.request.id)!,
+        deadline: Date.now() + 1,
+      });
+      return value;
+    };
+    await f.app.drain();
+    expectReleased(f, f.q.request);
+    f.store.close();
+  });
+});

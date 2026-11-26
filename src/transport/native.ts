@@ -892,21 +892,28 @@ export class NativeTransport implements Transport {
       this.store.get<MediaRecord>("media", id)
         ? error
         : new NotDispatched(error.message);
-    try {
-      this.guard(pairing);
-    } catch (error) {
-      throw error instanceof DomainError ? refusal(error) : error;
-    }
+    const refuse = (check: () => void) => {
+      try {
+        check();
+      } catch (error) {
+        throw error instanceof DomainError ? refusal(error) : error;
+      }
+    };
+    refuse(() => this.guard(pairing));
     const qualification = isAudioQualification(attention);
     const owner = this.store.get<AgentSession>("session", attention.sessionId);
     const documentOnly =
       owner?.documentAccess !== undefined ||
       owner?.conversation?.runnerId === "remote-documents";
-    if (documentOnly) this.assertDocumentDial(attention, pairing, effectId);
-    if (qualification)
-      this.assertQualificationDial(attention, pairing, effectId);
-    else if (activeAudioQualification(this.store, pairing))
-      throw new DomainError(403, "Audio qualification reserves this line.");
+    // A closed document grant, stopped listening or a line that audio
+    // qualification holds refuses the call before any request is sent.
+    refuse(() => {
+      if (documentOnly) this.assertDocumentDial(attention, pairing, effectId);
+      if (qualification)
+        this.assertQualificationDial(attention, pairing, effectId);
+      else if (activeAudioQualification(this.store, pairing))
+        throw new DomainError(403, "Audio qualification reserves this line.");
+    });
     await this.requireReady(pairing, "call", !qualification && !documentOnly);
     if (
       owner?.voiceFrontend?.provider === "elevenlabs" &&
@@ -926,7 +933,7 @@ export class NativeTransport implements Transport {
         throw new PreflightBlocked(
           "Audio qualification media readiness is unavailable; no call was placed.",
         );
-      this.assertQualificationDial(attention, pairing, effectId);
+      refuse(() => this.assertQualificationDial(attention, pairing, effectId));
     }
     if (!this.messages.cursor())
       throw refusal(
