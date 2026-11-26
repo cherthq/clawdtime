@@ -22,6 +22,8 @@ interface Pending {
   finish: (result: ExecutionResult) => void;
   claimed: boolean;
 }
+/** A worker is available while its last heartbeat is newer than this. */
+const heartbeatMs = 10_000;
 /** Authenticated pull worker, never a push into an idle desktop chat. Payloads stay transient. */
 export class RemoteExecutionRunner implements ExecutionRunner {
   private connections = new Map<string, Connection>();
@@ -78,9 +80,9 @@ export class RemoteExecutionRunner implements ExecutionRunner {
     const available =
       this.enabled &&
       (binding
-        ? !!connection && this.service.clock() - connection.at < 10_000
+        ? !!connection && this.service.clock() - connection.at < heartbeatMs
         : [...this.connections.values()].some(
-            (c) => this.service.clock() - c.at < 10_000,
+            (c) => this.service.clock() - c.at < heartbeatMs,
           ));
     return {
       id: this.id,
@@ -96,6 +98,21 @@ export class RemoteExecutionRunner implements ExecutionRunner {
       customControl: false,
       cancellation: "cooperative",
     };
+  }
+  /** A worker of a stopped session, or one whose heartbeat stopped, can take no work. */
+  private prune() {
+    const now = this.service.clock();
+    for (const [sessionId, connection] of this.connections) {
+      const session = this.service.store.get<
+        import("../contracts.js").AgentSession
+      >("session", sessionId);
+      if (
+        !session ||
+        session.state === "stopped" ||
+        now - connection.at >= heartbeatMs
+      )
+        this.connections.delete(sessionId);
+    }
   }
   ready(binding: JobBinding, details: Omit<Connection, "at">) {
     this.owned(binding);
@@ -115,6 +132,7 @@ export class RemoteExecutionRunner implements ExecutionRunner {
         403,
         "Worker identity does not match selected managed session.",
       );
+    this.prune();
     if (!this.connections.has(session.id) && this.connections.size >= 100)
       throw new DomainError(409, "Worker capacity reached.");
     this.connections.set(session.id, { ...details, at: this.service.clock() });
