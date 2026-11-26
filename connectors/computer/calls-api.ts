@@ -334,6 +334,18 @@ export interface ChertReachCallsOptions {
 }
 
 /** The call side of the reach over the Calls API. See the top of this file. */
+/** Chert's own error code of a refusal, as "_owner_required", when it is a plain code. */
+function refusalCode(value: Record<string, unknown>) {
+  const error = value.error;
+  const code =
+    error && typeof error === "object"
+      ? (error as Record<string, unknown>).code
+      : undefined;
+  return typeof code === "string" && /^[a-z0-9_]{1,40}$/.test(code)
+    ? `_${code}`
+    : "";
+}
+
 export class ChertReachCalls implements ReachCallPort {
   private readonly flights = new Map<string, Flight>();
   private record: z.infer<typeof recordSchema> | null;
@@ -781,7 +793,11 @@ export class ChertReachCalls implements ReachCallPort {
             "unknown",
             `call_refused_after_loss_${placed.status}`,
           )
-        : this.finish(flight, "failed", `call_refused_${placed.status}`);
+        : this.finish(
+            flight,
+            "failed",
+            `call_refused_${placed.status}${refusalCode(placed.value)}`,
+          );
     } else {
       // A wait in a queue that this path never asks for, or an error of the
       // server: whether a call exists is not known.
