@@ -10,7 +10,12 @@ import DeviceCore
   private var input: FileHandle?
   private var output: FileHandle?
   private var busy=false
-  init(url: URL) throws { store=try NativeActivationStore(url:url) }
+  /// The child executable and its arguments; tests replace them with a scripted child.
+  var executable: URL?
+  var arguments=["--installed-native-executor"]
+  init(url: URL, executable: URL? = nil, arguments: [String] = ["--installed-native-executor"]) throws {
+    store=try NativeActivationStore(url:url);self.executable=executable;self.arguments=arguments
+  }
   func cancel() {
     // No cloud callback, pipe read or AX wait is on the Stop path. A setter
     // already admitted may have reached the OS; its outcome stays uncertain.
@@ -18,8 +23,8 @@ import DeviceCore
   }
   private func launch() throws {
     let p=Process(), incoming=Pipe(), outgoing=Pipe()
-    p.executableURL=Bundle.main.executableURL
-    p.arguments=["--installed-native-executor"]
+    p.executableURL=executable ?? Bundle.main.executableURL
+    p.arguments=arguments
     p.standardInput=incoming; p.standardOutput=outgoing; p.standardError=FileHandle.nullDevice
     try p.run();process=p;input=incoming.fileHandleForWriting;output=outgoing.fileHandleForReading
   }
@@ -44,9 +49,10 @@ import DeviceCore
     }
     guard let value=try JSONSerialization.jsonObject(with:bytes) as? [String:Any] else { throw HelperError(503,"native_child_invalid") };return value
   }
-  private func exchange(_ value:[String:Any], allowed:() -> Bool) async throws -> [String:Any] {
+  private func exchange(_ value:[String:Any], allowed:() -> Bool, written:() -> Void = {}) async throws -> [String:Any] {
     guard allowed(),let input else { throw HelperError(409,"native_local_authority_changed") }
     try input.write(contentsOf:JSONSerialization.data(withJSONObject:value)+Data([10]))
+    written()
     while true {
       let result=try await line()
       if result["localAuthority"] as? Int == 1 {
@@ -60,6 +66,15 @@ import DeviceCore
         result["requestId"] as? String == value["requestId"] as? String else { throw HelperError(503,"native_child_binding") }
       return result
     }
+  }
+  /// Terminal receipt of a dispatch that ended before the child had the effect
+  /// request, so no input was sent. The time is capped at the dispatch deadline,
+  /// which is still true because no effect follows.
+  private func refusal(_ envelope: NativeActivationEnvelope) -> [String:Any] {
+    let now=Date().timeIntervalSince1970*1000
+    return ["operationId":envelope.id,"state":"rejected","reason":"native_refused_before_effect",
+      "terminalEvidence":["receiptId":UUID().uuidString,"operationId":envelope.id,"fingerprint":envelope.fingerprint,
+        "hostId":"clawdtime-installed-native","completedAt":min(now,envelope.nativeExpiresAt ?? now)]]
   }
   func run(_ envelope: NativeActivationEnvelope, dispatch:Bool, allowed:@escaping () -> Bool) async throws -> [String:Any] {
     if let old=try store.existing(envelope) {
@@ -75,6 +90,9 @@ import DeviceCore
     }
     busy=true
     var result:[String:Any]?
+    // Until the child has the effect request, nothing can reach the OS: a
+    // failure before it is a refusal, and a failure after it is uncertain.
+    var effectRequested=false
     do {
       try launch()
       var wire=envelope.wire(now:Date().timeIntervalSince1970*1000)
@@ -92,7 +110,7 @@ import DeviceCore
           NSDictionary(dictionary:observed["windowBounds"] as? [String:Any] ?? [:]).isEqual(to:prepared["windowBounds"] as? [String:Any] ?? [:]),
           envelope.operation["action"] as? String != "raise_window" || observed["appActive"] as? Bool == true else { throw HelperError(409,"native_target_changed") }
         wire["requestId"]=UUID().uuidString;wire["op"]=wire["effect"];wire["target"]=qualified["wireTarget"];wire["targetToken"]=qualified["targetToken"]
-        let response=try await exchange(wire,allowed:allowed)
+        let response=try await exchange(wire,allowed:allowed,written:{ effectRequested=true })
         let state=response["status"] as? String ?? "unknown"
         let outcome=NativeCompletionDecision.state(childStatus:state,responseMatches:true,authorityCurrent:allowed())
         let terminal=outcome != "uncertain"
@@ -105,12 +123,13 @@ import DeviceCore
         result=receipt
       }
     } catch {
-      if dispatch { result=["operationId":envelope.id,"state":"uncertain","reason":"native_completion_unknown"] }
+      if dispatch && effectRequested { result=["operationId":envelope.id,"state":"uncertain","reason":"native_completion_unknown"] }
+      else if dispatch { result=refusal(envelope) }
       else { await join();busy=false;throw error }
     }
     // Completion never clears the physical actor fence until waitpid joined it.
     await join();busy=false
-    if dispatch && !allowed(),result?["terminalEvidence"] != nil {
+    if dispatch && effectRequested && !allowed(),result?["terminalEvidence"] != nil {
       result?["state"]="returned";result?["reason"]="host_returned_target_unverified";result?.removeValue(forKey:"observation")
     }
     guard let result else { throw HelperError(503,"native_result_unavailable") }
