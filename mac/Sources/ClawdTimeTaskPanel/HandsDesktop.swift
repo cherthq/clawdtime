@@ -48,6 +48,10 @@ import TaskPanelCore
     /// that it opened over is this surface. No part of what makes two surfaces equal; part of what makes two looks
     /// equal, and an input goes on only while it holds (`DesktopWindowVisibility.sameMenu`).
     var menu = false
+    /// An inline field of the app had the keyboard, such as the name of a file in Finder, and the window that it lies
+    /// over is this surface (`DesktopWindowVisibility.inlineField`). Like `menu`: part of what makes two looks equal, and
+    /// an input goes on only while it holds (`DesktopWindowVisibility.sameField`).
+    var field = false
     /// What one look holds on to: the window, the windows in front of it as they were, and whether a menu was open.
     /// `floating` are the windows above the ordinary ones that the look saw. A change of them elsewhere on the screen
     /// does not make another look; one that is new at the place of a click is a cover (`OwnWindows.floatingCover`).
@@ -55,9 +59,12 @@ import TaskPanelCore
       let surface: Surface; let covers: [DesktopCover]
       var floating: [DesktopCover] = []
       var menu = false
-      static func == (lhs: Look, rhs: Look) -> Bool { lhs.surface == rhs.surface && lhs.covers == rhs.covers && lhs.menu == rhs.menu }
+      var field = false
+      static func == (lhs: Look, rhs: Look) -> Bool {
+        lhs.surface == rhs.surface && lhs.covers == rhs.covers && lhs.menu == rhs.menu && lhs.field == rhs.field
+      }
     }
-    var look: Look { Look(surface: self, covers: covers, floating: floating, menu: menu) }
+    var look: Look { Look(surface: self, covers: covers, floating: floating, menu: menu, field: field) }
     static func == (lhs: Self, rhs: Self) -> Bool {
       lhs.pid == rhs.pid && CFEqual(lhs.window, rhs.window) && DesktopArrival.sameLiveTitle(lhs.title, rhs.title) && lhs.frame == rhs.frame
         && lhs.windowID == rhs.windowID && lhs.displayID == rhs.displayID && lhs.map == rhs.map && lhs.ordinary == rhs.ordinary && lhs.fullScreen == rhs.fullScreen && lhs.fullScreenConfirmed == rhs.fullScreenConfirmed
@@ -380,7 +387,8 @@ import TaskPanelCore
     guard inputGenerationCurrent, let expected = inputSurface else { return false }
     let current = await surface()
     guard inputGenerationCurrent, let current, current == expected,
-      DesktopWindowVisibility.sameMenu(looked: expected.menu, now: current.menu) else { invalidate(); return false }
+      DesktopWindowVisibility.sameMenu(looked: expected.menu, now: current.menu),
+      DesktopWindowVisibility.sameField(looked: expected.field, now: current.field) else { invalidate(); return false }
     // Before the first event of a steady input the windows in front must be as they were, also the ones that
     // show nothing: one that starts to show could take the click. After it they may change, because the first
     // press of a double click can open a list. Even then no place of the command may lie under an unobserved
@@ -1134,15 +1142,23 @@ import TaskPanelCore
       // at all (Finder on macOS 26). For the hands' input the window that it opened over is the surface, and the look
       // records that a menu is open. The menu is a window above the ordinary ones: one that the look saw takes the click
       // on its item, one that came up after it is a cover.
-      var role = focusedWindow.flatMap { value($0, kAXRoleAttribute) as? String }, menuOpen = false
+      var role = focusedWindow.flatMap { value($0, kAXRoleAttribute) as? String }, menuOpen = false, fieldOpen = false
       let input = allowed && !directional
       let menuShown = DesktopWindowVisibility.menuShown(listed, pid: Int(pid), display: CGDisplayBounds(display.id))
       let main = (focusedWindow == nil || role == "AXMenu") && input ? element(value(app, kAXMainWindowAttribute)) : nil
       let mainRole = main.flatMap { value($0, kAXRoleAttribute) as? String }
       fact?("focusedMenu", role == "AXMenu"); fact?("menuShown", menuShown)
+      // With no focused window and no menu, an inline field of the app may have the keyboard: the name of a file that
+      // Finder edits. Its parent is the app, and it lies over the main window.
+      var inlineField = false
+      if focusedWindow == nil, !menuShown, input, let field = element(value(app, kAXFocusedUIElementAttribute)) {
+        inlineField = DesktopWindowVisibility.inlineField(role: value(field, kAXRoleAttribute) as? String,
+          parentRole: element(value(field, kAXParentAttribute)).flatMap { value($0, kAXRoleAttribute) as? String },
+          frame: frame(field), main: main.flatMap(frame))
+      }
       let focused: AXUIElement
       switch DesktopWindowVisibility.inputWindow(focused: focusedWindow != nil, focusedRole: role, mainRole: mainRole, input: input,
-                                                 menuShown: menuShown) {
+                                                 menuShown: menuShown, inlineField: inlineField) {
       case .focused:
         guard let focusedWindow else { diagnostic?("ax_focused_window_unavailable"); return nil }
         focused = focusedWindow
@@ -1150,6 +1166,10 @@ import TaskPanelCore
         guard let main else { diagnostic?("ax_menu_without_window"); return nil }
         focused = main; role = mainRole; menuOpen = true
         fact?("inputMenu", true)
+      case .field:
+        guard let main else { diagnostic?("ax_field_without_window"); return nil }
+        focused = main; role = mainRole; fieldOpen = true
+        fact?("inputField", true)
       case .none:
         diagnostic?(focusedWindow == nil && !menuShown ? "ax_focused_window_unavailable" : input ? "ax_menu_without_window" : "ax_menu_open")
         return nil
@@ -1248,7 +1268,7 @@ import TaskPanelCore
         let ordinaryMatch = DesktopWindowVisibility.focusedWindow(pid: Int(pid), title: title, frame: bounds,
           fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames,
           standaloneFrames: allowed ? standalone : nil, sheet: sheet)
-        let panel = ordinaryMatch == nil && allowed && !sheet && !menuOpen && role == "AXWindow"
+        let panel = ordinaryMatch == nil && allowed && !sheet && !menuOpen && !fieldOpen && role == "AXWindow"
           ? DesktopWindowVisibility.panelWindow(pid: Int(pid), frame: bounds, rows: listed, display: CGDisplayBounds(display.id), own: Int(getpid()))
           : nil
         guard let matched = ordinaryMatch ?? panel else { diagnostic?("ax_quartz_window_mismatch"); return nil }
@@ -1262,7 +1282,7 @@ import TaskPanelCore
       let parent = Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
         ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
         fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed, covers: covers, front: front, unseen: unseen, floating: floating,
-        menu: menuOpen)
+        menu: menuOpen, field: fieldOpen)
       diagnostic?(group == nil ? "ax_quartz_matched" : "directional_composition_ready")
       return group.map { .composite(parent, $0) } ?? .strict(parent)
     }

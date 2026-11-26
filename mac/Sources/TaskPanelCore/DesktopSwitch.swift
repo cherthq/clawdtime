@@ -106,16 +106,19 @@ public enum DesktopWindowVisibility {
   /// windows of the app, seen or not, may lie in front.
   public static let coverLimit = 4, coverShare = 0.9, unseenAlpha = 0.05, frontLimit = 8
 
-  /// A window in its own right, as Accessibility names it. Only two kinds are parts of another window: a window
-  /// of the kind "unknown", which is how an app lists the suggestions of an address bar or a small card, and a
-  /// help tag. Every other kind, and a window with no kind, stands alone. So does a sheet, whatever its kind.
+  /// A window in its own right, as Accessibility names it. Three kinds are parts of another window: a window
+  /// of the kind "unknown", which is how an app lists the suggestions of an address bar or a small card, a
+  /// help tag, and a text field or text area that the app lists among its windows: the field in which Finder edits the
+  /// name of a file lies in a small window of its own over the window of the folder (`inlineField`). Every other kind,
+  /// and a window with no kind, stands alone. So does a sheet, whatever its kind.
   public static func standsAlone(role: String?, subrole: String?) -> Bool {
     if role == "AXSheet" { return true }
-    return !(role == "AXHelpTag" || subrole == "AXUnknown")
+    return !(role == "AXHelpTag" || role == "AXTextField" || role == "AXTextArea" || subrole == "AXUnknown")
   }
 
-  /// Which window of the app is the surface of the hands' input: the focused window, the main window, or none.
-  public enum InputWindow: Equatable, Sendable { case focused, main, none }
+  /// Which window of the app is the surface of the hands' input: the focused window, the main window under an open
+  /// menu (`main`), the main window under an inline field that has the keyboard (`field`), or none.
+  public enum InputWindow: Equatable, Sendable { case focused, main, field, none }
   /// While a menu of the app is open (a context menu, a menu of the menu bar, the menu of a pop-up button),
   /// Accessibility names that menu as the app's focused window. A menu is no window: it has no title, no minimized
   /// state and no row among the ordinary windows, so it is never a surface, and a look with no surface gives no input
@@ -131,10 +134,32 @@ public enum DesktopWindowVisibility {
   /// as a window of the app at the level of menus (`menuShown`). With that menu on the screen, the app's main window is
   /// the surface of the hands' input, as under a menu that Accessibility names. With no menu shown, an app with no
   /// focused window gives no surface, as before. A move to another app or desktop never starts while a menu is open.
-  public static func inputWindow(focused: Bool, focusedRole: String?, mainRole: String?, input: Bool, menuShown: Bool) -> InputWindow {
-    guard focused else { return input && menuShown && mainRole == "AXWindow" ? .main : .none }
+  ///
+  /// Finder also names no focused window while the name of a file or a new folder is open for editing (Return on a
+  /// file, or a new folder). The field that has the keyboard is then a text field of the app with no window of its
+  /// own: Accessibility gives the app as its parent (`inlineField`). It lies over the window of the folder, the main
+  /// window, which is the surface of the hands' input (`field`). The window list shows the field as a small window of
+  /// the app in front of that window: a cover, as a list of suggestions is (`focusedWindow`). An open menu wins.
+  public static func inputWindow(focused: Bool, focusedRole: String?, mainRole: String?, input: Bool, menuShown: Bool,
+                                 inlineField: Bool = false) -> InputWindow {
+    guard focused else {
+      guard input, mainRole == "AXWindow" else { return .none }
+      return menuShown ? .main : inlineField ? .field : .none
+    }
     return inputWindow(focusedRole: focusedRole, mainRole: mainRole, input: input)
   }
+  /// The element of the app that has the keyboard is an inline field: a text field or a text area whose parent is the
+  /// app itself, not a window, lying inside the app's main window. A field inside a window has that window as its
+  /// parent chain and is never one; a field with no place, or one outside the main window, is not one either.
+  public static func inlineField(role: String?, parentRole: String?, frame: CGRect?, main: CGRect?) -> Bool {
+    guard role == "AXTextField" || role == "AXTextArea", parentRole == "AXApplication", let frame, let main,
+      frame.width > 0, frame.height > 0, frame.width.isFinite, frame.height.isFinite else { return false }
+    return main.insetBy(dx: -1, dy: -1).contains(frame)
+  }
+  /// An inline field has the keyboard: letters go into the name and Return gives the file that name. An input rests
+  /// on a look with the field open or with none, and goes on only while that holds. A field that closed since sends
+  /// the next letters to the folder, where they pick a file, and Return to the file that is selected.
+  public static func sameField(looked: Bool, now: Bool) -> Bool { looked == now }
   /// The level of the window server at which macOS shows an open menu: a context menu, a menu of the menu bar, the
   /// menu of a pop-up button (`kCGPopUpMenuWindowLevel`).
   public static let menuLevel = 101
