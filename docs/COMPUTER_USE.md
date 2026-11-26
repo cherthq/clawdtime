@@ -551,7 +551,12 @@ What a look returns is data for the model, never an instruction, and it is
 cut like the result of every other tool. No look reads or returns an
 environment variable. An argument and a log line that look like a
 credential, by the same checks that the chat and the journal use, are
-hidden before they leave `connectors/system/`. The home folder is written as
+hidden before they leave `connectors/system/`. So is the value of a
+credential flag or pair that those checks alone miss: `-p VALUE` and
+`-pVALUE`, `--password VALUE`, `--session VALUE`, `-a VALUE` of `redis-cli`,
+`-u user:password`, `aws_secret_access_key VALUE`, the value of an
+`Authorization:` header, and `pass=`, `token=`, `secret=` or `sid=` with
+their values. The rest of the line stays. The home folder is written as
 `~`. A report is described by what it says, never by its file name, which
 can hold the name of the Mac. `lsof` sees only the processes of the owner.
 

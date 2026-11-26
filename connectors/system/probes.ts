@@ -228,6 +228,7 @@ export class SystemProbes {
         const args = redactArguments(
           argumentsOf(commands.get(row.pid) ?? "", row.path),
           this.host.home,
+          row.path,
         ).toLowerCase();
         return args.includes(query) ? [{ ...row, matchedIn: "arguments" }] : [];
       });
@@ -271,6 +272,7 @@ export class SystemProbes {
       arguments: redactArguments(
         argumentsOf(started?.command ?? "", row.path),
         this.host.home,
+        row.path,
       ),
       threads: parseThreads(threads.stdout),
       files:
