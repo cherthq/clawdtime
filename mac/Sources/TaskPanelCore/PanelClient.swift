@@ -149,7 +149,8 @@ public final class PanelClient {
   /// does now. `after` is the last sequence number that the hands took.
   public func handsNext(after seq: Int) async throws -> HandsNext {
     guard seq >= 0 else { throw PanelFailure.configuration }
-    let result = try JSONDecoder().decode(HandsNext.self, from: await request(path: "/desktop/hands/next?after=\(seq)"))
+    let (data, _) = try await exchange(path: "/desktop/hands/next?after=\(seq)", headers: [HandsPace.readsHeader: HandsPace.readsValue])
+    let result = try JSONDecoder().decode(HandsNext.self, from: data)
     try result.validate()
     return result
   }
@@ -161,7 +162,8 @@ public final class PanelClient {
   public func handsNext(after seq: Int, wait: Double) async throws -> (next: HandsNext, held: Bool, shown: Bool) {
     guard seq >= 0, wait.isFinite else { throw PanelFailure.configuration }
     let ms = Int(min(2000, max(0, (wait * 1000).rounded())))
-    let (data, response) = try await exchange(path: "/desktop/hands/next?after=\(seq)&wait=\(ms)")
+    let (data, response) = try await exchange(path: "/desktop/hands/next?after=\(seq)&wait=\(ms)",
+                                              headers: [HandsPace.readsHeader: HandsPace.readsValue])
     let result = try JSONDecoder().decode(HandsNext.self, from: data)
     try result.validate()
     return (result, response.value(forHTTPHeaderField: HandsPace.heldHeader) != nil,

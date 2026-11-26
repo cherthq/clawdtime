@@ -180,4 +180,20 @@ final class HandsScreenTests: XCTestCase {
     XCTAssertEqual(ElementCleaner.clean(Array(repeating: raw("AXButton", title: "b"), count: 2000)).count, 400)
     XCTAssertEqual(ElementCleaner.clean([]).count, 0)
   }
+
+  func testEachCleanElementNamesThePlaceInTheTreeThatItCameFrom() {
+    // The hands read an element of the last look again by its number: each number keeps its element of the tree.
+    let few = ElementCleaner.cleanIndexed([raw("AXGroup"), raw("AXButton", title: "One"), raw("AXGroup"), raw("AXLink", title: "Two")])
+    XCTAssertEqual(few.elements.map(\.id), [0, 1]); XCTAssertEqual(few.sources, [1, 3])
+    let texts = (0..<600).map { raw("AXStaticText", value: "line \($0)") }
+    let buttons = (0..<50).map { raw("AXButton", title: "button \($0)") }
+    let all = texts + buttons
+    let many = ElementCleaner.cleanIndexed(all)
+    XCTAssertEqual(many.elements, ElementCleaner.clean(all))
+    XCTAssertEqual(many.sources.count, many.elements.count)
+    for (item, source) in zip(many.elements, many.sources) {
+      XCTAssertEqual(ElementCleaner.element(all[source], id: item.id), item)
+    }
+    XCTAssertEqual(many.sources.suffix(50), Array(600..<650))
+  }
 }

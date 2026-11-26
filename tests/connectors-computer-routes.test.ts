@@ -237,6 +237,21 @@ describe("the routes of computer use", () => {
     f.worker.stop();
   });
 
+  it("take what more the panel can read from the reads header of each read", async () => {
+    const f = fixture([done]);
+    const read = (headers: Record<string, string>) =>
+      f.app.request("/desktop/hands/next?after=0", {
+        headers: { authorization: `Bearer ${panel}`, ...headers },
+      });
+    expect((await read({ "x-clawdtime-hands-reads": "targets" })).status).toBe(
+      200,
+    );
+    expect(f.hands.readsTargets()).toBe(true);
+    // A panel of an older build sends no header, and gets no such look.
+    expect((await read({})).status).toBe(200);
+    expect(f.hands.readsTargets()).toBe(false);
+  });
+
   it("refuse every route without the panel credential, and a browser origin", async () => {
     const f = fixture([click]);
     await f.worker.submit("r1", "Save the note");

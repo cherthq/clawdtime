@@ -111,18 +111,25 @@ computer.
 3. The worker checks that action in code. An action that is not valid is
    refused and not run, and the planner is told why.
 4. When the action needs your yes, the worker asks and waits.
-5. Just before an input, the worker looks again. For a hover, a scroll, or
-   a click or a drag at a point where no element is, it first takes a quick
-   picture with no walk of the tree. When the window is the same and the
-   screen looks as it did (see [The quick picture](#the-quick-picture)), the
-   input goes with the elements of the planner's look. Otherwise, and for
-   keys, text and every click or drag on an element, it looks with no image.
+5. Just before an input, the worker looks again. For a hover, a scroll, a
+   click or a drag, it first takes a quick picture with no walk of the tree.
    A label can change in place with no change that a picture shows (Cancel
    becomes Delete, Save Draft becomes Send), so a press on an element always
-   reads the element's own name and role again. It finds the same element
-   again by its role, its name and its place, and it checks the action again
-   against that look. If another window is in front, the target is gone or
-   its name changed, nothing is sent and the planner chooses again.
+   reads the element's own name and role again. The panel reads them in the
+   same command as the quick picture, with no walk: each element that the
+   press presses (the element, and each larger one that holds it up to its
+   control), by the element of the tree behind its number in the planner's
+   look, or else the element with the same role at the same place. When the
+   window is the same, the screen looks as it did (see
+   [The quick picture](#the-quick-picture)), and each element read again has
+   the same role, name, value, state and place as in the planner's look, the
+   input goes with the elements of that look. Otherwise, and for keys and
+   text, it looks with no image: a walk of the whole tree. It finds the same
+   element again by its role, its name and its place, and it checks the
+   action again against that look. If another window is in front, the target
+   is gone or its name changed, nothing is sent and the planner chooses
+   again. A panel of an older build reads no element again: then every press
+   on an element walks the whole tree.
 6. The action goes to the hands or to the browser. Then the worker looks again
    and the planner picks the next action.
 
@@ -148,7 +155,7 @@ The worker compares two pictures on a grid of 64 by 36 cells, by their
 brightness. The code is in `connectors/computer/visual-diff.ts`. A grid this
 coarse does not see a label that changed in place, so the quick picture is
 never the only check before a click or a drag on an element: those always
-read the element's name and role again.
+read the element's name and role again, in the same command or with a walk.
 
 - **The target.** The place of the target counts with a margin of one cell,
   and one changed cell there is a change. A target in the menu bar counts
@@ -901,7 +908,17 @@ CLAWDTIME_OPENAI_API=chat npm run eval:computer:planner -- gpt-6.1-terra@none
   from step to step. Only the turn after them changes. OpenAI keeps such a
   first part in its cache by itself. For Anthropic the rules carry one cache
   marker, so the functions and the rules come from the cache after the first
-  step.
+  step. The turn itself starts with the goal and the steps so far, which
+  change least.
+- A turn costs about the same time whatever its size. Measured on November
+  26, 2026, with one screen of the request test, 5 or 6 rounds of each: on
+  `gpt-6.2-sol` a turn took a median of 1.6 to 2.0 seconds with 4,400 to
+  4,900 tokens (3,000 to 3,500 from the cache, 25 to 29 out, no reasoning),
+  and 1.6 to 2.1 seconds with no picture, a small picture, a picture at 0.6
+  of its size, half of the elements or a cache key: no change beyond the
+  spread of the same request. On `claude-opus-5-5` a turn took 1.2
+  to 1.3 seconds with 7,900 tokens, and the same with no cache. So the number
+  of turns sets the time, not their size: `then` saves whole turns.
 - Each answer tells how many tokens of the request came from the cache. The
   planner gives them, with the input and output tokens, to its `onUsage`
   callback.
@@ -1176,18 +1193,27 @@ The panel also says where its part of the step went, and the line then ends
 with it: `(hands: capture 91 ms, encode 3 ms, image 158 KB, walk 287 ms, glide
 352 ms, poll wait 0 ms)`. Capture is taking the picture, encode is writing it
 as a JPEG, image is its size, walk is the Accessibility tree of every look of
-the step, glide is the cursor before each input, and poll wait is how long the
+the step (with the elements read again before a press), glide is the cursor
+before each input, and poll wait is how long the
 commands of the step waited before the panel read them. Each part is there
 only when the step had it. The panel sends these numbers in a header of the
 result, `X-ClawdTime-Hands-Cost`. A service that does not know the header
-takes the result as before.
+takes the result as before. Each read of the next command says, in the header
+`X-ClawdTime-Hands-Reads: targets`, that the panel reads the elements of its
+last look again one by one. The service sends a look that does so only to a
+panel whose last read said it.
 
 `npm run bench:computer:speed` shows the same parts with no screen: the real
 worker does one request with a planner that thinks for no time, over made-up
-hands that act out the costs of the panel before this change and now. The
-glide, the wait at the target and the read of the next command are the
-panel's own rules; the picture and the walk are assumptions that the output
-names. It opens no window and calls no language model.
+hands that act out the costs of the panel before this change and now, and now
+with a walk of the whole tree before each press. The glide, the wait at the
+target and the read of the next command are the panel's own rules; the
+picture, the walk and the read of one element again are assumptions that the
+output names. It opens no window and calls no language model. On November 26,
+2026, a press on an element took 82 to 89 ms less with the elements read
+again than with a walk of a busy window (173 ms), and the request 5 percent
+less. A walk that reaches its limit of 0.6 seconds, as in a large
+spreadsheet, gives back about half a second on each press.
 
 The panel needs two permissions in System Settings, Privacy & Security:
 Accessibility, and Screen & System Audio Recording. When one is missing, the
@@ -1298,6 +1324,19 @@ On the screen:
   point of the picture. A double click and a right click too.
 - `type`: one line of text at the caret, or into a field by its number.
 - `key`: one key with its modifiers, for example `cmd+s`.
+- With `type` and `key`, `then` gives up to 3 keys to press after the step,
+  in order, when they are certain already: `return` to send a search after
+  its text, `delete` after `cmd+a`. Each key is a step of its own and goes
+  with no new turn of the planner: the worker looks, checks it as any key
+  (Return in a messages app still asks), and sends it. It goes only when the
+  step before it went through (`ok`), the person said nothing more, and the
+  same app and window are in front as when the planner chose it. Else the
+  keys that are left are dropped and the planner chooses from the new look.
+  Anything other than keys of one press each gives no keys, and the step
+  goes as always. In two runs of the request test on November 26, 2026,
+  with `gpt-6.2-sol`, 6 of 184 steps went this way (a Tab after an email
+  address), all 46 requests were done, and the planner test was right 74 of
+  76 times, as before.
 - `scroll`: at an element or at the middle of the screen. `amount` says how
   far, from 1 to 10 notches of the wheel. Without it the wheel turns 5 notches.
 - `hover`: the pointer goes to an element or to a point and rests there, with
@@ -2320,7 +2359,17 @@ the real screen, draws the cursor or calls a language model.
   target in the menu bar, a ticking timer in the menu bar status area, and a
   change at the target, a change that held, a large change and a large region
   that keeps changing, which still hold. A button whose label changed in place
-  (Cancel to Delete) under the same picture is not clicked.
+  (Cancel to Delete) under the same picture is not clicked, with hands that
+  read the pressed elements again one by one and with hands that walk the
+  tree. With the first, a press goes on the quick picture with no walk only
+  when each pressed element has its role, name, value, state and place; a
+  change of any, or an element that the hands do not find, walks the tree.
+  The read itself, in the panel, needs a real app: the Swift tests cover its
+  rules (which element of the last look is the one asked for, and which one
+  stands at the same place), not the Accessibility tree of a real app. Keys
+  that the planner gives in `then` go each after a look and with no new turn,
+  only while the step before went through, the person said nothing more and
+  the same window is in front; Return in a messages app still asks.
 - `progress` (18): the swing of two and of three actions, the still screen,
   no alarm while the screen changes, the order of notes, questions and the
   end, and the other ways that fit what is in front.

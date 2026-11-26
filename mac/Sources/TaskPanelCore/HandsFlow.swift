@@ -118,6 +118,9 @@ public enum HandsPace {
   public static let heldHeader = "X-ClawdTime-Hands-Wait"
   /// The header with which a service says that a call shows the screen now: its value is `call`.
   public static let screenShownHeader = "X-ClawdTime-Screen-Shown"
+  /// The header of each read with which the hands say what more they can read: `targets`, the elements of
+  /// their last look one by one (`HandsReread`). A service that does not know it sends no such look.
+  public static let readsHeader = "X-ClawdTime-Hands-Reads", readsValue = "targets"
   /// The wait before the next read. `elapsed` is how long the last read took, `held` says that the service
   /// held it, and `ran` that the hands just ran a command and posted its result. A service that does not
   /// answer is asked less often.

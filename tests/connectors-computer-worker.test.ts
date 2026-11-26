@@ -17,6 +17,7 @@ import {
   type HandCommand,
   type Observation,
   type Planner,
+  type ScreenElement,
 } from "../connectors/computer/ports.js";
 import {
   ComputerWorker,
@@ -31,6 +32,7 @@ import {
   observation,
   page,
   pageElement,
+  RereadHands,
   ScriptedPlanner,
   terminalApp,
   until,
@@ -64,13 +66,17 @@ function setup(
     postActionSettleMs?: number;
     unchangedDone?: boolean;
     realClock?: boolean;
+    /** Hands that read elements of their last look again one by one. */
+    reread?: boolean;
   } = {},
 ) {
   const home =
     options.home ?? mkdtempSync(join(tmpdir(), "clawdtime-computer-worker-"));
   if (!options.home) roots.push(home);
   const clock = { now: 1_000_000 };
-  const hands = new FakeHands(options.screens ?? [save]);
+  const hands = options.reread
+    ? new RereadHands(options.screens ?? [save])
+    : new FakeHands(options.screens ?? [save]);
   const planner = new ScriptedPlanner(script);
   const said: string[] = [];
   const journal = new ComputerJournal(home, () => clock.now);
@@ -6946,6 +6952,172 @@ describe("trouble of the planner", () => {
   });
 });
 
+describe("keys that the planner gives to press after a step", () => {
+  /** A planner that gives `then` with its first answer, then the script. */
+  class Then implements Planner {
+    readonly inputs: Parameters<Planner["next"]>[0][] = [];
+    constructor(
+      private readonly first: Action,
+      private readonly then: string[],
+      private readonly rest: Action[] = [done],
+    ) {}
+    async next(input: Parameters<Planner["next"]>[0]) {
+      this.inputs.push(input);
+      if (this.inputs.length === 1)
+        return { action: this.first, why: "Search", then: this.then };
+      return {
+        action: this.rest.shift() ?? {
+          kind: "give_up" as const,
+          reason: "end",
+        },
+        why: `step ${this.inputs.length}`,
+      };
+    }
+  }
+  const search = (values: Partial<Observation> = {}) =>
+    observation(
+      [
+        element(1, {
+          role: "AXSearchField",
+          title: "Search",
+          focused: true,
+        }),
+      ],
+      values,
+    );
+  function run(
+    planner: Planner,
+    screens: Observation[],
+    hands = new FakeHands(screens),
+  ) {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-then-"));
+    roots.push(home);
+    const said: string[] = [];
+    const journal = new ComputerJournal(home);
+    const worker = new ComputerWorker({
+      hands,
+      planner,
+      journal,
+      notify: (text) => said.push(text),
+      settleMs: 1,
+      transientMs: 1,
+    });
+    return { worker, hands, journal, said };
+  }
+
+  it("press each key after the step went through, after a look and with the checks, with no new turn of the planner", async () => {
+    const planner = new Then({ kind: "type", text: "dentist", element: 1 }, [
+      "return",
+    ]);
+    const { worker, hands, journal } = run(planner, [search()]);
+    await worker.submit("r1", "Find the note about the dentist");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.sent).toEqual([
+      { kind: "type", text: "dentist" },
+      { kind: "key", combo: "return" },
+    ]);
+    // The planner chose twice: the text with its key, and the done.
+    expect(planner.inputs).toHaveLength(2);
+    expect(planner.inputs[1]!.history.map((step) => step.action)).toEqual([
+      { kind: "type", text: "dentist", element: 1 },
+      { kind: "key", combo: "return" },
+    ]);
+    expect(planner.inputs[1]!.history[1]!.outcome).toBe("ok");
+    // The key is its own step in the journal, after its own look.
+    expect(journal.get("r1")!.steps.map((step) => step.kind)).toEqual([
+      "type",
+      "key",
+      "done",
+    ]);
+    const typed = hands.commands.findIndex((c) => c.kind === "type");
+    const pressed = hands.commands.findIndex((c) => c.kind === "key");
+    expect(
+      hands.commands.slice(typed + 1, pressed).map((c) => c.kind),
+    ).toContain("observe");
+  });
+
+  it("press a row of keys in order, each after the one before went through", async () => {
+    const planner = new Then({ kind: "key", combo: "cmd+a" }, ["delete"]);
+    const { worker, hands } = run(planner, [search()]);
+    await worker.submit("r1", "Clear the search");
+    await worker.idle();
+    expect(hands.sent).toEqual([
+      { kind: "key", combo: "cmd+a" },
+      { kind: "key", combo: "delete" },
+    ]);
+    expect(planner.inputs).toHaveLength(2);
+  });
+
+  it("ask the planner again when the step did not go through, another window came, or the person said more", async () => {
+    // The text found no field with the focus: it is no step that went through.
+    const noField = new Then({ kind: "type", text: "dentist" }, ["return"]);
+    const first = run(noField, [observation([element(1)])]);
+    await first.worker.submit("r1", "Find the note about the dentist");
+    await first.worker.idle();
+    expect(first.hands.sent).toEqual([{ kind: "type", text: "dentist" }]);
+    expect(noField.inputs).toHaveLength(2);
+
+    // Another window is in front after the text.
+    const moved = new Then({ kind: "type", text: "dentist", element: 1 }, [
+      "return",
+    ]);
+    const other = search({
+      app: { name: "Notes", bundleId: "com.apple.Notes", window: "Trash" },
+    });
+    const second = run(moved, [search(), search(), other]);
+    await second.worker.submit("r1", "Find the note about the dentist");
+    await second.worker.idle();
+    expect(second.hands.sent).toEqual([{ kind: "type", text: "dentist" }]);
+    expect(moved.inputs).toHaveLength(2);
+
+    // The person said more while the text went out.
+    const told = new Then({ kind: "type", text: "dentist", element: 1 }, [
+      "return",
+    ]);
+    const hands = new FakeHands([search()]);
+    const third = run(told, [search()], hands);
+    hands.answer = (command) => {
+      if (command.kind === "type")
+        void third.worker.submit("r2", "Look for the vet as well");
+      return undefined;
+    };
+    await third.worker.submit("r1", "Find the note about the dentist");
+    await third.worker.idle();
+    expect(third.hands.sent.map((c) => c.kind)).not.toContain("key");
+    expect(told.inputs.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("ask the person before a key that asks, as when the planner chose it", async () => {
+    const chat = observation(
+      [
+        element(1, {
+          role: "AXTextArea",
+          title: "Message",
+          focused: true,
+        }),
+      ],
+      {
+        app: {
+          name: "Messages",
+          bundleId: "com.apple.MobileSMS",
+          window: "Sam",
+        },
+      },
+    );
+    const planner = new Then({ kind: "type", text: "On my way", element: 1 }, [
+      "return",
+    ]);
+    const { worker, hands } = run(planner, [chat]);
+    await worker.submit("r1", "Write on my way to Sam");
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    expect(hands.sent).toEqual([{ kind: "type", text: "On my way" }]);
+    expect(worker.snapshot().message).toMatch(/return/i);
+    worker.stop();
+    await worker.idle();
+  });
+});
+
 describe("a first give_up", () => {
   it("goes back to the planner with the ways it did not try", async () => {
     const chrome = observation([element(1, { title: "Next" })], {
@@ -7147,6 +7319,157 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
         /target is no longer there\. Nothing was sent\./,
       );
     }
+  });
+
+  describe("hands that read the pressed elements again one by one", () => {
+    const cancel = element(1, { title: "Cancel" });
+    const target = { id: 1, role: "AXButton", x: 110, y: 200, w: 80, h: 24 };
+    const quickRead = {
+      kind: "observe",
+      image: true,
+      elements: false,
+      targets: [target],
+    };
+    const fullLook = { kind: "observe", image: false, elements: true };
+    // Inside element 1, as a point of the last image of 320 by 180.
+    const presses: Action[] = [
+      click,
+      { kind: "click_at", x: 33, y: 42 },
+      { kind: "drag", from: { element: 1 }, to: { x: 200, y: 150 } },
+    ];
+
+    it("read them with the quick picture in one command, walk no tree, and send the press when each is as the planner saw it", async () => {
+      for (const action of presses) {
+        const plannerLook = realObs(frameBase, [cancel]);
+        const { worker, hands } = setup([action, done], {
+          reread: true,
+          screens: [plannerLook, realObs(frameBase, [cancel]), plannerLook],
+        });
+        await worker.submit("reread_same", "Close the dialog");
+        await worker.idle();
+        expect(worker.snapshot().state, action.kind).toBe("completed");
+        expect(hands.sent, action.kind).toHaveLength(1);
+        expect(hands.commands.slice(0, 2), action.kind).toEqual([
+          { kind: "observe", image: true, elements: true },
+          quickRead,
+        ]);
+        expect(hands.commands, action.kind).not.toContainEqual(fullLook);
+      }
+    });
+
+    it("walk the whole tree when the name or the role changed in place, and send nothing", async () => {
+      for (const changed of [
+        element(1, { title: "Delete" }),
+        element(1, { title: "Cancel", role: "AXLink" }),
+      ])
+        for (const action of presses) {
+          const now = realObs(frameBase, [changed]);
+          const { worker, hands, planner } = setup([action, done], {
+            reread: true,
+            screens: [realObs(frameBase, [cancel]), now, now, now],
+          });
+          await worker.submit("reread_swap", "Close the dialog");
+          await worker.idle();
+          const name = `${action.kind} ${changed.role} ${changed.title}`;
+          expect(hands.sent, name).toEqual([]);
+          expect(hands.commands.slice(1, 3), name).toEqual([
+            quickRead,
+            fullLook,
+          ]);
+          expect(planner.inputs[1]!.history[0]!.outcome, name).toMatch(
+            /target is no longer there\. Nothing was sent\./,
+          );
+        }
+    });
+
+    it("walk the whole tree when the value, the state or the place changed, or the hands did not find the element", async () => {
+      const cases: [string, ScreenElement[], boolean][] = [
+        ["value", [element(1, { title: "Cancel", value: "1" })], true],
+        ["state", [element(1, { title: "Cancel", enabled: false })], true],
+        ["place", [element(1, { title: "Cancel", x: 140 })], true],
+        ["not found", [cancel], false],
+      ];
+      for (const [name, read, found] of cases) {
+        const { worker, hands } = setup([click, done], {
+          reread: true,
+          screens: [
+            realObs(frameBase, [cancel]),
+            realObs(frameBase, read),
+            realObs(frameBase, [cancel]),
+            realObs(frameBase, [cancel]),
+          ],
+        });
+        if (!found) (hands as RereadHands).found = () => false;
+        await worker.submit("reread_changed", "Close the dialog");
+        await worker.idle();
+        expect(hands.commands.slice(1, 3), name).toEqual([quickRead, fullLook]);
+        // The walk saw the button as it was: the press goes on that look.
+        expect(hands.sent, name).toEqual([
+          { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+        ]);
+      }
+    });
+
+    it("read again every element that a click presses: a named image and the button that holds it", async () => {
+      const icon = element(2, {
+        role: "AXImage",
+        title: "Trash",
+        x: 120,
+        y: 204,
+        w: 16,
+        h: 16,
+      });
+      const button = element(1, { title: "Cancel" });
+      const swapped = element(1, { title: "Delete" });
+      const { worker, hands } = setup(
+        [{ kind: "click_element", element: 2 }, done],
+        {
+          reread: true,
+          screens: [
+            realObs(frameBase, [button, icon]),
+            realObs(frameBase, [swapped, icon]),
+            realObs(frameBase, [swapped, icon]),
+          ],
+        },
+      );
+      await worker.submit("reread_row", "Close the dialog");
+      await worker.idle();
+      expect(hands.commands[1]).toEqual({
+        ...quickRead,
+        targets: [
+          { id: 2, role: "AXImage", x: 120, y: 204, w: 16, h: 16 },
+          target,
+        ],
+      });
+      // The button's name changed: the walk decides, and the yes of the question is for what it shows now.
+      expect(hands.commands[2]).toEqual(fullLook);
+    });
+
+    it("walk the whole tree when the planner's look is old or the person said yes, as before", async () => {
+      const { worker, hands, waiting } = setup(
+        [{ kind: "click_element", element: 1 }, done],
+        {
+          reread: true,
+          screens: [
+            realObs(frameBase, [
+              element(1, { title: "Delete" }),
+              element(2, {
+                role: "AXStaticText",
+                title:
+                  "This item will be deleted immediately. You can\u2019t undo this action.",
+                x: 10,
+                y: 300,
+              }),
+            ]),
+          ],
+        },
+      );
+      await worker.submit("reread_yes", "Tidy the list");
+      await waiting();
+      await worker.answer("yes");
+      await worker.idle();
+      expect(hands.commands[1]).toEqual(fullLook);
+    });
   });
 
   it("skips fast visual re-verify when fastReverify is false", async () => {

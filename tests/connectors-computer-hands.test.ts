@@ -3,6 +3,7 @@ import {
   HandsTimeout,
   PanelHands,
 } from "../connectors/computer/panel-hands.js";
+import type { HandCommand } from "../connectors/computer/ports.js";
 import { observation } from "./connectors-computer-fixture.js";
 
 const click = {
@@ -14,6 +15,54 @@ const click = {
 } as const;
 
 describe("the hands that the panel serves", () => {
+  it("read elements again one by one only while each read of the panel says it can", () => {
+    const hands = new PanelHands({ first: 1 });
+    expect(hands.readsTargets()).toBe(false);
+    hands.offer("targets");
+    expect(hands.readsTargets()).toBe(true);
+    hands.offer("more, targets");
+    expect(hands.readsTargets()).toBe(true);
+    // A panel of an older build says nothing: it gets no such look.
+    hands.offer(undefined);
+    expect(hands.readsTargets()).toBe(false);
+    for (const header of [
+      "",
+      "target",
+      "targets2",
+      `${"x".repeat(200)},targets`,
+    ]) {
+      hands.offer(header);
+      expect(hands.readsTargets(), header.slice(0, 20)).toBe(false);
+    }
+  });
+
+  it("queue a look that reads elements again, and refuse one with too many or a bad place", async () => {
+    const hands = new PanelHands({ first: 1 });
+    const target = { id: 3, role: "AXButton", x: 10, y: 20, w: 80, h: 24 };
+    const look: HandCommand = {
+      kind: "observe",
+      image: true,
+      elements: false,
+      targets: [target],
+    };
+    const running = hands.run(look, "Check the screen");
+    expect(hands.next(0)?.command).toEqual(look);
+    hands.result({ seq: 1, ok: true });
+    await running;
+    for (const targets of [
+      [],
+      Array(9).fill(target),
+      [{ ...target, w: 0 }],
+      [{ ...target, role: "" }],
+    ])
+      expect(
+        await hands.run(
+          { kind: "observe", image: true, elements: false, targets },
+          "Check the screen",
+        ),
+      ).toMatchObject({ ok: false, error: "refused" });
+  });
+
   it("holds one command, serves it again until its result arrives, and then resolves", async () => {
     const hands = new PanelHands({ first: 1 });
     expect(hands.next(0)).toBeNull();

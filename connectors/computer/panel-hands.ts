@@ -78,6 +78,12 @@ export interface HandsCost {
 
 /** The header in which the panel says what one command cost. */
 export const handsCostHeader = "x-clawdtime-hands-cost";
+/**
+ * The header of each read of the panel in which it says what more it can
+ * read: `targets`, the elements of its last look one by one. A panel that
+ * does not send it never gets an observe command with targets.
+ */
+export const handsReadsHeader = "x-clawdtime-hands-reads";
 /** The header with which the service says that it held a read. */
 export const handsHeldHeader = "x-clawdtime-hands-wait";
 /** The longest time that one read of the panel is held. */
@@ -135,6 +141,8 @@ export class PanelHands implements Hands {
   /** Held reads of the panel, woken when a command is queued. */
   private readonly sleepers = new Set<() => void>();
   private spent: HandsCost = {};
+  /** The panel said with its last read that it reads elements again one by one. */
+  private targets = false;
   /**
    * What the hands saw last, for the call video only (zoom-region.ts). In
    * memory, with no picture: it is never journaled and never an input.
@@ -198,6 +206,25 @@ export class PanelHands implements Hands {
     // A held read answers now: the panel gets the command with no wait.
     for (const wake of [...this.sleepers]) wake();
     return running;
+  }
+
+  /**
+   * What the panel said with its last read, from its reads header. Each read
+   * says it again, so a panel of an older build that takes over gets no
+   * command that it cannot read.
+   */
+  offer(header: string | null | undefined) {
+    this.targets =
+      typeof header === "string" &&
+      header.length <= 200 &&
+      header
+        .split(",")
+        .map((part) => part.trim())
+        .includes("targets");
+  }
+
+  readsTargets() {
+    return this.targets;
   }
 
   /** A command waits whose number is above `after`. */

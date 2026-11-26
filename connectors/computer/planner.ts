@@ -95,11 +95,15 @@ export {
  * planner test before one of those changes. A browser line is there only
  * when its function is offered.
  */
+/** When to give the keys after a step in `then`. */
+const thenRule =
+  "When the key after a type or a key is certain already, such as Return after the words of a search or Tab to the next cell or field, give it in then of that step: it saves a turn. Leave then out when you must see the screen before that key.";
 const laterRules = (browser: boolean, methods: readonly BrowserMethod[]) => {
   const offered = (name: string) => browser && browserCan(name, methods);
   return [
     `To open a menu or a tooltip that shows on hover, call ${offered("browser_hover") ? "hover (on a web page, browser_click with hover true)" : "hover"} first, then click what it shows.`,
     "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
+    thenRule,
     ...(offered("browser_select")
       ? [
           "For a dropdown of a web page, prefer browser_page with op select, index, and value set to the text of its option.",
@@ -180,6 +184,15 @@ const elementNumber = {
   description: "The number of an element in the list of this turn.",
 };
 const directionProperty = { type: "string", enum: ["up", "down"] };
+/** The most keys that one step may give to press after it. */
+export const thenLimit = 3;
+const thenKeys = {
+  type: "array",
+  items: { type: "string" },
+  maxItems: thenLimit,
+  description:
+    'Keys to press right after this step, in order, only when they are certain now and need no new look: "return" to send a search field or a form of one line after typing, "delete" after cmd+a. Each goes as its own step, after a look, and only when the step before it went through. Leave it out when what comes next depends on what the screen shows after this step.',
+};
 /** One end of a drag: exactly one of the two shapes. */
 const dragEnd = {
   description:
@@ -238,13 +251,13 @@ const screenTools = [
   tool(
     "type",
     "Type one line of text at the caret, as a keyboard does: it is added to what the field holds, and it takes the place of a selection. To replace the text of a field, give the field the focus, press cmd+a to select all of it, then type. With an element, that field gets the focus first when it does not have it. Never a password.",
-    { text: { type: "string" }, element: elementNumber },
+    { text: { type: "string" }, element: elementNumber, then: thenKeys },
     ["text"],
   ),
   tool(
     "key",
     'Press one key, with modifiers first: "cmd+s", "cmd+shift+4", "return", "escape", "tab".',
-    { combo: { type: "string" } },
+    { combo: { type: "string" }, then: thenKeys },
     ["combo"],
   ),
   tool(
@@ -925,6 +938,8 @@ type Reading =
       kind: "action";
       action: Action;
       why: string;
+      /** Keys to press after the action with no new turn (`thenOf`). */
+      then?: string[];
       /** A plan_update that came in the same answer, before the action. */
       update?: unknown;
     }
@@ -956,13 +971,33 @@ const repairNote = (problem: string) =>
 function toAction(
   name: string,
   parsed: Record<string, unknown>,
-): { action: Action; why: string } {
+): { action: Action; why: string; then?: string[] } {
   const { why, ...rest } = parsed;
+  // Keys to press after a type or a key: no part of the action itself.
+  const { then, ...own } = rest;
+  const follow = name === "type" || name === "key" ? thenOf(then) : [];
   return {
     // The shape of an action only. The worker checks it before anything runs.
-    action: actionFromCall(name, rest).action,
+    action: actionFromCall(name, name === "type" || name === "key" ? own : rest)
+      .action,
     why: typeof why === "string" ? why : "",
+    ...(follow.length ? { then: follow } : {}),
   };
+}
+
+/**
+ * The keys that a type or a key gives to press after it: each one key with
+ * its modifiers, as `key` takes it, at most `thenLimit`. Anything else gives
+ * none, and the planner is asked after the step as always.
+ */
+export function thenOf(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length > thenLimit) return [];
+  const keys = raw.map((item) =>
+    typeof item === "string" ? item.trim().toLowerCase() : "",
+  );
+  return keys.every((key) => /^[a-z0-9]+(?:\+[a-z0-9]+){0,3}$/.test(key))
+    ? keys
+    : [];
 }
 
 /**
@@ -1422,6 +1457,7 @@ export class ModelPlanner implements Planner {
         action: first.action,
         why: first.why,
         ...(first.update !== undefined ? { update: first.update } : {}),
+        ...(first.then ? { then: first.then } : {}),
       };
     if (first.kind === "plan") return first.chosen;
     if (first.kind === "refused") throw refusal();
@@ -1447,6 +1483,7 @@ export class ModelPlanner implements Planner {
         action: second.action,
         why: second.why,
         ...(second.update !== undefined ? { update: second.update } : {}),
+        ...(second.then ? { then: second.then } : {}),
       };
     if (second.kind === "plan") return second.chosen;
     if (second.kind === "refused") throw refusal();
@@ -1596,6 +1633,8 @@ type Chosen = {
   why: string;
   /** A plan_update that came with the action: the worker applies it first. */
   update?: unknown;
+  /** Keys to press after the action, each as its own step with no new turn. */
+  then?: string[];
 };
 
 /** Lines on how to work through a whole task. Both the outline and the turns with a plan read them. */

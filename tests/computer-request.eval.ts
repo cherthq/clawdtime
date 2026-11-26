@@ -125,7 +125,7 @@ import {
   writeResults,
   type CaseRun,
 } from "./computer-eval-report.js";
-import { inSplit } from "./computer-eval-stats.js";
+import { inSplit, median, ninetieth } from "./computer-eval-stats.js";
 import {
   apps,
   bookInvoices,
@@ -1907,6 +1907,13 @@ interface Row {
   lookMs: number;
   planMs: number;
   actMs: number;
+  /** The time of each step (look, plan and act), and of its plan, in milliseconds. */
+  stepMs: number[];
+  stepPlanMs: number[];
+  /** The tokens of every call of the language model: in all, from the cache, and of the answers. */
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
   said: string;
   kinds: string;
   /** What the worker asked the person, and what the hands sent, for a look at a request that went wrong. */
@@ -2004,10 +2011,16 @@ async function one(
             always: !chooser.path.ideal,
           })
         : null;
+    const used = { input: 0, cached: 0, output: 0 };
     const planner = new ModelPlanner({
       ...(script || !("model" in chooser)
         ? { key: "no-key-scripted", model: "scripted" }
         : planners.get(chooser.model)!),
+      onUsage: (usage) => {
+        used.input += usage.inputTokens ?? 0;
+        used.cached += usage.cachedTokens ?? 0;
+        used.output += usage.outputTokens ?? 0;
+      },
       request: withModelFaults(
         script
           ? scriptedModel(script.choose, request.subgoals)
@@ -2092,6 +2105,13 @@ async function one(
       lookMs: sum((entry) => entry.lookMs),
       planMs: sum((entry) => entry.planMs),
       actMs: sum((entry) => entry.actMs),
+      stepMs: timed.map((entry) =>
+        Math.round(entry.lookMs + entry.planMs + entry.actMs),
+      ),
+      stepPlanMs: timed.map((entry) => Math.round(entry.planMs)),
+      inputTokens: used.input,
+      cachedTokens: used.cached,
+      outputTokens: used.output,
       said: last.slice(0, 200),
       kinds: timed.map((entry) => entry.kind).join(" "),
       asked,
@@ -2153,6 +2173,11 @@ const faultRow = (
   lookMs: 0,
   planMs: 0,
   actMs: 0,
+  stepMs: [],
+  stepPlanMs: [],
+  inputTokens: 0,
+  cachedTokens: 0,
+  outputTokens: 0,
   said: "",
   kinds: "",
   asked: [],
@@ -2334,6 +2359,13 @@ async function measure() {
       mine.reduce((sum, row) => sum + pick(row), 0);
     console.log(
       `\n${model}: ${mine.filter((row) => row.done).length} of ${mine.length} done | ${total((row) => row.steps)} steps | ${Math.round(total((row) => row.seconds))} s in all | plan ${Math.round(total((row) => row.planMs) / 1000)} s, look ${Math.round(total((row) => row.lookMs) / 1000)} s, act ${Math.round(total((row) => row.actMs) / 1000)} s`,
+    );
+    const steps = mine.flatMap((row) => row.stepMs ?? []);
+    const plans = mine.flatMap((row) => row.stepPlanMs ?? []);
+    const seconds = (value: number | null) =>
+      value === null ? "-" : `${(value / 1000).toFixed(2)} s`;
+    console.log(
+      `a step: median ${seconds(median(steps))}, 90th percentile ${seconds(ninetieth(steps))} | its plan: median ${seconds(median(plans))}, 90th percentile ${seconds(ninetieth(plans))} | tokens: ${total((row) => row.inputTokens ?? 0)} in, ${total((row) => row.cachedTokens ?? 0)} of them from the cache, ${total((row) => row.outputTokens ?? 0)} out`,
     );
     console.log(
       "request | run | done | end | steps | inputs | questions | seconds | actions | faults",

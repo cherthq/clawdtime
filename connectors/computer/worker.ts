@@ -72,6 +72,7 @@ import {
   check,
   clean,
   focusedSecure,
+  pressedElements,
   pressesElement,
   quietCall,
   readsBeforeCall,
@@ -134,7 +135,13 @@ import {
   type CellMask,
   type FocusRect,
 } from "./visual-diff.js";
-import { BrowserClosed, BrowserInputUnknown, handErrors } from "./ports.js";
+import {
+  BrowserClosed,
+  BrowserInputUnknown,
+  handErrors,
+  rereadLimit,
+  type Reread,
+} from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import { directAddress, webAddress } from "./navigation.js";
 import { directOpening } from "./planner.js";
@@ -317,6 +324,37 @@ const postActionFollowUpMs = 180;
 const fastReverifyMaxAgeMs = 8_000;
 /** The pause before one more quick look, when only small regions away from the target changed. */
 const noiseLookMs = 150;
+/** How far an element read again may lie from its place in the planner's look, in points. */
+const rereadTolerance = 2;
+/**
+ * True when each element that the quick picture read again (`targets`) is as
+ * the planner's look gave it: the same role, name, value, state and place.
+ * One that the hands did not find, or that changed in any of these, is
+ * false, and the worker then walks the whole tree.
+ */
+function readAgain(
+  targets: readonly Reread[],
+  before: Observation,
+  seen: Observation,
+) {
+  return targets.every((target) => {
+    const was = before.elements.find((item) => item.id === target.id);
+    const now = seen.elements.find((item) => item.id === target.id);
+    return (
+      was !== undefined &&
+      now !== undefined &&
+      now.role === was.role &&
+      now.title === was.title &&
+      now.value === was.value &&
+      now.secure === was.secure &&
+      now.enabled === was.enabled &&
+      Math.abs(now.x - was.x) <= rereadTolerance &&
+      Math.abs(now.y - was.y) <= rereadTolerance &&
+      Math.abs(now.w - was.w) <= rereadTolerance &&
+      Math.abs(now.h - was.h) <= rereadTolerance
+    );
+  });
+}
 /** The margin around a point target, in points. In the menu bar a point target keeps its own small place. */
 const pointPad = 24;
 const menuBarPointPad = 4;
@@ -666,6 +704,20 @@ const sameSpeaker = (
 ) => started?.callId === said?.callId;
 interface Run {
   authority?: DesktopExecutionAuthority;
+  /**
+   * Keys that the planner gave to press after its last step (`then`), each
+   * as its own step with no new turn. They go only while each step before
+   * them went through, the person said nothing more, and the same window is
+   * in front as when the planner chose them.
+   */
+  followUps?: {
+    keys: string[];
+    why: string;
+    /** The step that must have gone through before the next key. */
+    after: number;
+    heard: number;
+    app: { bundleId: string; window: string };
+  };
   /** The closer look that the planner asked for, for its next turn only. */
   closer?: Closer;
   /** What the closer picture was taken of: it goes only with a look of that scene. */
@@ -2337,12 +2389,40 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.noise = { place: { ...place, elements: [] }, cells };
   }
   /**
+   * The elements that a press reads again with the quick picture, in the
+   * same command, in place of a walk of the tree: those that it presses
+   * (`pressedElements`). Undefined when it must walk the tree: the hands do
+   * not read elements one by one, the press holds a text that only the
+   * picture shows, or it holds more than one look reads again.
+   */
+  private rereadOf(action: Action, before: Observation): Reread[] | undefined {
+    if (this.hands.readsTargets?.() !== true) return undefined;
+    const pressed = pressedElements(action, before);
+    if (
+      !pressed.length ||
+      pressed.length > rereadLimit ||
+      pressed.some((item) => item.role === "OCRText")
+    )
+      return undefined;
+    return pressed.map(({ id, role, x, y, w, h }) => ({
+      id,
+      role,
+      x,
+      y,
+      w,
+      h,
+    }));
+  }
+  /**
    * Fast pre-action visual re-verify: when eligible (non-typing/non-key, did
    * not pause for user approval, observation is <= 8s old, no secure elements
-   * on screen, no element under the press (`pressesElement`: its name and
-   * role are read again in the walk of the tree), and prior look carried a
-   * real JPEG), take an image-only observe
-   * first and skip the AX walk only when the surface is the same, the
+   * on screen, and prior look carried a real JPEG), take an image-only observe
+   * first. A press on an element (`pressesElement`) also reads its name and
+   * role again: a label can change in place with no change that the picture
+   * shows. Hands that read elements one by one read those of the press
+   * (`rereadOf`) in the same command, and the quick picture counts only when
+   * each of them is as the planner saw it. With other hands, a press walks
+   * the whole tree. Skip the AX walk only when the surface is the same, the
    * target's own region (zero cursor mask) is unchanged, and fewer than
    * `DIFF_MIN_CELLS` other cells changed outside the menu bar status area
    * and the regions that kept changing by themselves. When only a few cells
@@ -2359,6 +2439,10 @@ export class ComputerWorker implements DesktopExecutorPort {
     command: HandCommand,
     approved: boolean,
   ): Promise<Observation | null | "over"> {
+    const targets =
+      before !== null && pressesElement(action, before)
+        ? (this.rereadOf(action, before) ?? null)
+        : undefined;
     const canFastReverify =
       this.fastReverify &&
       !approved &&
@@ -2368,13 +2452,18 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.observedAt !== undefined &&
       this.now() - run.observedAt <= fastReverifyMaxAgeMs &&
       !before.elements.some((el) => el.secure) &&
-      !pressesElement(action, before) &&
+      targets !== null &&
       luminanceGridOf(before) !== null;
     if (canFastReverify) {
       const quick = async (): Promise<Observation | null | "over" | "held"> => {
         const handed = await this.hand(
           run,
-          { kind: "observe", image: true, elements: false },
+          {
+            kind: "observe",
+            image: true,
+            elements: false,
+            ...(targets ? { targets } : {}),
+          },
           "Check the screen",
         );
         if (handed.over) return "over";
@@ -2385,7 +2474,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         return seen &&
           seen.at >= before.at &&
           seen.at - before.at <= fastReverifyMaxAgeMs &&
-          sameSurface(before, seen)
+          sameSurface(before, seen) &&
+          (!targets || readAgain(targets, before, seen))
           ? seen
           : null;
       };
@@ -2685,7 +2775,10 @@ export class ComputerWorker implements DesktopExecutorPort {
         // that go in circles get a note, then a question to the person.
         const judged = await this.judge(run);
         if (judged === "over") return;
-        if (judged === "again") continue;
+        if (judged === "again") {
+          delete run.followUps;
+          continue;
+        }
         this.notLoaded(run);
         this.remind(run);
         const planFrom = this.now();
@@ -2695,62 +2788,69 @@ export class ComputerWorker implements DesktopExecutorPort {
         const heard = run.guidance.length;
         if (heard !== run.heard) delete run.approval;
         run.heard = heard;
-        let planned: Awaited<ReturnType<Planner["next"]>> | "held" | null;
+        let planned: Awaited<ReturnType<Planner["next"]>> | "held" | null =
+          null;
         let late: NodeJS.Timeout | undefined;
         let failure: { error: unknown } | undefined;
-        // The planner hears through this signal when the worker waits no
-        // more for its answer: Stop, a hold, the time limit, the end.
-        const controller = new AbortController();
-        run.plannerAbort = controller;
-        let wake = () => {};
-        const woken = new Promise<"held">((resolve) => {
-          wake = () => {
+        // A key that the planner gave to press after its last step goes with
+        // no new turn: the checks and the look before the input are the same.
+        const followUp = this.followUp(run, heard);
+        if (followUp) planned = followUp;
+        else {
+          // The planner hears through this signal when the worker waits no
+          // more for its answer: Stop, a hold, the time limit, the end.
+          const controller = new AbortController();
+          run.plannerAbort = controller;
+          let wake = () => {};
+          const woken = new Promise<"held">((resolve) => {
+            wake = () => {
+              controller.abort();
+              resolve("held");
+            };
+          });
+          run.wake = wake;
+          try {
+            const input: Parameters<Planner["next"]>[0] & {
+              signal: AbortSignal;
+            } = {
+              goal: run.goal,
+              ...(run.guidance.length
+                ? { guidance: run.guidance.map((said) => said.text) }
+                : {}),
+              ...(run.remembered ? { remembered: run.remembered } : {}),
+              history: run.history.slice(-shownSteps),
+              ...this.failedWays(run),
+              observation: run.observation,
+              page: run.page,
+              ...(run.browserClosed ? { browser: false } : {}),
+              signal: controller.signal,
+              ...(run.plan ? { plan: run.plan.view() } : {}),
+              ...this.closerFor(run),
+            };
+            const plan = this.planner.next(input);
+            plan.catch(() => {});
+            // Neither Stop, hold nor the time limit waits for the planner.
+            planned = await Promise.race([
+              plan,
+              run.halted,
+              woken,
+              new Promise<null>((resolve) => {
+                late = setTimeout(
+                  () => resolve(null),
+                  Math.max(0, run.deadline - this.now()) + 10,
+                );
+                late.unref();
+              }),
+            ]);
+          } catch (error) {
+            failure = { error };
+            planned = null;
+          } finally {
+            clearTimeout(late);
+            delete run.wake;
             controller.abort();
-            resolve("held");
-          };
-        });
-        run.wake = wake;
-        try {
-          const input: Parameters<Planner["next"]>[0] & {
-            signal: AbortSignal;
-          } = {
-            goal: run.goal,
-            ...(run.guidance.length
-              ? { guidance: run.guidance.map((said) => said.text) }
-              : {}),
-            ...(run.remembered ? { remembered: run.remembered } : {}),
-            history: run.history.slice(-shownSteps),
-            ...this.failedWays(run),
-            observation: run.observation,
-            page: run.page,
-            ...(run.browserClosed ? { browser: false } : {}),
-            signal: controller.signal,
-            ...(run.plan ? { plan: run.plan.view() } : {}),
-            ...this.closerFor(run),
-          };
-          const plan = this.planner.next(input);
-          plan.catch(() => {});
-          // Neither Stop, hold nor the time limit waits for the planner.
-          planned = await Promise.race([
-            plan,
-            run.halted,
-            woken,
-            new Promise<null>((resolve) => {
-              late = setTimeout(
-                () => resolve(null),
-                Math.max(0, run.deadline - this.now()) + 10,
-              );
-              late.unref();
-            }),
-          ]);
-        } catch (error) {
-          failure = { error };
-          planned = null;
-        } finally {
-          clearTimeout(late);
-          delete run.wake;
-          controller.abort();
-          if (run.plannerAbort === controller) delete run.plannerAbort;
+            if (run.plannerAbort === controller) delete run.plannerAbort;
+          }
         }
         if (failure) {
           // What the planner threw can hold what was sent to it: it is not
@@ -2829,7 +2929,15 @@ export class ComputerWorker implements DesktopExecutorPort {
         // Done, give_up and ask say their own words.
         if (kind !== "done" && kind !== "give_up" && kind !== "ask")
           run.opening.acting(why);
+        // The keys that are left after this one.
+        const then = followUp
+          ? run.followUps?.keys.slice(1)
+          : "then" in planned
+            ? planned.then
+            : undefined;
+        delete run.followUps;
         await this.act(run, chosen, why);
+        this.queueFollowUps(run, then, why, heard, beforeObs);
         // Plan: an action came, so the plan updates in a row start again.
         run.plan?.acted();
         // The next look says what came of this step.
@@ -4566,6 +4674,63 @@ export class ComputerWorker implements DesktopExecutorPort {
       "ok",
     );
     this.halted(run);
+  }
+
+  /**
+   * The next key that the planner gave to press after its last step, as the
+   * action of this step, when it may go with no new turn: the step before it
+   * went through ("ok"), the person said nothing since, and the same app and
+   * window are in front as when the planner chose it. Else none, and the
+   * keys that are left are dropped: the planner chooses from this look.
+   */
+  private followUp(
+    run: Run,
+    heard: number,
+  ): { action: Action; why: string } | null {
+    const queued = run.followUps;
+    if (!queued) return null;
+    const last = run.history.at(-1);
+    const seen = run.observation;
+    const key = queued.keys[0];
+    if (
+      key === undefined ||
+      last?.step !== queued.after ||
+      last.outcome !== "ok" ||
+      heard !== queued.heard ||
+      !seen ||
+      seen.app.bundleId !== queued.app.bundleId ||
+      !sameWindowTitle(seen.app.window, queued.app.window)
+    ) {
+      delete run.followUps;
+      return null;
+    }
+    return { action: { kind: "key", combo: key }, why: queued.why };
+  }
+
+  /** Keeps the keys to press after the step that just ran, while it went through. */
+  private queueFollowUps(
+    run: Run,
+    keys: string[] | undefined,
+    why: string,
+    heard: number,
+    before: Observation | null,
+  ) {
+    const last = run.history.at(-1);
+    if (
+      !keys?.length ||
+      this.current !== run ||
+      !before ||
+      last?.step !== run.step ||
+      last.outcome !== "ok"
+    )
+      return;
+    run.followUps = {
+      keys: keys.slice(0, 3),
+      why,
+      after: run.step,
+      heard,
+      app: { bundleId: before.app.bundleId, window: before.app.window },
+    };
   }
 
   /*

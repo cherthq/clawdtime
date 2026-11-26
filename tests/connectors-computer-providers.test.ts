@@ -1166,7 +1166,8 @@ describe("the strict tools of Anthropic", () => {
     for (const tool of out) walk(tool.input_schema);
 
     expect(optional).toBeLessThanOrEqual(strictLimits.optional);
-    expect(optional).toBe(22);
+    // `then` of type and of key take the last two.
+    expect(optional).toBe(24);
     expect(unions).toBeLessThanOrEqual(strictLimits.unions);
     expect(unions).toBe(2);
 

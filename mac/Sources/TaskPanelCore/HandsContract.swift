@@ -94,10 +94,53 @@ public struct Observation: Codable, Equatable, Sendable {
   }
 }
 
+/// One element of the hands' last look whose name and role the worker reads again just before a press: its
+/// number in that look, its role and its place there, in screen points from the top left.
+public struct HandsReread: Codable, Equatable, Sendable {
+  public let id: Int
+  public let role: String
+  public let x: Double, y: Double, w: Double, h: Double
+  public init(id: Int, role: String, x: Double, y: Double, w: Double, h: Double) {
+    self.id = id; self.role = role; self.x = x; self.y = y; self.w = w; self.h = h
+  }
+  /// The most elements that one look reads again.
+  public static let limit = 8
+  /// How far an element may lie from its place and still be the same one, in points.
+  public static let tolerance = 1.0
+  public init(from decoder: Decoder) throws {
+    try HandsShape.only(["id", "role", "x", "y", "w", "h"], in: decoder)
+    let box = try decoder.container(keyedBy: CodingKeys.self)
+    id = try box.decode(Int.self, forKey: .id); role = try box.decode(String.self, forKey: .role)
+    x = try box.decode(Double.self, forKey: .x); y = try box.decode(Double.self, forKey: .y)
+    w = try box.decode(Double.self, forKey: .w); h = try box.decode(Double.self, forKey: .h)
+    guard id >= 0, !role.isEmpty, HandsShape.fits(role, ElementCleaner.roleLimit), [x, y, w, h].allSatisfy(\.isFinite), w > 0, h > 0
+      else { throw PanelFailure.response }
+  }
+  /// The middle of the place, where the element is found again when the look does not hold it any more.
+  public var middle: CGPoint { CGPoint(x: x + w / 2, y: y + h / 2) }
+  /// The element as the last look gave it is this one: the same role at the same place. Anything else is
+  /// another element, or a look that is not the worker's.
+  public func names(_ element: ScreenElement) -> Bool {
+    element.id == id && element.role == role && sits(element)
+  }
+  /// The element lies at this place, within the tolerance.
+  public func sits(_ element: ScreenElement) -> Bool {
+    abs(element.x - x) <= Self.tolerance && abs(element.y - y) <= Self.tolerance &&
+      abs(element.w - w) <= Self.tolerance && abs(element.h - h) <= Self.tolerance
+  }
+  /// Of the elements from the one under the middle up through those that hold it, the first one with this
+  /// role at this place. Nil when none is: the worker then walks the whole tree, as before.
+  public func pick(_ chain: [ScreenElement?]) -> Int? {
+    chain.firstIndex { candidate in candidate.map { $0.role == role && sits($0) } ?? false }
+  }
+}
+
 /// One command for the hands.
 public enum HandCommand: Equatable, Sendable {
   public enum Button: String, Codable, Sendable { case left, right }
-  case observe(image: Bool, elements: Bool)
+  /// A look. With `reread`, the hands also read those elements of their last look again, one by one, with no
+  /// walk of the tree, and the look gives only them, with their numbers from that look.
+  case observe(image: Bool, elements: Bool, reread: [HandsReread] = [])
   case move(x: Double, y: Double)
   case click(x: Double, y: Double, button: Button, count: Int, allowCover: Bool? = nil)
   case drag(fromX: Double, fromY: Double, toX: Double, toY: Double)
@@ -162,14 +205,14 @@ public enum HandCommand: Equatable, Sendable {
   /// The command sends input or reads the Accessibility tree.
   public var needsAccessibility: Bool {
     switch self {
-    case .observe(_, let elements): return elements
+    case .observe(_, let elements, let reread): return elements || !reread.isEmpty
     case .move, .click, .drag, .scroll, .type, .key, .openApp, .switchDesktop, .switchPreviousApp: return true
     case .openURL, .quitApp, .wait, .zoom: return false
     }
   }
   /// The command takes a picture of the screen.
   public var needsScreenRecording: Bool {
-    if case .observe(let image, _) = self { return image }
+    if case .observe(let image, _, _) = self { return image }
     if case .zoom = self { return true }
     if case .openApp = self { return true }
     if case .switchDesktop = self { return true }
@@ -186,7 +229,7 @@ public enum HandCommand: Equatable, Sendable {
 
 extension HandCommand: Codable {
   private enum Key: String, CodingKey {
-    case kind, image, elements, x, y, w, h, width, height, button, count, allowCover, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, browser, ms
+    case kind, image, elements, targets, x, y, w, h, width, height, button, count, allowCover, fromX, fromY, toX, toY, dx, dy, text, combo, name, window, direction, url, browser, ms
   }
   public init(from decoder: Decoder) throws {
     let box = try decoder.container(keyedBy: Key.self)
@@ -203,8 +246,11 @@ extension HandCommand: Codable {
     }
     switch try box.decode(String.self, forKey: .kind) {
     case "observe":
-      try only(.image, .elements)
-      self = .observe(image: try box.decode(Bool.self, forKey: .image), elements: try box.decode(Bool.self, forKey: .elements))
+      try only(.image, .elements, .targets)
+      let reread = try box.decodeIfPresent([HandsReread].self, forKey: .targets)
+      guard reread.map({ (1...HandsReread.limit).contains($0.count) }) ?? true else { throw PanelFailure.response }
+      self = .observe(image: try box.decode(Bool.self, forKey: .image), elements: try box.decode(Bool.self, forKey: .elements),
+                      reread: reread ?? [])
     case "move":
       try only(.x, .y)
       self = .move(x: try number(.x), y: try number(.y))
@@ -268,8 +314,9 @@ extension HandCommand: Codable {
     var box = encoder.container(keyedBy: Key.self)
     try box.encode(kind, forKey: .kind)
     switch self {
-    case .observe(let image, let elements):
+    case .observe(let image, let elements, let reread):
       try box.encode(image, forKey: .image); try box.encode(elements, forKey: .elements)
+      if !reread.isEmpty { try box.encode(reread, forKey: .targets) }
     case .move(let x, let y):
       try box.encode(x, forKey: .x); try box.encode(y, forKey: .y)
     case .click(let x, let y, let button, let count, let allowCover):

@@ -9,8 +9,11 @@
  * made-up panel reads their commands and acts out the cost of each one with a
  * wait: the read of the next command, the picture, the walk of the
  * Accessibility tree, the glide of the guided cursor and the input itself.
- * The request runs twice: once with the numbers of the panel before (kept
- * here as the baseline), and once with the numbers of the panel now.
+ * The request runs three times: once with the numbers of the panel before
+ * (kept here as the baseline), once with the numbers of the panel now but a
+ * walk of the whole tree before each press on an element, as before the
+ * panel read the pressed elements again one by one, and once with the panel
+ * now, which reads them with the quick picture.
  *
  * The rules of the glide, the wait at the target, the move of the pointer and
  * the read of the next command are the panel's own, before and after. The
@@ -72,6 +75,8 @@ interface Panel {
   quality: number;
   /** The picture's limit: the width, or the longer side. */
   side: "width" | "long";
+  /** The panel reads the elements of its last look again one by one (`targets`). */
+  reads: boolean;
 }
 
 /**
@@ -111,6 +116,7 @@ const before: Panel = {
   together: false,
   quality: 0.6,
   side: "width",
+  reads: false,
 };
 
 /** The panel now. */
@@ -130,7 +136,17 @@ const now: Panel = {
   together: true,
   quality: 0.5,
   side: "long",
+  reads: true,
 };
+
+/** The panel now, with a walk of the whole tree before each press on an element. */
+const walking: Panel = { ...now, name: "walk", reads: false };
+
+/**
+ * Assumed: reading one element again costs one question for its attributes
+ * and one for its label, at the cost of one element of the walk each.
+ */
+const rereadMs = 2 * busyWindow.eachMs;
 
 /** Costs that did not change: one read of the service, a read of the window in front, and the events. */
 const checkMs = 2;
@@ -173,13 +189,23 @@ const elements = (focused: boolean): ScreenElement[] => [
   item(5, "AXScrollArea", "Notes list", 220, 120, 480, 820),
   item(6, "AXButton", "Pin", 1320, 12, 80, 28),
 ];
+/**
+ * The picture of every look: one small grey JPEG, the same each time, so the
+ * quick picture before an input finds the screen as it was.
+ */
+const still = (() => {
+  const width = 128;
+  const height = 83;
+  const data = Buffer.alloc(width * height * 4, 200);
+  return jpeg.encode({ data, width, height }, 50).data.toString("base64");
+})();
 const look = (focused: boolean, image: boolean): Observation => ({
   at: Date.now(),
   screen,
   cursor: { x: 700, y: 500 },
   app: { name: "Notes", bundleId: "com.apple.Notes", window: "Notes" },
   elements: elements(focused),
-  ...(image ? { image: "aW1hZ2U=", imageWidth: 1280, imageHeight: 831 } : {}),
+  ...(image ? { image: still, imageWidth: 1280, imageHeight: 831 } : {}),
 });
 
 /** The planner: a fixed request that thinks for no time. */
@@ -206,6 +232,7 @@ class Script implements Planner {
 async function request(panel: Panel, imageBytes: number) {
   const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-speed-"));
   const hands = new PanelHands({ first: 1 });
+  if (panel.reads) hands.offer("targets");
   const steps: (StepTiming & HandsCost)[] = [];
   const worker = new ComputerWorker({
     hands,
@@ -242,7 +269,11 @@ async function request(panel: Panel, imageBytes: number) {
   ): Promise<{ result: Omit<HandResult, "seq">; cost: string }> => {
     if (command.kind === "observe") {
       const capture = command.image ? panel.captureMs + panel.encodeMs : 0;
-      const walk = command.elements ? panel.walkMs : 0;
+      const walk = command.targets
+        ? command.targets.length * rereadMs
+        : command.elements
+          ? panel.walkMs
+          : 0;
       const spent = panel.together ? Math.max(capture, walk) : capture + walk;
       // The window in front is read before and after the look.
       await sleep((spent + 2 * surfaceMs) / 1000);
@@ -256,8 +287,18 @@ async function request(panel: Panel, imageBytes: number) {
           : []),
         `walk=${Math.round(walk)}`,
       ];
+      const seen = look(focused, command.image);
+      const wanted = new Set(command.targets?.map((target) => target.id));
       return {
-        result: { ok: true, observation: look(focused, command.image) },
+        result: {
+          ok: true,
+          observation: command.targets
+            ? {
+                ...seen,
+                elements: seen.elements.filter((item) => wanted.has(item.id)),
+              }
+            : seen,
+        },
         cost: parts.join(";"),
       };
     }
@@ -456,7 +497,7 @@ async function main() {
     "The planner thinks for no time. Look, act and wait are milliseconds of each step; wait is the time that its commands waited for the panel to read them, glide is the guided cursor before its inputs.",
   );
   console.log(
-    `Assumed: a picture costs ${before.captureMs} ms to take; the window has ${busyWindow.all} elements, ${busyWindow.hidden} of them in parts that do not show, at ${busyWindow.eachMs} ms each (walk ${Math.round(walkBefore)} ms before, ${Math.round(walkNow)} ms now).`,
+    `Assumed: a picture costs ${before.captureMs} ms to take; the window has ${busyWindow.all} elements, ${busyWindow.hidden} of them in parts that do not show, at ${busyWindow.eachMs} ms each (walk ${Math.round(walkBefore)} ms before, ${Math.round(walkNow)} ms now); an element read again costs ${rereadMs.toFixed(2)} ms.`,
   );
   // The picture of a 3024 by 1964 screen, made up here: no screen is captured.
   const source = generatedScreen(3024, 1964);
@@ -468,40 +509,37 @@ async function main() {
     return { panel, size, bytes };
   });
   const old = await request(before, pictures[0]!.bytes);
+  const walked = await request(walking, pictures[1]!.bytes);
   const fast = await request(now, pictures[1]!.bytes);
   table("Before", old.steps);
+  table("After, with a walk of the tree before each press", walked.steps);
   table("After", fast.steps);
   const outside = (run: typeof old) =>
     sum(run.steps, "lookMs") + sum(run.steps, "actMs");
-  const rows: [string, number, number][] = [
-    ["look", sum(old.steps, "lookMs"), sum(fast.steps, "lookMs")],
-    ["act", sum(old.steps, "actMs"), sum(fast.steps, "actMs")],
-    [
-      "wait for the panel",
-      sum(old.steps, "pollWaitMs"),
-      sum(fast.steps, "pollWaitMs"),
-    ],
-    [
-      "glide and its wait",
-      sum(old.steps, "glideMs"),
-      sum(fast.steps, "glideMs"),
-    ],
-    ["walk of the tree", sum(old.steps, "walkMs"), sum(fast.steps, "walkMs")],
-    ["look and act", outside(old), outside(fast)],
-    ["whole request", old.total, fast.total],
+  const runs = [old, walked, fast];
+  const rows: [string, number[]][] = [
+    ["look", runs.map((run) => sum(run.steps, "lookMs"))],
+    ["act", runs.map((run) => sum(run.steps, "actMs"))],
+    ["wait for the panel", runs.map((run) => sum(run.steps, "pollWaitMs"))],
+    ["glide and its wait", runs.map((run) => sum(run.steps, "glideMs"))],
+    ["walk of the tree", runs.map((run) => sum(run.steps, "walkMs"))],
+    ["look and act", runs.map(outside)],
+    ["whole request", runs.map((run) => run.total)],
   ];
+  const less = (a: number, b: number) =>
+    a > 0 ? `${Math.round(((a - b) / a) * 100)}%` : "-";
   console.log(
-    `\n${"Totals, in ms".padEnd(22)}${pad("before", 9)}${pad("after", 9)}${pad("less", 7)}`,
+    `\n${"Totals, in ms".padEnd(22)}${pad("before", 9)}${pad("walk", 9)}${pad("after", 9)}${pad("less", 7)}${pad("than walk", 11)}`,
   );
-  for (const [name, a, b] of rows)
+  for (const [name, [a, w, b]] of rows)
     console.log(
-      `${name.padEnd(22)}${pad(Math.round(a), 9)}${pad(Math.round(b), 9)}${pad(a > 0 ? `${Math.round(((a - b) / a) * 100)}%` : "-", 7)}`,
+      `${name.padEnd(22)}${pad(Math.round(a!), 9)}${pad(Math.round(w!), 9)}${pad(Math.round(b!), 9)}${pad(less(a!, b!), 7)}${pad(less(w!, b!), 11)}`,
     );
   console.log(
-    `Steps: ${old.steps.length} before, ${fast.steps.length} after. The request ended as ${old.state} before and ${fast.state} after.`,
+    `Steps: ${runs.map((run) => run.steps.length).join(", ")} (before, walk, after). The request ended as ${runs.map((run) => run.state).join(", ")}.`,
   );
   console.log(
-    `Per step, look and act: ${Math.round(outside(old) / Math.max(1, old.steps.length))} ms before, ${Math.round(outside(fast) / Math.max(1, fast.steps.length))} ms after.`,
+    `Per step, look and act: ${runs.map((run) => `${Math.round(outside(run) / Math.max(1, run.steps.length))} ms`).join(", ")} (before, walk, after).`,
   );
 
   console.log(
