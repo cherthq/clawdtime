@@ -52,7 +52,12 @@ import {
   writePrivateJSON,
 } from "../shared/private-file.js";
 import { computerDirectory } from "./journal.js";
-import { LiveKitRooms, liveKitToken, type LiveKitPort } from "./livekit.js";
+import {
+  LiveKitError,
+  LiveKitRooms,
+  liveKitToken,
+  type LiveKitPort,
+} from "./livekit.js";
 import type { CallPhase, ReachAsk, ReachCallPort } from "./reach.js";
 
 export const callsProvider = "chert-calls-api" as const;
@@ -259,6 +264,8 @@ const entrySchema = z
       .string()
       .regex(/^[a-z0-9_]{1,60}$/)
       .optional(),
+    /** A call of an earlier run of the service that is still to be cleaned up: its room, and its call when it has an id. */
+    cleanup: z.literal(true).optional(),
   })
   .strict();
 type Entry = z.infer<typeof entrySchema>;
@@ -347,26 +354,29 @@ export class ChertReachCalls implements ReachCallPort {
     this.request = options.request ?? fetch;
     this.record = this.load();
     // A call that was on its way when the service stopped has an unknown
-    // outcome. It is kept so, and never placed again. A call that Chert had
-    // allocated is ended: nobody follows it any more.
-    const orphans: Entry[] = [];
+    // outcome. It is kept so, and never placed again. Nobody follows it any
+    // more, so it is marked to be cleaned up: its room is deleted, which takes
+    // the line agent out of the call, and a call that Chert had allocated is
+    // ended. A call that was being placed has no id to end. The mark stays
+    // until that is done, so a later start does what this one could not.
     if (this.record) {
       let changed = false;
       for (const entry of this.record.items)
         if (entry.state !== "over") {
-          if (entry.state === "allocated" && entry.callId) orphans.push(entry);
           entry.state = "over";
           entry.result = entry.connected ? "answered" : "unknown";
           entry.reason = "service_restarted";
+          entry.cleanup = true;
           changed = true;
         }
       if (changed) this.save();
       for (const entry of this.record.items) this.dropCapability(entry.id);
     }
-    this.restored = this.endOrphans(orphans);
+    this.restored = this.endOrphans();
   }
 
-  private async endOrphans(orphans: Entry[]) {
+  private async endOrphans() {
+    const orphans = this.record?.items.filter((entry) => entry.cleanup) ?? [];
     if (!orphans.length) return;
     const found = this.settings();
     if ("missing" in found) return;
@@ -375,13 +385,32 @@ export class ChertReachCalls implements ReachCallPort {
       ((keys) => new LiveKitRooms(keys, this.request, this.now))
     )(found.settings.liveKit);
     for (const entry of orphans) {
-      await this.effect(
-        found.settings,
-        `/calls/${entry.callId}/end`,
-        JSON.stringify({ reason: "ClawdTime reach call ended" }),
-        `clawdtime-reach-end-${entry.id}`,
-      ).catch(() => {});
-      await liveKit.deleteRoom(`clawdtime-reach-${entry.id}`).catch(() => {});
+      // The end has its own key, so a second send ends nothing new. Any
+      // answer but an error of the server settles it: a refusal says that
+      // the call is over or not there.
+      const ended = entry.callId
+        ? await this.effect(
+            found.settings,
+            `/calls/${entry.callId}/end`,
+            JSON.stringify({ reason: "ClawdTime reach call ended" }),
+            `clawdtime-reach-end-${entry.id}`,
+          ).then(
+            (answer) => answer.status < 500,
+            () => false,
+          )
+        : true;
+      // A room that is gone already counts as deleted.
+      const deleted = await liveKit
+        .deleteRoom(`clawdtime-reach-${entry.id}`)
+        .then(
+          () => true,
+          (error: unknown) =>
+            error instanceof LiveKitError && error.status === 404,
+        );
+      if (ended && deleted) {
+        delete entry.cleanup;
+        this.save();
+      }
     }
   }
 
