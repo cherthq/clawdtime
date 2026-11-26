@@ -602,7 +602,7 @@ const products = [
   ["Granite blender", "59.00", "0.00"],
   ["Amber mug", "9.00", "2.50"],
 ];
-/** A shop: a search over a list of products. A product page shows its price, and its delivery on a tab of its own. */
+/** A shop: a search shows the products whose names hold its words. A product page shows its price, and its delivery on a tab of its own. */
 const market = page(
   "Market",
   `.pane { flex: 1; padding: 20px 30px; } .search { width: 320px; height: 28px; border: 1px solid #c8c8c8; border-radius: 6px; padding: 0 8px; font: inherit; }
@@ -623,6 +623,8 @@ const market = page(
    function draw() {
      var words = el("search").value.toLowerCase().split(/\\s+/).filter(Boolean), list = el("list");
      list.innerHTML = "";
+     // As in a large shop, the products show only for a search.
+     if (!words.length) { var hint = document.createElement("p"); hint.setAttribute("data-role", "AXStaticText"); set(hint, "Search for a product by its name."); list.appendChild(hint); return; }
      products.forEach(function (product) {
        var name = product[0].toLowerCase();
        if (!words.every(function (word) { return name.indexOf(word) >= 0; })) return;
