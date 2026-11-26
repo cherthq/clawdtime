@@ -234,6 +234,28 @@ public enum OwnWindows {
     guard front == own else { return front }
     return menuBar == own ? nil : menuBar
   }
+  /// A press of a button or a turn of the wheel at `point`, in screen points from the bottom left, would land on a
+  /// window of ClawdTime: one that shows and takes clicks lies there. The windows that the hands let clicks through,
+  /// such as the mascot, take none. A window that came up after that does: the bubble with Approve on it, the card
+  /// of a question with Approve and No, the chat. The window list that the hands judge the screen by leaves all of
+  /// them out, so this rule reads AppKit's own list, at once, right before the event.
+  public static func takePointer(at point: CGPoint, _ windows: [OwnWindowState]) -> Bool {
+    windows.contains { $0.visible && $0.takesClicks && $0.frame.contains(point) }
+  }
+  /// The keys would go to ClawdTime: one of its windows has the keyboard, or ClawdTime is the app in front.
+  public static func holdKeyboard(keyWindow: Bool, active: Bool) -> Bool { keyWindow || active }
+}
+
+/// One window of ClawdTime as AppKit has it at this moment, in screen points from the bottom left of the main display.
+public struct OwnWindowState: Equatable, Sendable {
+  public let frame: CGRect
+  /// It is on the screen.
+  public let visible: Bool
+  /// It takes a click: it does not let mouse events through to the window behind it.
+  public let takesClicks: Bool
+  public init(frame: CGRect, visible: Bool, takesClicks: Bool) {
+    self.frame = frame; self.visible = visible; self.takesClicks = takesClicks
+  }
 }
 
 /// What the mascot says about everything it supervises, in words and in mood.

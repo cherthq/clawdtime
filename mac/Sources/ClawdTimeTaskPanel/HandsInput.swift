@@ -36,6 +36,14 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   var mayContinue: (() -> Bool)?
   /// Recheck the independently observed window after pointer travel and before input.
   var beforeInput: (() async -> Bool)?
+  /// Read at once, with no wait between it and the event, right before each press of a button and each turn of
+  /// the wheel. True: a window of ClawdTime that takes clicks lies at the place, in screen points from the top left.
+  /// Nothing goes there.
+  var ownWindowAt: ((CGPoint) -> Bool)?
+  /// Read the same way right before each key and each piece of typed text. True: the keys would go to ClawdTime.
+  var ownKeyboard: (() -> Bool)?
+  private func ownPointer(_ place: CGPoint) -> Bool { ownWindowAt?(place) ?? false }
+  private var keyboardIsOwn: Bool { ownKeyboard?() ?? false }
   private var interrupted: Bool { halted || personActed || mayContinue?() == false }
   private func allowed() async -> Bool {
     guard !interrupted else { return false }
@@ -116,6 +124,9 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     for press in 1...max(1, min(2, count)) {
       if interrupted { return false }
       if press > 1 { guard await allowed() else { return false } }
+      // After the last wait and the last check of the service: a window of ClawdTime that came up at the place,
+      // such as a request with Approve on it, gets no press.
+      if interrupted || ownPointer(point) { return false }
       // A button that went down always comes up: nothing between the two can stop.
       mouse(right ? .rightMouseDown : .leftMouseDown, at: point, button: right ? .right : .left, clicks: Int64(press))
       await pause(0.012)
@@ -131,20 +142,26 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     await pause(0.02)
     if interrupted { return false }
     guard await allowed() else { return false }
+    // Neither the place of the press nor the place of the drop lies under a window of ClawdTime.
+    if interrupted || ownPointer(from) || ownPointer(to) { return false }
     mouse(.leftMouseDown, at: from, clicks: 1)
     held = from
     // An app starts a drag only after the button stays down for a moment.
     await pause(0.05)
     let length = hypot(Double(to.x - from.x), Double(to.y - from.y))
     let path = GuidedPath(from: from, to: to, duration: GuidedPath.dragDuration(length: length), arc: 0)
+    var cut = false
     for point in path.points(every: 1.0 / 60) {
       if interrupted || held == nil { break }
+      // A window of ClawdTime that came up on the way ends the drag where it is: the button comes up there, and
+      // the drag did not finish.
+      if ownPointer(point) { cut = true; break }
       mouse(.leftMouseDragged, at: point)
       held = point
       await pause(1.0 / 60)
     }
     await pause(0.025)
-    let finished = !interrupted && held != nil
+    let finished = !cut && !interrupted && held != nil
     letGo()
     return finished
   }
@@ -162,7 +179,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
       if index % 2 == 0 {
         guard await allowed() else { return false }
       }
-      if interrupted { return false }
+      if interrupted || ownPointer(point) { return false }
       let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: tick.vertical, wheel2: tick.horizontal, wheel3: 0)
       event?.location = point
       post(event)
@@ -193,6 +210,8 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
         guard await allowed() else { return .refused }
         unchecked = 0
       }
+      // After the last check: the keyboard did not move to a window of ClawdTime, such as its chat.
+      if keyboardIsOwn { return .refused }
       switch step {
       case .text(let piece):
         let units = Array(piece.utf16)
@@ -219,6 +238,8 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   func key(_ combo: KeyCombo) async -> Bool {
     if interrupted { return false }
     guard await allowed(), keyIsPermitted(combo) else { return false }
+    // After the last check of the service: the keyboard is still outside ClawdTime.
+    if interrupted || keyboardIsOwn { return false }
     // The combo names a character. On a keyboard of another country that
     // character is on another key, so the key is found on the layout in use.
     let code = combo.character.flatMap(Self.keyCode(printing:)) ?? combo.keyCode
@@ -285,6 +306,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
       session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
     guard DesktopShortcutConfiguration.isEnabled(shortcut, in: Self.enabledHotKeys()) else { return .failure(.desktopShortcutUnavailable) }
+    guard !keyboardIsOwn else { return .failure(.refused) }
     post(down, flags: CGEventFlags(rawValue: shortcut.flags))
     await pause(0.02)
     post(up, flags: CGEventFlags(rawValue: shortcut.flags))
@@ -304,6 +326,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     guard CGPreflightScreenCaptureAccess() else { return .failure(.noScreenRecording) }
     guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
       session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
+    guard !keyboardIsOwn else { return .failure(.refused) }
     post(down, flags: .maskCommand)
     // Once down was submitted, always release both keys, including on Stop.
     await pause(0.02)

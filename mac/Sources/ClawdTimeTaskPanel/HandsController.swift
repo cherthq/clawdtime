@@ -106,6 +106,18 @@ import TaskPanelCore
       guard await self.desktop.inputStillCurrent(steady: !self.input.submittedInput) else { self.inputRefusal = .staleObservation; return false }
       return true
     }
+    input.ownWindowAt = { [weak self] place in
+      guard let self else { return true }
+      guard self.ownWindowTakes(place) else { return false }
+      self.inputRefusal = .targetNotVisible
+      return true
+    }
+    input.ownKeyboard = { [weak self] in
+      guard let self else { return true }
+      guard Self.keyboardIsOwn else { return false }
+      self.inputRefusal = .refused
+      return true
+    }
     desktop.onTransition = { [weak self] phase, epoch in
       guard let self else { return }
       switch phase {
@@ -361,7 +373,7 @@ import TaskPanelCore
       if let refusal = await lastCheck() { return .failure(refusal) }
       guard await desktop.beginInput(steady: true) else { return .failure(.staleObservation) }
       defer { desktop.endInput() }
-      guard NSApp.keyWindow == nil else { return .failure(.refused) }
+      guard !Self.keyboardIsOwn else { return .failure(.refused) }
       if keys.typesText, await focusIsSecure() { return .failure(.refused) }
       showTyping(); defer { endTyping() }
       return await input.key(keys) ? .success(nil) : .failure(inputFailure())
@@ -583,16 +595,26 @@ import TaskPanelCore
     }
     return restore
   }
+  /// A window of ClawdTime that shows and takes clicks lies at `place`, in screen points from the top left. It came
+  /// up after `passThrough`, or it takes clicks again. With no main display nothing is known, and the place is not free.
+  private func ownWindowTakes(_ place: CGPoint) -> Bool {
+    guard let map = HandsDisplay.main?.map else { return true }
+    return OwnWindows.takePointer(at: map.flip(place), NSApp.windows.map(OwnWindowState.init(window:)))
+  }
+  /// The keys would go to ClawdTime: its chat or another of its windows has the keyboard, or it is the app in front.
+  private static var keyboardIsOwn: Bool { OwnWindows.holdKeyboard(keyWindow: NSApp.keyWindow != nil, active: NSApp.isActive) }
   /// Keys go to the window that has the keyboard. When that is a window of
   /// ClawdTime, for example its chat, this waits a moment for it to close.
   private func keyboardFree() async -> Bool {
-    for _ in 0..<12 where NSApp.keyWindow != nil { await pause(0.05) }
-    return NSApp.keyWindow == nil
+    for _ in 0..<12 where Self.keyboardIsOwn { await pause(0.05) }
+    return !Self.keyboardIsOwn
   }
   /// In the middle of typed text: the keyboard is still outside ClawdTime and outside a password field.
   private func mayType() async -> Bool {
-    guard NSApp.keyWindow == nil, await lastCheck() == nil, await desktop.inputStillCurrent(steady: false) else { return false }
-    return !(await focusIsSecure())
+    guard !Self.keyboardIsOwn, await lastCheck() == nil, await desktop.inputStillCurrent(steady: false) else { return false }
+    guard !(await focusIsSecure()) else { return false }
+    // The reads above wait: the keyboard is read once more after them.
+    return !Self.keyboardIsOwn
   }
   /// The field that has the keyboard is a password field: the Accessibility
   /// tree says so, or macOS guards the keyboard as it does for one. An app that
@@ -750,5 +772,12 @@ import TaskPanelCore
     alert.addButton(withTitle: "Open System Settings")
     if alert.runModal() == .alertSecondButtonReturn,
       let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") { NSWorkspace.shared.open(url) }
+  }
+}
+
+extension OwnWindowState {
+  /// A window of this app as AppKit has it now. The frame counts from the bottom left of the main display.
+  @MainActor init(window: NSWindow) {
+    self.init(frame: window.frame, visible: window.isVisible, takesClicks: !window.ignoresMouseEvents)
   }
 }
