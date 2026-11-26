@@ -299,6 +299,44 @@ describe("durable generic proactive transport", () => {
       ready: false,
     });
   });
+  it("records a handoff that the owner refused before any effect as not sent and frees the line", async () => {
+    const f = fixture();
+    f.line.acquire.mockRejectedValue(
+      Error("owner_release_not_sent", { cause: Error("owner_not_ready") }),
+    );
+    expect(await f.transport.deliver(f.intent, f.grant)).toEqual({
+      state: "refused",
+      cleanupConfirmed: true,
+      reason: "owner_release_not_sent",
+    });
+    expect(
+      f.coordinator.transport.get(f.grant.attemptId, "handoff"),
+    ).toMatchObject({ state: "done", evidence: "release_not_sent" });
+    expect(f.media).not.toHaveBeenCalled();
+    expect(f.calls.createProactive).not.toHaveBeenCalled();
+    expect(f.line.restore).not.toHaveBeenCalled();
+    expect(f.cleanupViews).toHaveBeenCalledTimes(1);
+    expect(f.sessions.status(f.grant.attemptId)).toBeNull();
+    expect(await f.transport.readiness(f.intent)).toMatchObject({
+      ready: true,
+    });
+  });
+  it("keeps a handoff unknown when only the words of the error look like a refusal", async () => {
+    const f = fixture();
+    f.line.acquire.mockRejectedValue(
+      Error("lost response: owner_release_not_sent"),
+    );
+    expect(await f.transport.deliver(f.intent, f.grant)).toMatchObject({
+      state: "unknown",
+      cleanupConfirmed: false,
+    });
+    expect(
+      f.coordinator.transport.get(f.grant.attemptId, "handoff")?.state,
+    ).toBe("unknown");
+    expect(await f.transport.readiness(f.intent)).toMatchObject({
+      ready: false,
+    });
+  });
   it("preserves unknown room allocation when no owned cleanup handle returned", async () => {
     const f = fixture();
     f.media.mockRejectedValue(Error("room spawned then response lost"));

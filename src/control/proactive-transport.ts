@@ -17,7 +17,9 @@ import type {
 export interface ProactiveLineOwnerPort {
   /** Read-only preflight. Unsupported receipt retention must be reported before stopping the host. */
   readiness(): Promise<{ ready: boolean; reason?: string }>;
-  /** Reversible supported handoff preserving original receipts/cursors in place. */
+  /** Reversible supported handoff preserving original receipts/cursors in place.
+   * Rejects with the message `owner_release_not_sent` only when nothing reached
+   * the line and the owner holds no lock for the attempt. Any other rejection is unknown. */
   acquire(attemptId: string): Promise<{ exclusive: true }>;
   verify(attemptId: string): Promise<boolean>;
   restore(attemptId: string): Promise<{ confirmed: boolean }>;
@@ -183,16 +185,31 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
       if (!readiness.ready || !current())
         throw Error("line_or_authority_changed");
       handoff = "unknown"; // Set BEFORE await: a lost response may have moved ownership.
-      await effect(
-        "handoff",
-        async () => {
-          const result = await this.ports.line.acquire(grant.attemptId);
-          if (result.exclusive !== true)
-            throw Error("exclusive_handoff_unconfirmed");
-          return result;
-        },
-        "exclusive_handoff_confirmed",
-      );
+      try {
+        await effect(
+          "handoff",
+          async () => {
+            const result = await this.ports.line.acquire(grant.attemptId);
+            if (result.exclusive !== true)
+              throw Error("exclusive_handoff_unconfirmed");
+            return result;
+          },
+          "exclusive_handoff_confirmed",
+        );
+      } catch (error) {
+        // Only the owner's own refusal before any effect is not sent. It freed its
+        // lock, so this attempt frees the line too. Every other failure stays unknown.
+        if (
+          error instanceof Error &&
+          error.message === "owner_release_not_sent"
+        ) {
+          journal.settle(grant.attemptId, "handoff", {
+            evidence: "release_not_sent",
+          });
+          handoff = "untouched";
+        }
+        throw error;
+      }
       handoff = "acquired";
       if (!current()) throw Error("authority_changed");
       mediaAllocationStarted = true;
@@ -321,6 +338,7 @@ export class ProactiveTransport implements ProactiveDeliveryPort {
       const safeReasons = new Set([
         "fresh_exact_delivery_required",
         "line_or_authority_changed",
+        "owner_release_not_sent",
         "authority_changed",
         "authority_changed_during_media_allocation",
         "authority_or_media_changed_during_prepare",

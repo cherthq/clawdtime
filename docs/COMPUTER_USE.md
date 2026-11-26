@@ -1700,7 +1700,8 @@ The desktop service gives the reach one call path when it starts:
   API key (`chert-key.json`, or `CHERT_API_KEY` with `CHERT_PROJECT_ID`), the
   line of the project (`calls.json`, which `clawdtime connect` writes, or
   `CHERT_LINE_ID`), your number with your yes (`owner.json`), and the LiveKit
-  keys, `OPENAI_API_KEY` and `AGENT_NAME` in `line/.env.local`.
+  keys, `OPENAI_API_KEY` and `AGENT_NAME` in `line/.env.local`. An
+  `owner.json` that cannot be read places no call.
 
 `clawdtime computer doctor` says which path is ready ("calls to you: ready
 (Chert Calls API)"), or the exact piece that is missing.
@@ -1755,11 +1756,19 @@ reach call: the text goes instead.
 
 #### Texts
 
-It texts when the settings of the
-text channel (`CHERT_API_KEY`, `CHERT_PROJECT_ID`, `CLAWDTIME_OWNER_PHONE`,
-and `CHERT_LINE_ID` or a first text from you) are in the environment of the
-desktop service. `clawdtime computer doctor` says for both whether they can
-reach you, and why not.
+It texts when the desktop service has the settings of the text channel: the
+project API key (`chert-key.json`, or `CHERT_API_KEY` with
+`CHERT_PROJECT_ID`), your number, and the line (`CHERT_LINE_ID`, or a first
+text from you).
+
+- Your number is the one in `owner.json`, and a text goes to it only with your
+  yes. Only without `owner.json` is it `CLAWDTIME_OWNER_PHONE`.
+- An `owner.json` that cannot be read stops the text. It never falls back to
+  `CLAWDTIME_OWNER_PHONE`.
+- `clawdtime texts run` uses the same number.
+
+`clawdtime computer doctor` says for both whether they can reach you, and why
+not.
 
 `clawdtime connect` sets up both, step by step, and says what is still missing.
 See "Connect to Chert in one command" in [the setup guide](../SETUP_CLAWDTIME.md).

@@ -616,6 +616,12 @@ task that came from a call, a text or a routine reaches you at once.
   It says what is needed and where. You sign in on the Mac, or once in
   ClawdTime's own browser.
 - One call and one text at most for each question, also after a restart.
+- Once `clawdtime connect` stored your number in `owner.json`, it calls and
+  texts only that number, and only with your yes (step 7 of
+  `clawdtime connect`). That number wins over `CLAWDTIME_OWNER_PHONE`.
+  `clawdtime texts run` uses the same number.
+- When `owner.json` cannot be read, it sends no text, and no call goes through
+  the Chert Calls API. Look at the file, then run `clawdtime connect`.
 - `CLAWDTIME_COMPUTER_REACH_SECONDS` sets the wait, from 0 to 600 seconds.
   `CLAWDTIME_COMPUTER_REACH=off` turns the reach off.
 
