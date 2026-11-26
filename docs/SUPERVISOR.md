@@ -1752,8 +1752,8 @@ model changes:
   message, text or email counts as a step where the engine reads it as one:
   at the start of a part of the goal ("text Sam hello"), not as a thing
   ("read my newest email") and not when it turns to you ("tell me"). A plain
-  yes to ClawdTime's own offer of a next step carries the words of that
-  offer.
+  yes to an offer in ClawdTime's own words carries none of its words: say the
+  step yourself ("send it").
 - No argument, tool result or message that holds a password, a key or a code
   goes to the model or to memory, also when it is split over two messages ("my
   bank password is", then the value). A short value that you type right after

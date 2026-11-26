@@ -296,7 +296,6 @@ describe("the chat agent acts first", () => {
         ownerAt: now,
         withheld: false,
         answered: false,
-        offered: "",
         said: [],
         via: "chat",
         stopTurn: false,
@@ -339,7 +338,6 @@ describe("the chat agent acts first", () => {
         ownerAt: now,
         withheld: false,
         answered: false,
-        offered: "",
         said: [],
         via: "chat",
         stopTurn: false,
@@ -1166,6 +1164,44 @@ describe("holes that a review found", () => {
     ];
     for (const [goal, said] of fine)
       expect(unsaidStep(goal, said), goal).toBeNull();
+  });
+
+  it("lets a plain yes to ClawdTime's own offer carry none of its words, as the guide says", async () => {
+    const computer = new FakeComputer();
+    const model = scriptedModel([
+      {
+        calls: [call("computer_do", { goal: "send Sam the draft on Slack" })],
+      },
+      { text: "Tell me in your words what to do with the draft." },
+    ]);
+    const { agent } = setup({ computer, model });
+    await agent.answer(
+      [
+        {
+          role: "user",
+          text: "write a draft for Sam",
+          at: now - 2000,
+          via: "chat",
+        },
+        {
+          role: "assistant",
+          text: "Want me to send Sam the draft on Slack?",
+          at: now - 1000,
+          via: "chat",
+        },
+      ],
+      "yes",
+      "chat",
+    );
+    expect(computer.submits).toEqual([]);
+    expect(model.requests[1]!.messages.at(-1)!.content).toMatch(
+      /^Refused: The goal says "send"/,
+    );
+    const guide = readFileSync(
+      new URL("../docs/SUPERVISOR.md", import.meta.url),
+      "utf8",
+    );
+    expect(guide).not.toMatch(/offer of a next step\s+carries the words/);
   });
 
   it("takes no yes that the owner sent before the question existed", async () => {

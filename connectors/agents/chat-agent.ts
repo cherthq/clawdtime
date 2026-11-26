@@ -64,7 +64,6 @@ import {
   namesSecret,
   type JournalRequest,
 } from "../computer/journal.js";
-import { explicitApprovalYes } from "./call.js";
 import type { ReachRecord } from "../computer/reach.js";
 
 /** What the feed, the call and the texts need of a chat brain. Both brains have it. */
@@ -191,12 +190,6 @@ const offeredIn = (text: string, asked: string) => {
     .replace(/^["'`\u2018\u201c]+|["'`\u2019\u201d.!,;]+$/g, "");
   return value.length >= 3 && asked.includes(value);
 };
-/** A plain yes, as an answer to ClawdTime's own offer of a next step. */
-const plainYes = (words: string) =>
-  explicitApprovalYes.test(words) ||
-  /^(?:yes|yeah|yep|yup|sure|ok|okay|please do|do it)[.!]*$/i.test(
-    words.trim(),
-  );
 
 /** How many messages of the chat file go to the model whole. */
 const historyMessages = 30;
@@ -395,8 +388,6 @@ export class ChatAgent implements ChatBrain {
   private active: ActiveTurn | null = null;
   /** The node that the newest code stop stopped, for the next turn's context. */
   private codeStop: string | null = null;
-  /** ClawdTime's own offer of a next step, until the next message answers it. */
-  private offer: string | null = null;
   constructor(private readonly options: ChatAgentOptions) {
     this.graph =
       options.graph ?? new TaskGraph(options.root, options.world.now);
@@ -506,7 +497,6 @@ export class ChatAgent implements ChatBrain {
    */
   newConversation() {
     this.codeStop = null;
-    this.offer = null;
   }
 
   /**
@@ -657,17 +647,6 @@ export class ChatAgent implements ChatBrain {
     this.refresh();
     const codeStop = this.codeStop;
     this.codeStop = null;
-    // ClawdTime's own offer of a next step counts only for the message right
-    // after it, and only for a plain yes to it.
-    const last = history.at(-1);
-    const offered =
-      this.offer &&
-      last?.role === "assistant" &&
-      last.text === this.offer &&
-      plainYes(words)
-        ? this.offer
-        : "";
-    this.offer = null;
     const model = this.options.model;
     if (!model) {
       // No model: Stop still works, and the state is told as it is.
@@ -710,7 +689,6 @@ export class ChatAgent implements ChatBrain {
       ownerAt: at,
       withheld: shown === credentialNote,
       answered: false,
-      offered,
       said,
       via,
       stopTurn,
@@ -766,7 +744,6 @@ export class ChatAgent implements ChatBrain {
           turn.ownerAt = item.at;
           turn.withheld = shown === credentialNote;
           turn.answered = false;
-          turn.offered = "";
         }
         turn.said.push(...texts.filter((text) => text !== credentialNote));
         return texts;

@@ -86,8 +86,6 @@ export interface ChatTurn {
   withheld: boolean;
   /** Those words answered a question already: one message answers one question. */
   answered: boolean;
-  /** The words of ClawdTime's own offer of a next step, when the owner's newest words said yes to it. */
-  offered: string;
   /** What the owner said lately, oldest first, for a job. */
   said: string[];
   via: "chat" | "voice" | "call";
@@ -624,7 +622,7 @@ export function chatGate(
         call.args,
         call.name === "computer_do" ? "goal" : "schedule",
       );
-      const step = unsaidStep(goal, [...turn.said, turn.offered]);
+      const step = unsaidStep(goal, turn.said);
       if (step)
         return {
           allow: false,
