@@ -69,6 +69,8 @@ switch (args[0]) {
   case "onboard": state.line = true; save(); break;
   case "doctor": {
     const mine = args[args.indexOf("--project") + 1] === "${project}";
+    // The real chert can print a notice before its checks, with the same command.
+    out({ command: "doctor", code: "livekit_env_file", message: "LiveKit keys come from .env.local in this folder." });
     out({ command: "doctor", code: "doctor", ok: !!state.line && mine, checks: [
       { name: "session", status: "pass", detail: "${email}" },
       mine ? { name: "project", status: "pass", detail: "Fixture Project: your role is owner." } : { name: "project", status: "fail", detail: "That project is not one of yours.", fix: "Yours: Fixture Project" },
