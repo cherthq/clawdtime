@@ -43,6 +43,14 @@ struct HelperStatus: Codable {
   let preferences: ControlPreferenceStore
   let controlPanel = ControlPanelState()
   let capture = ScreenCapture()
+  /// Read the screen's window metadata and a lease's camera target. Tests
+  /// replace them, so no test reads the screen.
+  lazy var cameraSurfaceList: @MainActor () async throws -> [CameraSurface] = { [unowned self] in
+    try await self.capture.cameraSurfaces()
+  }
+  lazy var cameraTargetCheck: @MainActor (CameraSurface) async throws -> Void = { [unowned self] surface in
+    _ = try await self.capture.cameraTarget(surface, initial: true)
+  }
   let session = LocalSessionGuard()
   let displayConfiguration = DisplayConfigurationGuard()
   var ignoredStableScreenNotifications = 0
@@ -403,13 +411,18 @@ struct HelperStatus: Codable {
         return try .json(config.displays)
       }
       if request.method == "GET", request.path == "/v1/camera-surfaces" {
-        return try .json(await capture.cameraSurfaces())
+        // Window metadata is read from the screen: only after the local Enable.
+        try policy.check(now: Date(), sessionAvailable: session.available)
+        return try .json(await cameraSurfaceList())
       }
       if request.method == "GET", request.path == "/v1/displays" {
         return try .json(await capture.displays())
       }
       if request.method == "POST", request.path == "/v1/leases" {
         let lease = try decode(Lease.self, request.body)
+        // The camera target check below reads the screen: it runs only after the
+        // local Enable, not just inside begin().
+        try policy.check(now: Date(), sessionAvailable: session.available)
         guard backgroundLedger.unresolvedActions == 0 else { throw HelperError(409, "Unresolved background controller blocks helper admission.") }
         guard nativeHost.store.unresolved == 0 else { throw HelperError(409,"native_operation_unresolved") }
         guard CGPreflightScreenCaptureAccess(), CGDisplayIsActive(lease.displayId) != 0 else {
@@ -422,7 +435,7 @@ struct HelperStatus: Codable {
           throw HelperError(409, "Reconcile outstanding input before granting an executor.")
         }
         if policy.lease == nil, let surface = lease.surface {
-          _ = try await capture.cameraTarget(surface, initial: true)
+          try await cameraTargetCheck(surface)
         }
         try policy.begin(
           lease, now: Date(), sessionAvailable: session.available,
