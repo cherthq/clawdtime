@@ -515,6 +515,17 @@ through all the checks.
   or a risk ends at once, as before. The second give_up ends the request: "I
   could not finish. (the reason) Tell me another way to try, or do this step
   yourself."
+- **An app that loads slowly.** A news app or the page of a store can take
+  seconds to show what it holds after `open_app` brought it forward. When the
+  planner waits or gives up before any input in that app, the worker first
+  waits once more with no input, until two looks in a row show the same, as
+  for a held row (8 looks or 6 seconds at most, and it counts among the two
+  such waits of a request). After a wait of the planner, the next look shows
+  what the app loaded. When a give_up read a screen that changed in that
+  wait, the give_up does not end the request: the planner chooses again from
+  the new look. A give_up on a screen that was already still is read as
+  before. A give_up about you, an account, a permission or a risk still ends
+  at once, with no wait.
 - **Trouble of the planner.** The planner says what went wrong with its
   call. After a short failure that it already tried again, such as a busy or
   slow service, the worker waits 3 seconds, or the time that the service
