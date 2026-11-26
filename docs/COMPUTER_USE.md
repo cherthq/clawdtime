@@ -580,8 +580,10 @@ that one, and the force quit is asked again. A no ends it.
 
 These are never touched, with trust on too: launchd, the kernel,
 WindowServer, loginwindow, a process of another user, and ClawdTime itself:
-its own process, the processes it runs in, the ones it started, its apps and
-its entry points.
+its own process, the processes it runs in, the ones it started, its apps, its
+entry points in a folder of any name (`scripts/task-server.ts`), the line
+agent (`agent.mjs start`, also from a release folder), the line's host
+(`line/host.sh`), and what runs under one of them, such as `chert dev`.
 
 ## Plans and multi-step tasks
 

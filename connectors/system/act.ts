@@ -18,7 +18,9 @@
  *   question that the owner saw, and an older one is asked again.
  * - Never: launchd, the kernel, WindowServer, loginwindow, a process of
  *   another user, and ClawdTime itself (its own process, those it runs in,
- *   those it started, and its apps and entry points).
+ *   those it started, its apps and entry points in a folder of any name,
+ *   the line agent with its host and a release of it, and what runs under
+ *   one of them).
  */
 import { explicitApprovalNo, explicitApprovalYes } from "../agents/call.js";
 import { askPolicy, asksToLose, clean } from "../computer/guards.js";
@@ -50,6 +52,18 @@ const clawdtimeExecutable = /\/ClawdTime[^/]*\.app\/|(?:^|\/)clawdtime[^/]*$/i;
 /** A command line that runs an entry point of ClawdTime from its folder. */
 const clawdtimeEntry =
   /clawdtime\S*\/(?:scripts\/task-[\w-]+|cli\/(?:main|index|task-desktop)|line\/[\w-]+|dist\/[\w/-]+)\.[cm]?[jt]s\b|clawdtime\S*\/(?:media|gateway)\/[\w-]+\.py\b/i;
+/**
+ * A command line that runs ClawdTime by the names of its own files, from a
+ * folder of any name or a relative path: the task server and its kin, the
+ * desktop launcher, the line agent ("agent.mjs start", also from a release),
+ * the line's host ("line/host.sh", "host.sh keep agent"), and anything in a
+ * line folder of ClawdTime ("--env-file=~/clawdtime/line/.env.local").
+ */
+const clawdtimeOwnEntry =
+  /(?:^|[\s/])(?:scripts\/task-(?:server|handset|native-inspect|simulation)|cli\/task-desktop)\.[cm]?[jt]s\b|(?:^|[\s/=])agent\.mjs\s+start\b|(?:^|[\s/])line\/host\.sh\b|(?:^|[\s/])host\.sh\s+keep\s+(?:agent|dev)\b|clawdtime[^\s/]*\/line\//i;
+/** True when a command line runs a part of ClawdTime. */
+const runsClawdtime = (command: string) =>
+  clawdtimeEntry.test(command) || clawdtimeOwnEntry.test(command);
 
 /** ClawdTime's own process tree: itself, what it runs in, and what it started. */
 function ownTree(all: ProcessView[], self: { pid: number; ppid: number }) {
@@ -75,12 +89,16 @@ function ownTree(all: ProcessView[], self: { pid: number; ppid: number }) {
   return { inside, started };
 }
 
-/** Why this process is never touched here, or null. */
+/**
+ * Why this process is never touched here, or null. `commands`: the command
+ * line of each pid, to see a part of ClawdTime above this one.
+ */
 export function protectedReason(
   row: ProcessView,
   all: ProcessView[],
   command: string,
   self: { pid: number; ppid: number },
+  commands: ReadonlyMap<number, string> = new Map(),
 ): string | null {
   if (row.pid <= 1 || neverTouched.has(row.name))
     return `${label(row)} is a part of macOS that keeps the Mac running. ClawdTime never ends it.`;
@@ -90,9 +108,23 @@ export function protectedReason(
   if (
     tree.started.has(row.pid) ||
     clawdtimeExecutable.test(row.path) ||
-    clawdtimeEntry.test(command)
+    runsClawdtime(command)
   )
     return `${label(row)} is a part of ClawdTime. ClawdTime does not end itself: use Stop, or quit ClawdTime from its menu.`;
+  // What a part of ClawdTime started: chert dev under the line's host.
+  const byPid = new Map(all.map((item) => [item.pid, item]));
+  for (
+    let pid = row.ppid, guard = 0;
+    pid > 1 && guard < 32;
+    pid = byPid.get(pid)?.ppid ?? 0, guard++
+  ) {
+    const above = byPid.get(pid);
+    if (
+      (above && clawdtimeExecutable.test(above.path)) ||
+      runsClawdtime(commands.get(pid) ?? "")
+    )
+      return `${label(row)} runs under ClawdTime (pid ${pid}). ClawdTime does not end itself: use Stop, or quit ClawdTime from its menu.`;
+  }
   return null;
 }
 
@@ -302,6 +334,7 @@ export class ProcessDesk {
       all,
       commands.get(row.pid) ?? "",
       host.self,
+      commands,
     );
     if (guarded) return guarded;
     const verdict = actVerdict(row, action, {

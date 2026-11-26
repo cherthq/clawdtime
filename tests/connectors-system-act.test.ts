@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ProcessDesk } from "../connectors/system/act.js";
+import { ProcessDesk, protectedReason } from "../connectors/system/act.js";
+import type { ProcessView } from "../connectors/system/probes.js";
 import { SystemProbes } from "../connectors/system/probes.js";
 import {
   fakeHost,
@@ -205,6 +206,56 @@ describe("what is never touched", () => {
     expect(host.signals).toEqual([]);
     expect(quits(host)).toEqual([]);
     expect(opens(host)).toEqual([]);
+  });
+
+  it("refuses the line agent and ClawdTime's entry points in a folder of any name, and what runs under them", () => {
+    const row = (pid: number, ppid: number, path: string): ProcessView => ({
+      pid,
+      ppid,
+      uid: 501,
+      user: "sam",
+      cpu: 1,
+      mem: 1,
+      rssKb: 1,
+      elapsed: 10,
+      state: "S",
+      path,
+      name: path.slice(path.lastIndexOf("/") + 1),
+      app: null,
+      appPath: null,
+      isApp: false,
+      hint: null,
+    });
+    const self = { pid: 9000, ppid: 8999 };
+    const node = row(5000, 4990, "/opt/homebrew/bin/node");
+    const shell = row(4990, 400, "/bin/sh");
+    const all = [node, shell];
+    for (const command of [
+      "node --env-file=/Users/sam/clawdtime/line/.env.local agent.mjs start",
+      "node --env-file=/Users/sam/line.env /Users/sam/.local/share/clawdtime/line/releases/r7/agent.mjs start",
+      "node --env-file=/Users/sam/ct.env /opt/ct/releases/r9/agent.mjs start",
+      "node /Users/sam/code/ct/scripts/task-server.ts",
+      "node /Users/sam/code/ct/node_modules/.bin/tsx cli/task-desktop.ts",
+    ])
+      expect(protectedReason(node, all, command, self), command).toMatch(
+        /is a part of ClawdTime/,
+      );
+    // What the line's host started: chert dev, under host.sh keep dev.
+    const commands = new Map([
+      [5000, "chert dev --agent clawdtime --json"],
+      [4990, "/bin/sh /Users/sam/code/ct/line/host.sh keep dev"],
+    ]);
+    expect(
+      protectedReason(node, all, commands.get(5000)!, self, commands),
+    ).toMatch(/runs under ClawdTime/);
+    // Someone else's server stays theirs to stop.
+    const other = new Map([
+      [5000, "node /Users/sam/code/shop-site/server.js"],
+      [4990, "-zsh"],
+    ]);
+    expect(
+      protectedReason(node, all, other.get(5000)!, self, other),
+    ).toBeNull();
   });
 
   it("refuses a process of another user", async () => {
