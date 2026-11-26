@@ -697,6 +697,13 @@ const compiled = nameRules.map((rule) => ({
 }));
 /** A button whose whole name is a price: it buys. */
 const priceOnly = new RegExp(`^(?:${money.source})$`);
+/**
+ * A text field in the planner's words, named by what it takes: "the reply
+ * box", "the Reply\u2026 field". A click there gives it the focus and sends
+ * nothing, so these words name no control.
+ */
+const fieldWords =
+  /\b(?:send|reply|respond|answer|post|comment|message|share|tweet|chat|compose)(?:\u2026|\.\.\.)?["'\u201d]?\s+(?:text\s+)?(?:box|field|area|input|composer)\b/g;
 
 const moneyWords: Record<string, string> = {
   $: "dollars",
@@ -760,7 +767,8 @@ type NameOf = "control" | "menu" | "words";
 function askFor(raw: string, scene: Scene, of: NameOf = "control"): Ask | null {
   const words = of === "words";
   const dots = !words && trailingDots.test(clean(raw, 200));
-  const name = plain(clean(raw, 200).replace(trailingDots, ""));
+  const said = plain(clean(raw, 200).replace(trailingDots, ""));
+  const name = words ? said.replace(fieldWords, " ").trim() : said;
   if (!name) return null;
   const pay = (found: Ask) => {
     if (found.kind !== "pay") return found;
@@ -887,7 +895,10 @@ function screenRisk(
 ) {
   const name = clean(item.title, 80);
   return (
-    askFor(item.title, screenScene(observation, goal), nameOfItem(item)) ??
+    // The name of a window is its title: it says what the window shows, not what a click presses.
+    (item.role === "AXWindow"
+      ? null
+      : askFor(item.title, screenScene(observation, goal), nameOfItem(item))) ??
     (plainClose.test(name) ||
     quitName.test(name) ||
     item.role === "AXCloseButton"

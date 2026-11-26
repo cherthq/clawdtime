@@ -874,6 +874,24 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
         ).toBeNull();
       });
 
+      it("asks nothing for a click on the window itself, whatever its title", () => {
+        for (const raw of [
+          { kind: "click_element", element: 1 },
+          // A point where the window holds nothing else.
+          { kind: "click_at", x: 400, y: 300 },
+        ]) {
+          expect(asks(raw, thread()), JSON.stringify(raw)).toEqual(none);
+          expect(
+            asks(
+              raw,
+              thread([{ ...frame, title: "Send feedback - Stonepad" }]),
+              "",
+            ),
+            JSON.stringify(raw),
+          ).toEqual(none);
+        }
+      });
+
       it("still asks before a real Send, Reply, Post or Share that the request did not ask for", () => {
         const said = "Read the thread of the last message";
         for (const item of [
