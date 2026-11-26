@@ -181,6 +181,36 @@ const maximumLine = 2 * 1024 * 1024;
  * Runs the publisher as a child and keeps its latest valid snapshot. A child
  * that ends is started again after a delay that grows to one minute.
  */
+/** The words of a message, with a leading "Done." and spacing set aside. */
+const sameWords = (text: string) =>
+  text
+    .replace(/^\s*done[.!:,]?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+/**
+ * True when one of these messages of ClawdTime already says this answer: the
+ * same words, or words that hold it whole ("Done. Calendar showed 0 events
+ * today." holds "Calendar showed 0 events today."). A short answer counts only
+ * when it is the same.
+ */
+export function alreadySaid(
+  after: readonly { role: string; text: string }[],
+  text: string,
+) {
+  const words = sameWords(text);
+  if (!words) return false;
+  return after.some((message) => {
+    if (message.role !== "assistant") return false;
+    const other = sameWords(message.text);
+    return (
+      message.text === text ||
+      other === words ||
+      (words.length >= 24 && other.includes(words))
+    );
+  });
+}
+
 export class BoardFeed implements AgentBoardPort {
   private child: ChildProcess | undefined;
   private latest: BoardSnapshot | undefined;
@@ -655,12 +685,7 @@ export class BoardFeed implements AgentBoardPort {
     const after = since.slice(
       since.findLastIndex((message) => message.role === "user") + 1,
     );
-    const told =
-      !answer.choices.length &&
-      after.some(
-        (message) =>
-          message.role === "assistant" && message.text === answer.text,
-      );
+    const told = !answer.choices.length && alreadySaid(after, answer.text);
     // A message that joined a turn that ran already: that turn says the answer once.
     if (!answer.joined && answer.text.trim() && !told) this.log.append(reply);
     return reply;
