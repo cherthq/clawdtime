@@ -11,6 +11,7 @@ import {
   chatBrain,
   chatMode,
   trueAfterTheEnd,
+  trueClaims,
 } from "../connectors/agents/chat-agent.js";
 import {
   chatTools,
@@ -18,7 +19,7 @@ import {
   unsaidStep,
 } from "../connectors/agents/chat-tools.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
-import { TaskGraph } from "../connectors/agents/task-graph.js";
+import { TaskGraph, type TaskNode } from "../connectors/agents/task-graph.js";
 import { Routines } from "../connectors/computer/routines.js";
 import { childEnvironment } from "../cli/task-desktop.js";
 import {
@@ -689,6 +690,132 @@ describe("turns that overlap", () => {
       choices: [],
       joined: true,
     });
+  });
+});
+
+describe("a reply that claims more than the task list", () => {
+  it("drops a claim that a task is done or bought while its node says it runs", async () => {
+    const computer = new FakeComputer();
+    const model = scriptedModel([
+      {
+        calls: [
+          call("computer_do", {
+            goal: "buy the Aero 7 headphones on shop.example",
+          }),
+        ],
+      },
+      { text: "Done. I ordered the Aero 7 headphones for 48 dollars." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const out = await agent.answer(
+      [],
+      "buy the Aero 7 headphones on shop.example",
+      "call",
+    );
+    expect(computer.state).toBe("running");
+    expect(out.text).not.toMatch(/\b(?:done|ordered)\b/i);
+    expect(out.text).toMatch(/^Working on: "buy the Aero 7 headphones/);
+  });
+
+  it("keeps the claim once the node says done", async () => {
+    const computer = new FakeComputer();
+    const submit = computer.submit.bind(computer);
+    computer.submit = async (id: string, text: string) => {
+      const out = await submit(id, text);
+      computer.finish("Ordered the Aero 7 headphones for 48 dollars.");
+      return out;
+    };
+    const model = scriptedModel([
+      {
+        calls: [
+          call("computer_do", {
+            goal: "buy the Aero 7 headphones on shop.example",
+          }),
+        ],
+      },
+      { text: "Done. I ordered the Aero 7 headphones for 48 dollars." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const out = await agent.answer(
+      [],
+      "buy the Aero 7 headphones on shop.example",
+      "chat",
+    );
+    expect(out.text).toBe(
+      "Done. I ordered the Aero 7 headphones for 48 dollars.",
+    );
+  });
+
+  it("drops a claim about an earlier task that still runs, and keeps the rest", async () => {
+    const computer = new FakeComputer().run("send Sam the draft on Slack");
+    const model = scriptedModel([
+      { text: "Yes, I sent Sam the draft. Stonepad uses most of the CPU." },
+    ]);
+    const { agent } = setup({ computer, model });
+    agent.refresh();
+    const out = await agent.answer(
+      [],
+      "did you send Sam the draft? and what is slow?",
+      "chat",
+    );
+    expect(out.text).toBe("Stonepad uses most of the CPU.");
+  });
+
+  it("reads a claim of done in its common forms, and no claim where there is none", () => {
+    const task = (state: TaskNode["state"]): TaskNode => ({
+      id: "c1",
+      kind: "computer",
+      title: "send Sam the draft on Slack",
+      state,
+      createdAt: now,
+      updatedAt: now,
+      links: {},
+      history: [],
+    });
+    const running = [task("running")];
+    for (const claim of [
+      "Done.",
+      "All done!",
+      "Message sent.",
+      "I've sent the draft to Sam.",
+      "The draft was sent.",
+      "Sent it on.",
+      "Yes, I posted it.",
+    ])
+      expect(trueClaims(claim, running, running), claim).toBe("");
+    for (const plain of [
+      "I started the draft for Sam.",
+      "It asks to send the draft. Yes or no?",
+      "I haven't sent it yet.",
+      "I'll tell you once it's done.",
+      "Nothing was sent.",
+    ])
+      expect(trueClaims(plain, running, running), plain).toBe(plain);
+    expect(
+      trueClaims("Done, the draft waits for your yes.", running, running),
+    ).toBe("The draft waits for your yes.");
+    const done = [task("done")];
+    expect(trueClaims("Message sent.", done, done)).toBe("Message sent.");
+  });
+
+  it("keeps a plain done for work that is no task", async () => {
+    const computer = new FakeComputer().run("search Aero 7 prices");
+    const model = scriptedModel([
+      {
+        calls: [
+          call("remember", { fact: "The owner prefers Safari over Chrome." }),
+        ],
+      },
+      { text: "Done. Kept that you prefer Safari." },
+    ]);
+    const { agent } = setup({ computer, model, memory: true });
+    agent.refresh();
+    const out = await agent.answer(
+      [],
+      "remember that I prefer Safari over Chrome",
+      "chat",
+    );
+    expect(out.text).toBe("Done. Kept that you prefer Safari.");
   });
 });
 

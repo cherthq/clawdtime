@@ -1763,6 +1763,11 @@ model changes:
   or an agent: you type the value on the Mac yourself.
 - After a call ends, nothing more starts from it. A message of a call never
   joins the turn of another message: it waits and takes its own.
+- An answer says that a task is done, sent or bought only when its node says
+  done. Code drops each sentence that claims more ("Done. I ordered the
+  headphones." while the order still runs): about the tasks that your message
+  started, added to or answered, or, with none, about the task that the
+  sentence names. When nothing is left, the answer is what the task does now.
 - Words for a task that runs are your own words, and the task goes on with
   them. Words that stop it go to the stop, and a question about how it goes
   gets the state: neither is handed to the task as a change.
@@ -1776,8 +1781,8 @@ question, `m` reach, with a number), a kind, a title in your words, a state
 (queued, running, waiting, done, failed, canceled), its times, a short history
 and links: spawned by, waits on, answers, follows up. It is fed only from the
 real sources: the snapshot and journal of the computer engine, the jobs, the
-routines, the reach and the desk. The model says that a task is done only when
-its node says done. Each request of the model gets a short view of it, at most
+routines, the reach and the desk. An answer says that a task is done only when
+its node says done, and code holds it to that. Each request of the model gets a short view of it, at most
 1,500 characters:
 
 ```text
