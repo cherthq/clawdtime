@@ -5720,6 +5720,34 @@ describe("the browser", () => {
     expect(worker.snapshot().state).toBe("completed");
   });
 
+  it("never clicks the same button on another site or in another tab of the reading just before", async () => {
+    const buy = pageElement(5, { label: "Next" });
+    for (const now of [
+      page([buy], { url: "https://other.example/" }),
+      page([buy], { url: "https://example.com/elsewhere" }),
+      page([buy], { tab: "T2" }),
+    ]) {
+      const browser = new FakeBrowser(page([buy], { tab: "T1" }));
+      const { worker, planner } = setup(
+        [
+          { kind: "browser_read" },
+          () => {
+            browser.current = now;
+            return { kind: "browser_click", index: 5 };
+          },
+          done,
+        ],
+        { browser },
+      );
+      await worker.submit("r1", "Go to the next page");
+      await worker.idle();
+      expect(browser.calls, JSON.stringify(now)).toEqual(["read", "read"]);
+      expect(planner.inputs[2]!.history[1]!.outcome).toBe(
+        "not sent: the page changed since it was read",
+      );
+    }
+  });
+
   it("needs a new reading of the page after an action on the screen", async () => {
     const browser = new FakeBrowser(shop);
     const { worker, planner } = setup(

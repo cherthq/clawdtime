@@ -313,6 +313,12 @@ export interface BrowserPage {
   found?: boolean;
   /** Tabs of the front window, set by browser_tabs. */
   tabs?: BrowserTab[];
+  /**
+   * The tab that the reading came from, as the driver names it, when it can.
+   * The check just before an input compares it: an input never goes to
+   * another tab than the one that the planner read.
+   */
+  tab?: string;
   /** Present when a JavaScript dialog is open on the page. */
   dialog?: BrowserDialog;
   /** Recent browser downloads when non-empty, with sanitized basenames only. */

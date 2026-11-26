@@ -4252,10 +4252,12 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (!browser || first.send.via !== "browser") return;
     let call = first.send.call;
     if (readsBeforeCall(call)) {
-      // Just before the input: read the page again and find the same element.
-      // Its number names it inside one reading only. A tab is found again in
-      // a new list of the tabs.
+      // Just before the input: read the page again and find the same element,
+      // on the same page in the same tab. Its number names it inside one
+      // reading only. A tab is found again in a new list of the tabs.
       if (this.halted(run)) return;
+      // The reading that the planner chose from.
+      const read = run.page;
       let now: BrowserPage;
       try {
         const got = await withinOrHalted(
@@ -4304,7 +4306,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           first,
           run.hold ? heldByWordReason : saidMoreText,
         );
-      const moved = againstPage(action, call, now);
+      const moved = read && againstPage(action, call, now, read);
       const again = moved
         ? check(
             moved,

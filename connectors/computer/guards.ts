@@ -2520,15 +2520,20 @@ export function sameTab(was: BrowserTab, tabs: BrowserTab[] | undefined) {
 
 /**
  * The same browser action against a newer reading, just before it is sent.
- * An element is found again as `samePageElement` finds it, and a tab by its
- * address and its title. A key has no target of its own: it is checked again
- * against the newer reading. Null when the target is gone or two could be it.
+ * The newer reading must be of the same page as the reading that the
+ * planner chose from (`read`): the same tab, and the same origin and path of
+ * the address (`samePage`). An element is found again as `samePageElement`
+ * finds it, and a tab by its address and its title. A key has no target of
+ * its own: it is checked again against the newer reading. Null when the page
+ * or the target is gone, or two could be it.
  */
 export function againstPage(
   action: Action,
   call: BrowserCall,
   now: BrowserPage,
+  read: BrowserPage,
 ): Action | null {
+  if (call.name !== "switch_tab" && !samePage(read, now)) return null;
   if ("element" in call) {
     const same = samePageElement(call.element, now);
     return same ? ({ ...action, index: same.index } as Action) : null;
@@ -2538,6 +2543,26 @@ export function againstPage(
     return same ? ({ ...action, tab: same.index } as Action) : null;
   }
   return action;
+}
+
+/**
+ * True when two readings are of the same page: the same tab, as the driver
+ * names it, and the same origin and path of the address. Its query and its
+ * fragment may change: a page writes its state there. The same button on
+ * another site, or on another page of the same site, is another button.
+ */
+export function samePage(was: BrowserPage, now: BrowserPage) {
+  if (was.tab !== now.tab) return false;
+  const place = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      return null;
+    }
+  };
+  const before = place(was.url);
+  return before !== null && before === place(now.url);
 }
 
 /** The element of a newer reading of the page that is the same as this one. Null when it is gone or two could be it. */

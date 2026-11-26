@@ -18,6 +18,7 @@ import {
   type View,
 } from "../connectors/computer/guards.js";
 import type {
+  BrowserPage,
   BrowserPort,
   BrowserTab,
   Observation,
@@ -2387,6 +2388,7 @@ describe("the newer browser actions", () => {
         hover,
         { name: "hover", index: 1, element: menu },
         page([pageElement(4, { label: "Menu" })]),
+        page([menu]),
       ),
     ).toEqual({ kind: "browser_hover", index: 4 });
     expect(
@@ -2394,6 +2396,7 @@ describe("the newer browser actions", () => {
         hover,
         { name: "hover", index: 1, element: menu },
         page([pageElement(4, { label: "Other" })]),
+        page([menu]),
       ),
     ).toBeNull();
     const switching = { kind: "browser_switch_tab", tab: 1 } as const;
@@ -2403,14 +2406,17 @@ describe("the newer browser actions", () => {
       { ...tabs[1]!, index: 1 },
       { ...tabs[0]!, index: 2 },
     ];
-    expect(againstPage(switching, call, page([], { tabs: moved }))).toEqual({
+    const listing = page([], { tabs });
+    expect(
+      againstPage(switching, call, page([], { tabs: moved }), listing),
+    ).toEqual({
       kind: "browser_switch_tab",
       tab: 2,
     });
     expect(
-      againstPage(switching, call, page([], { tabs: [tabs[1]!] })),
+      againstPage(switching, call, page([], { tabs: [tabs[1]!] }), listing),
     ).toBeNull();
-    expect(againstPage(switching, call, page([]))).toBeNull();
+    expect(againstPage(switching, call, page([]), listing)).toBeNull();
     const twins = [
       { ...tabs[0]!, index: 3 },
       { ...tabs[0]!, index: 4 },
@@ -2419,7 +2425,52 @@ describe("the newer browser actions", () => {
     expect(sameTab(tabs[0]!, [...twins, tabs[0]!])).toEqual(tabs[0]);
     // A key has no target: it is checked again against the newer reading.
     const key = { kind: "browser_key", combo: "Enter" } as const;
-    expect(againstPage(key, { name: "key", combo: "Enter" }, page())).toBe(key);
+    expect(
+      againstPage(key, { name: "key", combo: "Enter" }, page(), page()),
+    ).toBe(key);
+  });
+  it("finds the target again only on the same page address and in the same tab", () => {
+    const buy = pageElement(1, { label: "Place order" });
+    const click = { kind: "browser_click", index: 1 } as const;
+    const call: BrowserCall = { name: "click", index: 1, element: buy };
+    const read = page([buy], {
+      url: "https://shop.example/cart?step=2#top",
+      tab: "T1",
+    });
+    const now = (values: Partial<BrowserPage>) =>
+      page([buy], { url: read.url, tab: "T1", ...values });
+    // The same page, with another query and fragment: the same element.
+    expect(
+      againstPage(
+        click,
+        call,
+        now({ url: "https://shop.example/cart?step=3" }),
+        read,
+      ),
+    ).toEqual(click);
+    // The same button on another site, on another path, or in another tab.
+    for (const values of [
+      { url: "https://other.example/cart" },
+      { url: "http://shop.example/cart" },
+      { url: "https://shop.example:8443/cart" },
+      { url: "https://shop.example/checkout" },
+      { tab: "T2" },
+      { tab: undefined },
+    ])
+      expect(
+        againstPage(click, call, now(values), read),
+        JSON.stringify(values),
+      ).toBeNull();
+    // A key goes to the page that has the focus: another page holds it.
+    const key = { kind: "browser_key", combo: "Enter" } as const;
+    expect(
+      againstPage(
+        key,
+        { name: "key", combo: "Enter" },
+        now({ url: "https://other.example/" }),
+        read,
+      ),
+    ).toBeNull();
   });
   it("reads which optional methods a driver has", () => {
     const base = {

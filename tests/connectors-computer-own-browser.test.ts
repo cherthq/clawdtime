@@ -510,7 +510,7 @@ describe("ClawdTime's own browser: its endpoint", () => {
     ]);
     // The process is proven before any page is touched.
     expect(paper.sent[0]!.method).toBe("SystemInfo.getProcessInfo");
-    expect(page).toEqual({ browser: "own", ...shop });
+    expect(page).toEqual({ browser: "own", ...shop, tab: "T1" });
     expect(paper.calls()).toEqual([
       { do: "read", session: browser.session, start: 1 },
     ]);
@@ -1187,6 +1187,37 @@ describe("ClawdTime's own browser: tabs", () => {
       /Tab 1 is not open any more/,
     );
     expect(paper.of("Target.activateTarget")).toEqual([]);
+  });
+
+  it("names the tab of each reading, and never sends an input to another tab when its own closed", async () => {
+    const { paper, browser } = setup();
+    paper.targets.push({
+      targetId: "T2",
+      type: "page",
+      title: "Mail",
+      url: "https://mail.test/",
+    });
+    expect((await browser.read()).tab).toBe("T1");
+    // The person closes the tab that ClawdTime read.
+    paper.targets = paper.targets.filter((item) => item.targetId !== "T1");
+    paper.sent.length = 0;
+    for (const input of [
+      () => browser.click(1),
+      () => browser.type(2, "Ada", false),
+      () => browser.key!("Enter"),
+      () => browser.scroll("down"),
+      () => browser.back(),
+    ]) {
+      const error = await input().catch((failure) => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(BrowserInputUnknown);
+      expect(error.message).toMatch(/not open any more\. Nothing was sent\./);
+    }
+    expect(paper.inputs()).toEqual([]);
+    expect(paper.of("Target.attachToTarget")).toEqual([]);
+    expect(paper.of("Runtime.evaluate")).toEqual([]);
+    // A read shows the tab that is there now, and names it.
+    expect((await browser.read()).tab).toBe("T2");
   });
 
   it("does not read or operate a page of the browser itself", async () => {

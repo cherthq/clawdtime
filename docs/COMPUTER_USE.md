@@ -1246,6 +1246,16 @@ In the browser, when the driver is on:
 - `browser_switch_tab`: brings one tab of the last list to the front of its
   window. The browser itself does not come forward.
 
+Just before a click, a typed text, a hover, a choice or a key, the worker
+reads the page again. The step goes only when that reading is of the same
+page as the one that the planner chose from: the same origin and path of the
+address (the query and the fragment may change), and the same tab, which
+ClawdTime's own browser names in each reading. The same button on another
+site, on another page of the site or in another tab is another button:
+nothing is sent and the planner chooses again. When the tab that ClawdTime's
+own browser read closed, an input never goes to another tab: nothing is
+sent. A read goes on in the tab that is there, and names it.
+
 The planner gets a browser action only when the driver has its method:
 `browserMethods` in `guards.ts` reads them from the driver. The checks refuse
 an action whose method the driver lacks.

@@ -2151,7 +2151,12 @@ export class OwnBrowser implements BrowserPort {
     return result;
   }
 
-  /** The tab that the driver works in, attached. Only a read may make one when none is there. */
+  /**
+   * The tab that the driver works in, attached. Only a read may make one
+   * when none is there, and only a read goes on in another tab when the one
+   * that the driver read closed: its page names the tab. An input never
+   * falls back to another tab.
+   */
   private async tab(mayStart: boolean): Promise<Tab> {
     const live = await this.started(mayStart);
     const all = targetsSchema.safeParse(
@@ -2172,9 +2177,12 @@ export class OwnBrowser implements BrowserPort {
         seen.add(target.targetId);
       }
     }
-    let target =
-      pages.find((item) => item.targetId === this.current) ??
-      pages.find(listable);
+    const kept = pages.find((item) => item.targetId === this.current);
+    if (!kept && this.current !== null && !mayStart)
+      throw new Error(
+        `The tab that ${me} read is not open any more. Nothing was sent. Read the page again.`,
+      );
+    let target = kept ?? pages.find(listable);
     if (!target) {
       if (!mayStart)
         throw new Error(`${me} has no tab open. Nothing was sent.`);
@@ -3326,7 +3334,10 @@ export class OwnBrowser implements BrowserPort {
     tab.url = answer.page.url;
     tab.title = answer.page.title;
     tab.elementFrames.clear();
-    const page = pageOfReading("own", answer.page);
+    const page: BrowserPage = {
+      ...pageOfReading("own", answer.page),
+      tab: tab.targetId,
+    };
     if (chromeError(answer.page.url)) {
       page.elements = [];
     } else {
