@@ -108,7 +108,7 @@ is imported. Node 24+ provides the SQLite runtime.
 
 ## Source migration
 
-Reviewed/extracted from Apple Teams commit
+Reviewed/extracted from the source project's commit
 `be47b11fe1317c4747db4121bec37896998b5201`:
 
 - `src/store.ts` → `src/storage/store.ts`: synchronous transactions, entity/state
@@ -450,7 +450,7 @@ external attempt is possible, the ordinary unknown-outcome rules still apply.
 
 ### Source pause and resume mechanics
 
-At the audited Apple Teams commit, `LIVE_TRAFFIC_ENABLED=false` while preserving
+At the audited source project commit, `LIVE_TRAFFIC_ENABLED=false` while preserving
 `APP_MODE=live`, credentials and the existing database stops native message polling
 and new worker scheduling/draining. New inbound calls are declined; owned-call
 polling continues cleanup. SIGTERM waits for the in-flight integration tick before

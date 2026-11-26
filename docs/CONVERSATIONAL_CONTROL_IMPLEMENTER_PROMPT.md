@@ -4,13 +4,13 @@ Copy the following into the new implementation chat. Keep this file uncommitted.
 
 ---
 
-You are the coordinating implementer for ClawdTime in `/Users/garygao/clawdtime`.
+You are the coordinating implementer for ClawdTime in `~/clawdtime`.
 Context yourself, then implement the approved conversational-control architecture.
 Do not stop at a proposal or another plan. Work through implementation, integration,
 tests, deployment preparation and the physical acceptance that is actually possible.
 
 The authoritative new plan is:
-`/Users/garygao/clawdtime/docs/CONVERSATIONAL_CONTROL_IMPLEMENTATION_PLAN.md`
+`<repo>/docs/CONVERSATIONAL_CONTROL_IMPLEMENTATION_PLAN.md`
 
 The user approved this product behavior:
 
@@ -115,8 +115,8 @@ agent workflow. Keep old live sessions immutable and migrate new sessions throug
 explicit capabilities/versions and rollout flags.
 
 Default to simulation/standby. Only you as lead may handle secrets, deploy,
-install/restart components or coordinate a live line. Never modify Apple Teams
-or sibling chert-facetime; never copy customer/runtime data, secrets, screens or
+install/restart components or coordinate a live line. Never modify the source project
+or the sibling private repository; never copy customer/runtime data, secrets, screens or
 audio into source or test fixtures. Do not change line ownership from historical
 names in old docs. Freshly audit the existing dedicated binding, idle calls,
 pending/unknown effects and current deployments before any rollout. Respect

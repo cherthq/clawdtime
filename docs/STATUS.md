@@ -26,8 +26,8 @@ The controller was joined, its temporary trigger closed, and local Stop visibly
 confirmed. The exact lease is released, executor is none/idle at epoch zero,
 there are no input actions, and the original foreground bridge is closed.
 Both presentation and native-activation admission gates are false. Gate-off
-backend deployment `060afd06-fdaf-4183-acfe-3443886a726f` and media deployment
-`7006906c-8107-4216-a65d-3456bb6c02e6` succeeded; readiness reports zero active
+backend deployment `<deployment-id>` and media deployment
+`<deployment-id>` succeeded; readiness reports zero active
 calls, pending or unknown transport effects, and media reports zero sessions
 with its gateway connected. No further call was placed under this approval.
 
@@ -37,8 +37,8 @@ media-to-connector diagnostic path found no blocker; this is not physical
 acceptance of the previously blocked walkthrough.
 
 Diagnostic release `4268918b67efa1c437f756fb6539d67511f5c174` is pushed and
-deployed: backend `a97b3f6b-8ebb-456d-a881-66f7f289e6b2`, media
-`ed23c369-6b40-43ba-8ac7-429c119db217`. Both report healthy at that exact
+deployed: backend `<deployment-id>`, media
+`<deployment-id>`. Both report healthy at that exact
 revision with the two test admission gates disabled. Media has no active sessions
 and its gateway is connected; backend has no active calls or pending/unknown
 transport effects. The Mac companion and gateway were not changed.
@@ -154,8 +154,8 @@ Backend readiness reports zero active calls, pending effects and unknown effects
 the media service reports zero active sessions. Both services are healthy on
 implementation `89f78397c63b2e9362e764a0ab6b34ad42aa6623`, with presentation and
 native activation explicitly disabled. Gate-off deployments are backend
-`5327b17a-a451-4230-b947-d528fe7a98f6` and media
-`ea8e6129-1f6d-4d70-939a-cac41a49cfbd`. The full production walkthrough remains
+`<deployment-id>` and media
+`<deployment-id>`. The full production walkthrough remains
 unaccepted pending diagnosis of the activation rejection and voice disconnect.
 
 ## November 17, 2026 — earlier authorized attempt blocked before dialing
@@ -191,8 +191,8 @@ pushed on `ArgosClawd`. Matching artifacts were deployed from a frozen Git archi
 
 | Component           | Verified artifact                                                                                                                                        |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Backend             | Deployment `f320ce4b-e9db-4fc1-812a-8fc01178e820`; health reports the exact source SHA                                                                   |
-| Media               | Deployment `cb364e09-af86-4765-9ec4-6712bcee8fd5`; health reports the exact source SHA                                                                   |
+| Backend             | Deployment `<deployment-id>`; health reports the exact source SHA                                                                                        |
+| Media               | Deployment `<deployment-id>`; health reports the exact source SHA                                                                                        |
 | Gateway             | Frozen source directory; authenticated version reports the exact SHA and runtime hash `e7fa4859b4ff26b3d692c498e1b84e235d5f8931a30e64c860c983f5e2713462` |
 | Installed companion | 0.4.0 build 8; exact source SHA, `ClawdTimeSourceDirty=false`; executable SHA-256 `949460aa9de727fe97da0f07db4904a8828189c24930878870ea8050c065a71b`     |
 | Original-chat CLI   | 129 compiled files match a fresh frozen-source build; tree SHA-256 `85796f67871d415aebe73cf795eb280b36bac522a76cbeecfba8a3a1f51bc7a1`                    |
@@ -409,8 +409,8 @@ unauthorized.
 ## November 17, 2026 — prepared presentation deployed with new admission off
 
 Production source `c7af884` is committed and pushed on `ArgosClawd`. Backend
-`3419147a-df04-4166-a4a9-5f32e6681c42` and media
-`4c7de1a8-32b2-4e31-ba3d-c51dad365185` both deployed successfully. The installed
+`<deployment-id>` and media
+`<deployment-id>` both deployed successfully. The installed
 companion is 0.4.0 build 7 and the existing gateway was restarted against the
 matching source. Exact helper/gateway configuration hashes and gateway lease/action
 ledger hashes were unchanged; helper receipt counts and existing Screen Recording/
@@ -603,7 +603,7 @@ not replaced. Existing diagnostics cannot retroactively identify the old guard.
 
 ### Cumulative delivery and acceptance
 
-- Dedicated Clawdtime project and line ending 9741 connected; existing pairing,
+- Dedicated Clawdtime project and line ending 0100 connected; existing pairing,
   records and other shared lines preserved.
 - ElevenLabs realtime duplex voice deployed with bounded tools; this original
   coding chat remains the executor and received three spoken requests.
@@ -623,8 +623,8 @@ media relay tests passed; independent review found no blockers. Prior deployed
 playback repair: 379 media tests passed, 13 optional SDK tests skipped, plus a
 real-provider audio-only probe. Worktree was clean before this diagnostic change.
 
-Current backend deployment: `ae254fac-7cb2-4af3-b160-5d074f91ce32`.
-Current media deployment: `4db02d42-291d-477e-a6f3-d7e4ad5762e3`, from `f0426b4`.
+Current backend deployment: `<deployment-id>`.
+Current media deployment: `<deployment-id>`, from `f0426b4`.
 Post-deployment checks verified matching running-source hash, voice readiness,
 unchanged environment and all seven media ledger tables preserved. Fresh diagnosis
 checks confirmed idle services, no active call/view lease/unresolved input, and
@@ -676,7 +676,7 @@ probe passed in 25,667 ms with 579 paced frames, a 157,344-byte valid chunk, pea
 queued PCM 338,896 bytes, no tool effects, and empty queues after Stop.
 The full media suite passed 379 tests (13 optional SDK tests skipped) in 55.948s.
 
-Deployment `4db02d42-291d-477e-a6f3-d7e4ad5762e3` is SUCCESS from pushed
+Deployment `<deployment-id>` is SUCCESS from pushed
 commit `f0426b4`. Running frontend SHA-256
 `528141fbefadd9a6acb1697a012005b1b24e25af164e93c5c7a30a8c9bf25cf3`
 matches tested source. Voice readiness passes; all seven media ledger tables match
@@ -714,7 +714,7 @@ not forensic proof that it was the only cause of the hang-up. Physical acceptanc
 and the prepared zoom/annotation walkthrough remain incomplete.
 
 The correction is committed/pushed as `0a1424a` and deployed to media as
-`9106feea-eb70-4058-b5cf-58ba56bbaf59` (SUCCESS). Running frontend SHA-256
+`<deployment-id>` (SUCCESS). Running frontend SHA-256
 `0c3049b639ad7ff3df8fad3a74e2a55a836b81a83d97102bf14dd6f4fff61b37`
 exactly matches tested source. Voice readiness reports configured, agent validated,
 and ready. All seven existing media ledger tables match the same-volume pre-deploy
@@ -722,7 +722,7 @@ snapshot; environment values are unchanged. Both services are idle. Backend,
 Mac installation, line assignment and provider software remain unchanged.
 
 An initial deployment upload incorrectly selected the root backend Dockerfile.
-Deployment `5faa0936-73d3-4745-91d9-3d733255a27b` was canceled and confirmed
+Deployment `<deployment-id>` was canceled and confirmed
 REMOVED while the previous media deployment remained SUCCESS and healthy. The
 successful deployment used the frozen commit's `media/` directory as its root.
 No additional call was placed; a newly authorized handset test remains next.
@@ -744,9 +744,9 @@ inclusive tap and identity-revalidation paths are unchanged. Current line-sessio
 protocol 1 selects that same isolated branch. This establishes digital process
 isolation, not handset playback, acoustic echo cancellation or physical duplex.
 
-Backend deployment `ae254fac-7cb2-4af3-b160-5d074f91ce32` succeeded with duplex and
+Backend deployment `<deployment-id>` succeeded with duplex and
 remote-audio-isolation flags enabled. Same reviewed image, database, project/binding
-and media deployment preserved. Resumed only 9741; inbound routing remains reject.
+and media deployment preserved. Resumed only 0100; inbound routing remains reject.
 Registered a fresh explicit ElevenLabs v2 session in this chat with the exact Finder
 window and native desktop capability. Prior installed MCP uses a rejected old pairing;
 its three unknown registration intents are retained untouched. Current backend had
@@ -766,7 +766,7 @@ interaction interrupted automation. No new call has been placed at this checkpoi
 Continued the user-authorized Clawdtime project move. Created a replacement
 project-scoped Calls credential for the existing service, then changed only
 `projectId` and `projectKey` in the deployed backend's live configuration.
-Backend deployment `5248f2f4-a38a-48d7-85a1-179902292d29` is SUCCESS, reusing
+Backend deployment `<deployment-id>` is SUCCESS, reusing
 its existing reviewed image. Media deployment and variables are unchanged.
 This supersedes the prior pending project-credential handoff below.
 
@@ -801,7 +801,7 @@ and snapshots remain outside Git. Full physical voice/screen acceptance is still
 ## November 17, 2026 — user-authorized new project and line assignment
 
 At the user's explicit request, created a new Chert project named **Clawdtime**
-under the existing operator account and moved line ending 9741 from its currently
+under the existing operator account and moved line ending 0100 from its currently
 shown provisioning customer project to it. The older similarly named ClawdTime
 project remains intact. Current authenticated admin UI confirmed the move;
 the new project's detail page shows the full expected phone number and original
@@ -812,7 +812,7 @@ No call, runtime reinstall, provider code change or other line mutation was perf
 The earlier dashboard admin-access blocker was transient: current authenticated
 administration works. Phone-number search in the assignment UI omitted this row
 because it displays a masked identity; searching the screenshot's Liam Su account
-resolved the exact row, then project detail confirmed 9741 after assignment.
+resolved the exact row, then project detail confirmed 0100 after assignment.
 
 Existing ClawdTime backend credentials/configuration still target the prior HackPton
 project and were not silently replaced. Next step is a preserving credential/config
@@ -823,15 +823,15 @@ The user has not authorized another FaceTime call.
 ## November 17, 2026 — dedicated voice configured and components deployed
 
 User authorized configuring a dedicated ElevenLabs agent and deploying ClawdTime
-for the existing 9741 binding, preserving records and assignment, with **no new
+for the existing 0100 binding, preserving records and assignment, with **no new
 FaceTime call**. The lead performed provider/deployment operations; the agent team
 reviewed provider compatibility, native installation and route evidence.
 
 - Dedicated seven-client-tool agent created and GET-validated. Gemini 2.5 Flash,
   Eleven Flash v2, 16 kHz PCM, authenticated connections, no provider queueing,
   voice recording disabled and zero-day retention. The prior lab agent was untouched.
-- Backend `79f6575c-0676-45a4-9c61-4be251d860a8` and media
-  `c3ad1969-28f7-4376-bba5-48db57296512` both SUCCESS. Deployed media's authenticated
+- Backend `<deployment-id>` and media
+  `<deployment-id>` both SUCCESS. Deployed media's authenticated
   ElevenLabs readiness returns configured/agentValidated/ready all true, using only
   agent/tool GETs. No provider conversation or audio session was started.
 - Installed Companion 0.4.0/build 6 and restarted the existing gateway. Effective
@@ -846,7 +846,7 @@ reviewed provider compatibility, native installation and route evidence.
 **Not yet call-ready:** a fresh project-scoped Chert Calls inventory returns HTTP
 200 with zero visible lines for the saved HackPton project. The existing dashboard
 sign-in also no longer exposes platform-admin access. This is current evidence,
-not proof that the line was reassigned. Current 9741 worker/session/build isolation
+not proof that the line was reassigned. Current 0100 worker/session/build isolation
 cannot be established, so backend duplex and remote-isolation gates remain false.
 Resolve visibility of the existing binding before enabling those gates; do not
 reassign a line to make the check pass. A new explicit same-chat ElevenLabs session
@@ -925,7 +925,7 @@ This is not unattended CUA readiness or phone/capture acceptance. See
 [the executor report](DESKTOP_EXECUTOR.md) for boundaries and the recommendation
 to bundle a persistent runtime for the independent product.
 
-## First authorized 9741 camera call — November 17, 2026
+## First authorized 0100 camera call — November 17, 2026
 
 The user authorized live activation and one Finder FaceTime demo, then explicitly
 requested restoring their existing HackPton admin membership **persistently**.
@@ -933,7 +933,7 @@ The audited membership routine restored that exact account/project role; the
 existing recipient verification became valid again. The line, assignment
 generation, provider binary and other projects/lines were unchanged.
 
-Backend live activation: `cc7e5656-802c-4d7e-90a9-c237db5e57f4` (SUCCESS).
+Backend live activation: `<deployment-id>` (SUCCESS).
 The fresh database was initialized through the adapter's verified retained event
 anchor before activation, without replaying earlier messages. The earlier no-camera
 foreground bridge was closed cleanly; a fresh same-chat v2 bridge registered the
@@ -976,11 +976,11 @@ The user explicitly approved deploying ClawdTime and finishing Mac pairing.
 The backend and media release is now deployed; **runtime remains standby** with
 live traffic disabled. No setup-test notice, message, FaceTime call, capture lease
 or OS input was submitted. The native provider upgrade remains withdrawn.
-9741 remains in HackPton with assignment generation 4 and no competing connector;
+0100 remains in HackPton with assignment generation 4 and no competing connector;
 no Chert provider software, line assignment or other shared line was changed.
 
-- Backend: `41f8ee37-ab4b-4ded-b852-dae6f33c57e4`, SUCCESS, version 0.4.0.
-- Media: `b8f97d2c-3871-42e4-afb5-d415745949ec`, SUCCESS, healthy,
+- Backend: `<deployment-id>`, SUCCESS, version 0.4.0.
+- Media: `<deployment-id>`, SUCCESS, healthy,
   gateway connected, zero active sessions.
 - Companion: 0.4.0/build 5 installed at the existing stable app path. Existing
   helper/gateway configuration, keys, receipt histories and control policy were
@@ -1037,13 +1037,13 @@ No receipt lookup or native provider installation is required by this mode.
 `npm run check` passed 950 tests/58 files, typecheck and build. Component checks:
 12 preview, 3 gateway camera, 53 Swift. Companion 0.4.0/build 5 is built and locally
 signature-verified, not installed. A source-only release archive and private
-disabled 9741 configuration are staged; GET-only preflight passes identity,
+disabled 0100 configuration are staged; GET-only preflight passes identity,
 cursor, project line, worker and media checks. Activation and fresh Mac pairing
 are still pending. No deployment, message or call occurred.
 
-The user dropped the proposed 9741 native messaging upgrade and authorized
+The user dropped the proposed 0100 native messaging upgrade and authorized
 continuing toward the production demo. Its locally built candidate is withdrawn
-and must not be installed. Keep 9741 in HackPton with its existing provider
+and must not be installed. Keep 0100 in HackPton with its existing provider
 software, credentials, callback and records. Adapt ClawdTime explicitly to the
 existing standard send API; unknown submissions remain blocked, never requeued
 or automatically resubmitted. The earlier strict-receipt-only diagnostic below
@@ -1052,7 +1052,7 @@ authorized by this preparation step.
 
 ## HackPton binding and receipt compatibility — November 17, 2026
 
-The user confirmed the existing line ending 9741 within HackPton is the target;
+The user confirmed the existing line ending 0100 within HackPton is the target;
 do not reassign any line. The prior Argos chat and operational README confirm
 successful recipient verification and a physical audio/synthetic-camera test.
 This does not establish a ClawdTime pairing or strict text receipt compatibility.
@@ -1061,7 +1061,7 @@ Current authenticated GETs confirm exact native identity and healthy service,
 plus project-scoped Calls access to the available, unoccupied selected line.
 The native service lacks ClawdTime's required receipt lookup: generic 404 instead
 of the structured missing-receipt response; status also reports no trusted bridge.
-The existing Mac recovery credential belongs to an older line, not 9741.
+The existing Mac recovery credential belongs to an older line, not 0100.
 
 Local preflight now requires `native_text_receipts`; unsupported services cannot
 advance inbound polling or create a welcome effect. Checks use authenticated GET
@@ -1166,8 +1166,8 @@ could start: `Failed to snapshot repository. Please try again in a few minutes.`
 Each failed deployment has `snapshotId:null`; no new application image ran.
 
 Restored and verified production **0.3.2** using its prior image and custom
-variables. Backend `51db1940-dcbd-46ca-836b-d3d484a1ca4e` is SUCCESS; media
-`7c884f0c-02af-4f0a-92bd-43a33acb084e` remains SUCCESS. All 74 JavaScript,
+variables. Backend `<deployment-id>` is SUCCESS; media
+`<deployment-id>` remains SUCCESS. All 74 JavaScript,
 18 Python and 10 public asset hashes match prior manifest
 `c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
 Running configuration, database entities/events/effects/Messages cursors and media
@@ -1239,8 +1239,8 @@ work is preserved and excluded from the deployment archive. See
 ## Tool correctness patch deployed — November 13, 2026, 22:43 UTC
 
 **0.3.2 code is deployed; normal conversational execution and the résumé demo are
-not enabled or accepted.** Backend `2e5a67d8-cf69-4370-944d-6349d2b024bf` and media
-`7c884f0c-02af-4f0a-92bd-43a33acb084e` are SUCCESS. Exact isolated source manifest:
+not enabled or accepted.** Backend `<deployment-id>` and media
+`<deployment-id>` are SUCCESS. Exact isolated source manifest:
 `c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
 All 74 JavaScript, 18 Python and 10 public asset hashes match. Configuration,
 backend entities/events/effects/Messages cursors and media ledgers are preserved.
@@ -1339,8 +1339,8 @@ A further call requires fresh readiness/authorization.
 an execution-disabled acoustic test, not acceptance of ordinary full-duplex work.
 The user must still explicitly state readiness for each new call.
 
-- Backend: `2dc6293e-81c1-49a2-b97d-21c8249f8b36`, SUCCESS, Node 24.22.3.
-- Media: `b683019a-6bae-4ac2-be65-ec540cf1d22a`, SUCCESS, Python 3.12.16.
+- Backend: `<deployment-id>`, SUCCESS, Node 24.22.3.
+- Media: `<deployment-id>`, SUCCESS, Python 3.12.16.
 - Isolated uncommitted source manifest:
   `9e50e96d4db5aa9746ca2e7d4679dcbd3eef073fa41628a8a0e151030cfa4768`,
   atop `a5af1f3` on preserved `improvements`; unrelated website work excluded.
@@ -1402,10 +1402,10 @@ never restore an older database/cursor or redial as recovery.
 
 The user authorized creation of the ClawdTime OpenAI project service-account key.
 It is securely configured in production media and expires December 13, 2026.
-No additional key setup is needed. Media `c197bb86-a198-4f72-906a-7f6ab1d97f83`
+No additional key setup is needed. Media `<deployment-id>`
 is SUCCESS, source 0.3.0 manifest
 `1d658394b7349003083d7d1c1bd99cfd1e94d3c0b0006dd607432076eb5746aa`.
-Backend `f8932374-b6a1-4039-9a43-d15697633713` is unchanged. Optional pinned
+Backend `<deployment-id>` is unchanged. Optional pinned
 Agents/plugin 1.8.12 and OpenAI 3.50.0 are installed; runtime gates remain off.
 Real silent client-delegation session startup: local 1,317.7 ms, deployed 1,234.7 ms,
 both provider-confirmed clean closure. The initial local TLS failure was resolved
@@ -1424,8 +1424,8 @@ historical where they describe credentials or optional dependencies as absent.
 ## Gated 0.3.0 rollout — November 13, 2026, 21:32 UTC
 
 Authorized backend/media deployment completed without a call or test message.
-Backend `f8932374-b6a1-4039-9a43-d15697633713` and media
-`720d1ffa-fd1c-4d8b-bf79-996074e3d4e5` are SUCCESS. The isolated uncommitted source
+Backend `<deployment-id>` and media
+`<deployment-id>` are SUCCESS. The isolated uncommitted source
 snapshot is `3302d324035ddf69be3ee78a4ce4a59b274d250f54dac7354b2e475b36081a56`;
 it excludes the unrelated website sprint. Deployed JS/Python/public asset hashes
 match. The current audited configuration and binding were preserved.
@@ -1492,8 +1492,8 @@ SDK **3.50.0**, RTC **1.2.1** and API **1.2.2** compatibility was exercised thro
 client-delegation startup and synthetic PCM transmission, without a provider call.
 
 Earlier source-qualification evidence recorded backend
-`c6d304b4-d42b-4deb-8130-0fd5f8bf1063` (source `7f1b687`) and media
-`cb123fed-509f-499b-93b5-a30b88a2d3cc` (source `f7611d2`) SUCCESS. Zero active
+`<deployment-id>` (source `7f1b687`) and media
+`<deployment-id>` (source `f7611d2`) SUCCESS. Zero active
 calls/media sessions, pending effects or unknown transport effects; gateway
 connected. That source-qualification phase made no live deployment, line change,
 service restart, message or call; the authorized rollout above followed later. Installed companion remains **0.2.1**; source packaging is **0.3.0 build 4**.
@@ -1598,7 +1598,7 @@ tests** passed, including nine focused activation/cancellation regressions.
 Actual post-fix call survival and audible greeting still require a new handset test.
 
 Media-only fix source `f7611d2799eada34026fdd71556e38d781d0b808` was deployed as
-`cb123fed-509f-499b-93b5-a30b88a2d3cc` (SUCCESS); the previous media deployment
+`<deployment-id>` (SUCCESS); the previous media deployment
 was removed. All fourteen deployed Python files matched the clean source archive.
 Protected configuration and media ledger hashes were unchanged. Backend, Mac
 companion and gateway source were not redeployed. The gateway reconnected after
@@ -1622,8 +1622,8 @@ release. No sibling project, line assignment or unrelated branch was modified.
 
 | Component       | Verified release                                                                                                   |
 | --------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Backend         | `c6d304b4-d42b-4deb-8130-0fd5f8bf1063`, SUCCESS; all 62 deployed JavaScript files matched                          |
-| Media           | `9175e3e9-3565-4c3c-926e-8eec2f7a236e`, SUCCESS; all 14 deployed Python files matched                              |
+| Backend         | `<deployment-id>`, SUCCESS; all 62 deployed JavaScript files matched                                               |
+| Media           | `<deployment-id>`, SUCCESS; all 14 deployed Python files matched                                                   |
 | Companion       | Current source installed with the original signing requirement; Screen Recording and Accessibility preserved       |
 | Gateway         | Existing independent LaunchAgent restarted with current source and unchanged private configuration                 |
 | Codex connector | Rebuilt and installed skill updated; MCP configuration preserved; fresh foreground registration/inbox smoke passed |
@@ -1827,8 +1827,8 @@ injected media/gateway failures log fixed warnings during passing tests.
 
 No remaining isolated check failures. No merge, deployment, installed-component
 replacement/restart, real connector spike, physical call, outbound message, real
-native input, or production configuration/database read was performed. No sibling
-Apple Teams/chert-facetime files were modified. Native approvals, exclusive
+native input, or production configuration/database read was performed. No files of the
+source project or the sibling private repository were modified. Native approvals, exclusive
 ownership, Stop, cursors, unknown outcomes and existing receipt behavior remain
 required; tests do not grant permission.
 
@@ -1862,10 +1862,10 @@ checkout; its source was reconciled before packaging so deployment would not
 regress current routing. No gateway/companion installation or routing transfer
 was performed.
 
-- Backend: `9ed4f88e-d2d9-4d9d-9384-82f3687e13b6` — successful, one running instance.
-- Media: `3115494a-c9d2-4666-aef2-e5a3417280b7` — successful, one running instance.
-- Actual predecessors: backend `06da11f3-b841-4bb0-9d7b-2a25b28a101e` and media
-  `5d2f9655-a82c-4e9a-8767-16fbb3133440`; both are removed.
+- Backend: `<deployment-id>` — successful, one running instance.
+- Media: `<deployment-id>` — successful, one running instance.
+- Actual predecessors: backend `<deployment-id>` and media
+  `<deployment-id>`; both are removed.
 
 Preflight and final checks showed no active calls, active leases or pending/unknown
 effects. The idle backend was stopped while media changed, then the new backend
@@ -2007,8 +2007,8 @@ that imports the server from only the files shipped by that list.
 The user subsequently authorized deploying both fixes, with no further call.
 The tracked-source archive of `84d09dc` was deployed to the existing services:
 
-- Backend: `9ea80a02-2896-4197-9166-98281d3c7b0e`.
-- Media: `d538d1a1-df17-4c70-a3da-41fdb58e00ac`.
+- Backend: `<deployment-id>`.
+- Media: `<deployment-id>`.
 
 Both deployments succeeded and their predecessors were removed. All 53 deployed
 JavaScript modules and 11 media Python modules match the release. Protected
@@ -2128,8 +2128,8 @@ and recovery plan. No second call is authorized.
 The user explicitly approved deployment of `8efbacc` and the companion/gateway/
 connector updates. No call was authorized or placed during this rollout.
 
-- Backend deployment: `7942fb9b-472e-4dce-8642-f1f2af18144a`.
-- Media deployment: `a544d42e-9c59-4a52-9b06-28c249c80f20`.
+- Backend deployment: `<deployment-id>`.
+- Media deployment: `<deployment-id>`.
 - Both deployments succeeded; their exact predecessor deployments were removed.
   Deployed code hashes match the approved release, including all 60 compiled
   backend files. Runtime configuration hashes are unchanged.
@@ -2296,8 +2296,8 @@ after seven tools; a separate adversarial test proves that a tool emitted in the
 reply-only step never executes. No new provider calls were needed for these tests.
 
 Production source `424367c` deployed successfully as backend
-`7aac217a-0201-4309-aafc-114b1acd5936` and media
-`8cc86c8c-7201-4644-b0c8-e1fa10e6b22b`. Exact code hashes match the clean source
+`<deployment-id>` and media
+`<deployment-id>`. Exact code hashes match the clean source
 archive; predecessor deployments are removed. Both services return healthy HTTP
 responses, the gateway is connected, the line is idle and there are no active
 calls/media sessions or pending/unknown effects. Runtime configuration hashes,
@@ -2357,8 +2357,8 @@ caption regression was corrected to enqueue its second item while the first was
 in flight, preserving its original pre-pause queue coverage with the smaller queue.
 
 Source `e03b7d1` deployed successfully as backend
-`12ad52e6-798e-45ae-bd9d-ebdf232ccd4e` and media
-`b76c1663-d29b-411f-a051-7ae4f48c2344`. Exact deployed file hashes match the
+`<deployment-id>` and media
+`<deployment-id>`. Exact deployed file hashes match the
 clean source archive; both preceding deployments are removed. HTTP health checks
 pass, the device gateway is connected, and there are no active calls/media
 sessions or pending/unknown effects. Runtime configuration hashes, line routing,
@@ -2461,8 +2461,8 @@ match the previous final snapshot, as do gateway action/lease tables. Both macOS
 permission grants remain present; the human's local Enable is on with no active
 lease. No live call, recap, re-pairing, permission change or model change was made.
 Source `25ddf8a61b3072e7169305db13d12f9f86f0f353` is deployed from a clean
-tracked archive to backend `b9ab9778-e79a-475f-bfae-39fde6ddb79f` and media
-`9b8b9e58-bebf-4e76-9fb7-8f01eb03a2f9`. Both report SUCCESS; their predecessors
+tracked archive to backend `<deployment-id>` and media
+`<deployment-id>`. Both report SUCCESS; their predecessors
 are removed. A build of that exact archive matches every checked running module.
 Both configuration hashes are unchanged: Astra medium/4096 and the existing keys
 remain. Backend entity/effect/event hashes and cursor match the immediate
@@ -2476,8 +2476,8 @@ hashes match the prior deployed image. After fresh idle reconciliation, redeploy
 only the affected existing service from that tracked source with unchanged
 configuration. Preserve volumes, receipts and current cursors; never restore an
 older database or replay effects. The additive diagnostic table can remain.
-The prior backend/media deployment IDs are `39112b96-eb77-400e-b9cd-77e79f5471d6`
-and `74e2e33f-6697-4d24-b7d6-2ce27aff88b6`. Private release proof and rollback
+The prior backend/media deployment IDs are `<deployment-id>`
+and `<deployment-id>`. Private release proof and rollback
 instructions are retained in `.data/disconnect-release-proof.json` and
 `.data/disconnect-rollback.json`.
 
@@ -2557,7 +2557,7 @@ No live call was made. This offline evidence does not establish handset or nativ
 desktop acceptance.
 
 Source `6a94c11` is deployed to backend
-`39112b96-eb77-400e-b9cd-77e79f5471d6`; its predecessor is removed. Deployed code
+`<deployment-id>`; its predecessor is removed. Deployed code
 hashes and runtime settings confirm Astra medium with 4096 output tokens. Only
 the backend model and reasoning environment values changed. Media, helper, gateway,
 pairing, permissions, line ownership, message cursor, backend receipts and all eight
@@ -2624,7 +2624,7 @@ arbitrary desktop targets or handset acceptance. The earlier failed-model eviden
 below remains historical; no successful live control claim replaces it.
 
 Source `f918b60` deployed from a clean tracked-source archive to backend deployment
-`c45e24cd-7d52-4664-a82c-ae133a4cdd3a`; the previous backend is removed. Read-only
+`<deployment-id>`; the previous backend is removed. Read-only
 inspection confirms the running Gateway model is `openai/gpt-6.1-sol`, reasoning
 is `low`, and output budget is 4096, with deployed control/application hashes
 matching the reviewed build. Media, gateway and companion were not restarted.
@@ -2676,9 +2676,9 @@ the earlier model's targeting limitation. Another live call requires new
 explicit authorization and local Enable; neither was performed.
 
 Source `54b9045` deployed from a clean tracked-source archive to backend deployment
-`dcdd4926-2863-4a45-8b29-ff14ed50aaf4`. The previous backend is removed; deployed
+`<deployment-id>`. The previous backend is removed; deployed
 application/control hashes match the reviewed build. Media remains on
-`74e2e33f-6697-4d24-b7d6-2ce27aff88b6`; helper and gateway were not restarted.
+`<deployment-id>`; helper and gateway were not restarted.
 Readiness reports zero active calls, pending effects or unknown outcomes. Protected
 installation/configuration file hashes, gateway lease/action tables, backend
 entity/effect/event hashes, message cursor and line binding match the pre-deploy
@@ -2767,8 +2767,8 @@ The backend now retains the first authenticated screen-stop reason and bounded
 turn timestamps, and distinguishes a lost screen connection from unavailable
 call/session context. It preserves the same fail-closed authority checks.
 
-At handoff, backend deployment `f06f6be1-17f7-4c85-8a2c-08507b51af2e` and media
-deployment `cb7aac1e-551c-4fbb-acdb-a617fd06d12c` ran the previously reviewed
+At handoff, backend deployment `<deployment-id>` and media
+deployment `<deployment-id>` ran the previously reviewed
 `c6de85d` source. Follow-up validation passes 418 backend/connector tests plus
 TypeScript/build, 108 media tests and 24 gateway tests. Independent review passed,
 including real local HTTP/WSS delay and late-helper-completion regressions,
@@ -2777,8 +2777,8 @@ readiness polling. Formatting checks and skill validation passed. The installed
 companion is unchanged. No new call, recap or physical acceptance has been claimed.
 
 Release `dd011f4` deployed successfully from a clean tracked-source archive:
-backend `fc210e75-d686-4c43-89c7-22c9ef00efcb`, media
-`74e2e33f-6697-4d24-b7d6-2ce27aff88b6`. Both prior instances are removed and
+backend `<deployment-id>`, media
+`<deployment-id>`. Both prior instances are removed and
 deployed code hashes match the reviewed source. The existing gateway was restarted
 once to load the same source; it reconnected and its diagnostic schema is present.
 The installed companion binary, protected configuration/pairing files, helper
@@ -2795,13 +2795,13 @@ The user confirmed that the website greeting sent as iMessage and that the welco
 with setup prompt arrived. An initial greeting from the user's original handset
 was outside the previous pilot allowlist; the user selected that handset, the
 allowlist was corrected without replay, and one fresh greeting succeeded. Backend
-deployment `2fc5ca13-0e57-4415-a9c9-32b00a53e7ca` retains the existing code image.
+deployment `<deployment-id>` retains the existing code image.
 
 This same Codex chat consumed the new setup link once, installed the project skill
 and connection, and configured display 1 for explicit view-only sharing. The old
 companion configuration and receipts were preserved. The existing app retained its
 signature and macOS grants; the user enabled it locally. The fresh gateway connected
-through media deployment `d78ee3d0-e57a-42b2-af0d-c223086ea64f`; scoped live checks passed.
+through media deployment `<deployment-id>`; scoped live checks passed.
 
 The user authorized one outbound call and Messages recap, with no control exercise.
 That call rang, and the user reported it ended when answered. Provider events show
@@ -2819,7 +2819,7 @@ The corrected handler unsubscribes and ignores video from the exact worker while
 retaining rejection of foreign participants, unsupported track kinds, conflicting
 audio tracks and failed unsubscription. All 89 media tests pass, including seven
 new callback regression tests; independent review found no actionable issue.
-Media deployment `34d078b5-2f13-46df-9fab-20e2e701b3aa` succeeded from `3acd183`;
+Media deployment `<deployment-id>` succeeded from `3acd183`;
 the previous deployment is removed, the live server hash matches the reviewed
 source, and scoped readiness passed before the separately authorized follow-up below.
 
@@ -2862,8 +2862,8 @@ enforces permission, so model output cannot expand it.
 Validation: 408 backend/connector tests plus TypeScript/build pass; 101 media tests
 pass, including delayed frame/renewal responses, same-lease recovery, Stop and
 expiry regressions. Independent review found no remaining actionable issue;
-backend deployment `f06f6be1-17f7-4c85-8a2c-08507b51af2e` and media deployment
-`5eb45f25-498c-4c3f-a228-9f1a44d17b04` succeeded from `c6de85d`. Live source
+backend deployment `<deployment-id>` and media deployment
+`<deployment-id>` succeeded from `c6de85d`. Live source
 hashes match the reviewed build and scoped readiness passes. A synthetic model
 request to click/type under view-only permission returned a natural limitation
 reply with zero tool calls. These checks do not establish physical acceptance or
@@ -2871,7 +2871,7 @@ authorize another call.
 
 ## Service-number correction — November 11
 
-The user identified Mia's current number as different from the configured number.
+The user identified line B's current number as different from the configured number.
 Read-only checks confirmed that the provider inventory, running native API and
 ClawdTime binding still reported the previous number. The Mac account lists both
 aliases; that alone does not establish current Apple reachability. Earlier healthy
@@ -2886,9 +2886,9 @@ retained the installed binaries and original settings, and verified unchanged
 native state, operation journals and event head before leaving admission paused.
 The same provider inventory row and ClawdTime binding were then corrected; the
 logical line, account, credentials, database and exact cursor 5 remained intact.
-The original Lucas archive and historical hashes were also rechecked unchanged.
+The original line A archive and historical hashes were also rechecked unchanged.
 
-Deployment `2337484e-815d-4b9d-8191-4783f0a3f79f` succeeded using the existing
+Deployment `<deployment-id>` succeeded using the existing
 `f6177c0` image; prior standby deployments are removed. The exact owned maintenance
 fence was released once. Transport checks pass, and the live browser verifies all
 four prefilled Messages links and the visible fallback use the corrected number.
@@ -2910,11 +2910,11 @@ The current-chat integration stays pending through permissions; its default test
 is one approved video call, screen visibility, natural voice or text, same-session
 continuation, and a Messages recap. Computer-control exercises are optional.
 
-Backend deployment `38fecab0-bb83-46b2-b447-b23a119fd7d8` (code `f6177c0`) succeeded
+Backend deployment `<deployment-id>` (code `f6177c0`) succeeded
 before the standby correction above. TypeScript/build and 376 tests pass, as do the
 built-app onboarding browser checks and 14 focused media checks. A live browser
 check before the pause confirmed four prefilled Messages links, no preview interception and no JS
-errors. Native Messages greeting prefill and the fresh Mia handset loop still
+errors. Native Messages greeting prefill and the fresh line B handset loop still
 require human observation; browser links alone are not delivery evidence.
 
 The README and setup skill now distinguish limitations: no automatic tapback,
@@ -2925,17 +2925,17 @@ The current test uses the existing approved companion and lead-managed gateway.
 
 ## Dedicated-line migration — November 11
 
-- The original Lucas line returned exclusively to Apple Teams after ClawdTime's
+- The original line A line returned exclusively to the source project after ClawdTime's
   dispatcher stopped. All five calls ended, all 23 leases released, and original
   entities/effects/events hashes remained unchanged. Its cursor, unknown outcomes,
   private configuration and encrypted consistent backup are preserved.
-- Mia is assigned to an independent ClawdTime provider project with a scoped
+- line B is assigned to an independent ClawdTime provider project with a scoped
   credential. Native identity matches the assigned logical line. A fresh database
-  and encryption key isolate it from the historical Lucas runtime; event baseline
+  and encryption key isolate it from the historical line A runtime; event baseline
   5 was verified without replaying retained messages.
-- Backend deployment `2313e4ae-fe0a-4031-bb9d-1341bc696d5a` is SUCCESS using the
-  existing `e08eca1` image, live on Mia's separate database. Prior standby deployment
-  `695f2901-4f62-488b-92cb-e588a7c43596` is REMOVED. Media and the installed local
+- Backend deployment `<deployment-id>` is SUCCESS using the
+  existing `e08eca1` image, live on line B's separate database. Prior standby deployment
+  `<deployment-id>` is REMOVED. Media and the installed local
   companion were unchanged. The provider acknowledged activation generation 6.
 - Fixed provider receipt 503: the old helper lacked a text journal and its launch
   configuration lacked the sender field required by strict sending. The scoped
@@ -2946,9 +2946,9 @@ The current test uses the existing approved companion and lead-managed gateway.
 - Receipt status/whoami now report available and the unused-origin lookup returns
   404/found=false. All transport preflight checks pass. Live runtime inspection
   reports zero pending/unknown effects and active calls, with no migrated pairing.
-  No message, call or screen input was sent for this migration. Fresh Mia onboarding
+  No message, call or screen input was sent for this migration. Fresh line B onboarding
   and handset acceptance remain unperformed; prior permissions and Stop are intact.
-- Installation receipt: `FT-INSTALL-CLAWDTIME-MIA-REPAIR-20261111`. The reviewed
+- Installation receipt: `FT-INSTALL-CLAWDTIME-LINE-B-REPAIR-20261111`. The reviewed
   installer passed 52 offline recovery tests; the separate journal initializer
   passed seven tests. Existing journals, other account PIDs and unchanged ingress
   were verified after installation. Rollback preserves the initialized journal.
@@ -3009,8 +3009,8 @@ before its acknowledgement, and Stop during grant creation prevents readiness.
 Historical pre-migration deployment snapshot: **`e08eca1`**, including the
 conversational harness in `0672468`. The current line/deployment state is above.
 
-- Backend: `f395c13f-0054-4f05-9950-af69732b1872` — SUCCESS.
-- Media: `acf01bae-c9c5-471d-85e7-cbe0c21b355a` — SUCCESS.
+- Backend: `<deployment-id>` — SUCCESS.
+- Media: `<deployment-id>` — SUCCESS.
 - Both public health checks return HTTP 200. Canonical `/agents` serves the new
   natural-language setup protocol. Media reports zero active sessions and a
   connected device gateway; transport preflight and backend heartbeat pass.
@@ -3021,15 +3021,15 @@ conversational harness in `0672468`. The current line/deployment state is above.
 - Before/after metadata matches: five ended calls, four retained observed input
   receipts, 23 released leases, and the same historical unknown notice/inbound/
   effect states. No new message invitation, phone call or screen input was sent.
-- Deployment packaging correction: candidate `f8006440-7db0-42e5-8a60-fb0978898369`
+- Deployment packaging correction: candidate `<deployment-id>`
   used the wrong build context and was canceled before replacing the active media
   image. Media must upload the archived **media/** directory; backend uploads
-  the archived root. Candidate `c45b1447-cefc-4b38-9a32-29aa66a9f1d7` was superseded
+  the archived root. Candidate `<deployment-id>` was superseded
   during rollout to include the natural-speech introduction. The media restart
   window had no active calls; final gateway reconnection was verified.
 - Prior rollback images remain identified: backend
-  `70698b6a-1994-4d74-8d93-74da1d813a62` (code `4550c12`) and media
-  `62fe9a11-63e6-4f42-a705-7b7cf00ef2aa` (code `b93b28b`). Restore code/images only
+  `<deployment-id>` (code `4550c12`) and media
+  `<deployment-id>` (code `b93b28b`). Restore code/images only
   if necessary; preserve current ledgers/cursors and never restore an old DB.
 
 This revision has **no new handset acceptance**: the user requested no further
@@ -3043,7 +3043,7 @@ while authorizing input, although ordinary actions no longer blank the stream.
 This section records initial installation and release evidence. Later entries and
 the current migration summary supersede its deployment and acceptance state.
 
-- Apple Teams audited and inspected baseline: `be47b11fe1317c4747db4121bec37896998b5201`.
+- Source project audited and inspected baseline: `be47b11fe1317c4747db4121bec37896998b5201`.
   Source main stayed clean at that commit; its five existing worktrees were preserved.
 - ClawdTime canonical repository: https://github.com/cherthq/clawdtime, with
   releases integrated into `main`. Implementation was developed on
@@ -3051,18 +3051,18 @@ the current migration summary supersede its deployment and acceptance state.
   publishing to this remote and `main`. No public npm package or GitHub topics
   have been published. The README covers the product hook, complete setup and
   everyday user flow, two modes, requirements and remaining acceptance gaps.
-- Independent Railway project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
-- Backend live deployment: `bc0f8032-d316-4b7f-a952-927160d0a38d`, from
+- Independent Railway project: `<project-id>`.
+- Backend live deployment: `<deployment-id>`, from
   clean commit `f1f1320cc2d64d053871355aa55ea3292cad77ea`.
-- Media deployment: `4d18c8d9-1ce4-421a-abd0-5f3bb65daf6e`.
-- Source paused using its existing image: `e54088af-d19e-4378-8aa6-d2b4ac12acd4`.
+- Media deployment: `<deployment-id>`.
+- Source paused using its existing image: `<deployment-id>`.
   No source code or sibling deployment was changed.
 - Companion: `com.clawdtime.companion`, internal 0.1.0, ad hoc signed.
   Binary SHA-256: `abfdeb7eb0228ac2b4ae9d1f35d1fdd89da3c3ac7b1d6aff226c312aa0e858dd`.
   `codesign --verify --deep --strict` passed. No Developer ID/TeamIdentifier or notarization.
 - Client versions: Claude Code **2.1.311**; Codex CLI **0.166.0-alpha.5.1**.
 - Validation runtime: Node **24.22.1**, Python **3.14.0**, Swift **6.2.4**.
-- Companion installed at `/Users/garygao/Applications/ClawdTime Companion.app`.
+- Companion installed at `~/Applications/ClawdTime Companion.app`.
   Separate bootstrap configuration has empty display ACLs. The user granted the
   initial build permissions; its relaunch repair changed the ad hoc signature.
   The user authorized replacing only ClawdTime’s stale entries. Current-build
@@ -3132,7 +3132,7 @@ provider acting on a physical fixture remains unverified.
    download API after the in-app download UI stopped. The companion has both ACLs
    loaded; Codex and Claude Code connections were installed in the disposable project.
    Only native receipt recovery and explicit local Enable block live readiness.
-2. **Supervised handset loop.** The user confirmed the Liam Davis alias against
+2. **Supervised handset loop.** The user confirmed the another alias alias against
    the exact native/logical/inventory binding and selected a sole demo recipient.
    The private handoff record preserves the source cursor and pause evidence.
    Test call, visible screen, voice/text, click/type/scroll, bounded AI action,
@@ -3202,7 +3202,7 @@ This is a temporary local preview, not a deployed public website.
 
 ## Follow-up fixes and hosting — November 11, 2026
 
-Hosted landing: https://backend-production-ee686906.up.railway.app
+Hosted landing: https://api.example.com
 Private pairing route: `/pair`; no operational dashboard is implemented.
 The prior local-only diagnosis above records the earlier state, superseded here.
 
@@ -3241,7 +3241,7 @@ succeeded in the disposable project; doctor reports only `local_recovery` and
 `local_arm` failures. No agent client, capture, input or call was started.
 
 The user's later handset correction supersedes the initial tester choice; only the
-corrected recipient is allowlisted. Apple Teams remains paused. Its retained cursor
+corrected recipient is allowlisted. The source project remains paused. Its retained cursor
 and all ClawdTime unknown outcomes must be reconciled before any ownership reversal.
 
 Implementation fixes are committed as `4f6e540`. Separate concurrent landing/pricing
@@ -3337,7 +3337,7 @@ The user executed the exact-target provider maintenance; before was
 ## First supervised call and capture investigation
 
 Release `848102c` deployed as backend
-`0d4075e0-160a-43b6-a0a8-35c8f12d9a83`. Canonical www HTTPS and all public setup
+`<deployment-id>`. Canonical www HTTPS and all public setup
 routes return 200; legacy Railway origins remain accepted. GoDaddy HTTP apex
 forwarding is verified; apex HTTPS/deep-link forwarding is not qualified, so use
 www directly. The old notice was retired through its exact immutable evidence
@@ -3365,8 +3365,8 @@ Real HTTP and TLS/WebSocket synthetic-frame tests pass, including refusal and co
 capture timeout. A separately approved further diagnostic call is still required.
 
 Follow-up release `b93b28b` deployed successfully as backend
-`41bf01a8-34cb-4aae-a5d3-4fb833fb4aec` and media
-`62fe9a11-63e6-4f42-a705-7b7cf00ef2aa`. The independent gateway was restarted
+`<deployment-id>` and media
+`<deployment-id>`. The independent gateway was restarted
 after confirmed call cleanup to load sanitized diagnostics; the installed Mac
 companion was preserved. Existing-project setup checks confirm both macOS grants,
 local enablement, no active helper lease, matching installed skill and live
@@ -3407,7 +3407,7 @@ inspection at 14:25 Eastern returned `reply_map_thread/accepted:false` again.
 That stage alone does not distinguish ordinary account-qualified DM routing from
 a real reply thread. Independent source tests reproduced rejection of an exact
 ordinary account/peer mapping. Candidate `742b4068` in isolated
-`/Users/garygao/chert-clawdtime-text-path` fixes only strict text acceptance while
+`~/chert-clawdtime-text-path` fixes only strict text acceptance while
 preserving all bridge checks and non-text behavior. Tests failed before and pass
 after; independent review, signed paired build and isolated target contracts pass.
 Guarded account-only installation is being prepared; no new message/call occurred.
@@ -3444,7 +3444,7 @@ internal signed pilot build, not notarized public distribution. No second physic
 call or screen/control/continuation/result acceptance has occurred.
 
 Recovery release `5e54a68` passed 219 TypeScript tests, typecheck and build and
-was deployed successfully as backend `894ad81e-3c4f-40d1-b935-023b02776e7a`.
+was deployed successfully as backend `<deployment-id>`.
 Both actual Mac permissions now pass after replacing only ClawdTime's stale
 entries, and the owner enabled the app locally. During deployment the old backend
 session stopped after a heartbeat gap; it was not resurrected. The native coding
@@ -3469,7 +3469,7 @@ the call request's five-minute deadline once started. Duplicate YES/start reques
 must not extend timers; expired tests and prior receipts remain unchanged.
 
 Release `5880c38` (223 TypeScript tests, typecheck/build, independent review) was
-successfully deployed as backend `1e762fb9-2b5a-4927-ab53-ecd2426faffd`. With new
+successfully deployed as backend `<deployment-id>`. With new
 explicit call authorization and an authenticated coded reply, the next physical
 call showed the disposable fixture on the intended handset. Media recorded 302
 fresh frames and emitted screen video; the first screen video was approximately
@@ -3508,7 +3508,7 @@ This repair is not physical CUA acceptance. Subsequent tests must leave the Mac
 fixture foregrounded and use handset feedback to avoid desktop-chat focus changes.
 
 CUA repair release `8cd5621` deployed successfully as backend
-`16b9297b-3f31-449f-8553-32e3512a0c46`. The preceding verified transport
+`<deployment-id>`. The preceding verified transport
 bridge was closed before deployment; no live call or lease remained. The Mac app
 and media service were unchanged. Further physical calls require fresh approval;
 no additional control pass is implied by this deployment.
@@ -3534,7 +3534,7 @@ but encoding differs. Independent review and 278 TypeScript tests, typecheck/bui
 pass. Live qualification remains pending; no new call is implicit.
 
 Bounded-settling/diagnostic release `bcd4b23` deployed successfully as backend
-`3d8423d9-3f4f-4f62-8ffd-78570564107d`. No helper/media update or permission
+`<deployment-id>`. No helper/media update or permission
 change was made. Read-only prior control metadata contains two `planning_refused`
 and two `screen_changed` results, all `not_started`, with zero action receipts.
 No model clarification or changed-pixel evidence was retained for those attempts.
@@ -3557,10 +3557,10 @@ clear the typing latch; uncertain clicks and AI typing cannot. Integrated valida
 308 tests, typecheck/build, independent review. No new physical test is claimed.
 
 Release `4550c12` deployed successfully as backend
-`70698b6a-1994-4d74-8d93-74da1d813a62`. The old end-call effect reconciled
+`<deployment-id>`. The old end-call effect reconciled
 through the reviewed GET-only path: cleanup confirmed, original unknown body
 retained in its audit, and `nativeEndAcknowledgementUnknown:true`. Readiness now
-passes. A fresh read-only ownership audit confirms Apple Teams disabled, no active
+passes. A fresh read-only ownership audit confirms the source project disabled, no active
 source calls or pending/unknown source jobs, provider idle and the original source
 cursor retained. No additional call has been placed under this release.
 

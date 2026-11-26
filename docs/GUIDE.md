@@ -242,9 +242,9 @@ publication, paid commitments and existing service replacement are not implied.
 
 ## Provenance and remaining work
 
-ClawdTime is an independent project selectively extracted from Apple Teams commit
+ClawdTime is an independent project selectively extracted from the source project's commit
 `be47b11fe1317c4747db4121bec37896998b5201`, with new pairing/attention/agent domains.
-The source repository and sibling `chert-facetime` remain separate. Production
+The source repository and the sibling private repository remain separate. Production
 customer data, credentials and receipt databases are not copied. See
 [MIGRATION](MIGRATION.md), [media migration manifest](MIGRATION_MEDIA.md)
 and [ARCHITECTURE](ARCHITECTURE.md).

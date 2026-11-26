@@ -1,4 +1,4 @@
-// Narrow DM extraction from Apple Teams src/chert/messages.ts at be47b11.
+// Narrow DM extraction from the source project's src/chert/messages.ts at be47b11.
 import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Pairing } from "../contracts.js";

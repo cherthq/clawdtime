@@ -3,8 +3,8 @@
 ## November 17, 2026 — production integration, explicit staged admission
 
 **Staged deployment result:** committed source `c7af884` is running on backend
-`3419147a-df04-4166-a4a9-5f32e6681c42` and media
-`4c7de1a8-32b2-4e31-ba3d-c51dad365185`; both deployments succeeded. Companion 0.4.0
+`<deployment-id>` and media
+`<deployment-id>`; both deployments succeeded. Companion 0.4.0
 build 7 and the matching gateway are installed. Existing permissions, configuration
 hashes and gateway receipt/lease hashes were preserved. Backend and media are idle;
 the companion is disarmed. New admission remains default-off. Scoped readiness
@@ -353,8 +353,8 @@ proceed immediately through repair/deployment.
   Metadata-only checks passed with the selected window reported off-screen; its
   geometry and ScreenCaptureKit filter rectangle agreed. Off-screen status alone
   is therefore not sufficient to explain a refusal.
-- Backend deployment `ae254fac-7cb2-4af3-b160-5d074f91ce32` and media deployment
-  `4db02d42-291d-477e-a6f3-d7e4ad5762e3` still report SUCCESS. Backend has zero
+- Backend deployment `<deployment-id>` and media deployment
+  `<deployment-id>` still report SUCCESS. Backend has zero
   pending/unknown call effects and active calls; media has zero active sessions
   and a connected gateway.
 - Installed Companion is still 0.4.0 build 6, executable SHA-256
@@ -489,7 +489,7 @@ not replaced. Existing diagnostics cannot retroactively identify the old guard.
 
 ### Cumulative delivery and acceptance
 
-- Dedicated Clawdtime project and line ending 9741 connected; existing pairing,
+- Dedicated Clawdtime project and line ending 0100 connected; existing pairing,
   records and other shared lines preserved.
 - ElevenLabs realtime duplex voice deployed with bounded tools; this original
   coding chat remains the executor and received three spoken requests.
@@ -509,8 +509,8 @@ media relay tests passed; independent review found no blockers. Prior deployed
 playback repair: 379 media tests passed, 13 optional SDK tests skipped, plus a
 real-provider audio-only probe. Worktree was clean before this diagnostic change.
 
-Current backend deployment: `ae254fac-7cb2-4af3-b160-5d074f91ce32`.
-Current media deployment: `4db02d42-291d-477e-a6f3-d7e4ad5762e3`, from `f0426b4`.
+Current backend deployment: `<deployment-id>`.
+Current media deployment: `<deployment-id>`, from `f0426b4`.
 Post-deployment checks verified matching running-source hash, voice readiness,
 unchanged environment and all seven media ledger tables preserved. Fresh diagnosis
 checks confirmed idle services, no active call/view lease/unresolved input, and
@@ -562,7 +562,7 @@ probe passed in 25,667 ms with 579 paced frames, a 157,344-byte valid chunk, pea
 queued PCM 338,896 bytes, no tool effects, and empty queues after Stop.
 The full media suite passed 379 tests (13 optional SDK tests skipped) in 55.948s.
 
-Deployment `4db02d42-291d-477e-a6f3-d7e4ad5762e3` is SUCCESS from pushed
+Deployment `<deployment-id>` is SUCCESS from pushed
 commit `f0426b4`. Running frontend SHA-256
 `528141fbefadd9a6acb1697a012005b1b24e25af164e93c5c7a30a8c9bf25cf3`
 matches tested source. Voice readiness passes; all seven media ledger tables match
@@ -600,7 +600,7 @@ not forensic proof that it was the only cause of the hang-up. Physical acceptanc
 and the prepared zoom/annotation walkthrough remain incomplete.
 
 The correction is committed/pushed as `0a1424a` and deployed to media as
-`9106feea-eb70-4058-b5cf-58ba56bbaf59` (SUCCESS). Running frontend SHA-256
+`<deployment-id>` (SUCCESS). Running frontend SHA-256
 `0c3049b639ad7ff3df8fad3a74e2a55a836b81a83d97102bf14dd6f4fff61b37`
 exactly matches tested source. Voice readiness reports configured, agent validated,
 and ready. All seven existing media ledger tables match the same-volume pre-deploy
@@ -608,7 +608,7 @@ snapshot; environment values are unchanged. Both services are idle. Backend,
 Mac installation, line assignment and provider software remain unchanged.
 
 An initial deployment upload incorrectly selected the root backend Dockerfile.
-Deployment `5faa0936-73d3-4745-91d9-3d733255a27b` was canceled and confirmed
+Deployment `<deployment-id>` was canceled and confirmed
 REMOVED while the previous media deployment remained SUCCESS and healthy. The
 successful deployment used the frozen commit's `media/` directory as its root.
 No additional call was placed; a newly authorized handset test remains next.
@@ -622,7 +622,7 @@ installed executable and exact-line heartbeat agree on `97823a1…` from clean
 `5d70b571…`. Independent review confirms the previously qualified process-isolation
 source remains unchanged. No provider software was modified or reinstalled.
 
-Configuration-only backend deployment `ae254fac-7cb2-4af3-b160-5d074f91ce32` enables
+Configuration-only backend deployment `<deployment-id>` enables
 duplex and remote-isolation assertions. Exact line resumed, inbound reject policy
 preserved. Fresh same-chat ElevenLabs session selects only the harmless Finder
 window and preserves native input ownership. Companion restarted using the existing
@@ -636,9 +636,9 @@ annotations and interruption still require the upcoming supervised demo.
 
 ## New-project connection verified — November 17, 2026
 
-The requested **Clawdtime** project now owns line ending 9741, and the ClawdTime
+The requested **Clawdtime** project now owns line ending 0100, and the ClawdTime
 backend uses that project's credential. Configuration-only deployment
-`5248f2f4-a38a-48d7-85a1-179902292d29` succeeded at 14:45 UTC using the existing
+`<deployment-id>` succeeded at 14:45 UTC using the existing
 backend image. Only the Calls `projectId` and `projectKey` changed. This supersedes
 the old-project visibility blocker recorded below; it does not establish call readiness.
 
@@ -676,7 +676,7 @@ message was placed in this continuation. Existing records and other lines are in
 
 ## Authorized dedicated voice rollout — November 17, 2026
 
-The user authorized provider configuration and ClawdTime deployment for 9741,
+The user authorized provider configuration and ClawdTime deployment for 0100,
 without changing the assignment or existing records and without another FaceTime
 call. This section supersedes earlier statements that build 6 was local-only.
 
@@ -698,10 +698,10 @@ exposed partial HTTP chunk parsing. Correction `f4ffe03` accumulates through EOF
 under the existing timeout and 128 KiB cap; three real loopback HTTP regressions
 cover split JSON strings, invalid trailing content and fragmented overflow.
 
-- Backend deployment: `79f6575c-0676-45a4-9c61-4be251d860a8`, SUCCESS,
+- Backend deployment: `<deployment-id>`, SUCCESS,
   source `89e6816` (backend source unchanged by the subsequent media-only fix).
-- Final media deployment: `c3ad1969-28f7-4376-bba5-48db57296512`, SUCCESS,
-  source `f4ffe03`; supersedes the first media deployment `198a52fe-7d66-434b-b8a9-096fbab3282f`.
+- Final media deployment: `<deployment-id>`, SUCCESS,
+  source `f4ffe03`; supersedes the first media deployment `<deployment-id>`.
 - Authenticated production `/voice/elevenlabs/readiness` returned
   `configured:true, agentValidated:true, ready:true` at 13:36 UTC. This validates
   configuration, not physical latency, duplex interruption or handset playback.
@@ -730,7 +730,7 @@ pending/unknown effects zero. Backend ElevenLabs selection is enabled, but backe
 **two-way voice and remote-audio-isolation assertions remain false**: a fresh GET of
 Chert's project-scoped Calls inventory returns HTTP 200 with `total:0` for the saved
 HackPton project. The existing dashboard session, after refreshing sign-in, reports
-platform-admin access required. Therefore current 9741 assignment/worker/session
+platform-admin access required. Therefore current 0100 assignment/worker/session
 and qualified build cannot be freshly verified. Historical digital-isolation
 qualification alone cannot authorize a newly invisible route. Nothing was reassigned
 or granted to work around this. Resolve project visibility for the existing binding,
@@ -864,7 +864,7 @@ the one used in the failed demo. The coordinating chat's delayed polling/reply
 also contributed to the slow interaction; provider/model choice is not the only
 issue. No reliable end-of-speech-to-first-audio measurement was collected.
 
-Read-only comparison used `/Users/garygao/argos-lab/README.md`, `create-agent.py`,
+Read-only comparison used a private lab folder's `README.md`, `create-agent.py`,
 `media_trial.py`, and `source/escalation_mcp/voice/eleven_agent.py`. No sibling
 project, provider configuration, credentials, or live call was changed by this
 audit. The lab implementation is evidence of its own limited acceptance, not a
@@ -897,7 +897,7 @@ typecheck and build). The Mac specialist verified 55 Swift tests and a Swift bui
 tests. No tests establish Argos-equivalent handset behavior. The checkpoint is
 committed locally, not pushed; the audit adds no runtime feature or flag change.
 
-## First authorized 9741 camera call — November 17, 2026
+## First authorized 0100 camera call — November 17, 2026
 
 The user authorized live activation and one Finder FaceTime demo, then explicitly
 requested restoring their existing HackPton admin membership **persistently**.
@@ -905,7 +905,7 @@ The audited membership routine restored that exact account/project role; the
 existing recipient verification became valid again. The line, assignment
 generation, provider binary and other projects/lines were unchanged.
 
-Backend live activation: `cc7e5656-802c-4d7e-90a9-c237db5e57f4` (SUCCESS).
+Backend live activation: `<deployment-id>` (SUCCESS).
 The fresh database was initialized through the adapter's verified retained event
 anchor before activation, without replaying earlier messages. The earlier no-camera
 foreground bridge was closed cleanly; a fresh same-chat v2 bridge registered the
@@ -948,11 +948,11 @@ The user explicitly approved deploying ClawdTime and finishing Mac pairing.
 The backend and media release is now deployed; **runtime remains standby** with
 live traffic disabled. No setup-test notice, message, FaceTime call, capture lease
 or OS input was submitted. The native provider upgrade remains withdrawn.
-9741 remains in HackPton with assignment generation 4 and no competing connector;
+0100 remains in HackPton with assignment generation 4 and no competing connector;
 no Chert provider software, line assignment or other shared line was changed.
 
-- Backend: `41f8ee37-ab4b-4ded-b852-dae6f33c57e4`, SUCCESS, version 0.4.0.
-- Media: `b8f97d2c-3871-42e4-afb5-d415745949ec`, SUCCESS, healthy,
+- Backend: `<deployment-id>`, SUCCESS, version 0.4.0.
+- Media: `<deployment-id>`, SUCCESS, healthy,
   gateway connected, zero active sessions.
 - Companion: 0.4.0/build 5 installed at the existing stable app path. Existing
   helper/gateway configuration, keys, receipt histories and control policy were
@@ -1004,7 +1004,7 @@ November 16, 2026 · Real Finder sharing accepted locally · No FaceTime accepta
 ## Current demo preparation — November 17, 2026
 
 The native provider upgrade is **dropped**. Its candidate is marked withdrawn in
-the private preparation record; do not install it. Keep the existing 9741 line
+the private preparation record; do not install it. Keep the existing 0100 line
 within HackPton and preserve its provider service and assignment.
 
 ClawdTime now supports explicit `textTransport: "standard_once"`. It verifies
@@ -1029,7 +1029,7 @@ The current companion was release-built as **0.4.0/build 5** with strict local
 signature verification; packaging now derives the version from package.json.
 It is ad-hoc signed and has not been installed or release-qualified.
 
-An owner-only 9741 configuration draft is staged with live traffic disabled and
+An owner-only 0100 configuration draft is staged with live traffic disabled and
 source ownership deliberately uncommitted. Six GET-only adapter preparation
 requests in an in-memory store verified exact identity, retained event boundary,
 project-scoped line, availability, worker heartbeat and media/gateway health.
@@ -1042,7 +1042,7 @@ The matched source archive, hash manifest and companion are retained privately
 under `prod-demo-release` in the dated recovery directory. They contain source
 and build artifacts only, not runtime records or credentials. Remaining rollout:
 activate matching ClawdTime backend/media and local camera components; use a new
-9741 database/configuration while retaining the old pair together; claim a fresh
+0100 database/configuration while retaining the old pair together; claim a fresh
 exact-line Mac pairing via the operator route without sending a setup-test notice;
 then verify same-chat readiness. A FaceTime demo requires separate call permission.
 No provider software, installed service, deployment, line assignment or old record
@@ -1271,21 +1271,21 @@ capture was copied into the repository.
 
 **Superseding decision:** the user dropped the native messaging upgrade. The
 prepared provider worker/helper candidate is withdrawn and must not be installed.
-Use the existing 9741/HackPton service and adapt ClawdTime's selected text
+Use the existing 0100/HackPton service and adapt ClawdTime's selected text
 transport locally. Preserve ambiguous delivery as unknown; do not automatically
 resubmit it or fall back to another send route. Strict receipt lookup remains
 appropriate for the old strict adapter but is not a universal camera/CUA
 requirement. Continue production-demo preparation without a FaceTime call.
 
-**Latest user correction:** use the existing service number ending **9741**;
+**Latest user correction:** use the existing service number ending **0100**;
 do not reassign any line. The proposed alternate-line/provider-software repair
-was withdrawn and never executed. Read-only verification found that 9741 is
+was withdrawn and never executed. Read-only verification found that 0100 is
 enabled and available with a fresh worker heartbeat. Its current customer
 project and assignment audit identify HackPton; the ClawdTime customer project
 has no assigned line. The audit's reservation extends through November 18.
 The five saved Mac connections inspected contain only older line identities,
-not 9741. The prior recovery credential therefore does **not** establish a
-9741 connection. The user subsequently confirmed that HackPton is the intended
+not 0100. The prior recovery credential therefore does **not** establish a
+0100 connection. The user subsequently confirmed that HackPton is the intended
 project and identified the prior “Compare Argos with ClawdTime” chat. No updated
 prompt is needed. That history and the operational Argos README establish the
 successful November 16 verification/audio/synthetic-camera test and its isolated
@@ -1294,15 +1294,15 @@ No reassignment, provider modification, call, message, or credential relabeling
 was performed during this follow-up. The connector, transport, and Mac agents
 independently reviewed recovery prerequisites.
 
-Authenticated GET probes using the existing protected 9741 configuration now
+Authenticated GET probes using the existing protected 0100 configuration now
 confirm both the exact healthy native identity and project-scoped Calls access:
 HTTP 200, matching line/phone, available and unoccupied. The receipt lookup
 required by ClawdTime returns generic HTTP 404 `Not found`, instead of the
 receipt protocol's `found: false` response. Native status reports no trusted
 message bridge installed. This is an integration compatibility gap, not a failed
 line assignment or a failure of the earlier Argos verification test. The working
-9741 messaging service and callback configuration were left unchanged. The live
-ClawdTime backend has not been rebound, and this Mac is not yet paired to 9741.
+0100 messaging service and callback configuration were left unchanged. The live
+ClawdTime backend has not been rebound, and this Mac is not yet paired to 0100.
 
 Local transport preflight now checks `native_text_receipts` with an authenticated,
 GET-only lookup for a fresh native-valid operation origin. Only the exact
@@ -1314,7 +1314,7 @@ Regression coverage includes malformed responses and a real runtime tick with
 an unsupported receipt endpoint, asserting zero polls, sends and new effects.
 
 Validation: `npm run check` passed **923 tests in 58 files**, typecheck and build.
-An in-memory diagnostic using the built transport against the selected 9741
+An in-memory diagnostic using the built transport against the selected 0100
 service performed exactly two GETs: identity passed, receipt compatibility
 blocked, no cursor was created and no effect recorded. Read-only remote service
 metadata confirmed that the isolated launch agent uses the host's existing
@@ -1329,11 +1329,11 @@ and seven strict-text test targets passed; the worker was relinked with static
 Opus after read-only inspection found the target lacks the Homebrew Opus dylib.
 The isolated codec fixture and local signature checks passed. All 400 extracted
 source files still match the archive. Candidate artifacts, hashes and logs are
-retained privately under the dated recovery directory's `native-9741-candidate`.
+retained privately under the dated recovery directory's `native-0100-candidate`.
 They are development-signed, not installed or physically qualified. The actual
-9741 helper-load check and an account-specific guarded install/rollback remain
+0100 helper-load check and an account-specific guarded install/rollback remain
 necessary. The existing executable is shared: never overwrite it; any approved
-installation must use a new 9741-private path and change only its launch agent.
+installation must use a new 0100-private path and change only its launch agent.
 No security settings were changed. Independent connector review found no critical
 issue in the ClawdTime readiness fix; the final runtime suite passed 10 tests and
 the final build passed after its diagnostic wording update.
@@ -1373,9 +1373,9 @@ unused sentinel. The candidate is therefore **not qualified for ClawdTime's
 receipt-preserving message transport**. No test message was sent to discover this.
 
 The earlier Mac credential change passed project configuration/doctor checks
-for its original line only; it did not reconnect 9741. No provider line, shared allocation, worker,
+for its original line only; it did not reconnect 0100. No provider line, shared allocation, worker,
 deployment or runtime database was changed. Completing the line repair requires
-qualifying the existing 9741 service for ClawdTime's message receipt contract
+qualifying the existing 0100 service for ClawdTime's message receipt contract
 before an audited configuration change within HackPton. The alternate-line
 proposal is withdrawn. Do not solve it by moving any line, replaying old setup effects,
 rebinding an existing database, or switching to an unreceipted send endpoint.
@@ -1397,7 +1397,7 @@ private before/after file hashes, scoped read-only provider probes and diff chec
   changes. Staging/committing was deferred until the explicit joint-review request
   above. No push, deployment, live configuration, installed service change,
   provider session, Messages send or call occurred.
-- Apple Teams, chert-facetime and the operational argos-lab were not modified.
+- The source project, the sibling private repository and the operational private lab folder were not modified.
   No credentials, runtime/customer records, real screenshots or audio were copied.
 - Context was read across the coordinating lead and scoped Mac/media, connector
   and transport specialists, including the specified handoff, project plans,
@@ -1407,7 +1407,7 @@ private before/after file hashes, scoped read-only provider probes and diff chec
 
 ## Run and review locally
 
-From `/Users/garygao/clawdtime`:
+From `~/clawdtime`:
 
 ```sh
 npm run preview:camera

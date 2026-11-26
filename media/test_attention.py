@@ -1,4 +1,4 @@
-"""New ClawdTime boundaries, separate from retained Apple Teams regressions."""
+"""New ClawdTime boundaries, separate from retained source project regressions."""
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

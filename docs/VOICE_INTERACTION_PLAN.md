@@ -315,7 +315,7 @@ provider benchmark or competitor service merely to validate a documentation chan
 - [LiveKit turn handling](https://docs.livekit.io/agents/logic/turns/): evaluate existing interruption/turn components, pinned to compatible installed versions.
 - [LiveKit noise/echo handling](https://docs.livekit.io/cloud/noise-cancellation/): deployment/track compatibility must be checked; no cloud capability is presumed provisioned.
 - [Python asyncio blocking work](https://docs.python.org/3/library/asyncio-task.html#asyncio.to_thread): distinguish blocking I/O from CPU work when protecting the audio loop.
-- [FaceTimeOS audio interruption](https://github.com/dylanelu/FaceTimeOS/blob/97745aa62d37923a8dc8ccc5168a36797975bf65/backend/call.py), [utterance processing](https://github.com/dylanelu/FaceTimeOS/blob/97745aa62d37923a8dc8ccc5168a36797975bf65/backend/main.py), and [Agent S loop](https://github.com/dylanelu/FaceTimeOS/blob/97745aa62d37923a8dc8ccc5168a36797975bf65/Agent-S/src/s3/app.py): source mechanisms, not comparative latency or production qualification.
+- FaceTimeOS audio interruption, utterance processing, and Agent S loop: source mechanisms, not comparative latency or production qualification.
 
 Borrow designs; inspect each file's provenance/license before copying code. The
 reviewed FaceTimeOS Agent-S/frontend licenses do not establish backend licensing.

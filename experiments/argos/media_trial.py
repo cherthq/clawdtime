@@ -323,7 +323,7 @@ async def run_media(settings, api_key, agent_id, *, smoke=True, seconds=30,
         conv = TrialConversation(ElevenLabs(api_key=api_key, timeout=10), agent_id,
             requires_auth=True, audio_interface=audio, client_tools=client_tools,
             config=ConversationInitiationData(conversation_config_override={"agent": {
-                "prompt": {"prompt": prompt}, "first_message": "Hi Gary, this is Argos. Can you hear me and see the demo code card? You can ask me to zoom in on the learning rate."}}),
+                "prompt": {"prompt": prompt}, "first_message": "Hi there, this is Argos. Can you hear me and see the demo code card? You can ask me to zoom in on the learning rate."}}),
             callback_agent_response=lambda _: schedule(bump, "agent_responses"),
             callback_user_transcript=lambda _: schedule(bump, "user_transcripts"),
             callback_agent_response_correction=lambda _a, _b: schedule(bump, "corrections"),

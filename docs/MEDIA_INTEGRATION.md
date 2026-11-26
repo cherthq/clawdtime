@@ -912,7 +912,7 @@ provider, open a microphone or place a call.
 
 The implemented call workflow is agent-initiated outbound FaceTime. ClawdTime does
 not implement inbound FaceTime handling or an `auto_reject` route. Historical
-Apple Teams source-pause behavior does not establish either capability here.
+The source project's source-pause behavior does not establish either capability here.
 
 A screen-only setup test needs no click, typing or scroll exercise. A natural
 visibility report records handset evidence without ending ordinary conversation.
@@ -988,7 +988,7 @@ lease. The coordinator must block agent resume until its release/epoch handshake
 ## Read-only readiness (follow-up)
 
 `GET /health` includes `service:"clawdtime-media"` so a backend preflight can reject
-an accidental Apple Teams media origin even though its older API shape is similar.
+an accidental media origin of the source project even though its older API shape is similar.
 Authenticated `GET /devices/:deviceId/readiness/:memberId/:displayId` traverses
 only registered gateway origins and authenticated helper metadata. It returns
 `deviceId`, the exact requested `memberId`/string `displayId`, `viewAllowed`,
@@ -1624,7 +1624,7 @@ collision, failed-install closure and successful acknowledgment/closure.
 These checks make no live calls and are not physical acceptance.
 
 After a retained migration, source rollback keeps the new retention wrapper and
-preload. Set `CLAWDTIME_LINE_RELEASE=/Users/garygao/clawdtime-host/line` when
+preload. Set `CLAWDTIME_LINE_RELEASE=~/clawdtime-host/line` when
 starting the new immutable release's `line/host.sh`; this explicit environment
 value overrides the env-file release setting and is passed to both tmux keepers.
 The baseline agent then reads the original private env file while guarded dev
@@ -1763,7 +1763,7 @@ Official references checked against downloaded and isolated-installed 1.8.12 whe
 [GPT-Live delegation](https://developers.openai.com/api/docs/guides/live-delegation)
 and [LiveKit GPT-Live](https://docs.livekit.io/agents/models/realtime/gpt-live/).
 The earlier optional SDK deployment and authenticated silent-session
-qualification used successful media deployment `c197bb86-a198-4f72-906a-7f6ab1d97f83`,
+qualification used successful media deployment `<deployment-id>`,
 with source manifest SHA-256
 `1d658394b7349003083d7d1c1bd99cfd1e94d3c0b0006dd607432076eb5746aa`.
 Its qualified runtime is Python 3.12.16, LiveKit Agents/OpenAI plugin 1.8.12,
@@ -1790,8 +1790,8 @@ API/runtime compatibility only.
 
 Current release: source **0.3.1**, manifest SHA-256
 `9e50e96d4db5aa9746ca2e7d4679dcbd3eef073fa41628a8a0e151030cfa4768`.
-Backend deployment `2dc6293e-81c1-49a2-b97d-21c8249f8b36` and media deployment
-`b683019a-6bae-4ac2-be65-ec540cf1d22a` both reached SUCCESS. The lead verified
+Backend deployment `<deployment-id>` and media deployment
+`<deployment-id>` both reached SUCCESS. The lead verified
 matching hashes for 74 JavaScript, 18 Python and 10 public files; state and
 cursors were preserved. Post-deployment checks found zero active calls, media
 sessions, pending effects or unknown outcomes. Only the new qualification flags

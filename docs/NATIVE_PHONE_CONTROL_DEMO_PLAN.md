@@ -43,14 +43,14 @@ until that gate passes.
 
 ## 2. Baseline and evidence
 
-| Area                 | Reviewed state                                                                      | Consequence                                                                                                                                      |
-| -------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ClawdTime source     | `509063f5` on `improvements`; A–F implementation `783be952`                         | Source capability is not installed/deployed capability.                                                                                          |
-| Hosted ClawdTime     | Latest repository release record says backend/media `0814e50`                       | Fresh private inventory must establish actual deployed versions before rollout.                                                                  |
-| Dedicated line       | `LINE_HANDOFF.md` records Mia dedicated to ClawdTime; Lucas returned to Apple Teams | Resolve exact private project/line/worker/runtime/account identities; labels are not authorization. Do not transfer Lucas or replay its handoff. |
-| FaceTime checkout    | `f1d1d065ff906d4a1e16c49d84344bb506aa60ed`                                          | Existing uncommitted sibling work must be preserved; do not edit this checkout.                                                                  |
-| Screen-control draft | PR #654, `8d13e3d875437988bca6dc4c499ee5148ee07653`                                 | Diagnostic scaffolding, not completed mobile control. Recheck moving PR heads when implementing.                                                 |
-| Earlier drafts       | #606/#611 native screen-control stack; #629 phone UI module                         | Review selectively. Mac→Mac design and local CGEvent input do not establish native Mac→iPhone input.                                             |
+| Area                 | Reviewed state                                                                             | Consequence                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ClawdTime source     | `509063f5` on `improvements`; A–F implementation `783be952`                                | Source capability is not installed/deployed capability.                                                                                          |
+| Hosted ClawdTime     | Latest repository release record says backend/media `0814e50`                              | Fresh private inventory must establish actual deployed versions before rollout.                                                                  |
+| Dedicated line       | `LINE_HANDOFF.md` records line B dedicated to ClawdTime; line A returned to the source project | Resolve exact private project/line/worker/runtime/account identities; labels are not authorization. Do not transfer line A or replay its handoff. |
+| FaceTime checkout    | `f1d1d065ff906d4a1e16c49d84344bb506aa60ed`                                                 | Existing uncommitted sibling work must be preserved; do not edit this checkout.                                                                  |
+| Screen-control draft | PR #654, `8d13e3d875437988bca6dc4c499ee5148ee07653`                                        | Diagnostic scaffolding, not completed mobile control. Recheck moving PR heads when implementing.                                                 |
+| Earlier drafts       | #606/#611 native screen-control stack; #629 phone UI module                                | Review selectively. Mac→Mac design and local CGEvent input do not establish native Mac→iPhone input.                                             |
 
 Source authority is current implementation and tests, then dated operational
 evidence, then historical plans. Existing rollout instructions are not fresh
@@ -545,18 +545,18 @@ plans. Relevant source: `src/contracts.ts`, `src/transport/native.ts`,
 `src/control/execution.ts`, `src/app.ts`, `media/server.py`,
 `connectors/shared/{mcp,conversation,protocol,setup-session}.ts`.
 
-Upstream references:
+Upstream references, in a private repository:
 
 - API review paths at the FaceTime baseline: `control-plane/src/lib/facetime/{auth,http,call-action,sdk-feature-gates}.ts`, `control-plane/app/api/v1/calls/`, `Sources/ChertFaceTimeLab/ControlPlaneClient.swift`.
-- [Outbound caller-screen restriction](https://github.com/cherthq/facetime/blob/f1d1d065ff906d4a1e16c49d84344bb506aa60ed/control-plane/supabase/migrations/20261028143000_media_sessions.sql#L192), [caller-video source limitations](https://github.com/cherthq/facetime/blob/f1d1d065ff906d4a1e16c49d84344bb506aa60ed/docs/operations/BYOR_CALLER_VIDEO.md).
-- [Call-owner boundary](https://github.com/cherthq/facetime/blob/f1d1d065ff906d4a1e16c49d84344bb506aa60ed/docs/architecture/CONTROL_BACKEND.md), [signed helper installation constraints](https://github.com/cherthq/facetime/blob/f1d1d065ff906d4a1e16c49d84344bb506aa60ed/docs/operations/DYLIB_CONTROL_BACKEND.md).
+- Outbound caller-screen restriction, caller-video source limitations.
+- Call-owner boundary, signed helper installation constraints.
 
-- [Existing native helper](https://github.com/cherthq/facetime/blob/f1d1d065ff906d4a1e16c49d84344bb506aa60ed/helper/RsFacetimeInjected.m)
-- [Existing call controller](https://github.com/cherthq/facetime/blob/f1d1d065ff906d4a1e16c49d84344bb506aa60ed/Sources/ChertFaceTimeLab/NativeFaceTimeController.swift)
-- [Existing injected bridge](https://github.com/cherthq/facetime/blob/f1d1d065ff906d4a1e16c49d84344bb506aa60ed/Sources/ChertFaceTimeLab/FaceTimeBridgeIPC.swift)
-- [Draft #654](https://github.com/cherthq/facetime/pull/654), [screen observation](https://github.com/cherthq/facetime/blob/8d13e3d875437988bca6dc4c499ee5148ee07653/helper/NativeScreenObservation.inc)
-- [Earlier SDK design #606](https://github.com/cherthq/facetime/pull/606), [draft #611](https://github.com/cherthq/facetime/pull/611), [phone UI draft #629](https://github.com/cherthq/facetime/pull/629)
+- Existing native helper
+- Existing call controller
+- Existing injected bridge
+- Draft #654, screen observation
+- Earlier SDK design #606, draft #611, phone UI draft #629
 
-These links support source review, not claims of installed or physically verified
+These references support source review, not claims of installed or physically verified
 phone control. The implementation handoff must refresh moving branches and record
 actual test/deployment evidence separately.

@@ -1198,7 +1198,7 @@ describe("the page script: passwords", () => {
       placeholder: "Password",
     });
     const page = new FakePage(
-      input({ id: "user", type: "text", "aria-label": "User", value: "anish" }),
+      input({ id: "user", type: "text", "aria-label": "User", value: "ada" }),
       secret,
       input({ type: "text", name: "confirmPassword", value: "hunter3" }),
       input({

@@ -13,7 +13,7 @@ plan were prepared as uncommitted drafts on November 13, 2026. The user subseque
 
 ---
 
-Work in `/Users/garygao/clawdtime`. Implement work packages **A–F** in
+Work in `~/clawdtime`. Implement work packages **A–F** in
 `docs/FACETIMEOS_IMPROVEMENTS_PLAN.md`, test them, and commit the completed work on
 the branch named **`improvements`**. Never create or use a `codex/` branch.
 
@@ -109,7 +109,7 @@ input.** A prior call authorization in another conversation is not reusable here
 Use synthetic fixtures and isolated transports. Do not read or copy production
 databases/customer state to make tests convenient.
 
-Do not modify Apple Teams or sibling `chert-facetime`. Preserve unknown outcomes,
+Do not modify the source project or the sibling private repository. Preserve unknown outcomes,
 cursors, effect receipts and session identity. Do not loosen native tool restrictions,
 local Enable/Stop, freshness, control leases, executor epochs, policy revisions or
 explicit approval requirements. Read-only telemetry never authorizes input.

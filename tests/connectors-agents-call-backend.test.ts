@@ -580,7 +580,7 @@ describe("a conversation by phone, against the real backend in simulation", () =
 describe("one sentence by phone, against the real backend in simulation", () => {
   it("says it, ends when the person has heard it, and never calls twice for the same news", async () => {
     const line = await backend();
-    const sentence = "pratap has shown no sign of life for 12 minutes.";
+    const sentence = "ada has shown no sign of life for 12 minutes.";
     const telling = sayByCall(
       await openCall(line.link, "incident-abc"),
       sentence,

@@ -68,7 +68,7 @@ November 22, 2026. **Production deployed** from immutable source commit
 `b680e896eb512cfffe875066c3a6bcbfe89d0fe6`. The original proactive implementation
 is `952d49c`; retained delivery is `5b681c5`, with private-log and mapped-executable
 fixes in `4f993bd` and `b680e89`. Main includes these commits. The working baseline
-remains untouched in `/Users/garygao/clawdtime-host` at `e76989e`.
+remains untouched in `~/clawdtime-host` at `e76989e`.
 
 Validation and installation use Node `v24.22.1`, provider
 `@trychert/facetime@0.1.0-beta.19`, LiveKit agents `1.8.0`, and LiveKit server SDK
@@ -188,7 +188,7 @@ code retains the same records. It never opens or copies a production database:
 
 ```sh
 npx tsx scripts/verify-proactive-compatibility.ts \
-  /Users/garygao/.local/share/clawdtime-host/checkpoints/working-20261122T183852Z/runtime
+  ~/.local/share/clawdtime-host/checkpoints/working-20261122T183852Z/runtime
 ```
 
 This proves storage compatibility, not that old code enforces new policy. Before
@@ -254,14 +254,14 @@ task database, journal, screen or audio. Original journals remain under `.chert/
 The private rollback checkpoint remains:
 
 ```text
-/Users/garygao/.local/share/clawdtime-host/checkpoints/working-20261122T183852Z
+~/.local/share/clawdtime-host/checkpoints/working-20261122T183852Z
 ```
 
 Its verifier passed 28,613 entries, saved app signature and Git bundle checks.
 Use its `RESTORE.md` together with the retained-wrapper correction in
 [MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md): after migration, **keep the new
 retention host wrapper/preload**, selecting the old incoming agent through
-`CLAWDTIME_LINE_RELEASE=/Users/garygao/clawdtime-host/line`. Never revert to an
+`CLAWDTIME_LINE_RELEASE=~/clawdtime-host/line`. Never revert to an
 unguarded dev launcher. Disable new admissions, reconcile active/unknown effects,
 then restore source selection and desktop configuration at an idle boundary.
 Preserve the current database, original journals, all newer receipts and cursors.

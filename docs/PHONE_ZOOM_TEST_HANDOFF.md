@@ -13,18 +13,18 @@ file before another handoff. The normal Supervisor and phone host now run the
 corrected build, normal computer control is enabled, and test control is off.
 Do not call the full feature accepted.
 
-- Worktree: `/Users/garygao/clawdtime-spaces-zoom-integration`.
+- Worktree: `~/clawdtime-spaces-zoom-integration`.
 - Branch: `spaces-zoom-integration` (do not use a `codex/` branch).
 - Draft integration PR: <https://github.com/cherthq/clawdtime/pull/56>.
 - Installed implementation commit: `ae56d947b71f5b6e7cd9cee22304c6c88b7e0cb3`.
 - This handoff may be committed after that implementation commit; use the actual
   current Git head when recording subsequent work.
 - Main incorporated through `fc2bfe4c2815b5acc1429b7f32059543da085658` (PRs #54/#55,
-  including Anish's job-result reporting). Recheck remote changes before a later
+  including a teammate's job-result reporting). Recheck remote changes before a later
   integration; do not silently discard branch work or replace the test version.
 - PR #51 and #53 histories are integrated; PR #38 must remain untouched.
-- Do not change `/Users/garygao/apple-teams` or sibling `chert-facetime`.
-  Preserve unrelated work in `/Users/garygao/clawdtime` and other worktrees.
+- Do not change the source project or the sibling private repository.
+  Preserve unrelated work in `~/clawdtime` and other worktrees.
 
 Read these files, in order, before continuing:
 
@@ -247,31 +247,31 @@ These are local paths, not files to copy into Git. Never print credentials or
 copy runtime customer/conversation data into tracked fixtures. Recheck PIDs and
 ownership; do not reuse historical PIDs.
 
-| Component                      | Location / setting                                                                                   |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Isolated native app            | `/Users/garygao/Applications/ClawdTime Integration Test.app`                                         |
-| Test bundle ID                 | `com.clawdtime.supervisor.spaceszoomtest`                                                            |
-| Test native binary version     | `c9e4145`; unchanged by later JS/TS fixes                                                            |
-| Fixture root                   | `/Users/garygao/.local/share/clawdtime-spaces-zoom-test-20261121`                                    |
-| Fixture service                | `state/`, loopback port **13376**, disposable `project/`                                             |
-| Fixture control config         | `config/`; native worker configured, coding simulation, jobs off                                     |
-| Fixture phone files            | `phone/agent.jsonl`, `phone/dev.jsonl`, `handoff.json`, `retest-offsets.json`                        |
-| Fixture evidence               | `acceptance-state.json`, `physical-*.json`, `phone/call-trace.json`                                  |
-| Normal native app              | `/Users/garygao/Applications/ClawdTime Supervisor.app`                                               |
-| Normal service                 | port **13356**, state `/Users/garygao/.local/share/clawdtime-supervisor-anish/main-desktop-20261121` |
-| Normal control config          | `/Users/garygao/.local/share/clawdtime-supervisor-anish/supervisor`                                  |
-| Normal source                  | `/Users/garygao/.local/share/clawdtime/line-source`                                                  |
-| Normal phone state             | `/Users/garygao/.local/share/clawdtime/line`                                                         |
-| Normal tmux session            | `clawdtime-line`, windows `agent` and `dev`                                                          |
-| Test tmux session              | `clawdtime-line-integration-test`, windows `agent` and `dev`                                         |
-| Test phone agent name / health | `clawdtime-integration-test`, **8082**                                                               |
-| Normal phone health            | **8081**                                                                                             |
-| Node / Chert CLI               | `/Users/garygao/.nvm/versions/node/v24.22.1/bin/`                                                    |
+| Component                      | Location / setting                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| Isolated native app            | `~/Applications/ClawdTime Integration Test.app`                                         |
+| Test bundle ID                 | `com.clawdtime.supervisor.spaceszoomtest`                                               |
+| Test native binary version     | `c9e4145`; unchanged by later JS/TS fixes                                               |
+| Fixture root                   | `~/.local/share/clawdtime-spaces-zoom-test-20261121`                                    |
+| Fixture service                | `state/`, loopback port **13376**, disposable `project/`                                |
+| Fixture control config         | `config/`; native worker configured, coding simulation, jobs off                        |
+| Fixture phone files            | `phone/agent.jsonl`, `phone/dev.jsonl`, `handoff.json`, `retest-offsets.json`           |
+| Fixture evidence               | `acceptance-state.json`, `physical-*.json`, `phone/call-trace.json`                     |
+| Normal native app              | `~/Applications/ClawdTime Supervisor.app`                                               |
+| Normal service                 | port **13356**, state `~/.local/share/clawdtime-supervisor-owner/main-desktop-20261121` |
+| Normal control config          | `~/.local/share/clawdtime-supervisor-owner/supervisor`                                  |
+| Normal source                  | `~/.local/share/clawdtime/line-source`                                                  |
+| Normal phone state             | `~/.local/share/clawdtime/line`                                                         |
+| Normal tmux session            | `clawdtime-line`, windows `agent` and `dev`                                             |
+| Test tmux session              | `clawdtime-line-integration-test`, windows `agent` and `dev`                            |
+| Test phone agent name / health | `clawdtime-integration-test`, **8082**                                                  |
+| Normal phone health            | **8081**                                                                                |
+| Node / Chert CLI               | `~/.nvm/versions/node/v24.22.1/bin/`                                                    |
 
 The normal native app/service has not been replaced or restarted. Both TCC grants
 were previously confirmed for the isolated test app, and its binary identity has
 not changed. Do not ask for grants again unless a fresh check actually fails.
-The older root `clawdtime-supervisor-anish/desktop-panel.json` pointing to port
+The older root `clawdtime-supervisor-owner/desktop-panel.json` pointing to port
 13346 is stale; use the normal state path in the table.
 
 Private helper scripts in fixture `phone/`:
@@ -295,8 +295,8 @@ Private helper scripts in fixture `phone/`:
 
 Protected configuration references (read only into memory, never print/copy):
 
-- Phone env: `/Users/garygao/.local/share/clawdtime/line-source/line/.env.local`.
-- Desktop model credential: `/Users/garygao/.local/share/clawdtime-supervisor-anish/model-credentials.json`.
+- Phone env: `~/.local/share/clawdtime/line-source/line/.env.local`.
+- Desktop model credential: `~/.local/share/clawdtime-supervisor-owner/model-credentials.json`.
 - Provider CLI credential store: `~/.chert` (or configured `CHERT_HOME`).
 - Fixture panel token: fixture `state/desktop-panel.json`.
 

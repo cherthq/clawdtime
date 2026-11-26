@@ -125,13 +125,13 @@ checkpoint. Existing worktrees and uncommitted drafts are preserved.
 
 The user approved this plan. This handoff session creates the directory and planning documents only; it does not implement the application, install a helper, create hosting, or change live traffic. The next coding session should context itself and execute the plan using agent teams.
 
-- New project: `/Users/garygao/clawdtime`.
-- Source project: `/Users/garygao/apple-teams`.
+- New project: `~/clawdtime`.
+- Source project: a private repository (`<private-repo>`).
 - Audited source baseline: `be47b11fe1317c4747db4121bec37896998b5201` on `main`.
-- Source remote: `https://github.com/cherthq/apple-teams.git`.
-- Apple Teams was clean at handoff. Preserve any subsequent changes and active worktrees.
+- Source remote: the same private repository.
+- The source project was clean at handoff. Preserve any subsequent changes and active worktrees.
 - The new directory initially contains this plan and `SESSION_PROMPT.md`. No new Git repository, remote, package publication, services, or runtime state has been created by this handoff.
-- Read applicable parent instructions and create project-specific `AGENTS.md` during implementation. `/Users/garygao/AGENTS.md` references `orangeslice-docs/AGENTS.md`; those service instructions apply when those services are used, not as a reason to introduce unrelated dependencies.
+- Read applicable parent instructions and create project-specific `AGENTS.md` during implementation. `~/AGENTS.md` references the `AGENTS.md` of a private repository; those service instructions apply when those services are used, not as a reason to introduce unrelated dependencies.
 - The user's approval covers the agreed implementation scope. Do not repeatedly ask for authorization already given. Separate that authorization from prerequisites that still need evidence: exact line identity, an idle handoff window, supported agent APIs, signing credentials, and any genuinely new scope or paid commitment.
 
 ## Product decision
@@ -140,7 +140,7 @@ The user approved this plan. This handoff session creates the directory and plan
 
 ClawdTime connects an existing agent to its human through iMessage and FaceTime. The agent works in its usual environment, calls when it needs help or has something to show, displays the relevant screen, receives spoken or text feedback, and continues. Human-directed computer use is part of the first demo.
 
-Apple Teams remains the group-first product: group conversations, shared context, scheduling, notes, and group calls. ClawdTime is a separate product and codebase for agent-to-human attention, visual oversight, and remote intervention. Group workflows can be introduced later without forcing them into the first coding demo.
+The source project remains the group-first product: group conversations, shared context, scheduling, notes, and group calls. ClawdTime is a separate product and codebase for agent-to-human attention, visual oversight, and remote intervention. Group workflows can be introduced later without forcing them into the first coding demo.
 
 The user specifically requested that a human can direct the agent to act through CUA as a default capability. Interpret that as available during an authorized session after explicit pairing and macOS permissions, without a confirmation-code ritual for every ordinary click/type/scroll request. It does not mean silently granting Accessibility, permanently capturing the screen, overriding local Stop, or bypassing the connected agent's permission policy.
 
@@ -190,13 +190,13 @@ Basic session feedback and CUA over Messages are MVP. General initiation of arbi
 - Reports/articles: layout and content review before release.
 - Browsing/buying: review a cart before a specifically authorized checkout.
 - Schedulers/watchers: bring an event requiring attention to the human.
-- Groups: later, work with Apple Teams-style group conversations and group FaceTime.
+- Groups: later, work with group conversations and group FaceTime in the style of the source project.
 
 Do not advertise email sending, video editing, checkout, watchers, or group screen control as implemented merely because the underlying computer-control primitives exist.
 
 ## Existing evidence and gaps
 
-These are dated observations from Apple Teams, not a fresh health check of ClawdTime.
+These are dated observations from the source project, not a fresh health check of ClawdTime.
 
 | Capability | Existing evidence | What ClawdTime must add or verify |
 | --- | --- | --- |
@@ -214,7 +214,7 @@ These are dated observations from Apple Teams, not a fresh health check of Clawd
 
 Earlier live inspection on November 11 found: backend view/control/video/AI-task gates enabled; media healthy with gateway connected; one local Mac/display registered; Screen Recording and Accessibility granted; helper locally disarmed; no active calls. Tailscale was running, but the configured helper used loopback and the gateway used outbound WSS. Recheck everything before a live test.
 
-The recorded source validation was 546 tests across 51 files, TypeScript/build and formatting passing. Those are Apple Teams results, not ClawdTime results. GitHub Actions was blocked before execution by account billing/spending restrictions; do not label those runs passed.
+The recorded source validation was 546 tests across 51 files, TypeScript/build and formatting passing. Those are results of the source project, not ClawdTime results. GitHub Actions was blocked before execution by account billing/spending restrictions; do not label those runs passed.
 
 ### Current transport and device boundaries to retain
 
@@ -232,7 +232,7 @@ The background companion may remain connected and ready for requests. That is di
 
 ## Phase 1 — independent project foundation
 
-1. Use `main` in `/Users/garygao/clawdtime`, or a generic descriptive branch name when isolation is needed. Never create or use `codex/` branches. Preserve these planning files.
+1. Use `main` in `~/clawdtime`, or a generic descriptive branch name when isolation is needed. Never create or use `codex/` branches. Preserve these planning files.
 2. Record the source baseline and a migration manifest of copied files and modifications.
 3. Retain the established TypeScript, Python, and Swift stack initially. This is extraction/adaptation of an established system, not a framework rewrite. Optional eve compatibility in the source is not a reason to make eve a new MVP dependency.
 4. Create project-specific `AGENTS.md`, `.gitignore`, config examples, local simulation commands, test commands, and build scripts.
@@ -274,7 +274,7 @@ clawdtime/
 
 ## Phase 2 — selective migration
 
-| Apple Teams source | Retain/adapt | Boundary |
+| Source project path | Retain/adapt | Boundary |
 | --- | --- | --- |
 | `src/chert/` | Messaging, outbound calls, authenticated callbacks, native result reconciliation | Introduce ClawdTime ownership/session interfaces; do not duplicate active ownership of the live line |
 | `media/` | Media bridge, speech/transcription, screen video, captions/status scenes, cleanup | Independent service/config and retained outcome semantics |
@@ -283,12 +283,12 @@ clawdtime/
 | `src/devices.ts`, `src/device-tasks.ts` | Screen selection, CUA, fresh-frame validation, single-action vision planning | Extract the domain dependencies; preserve deterministic authorization |
 | `src/store.ts`, `src/security.ts`, worker/receipt patterns | Transactions, durable jobs, encryption, deduplication | Build a smaller ClawdTime domain instead of importing the entire workspace engine |
 | `src/agent-model.ts`, relevant brain/turn code | Only model/provider and narration/planning pieces actually needed | Keep coding execution in the connected agent; no accidental provider/model migration |
-| `scripts/readiness.ts`, monitoring/backup/recovery | Operational verification and recovery | Adapt paths and services; do not overwrite installed Apple Teams agents |
+| `scripts/readiness.ts`, monitoring/backup/recovery | Operational verification and recovery | Adapt paths and services; do not overwrite installed agents of the source project |
 | Matching tests in `tests/`, `media/`, `gateway/`, `devices/` | Permission, isolation, replay, failure, call, and device contracts | Port relevant assertions; do not claim source test counts as new-project coverage |
 
 Do not wholesale copy `.data`, `.env`, databases, provider grants, session tokens, recovery copies, customer history, native receipt ledgers, build products, `node_modules`, or installed helper configuration. Migrate code, not production customer state.
 
-Leave Google Calendar, team management, group enrollment/scheduling, GitHub/Linear/Notion business tools, and the full context dashboard in Apple Teams. If a desired module imports those components, extract the small shared interface rather than importing the whole dependency chain.
+Leave Google Calendar, team management, group enrollment/scheduling, GitHub/Linear/Notion business tools, and the full context dashboard in the source project. If a desired module imports those components, extract the small shared interface rather than importing the whole dependency chain.
 
 Preserve required licensing/provenance. Do not perform a blanket search-and-replace across retained protocol fields or receipt IDs; identifiers with operational meaning require explicit migration decisions.
 
@@ -372,40 +372,40 @@ If an adapter cannot establish that coordination, refuse the conflicting action 
 
 Keep the connector/gateway ready in the background after pairing. Screen capture/control stays gated by explicit local permissions and session authorization. Retain visible sharing/control indicators and a local kill switch. Lock, sleep, Stop, or revoked pairing must invalidate active control; resuming the app must not revive stopped leases.
 
-## Phase 5 — reuse the Liam Davis test number
+## Phase 5 — reuse the another alias test number
 
-The user explicitly requested the same Liam Davis number for testing. The previous session did not verify which private provider identity that label denotes. **Do not guess the number or equate a display name with a line binding.** Resolve the exact identity through existing private operator configuration and read-only provider evidence.
+The user explicitly requested the same another alias number for testing. The previous session did not verify which private provider identity that label denotes. **Do not guess the number or equate a display name with a line binding.** Resolve the exact identity through existing private operator configuration and read-only provider evidence.
 
-One application owns the line at a time. Do not start an independent ClawdTime poller/dispatcher while Apple Teams still processes that line.
+One application owns the line at a time. Do not start an independent ClawdTime poller/dispatcher while the source project still processes that line.
 
 ### Preflight
 
 - Record the exact native and logical line binding, current application owner/routing, current cursor/anchor, active calls, pending jobs, and unknown outcomes privately.
 - Complete local/simulated migration and connector checks first.
 - Keep ClawdTime live traffic off until the handoff prerequisites are satisfied.
-- Prepare rollback with the exact previous configuration and event-boundary treatment. Preserve all Apple Teams ledgers.
+- Prepare rollback with the exact previous configuration and event-boundary treatment. Preserve all ledgers of the source project.
 
 ### Handoff
 
 1. Use an idle test window; do not interrupt an active call or abandon unresolved native actions.
-2. Drain and pause Apple Teams ownership of this specific line.
+2. Drain and pause the source project's ownership of this specific line.
 3. Establish a safe ClawdTime event baseline so historical messages cannot become new commands.
 4. Provision a fresh ClawdTime test account bound to the verified line and allowlisted tester.
 5. Enable ClawdTime and conduct the supervised demo.
-6. Either retain ClawdTime ownership or restore Apple Teams according to the agreed testing outcome.
+6. Either retain ClawdTime ownership or restore the source project according to the agreed testing outcome.
 
-This temporarily pauses Apple Teams use of the selected line. If that is no longer acceptable due to current activity/ownership, complete all independent work and ask only about that concrete handoff conflict.
+This temporarily pauses the source project's use of the selected line. If that is no longer acceptable due to current activity/ownership, complete all independent work and ask only about that concrete handoff conflict.
 
 ### Rollback
 
 - Disable ClawdTime dispatch and confirm call/media/device cleanup.
 - Preserve uncertain outcomes and action receipts; do not erase state to force retries.
-- Reconcile events received during the handoff interval before restoring Apple Teams. Restoring a stale cursor alone risks replaying already-handled messages.
+- Reconcile events received during the handoff interval before restoring the source project. Restoring a stale cursor alone risks replaying already-handled messages.
 - Restore only the approved line routing/configuration and verify a healthy integration heartbeat without generating unsolicited customer effects.
 
 Do not copy production customer data to make handoff convenient. Reuse only explicitly needed transport access through protected configuration, and generate fresh application encryption/authentication secrets. No additional number is required for the internal MVP.
 
-Do not edit or deploy sibling `chert-facetime` under this plan. The integration should use existing supported APIs. If implementation discovers a missing upstream capability, document it and request scope expansion rather than modifying the sibling silently.
+Do not edit or deploy the sibling private repository under this plan. The integration should use existing supported APIs. If implementation discovers a missing upstream capability, document it and request scope expansion rather than modifying the sibling silently.
 
 ## Phase 6 — implement with agent teams
 
@@ -475,7 +475,7 @@ Do not hide a failed feasibility spike behind a mock. If a supported agent surfa
 
 Internal demo packaging may be locally signed with its limitations documented. External download testing requires distribution signing/notarization and a clean installation check; lack of credentials must be reported, not presented as a completed public installer.
 
-Separate ClawdTime backend/media services and volumes should start in standby. Do not deploy ClawdTime over Apple Teams. No new paid hosting plan, domain, package namespace, or external account is implied to exist already; surface a concrete prerequisite if required.
+Separate ClawdTime backend/media services and volumes should start in standby. Do not deploy ClawdTime over the source project. No new paid hosting plan, domain, package namespace, or external account is implied to exist already; surface a concrete prerequisite if required.
 
 ## README requirements and proposed content
 

@@ -48,7 +48,7 @@ For the prepared configuration, the read-only command is:
 npx tsx scripts/audio-qualification.ts --config .data/audio-test-operator.json --check
 ```
 
-Only after Gary explicitly says he is ready for **one** call, run in a visible
+Only after the owner explicitly says they are ready for **one** call, run in a visible
 foreground terminal:
 
 ```sh
