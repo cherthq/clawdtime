@@ -25,7 +25,9 @@
  *   when that is not enough. A tool result is never sent without the call
  *   that asked for it.
  * - An abort ends the loop at once: a waiting request of the model is left,
- *   and no call after it starts.
+ *   tools that only read are left as they run, and no call after it starts.
+ *   A tool with an effect gets the abort as its signal and ends first, so
+ *   that no effect of it is left unknown.
  */
 
 export interface LoopCall {
@@ -435,12 +437,22 @@ export async function runAgentLoop(
           content,
         });
         index++;
+        if (signal.aborted) return finish("aborted");
         continue;
       }
       let end = index;
       while (end < round.length && isRead(round[end]!)) end++;
       const batch = round.slice(index, end);
-      const results = await Promise.all(batch.map((call) => runOne(call)));
+      let results: string[];
+      try {
+        // A read changes nothing: at the abort its answer is not waited for.
+        results = await untilAbort(
+          Promise.all(batch.map((call) => runOne(call))),
+          signal,
+        );
+      } catch {
+        return finish("aborted");
+      }
       batch.forEach((call, at) =>
         messages.push({
           role: "tool",

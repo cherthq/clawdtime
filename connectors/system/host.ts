@@ -3,12 +3,12 @@
  *
  * Every probe and every action of `connectors/system/` goes through a
  * `SystemHost`, so tests replace it with made-up outputs. The real one runs a
- * program with `execFile`: no shell, a fixed path, its own short timeout and a
- * cap on what it may print. The child gets a fixed environment with a path
+ * program with `execFile` (or `spawn`, to keep the end of a long output): no
+ * shell, a fixed path, its own short timeout and a cap on what it may print. The child gets a fixed environment with a path
  * and the C locale only, so no variable of ClawdTime reaches it, and no probe
  * reads an environment.
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   closeSync,
   fstatSync,
@@ -23,6 +23,12 @@ export interface RunLimits {
   timeoutMs: number;
   /** The most bytes of output. More is cut, and the result says so. */
   maxBytes: number;
+  /**
+   * Which end of a longer output stays: "head" (the default) stops the
+   * program at the cap; "tail" reads it to its end and keeps the newest
+   * bytes, from the first whole line on. A log is read with "tail".
+   */
+  keep?: "head" | "tail";
 }
 
 export interface RunResult {
@@ -31,7 +37,7 @@ export interface RunResult {
   stdout: string;
   /** Stopped by its timeout. */
   timedOut: boolean;
-  /** The output reached its cap: what came after is not here. */
+  /** The output reached its cap: what came after it (or before it, with "tail") is not here. */
   cut: boolean;
   /** The program is not on this Mac. */
   missing: boolean;
@@ -82,35 +88,109 @@ const childEnv = (home: string) => ({
   HOME: home,
 });
 
+/** Runs a program to its end, or to its timeout, and keeps the last bytes of what it prints. */
+function execTail(
+  home: string,
+  file: string,
+  args: readonly string[],
+  limits: RunLimits,
+): Promise<RunResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: RunResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let dropped = false;
+    let timedOut = false;
+    const child = spawn(file, [...args], {
+      env: childEnv(home),
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, limits.timeoutMs);
+    child.stdout.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      // Only the newest bytes stay.
+      while (size > limits.maxBytes && chunks.length) {
+        const over = size - limits.maxBytes;
+        const first = chunks[0]!;
+        if (first.length <= over) {
+          chunks.shift();
+          size -= first.length;
+        } else {
+          chunks[0] = first.subarray(over);
+          size -= over;
+        }
+        dropped = true;
+      }
+    });
+    child.on("error", (error: NodeJS.ErrnoException) =>
+      finish({
+        code: null,
+        stdout: "",
+        timedOut: false,
+        cut: false,
+        missing: error.code === "ENOENT",
+      }),
+    );
+    child.on("close", (code) => {
+      let stdout = Buffer.concat(chunks).toString("utf8");
+      // The first line was cut in its middle: it goes.
+      if (dropped) {
+        const end = stdout.indexOf("\n");
+        stdout = end < 0 ? "" : stdout.slice(end + 1);
+      }
+      finish({
+        code: timedOut ? null : code,
+        stdout,
+        timedOut,
+        cut: dropped,
+        missing: false,
+      });
+    });
+  });
+}
+
 export function realExec(home: string): Exec {
   return (file, args, limits) =>
-    new Promise((resolve) => {
-      execFile(
-        file,
-        [...args],
-        {
-          encoding: "utf8",
-          timeout: limits.timeoutMs,
-          maxBuffer: limits.maxBytes,
-          killSignal: "SIGKILL",
-          env: childEnv(home),
-          windowsHide: true,
-        },
-        (error, stdout) => {
-          const failure = error as
-            (Error & { code?: unknown; killed?: boolean }) | null;
-          const code = failure?.code;
-          const cut = code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
-          resolve({
-            code: failure ? (typeof code === "number" ? code : null) : 0,
-            stdout: typeof stdout === "string" ? stdout : "",
-            timedOut: !!failure && failure.killed === true && !cut,
-            cut,
-            missing: code === "ENOENT",
-          });
-        },
-      );
-    });
+    limits.keep === "tail"
+      ? execTail(home, file, args, limits)
+      : new Promise((resolve) => {
+          execFile(
+            file,
+            [...args],
+            {
+              encoding: "utf8",
+              timeout: limits.timeoutMs,
+              maxBuffer: limits.maxBytes,
+              killSignal: "SIGKILL",
+              env: childEnv(home),
+              windowsHide: true,
+            },
+            (error, stdout) => {
+              const failure = error as
+                (Error & { code?: unknown; killed?: boolean }) | null;
+              const code = failure?.code;
+              const cut = code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+              resolve({
+                code: failure ? (typeof code === "number" ? code : null) : 0,
+                stdout: typeof stdout === "string" ? stdout : "",
+                timedOut: !!failure && failure.killed === true && !cut,
+                cut,
+                missing: code === "ENOENT",
+              });
+            },
+          );
+        });
 }
 
 export const realFiles: ReportFiles = {

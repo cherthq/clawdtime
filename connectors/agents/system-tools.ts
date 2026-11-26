@@ -7,10 +7,12 @@
  * through the ask policy in `connectors/system/act.ts`: a force quit asks
  * first, and only the owner's own clear yes in a newer message lets it go.
  * A yes that already answered another question in the same message counts
- * for nothing here: one message answers one question.
+ * for nothing here: one message answers one question. A plain yes answers
+ * the newest question that the owner saw: a force quit asked before a newer
+ * question is asked again.
  */
 import { realHost } from "../system/host.js";
-import { ProcessDesk, processActions } from "../system/act.js";
+import { ProcessDesk, processActions, type ProcessAsk } from "../system/act.js";
 import { lookKinds, systemLook } from "../system/look.js";
 import { SystemProbes } from "../system/probes.js";
 import type { LoopTool } from "./agent-loop.js";
@@ -28,7 +30,11 @@ const number = (description: string) => ({ type: "number", description });
 export function systemTools(
   desk: ProcessDesk,
   turn: ChatTurn,
-  options: { computerBusy: () => boolean },
+  options: {
+    computerBusy: () => boolean;
+    /** False when the owner's newest words answer another question than this one. */
+    mayDecide?: (ask: ProcessAsk) => boolean;
+  },
 ): LoopTool[] {
   return [
     {
@@ -67,18 +73,19 @@ export function systemTools(
         additionalProperties: false,
       },
       effect: true,
-      run: (args) =>
+      run: (args, signal) =>
         desk.act(
           { action: args.action, pid: args.pid, name: args.name },
           {
             // A yes that answered another question in this message is spent.
             words: turn.answered ? "" : turn.owner,
             at: turn.ownerAt,
+            ...(options.mayDecide ? { mayDecide: options.mayDecide } : {}),
             used: () => {
               turn.answered = true;
             },
           },
-          { background: options.computerBusy() },
+          { background: options.computerBusy(), signal },
         ),
     },
   ];

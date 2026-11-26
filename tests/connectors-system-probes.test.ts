@@ -92,6 +92,114 @@ describe("what comes out of a probe", () => {
   });
 });
 
+describe("credential flags and pairs", () => {
+  it("hides the value of a credential flag or pair that the checks alone miss", () => {
+    const hidden: [string, string, string][] = [
+      [
+        "/opt/homebrew/bin/sshpass",
+        "-p Riverchat2026 ssh admin@build.example",
+        "-p [hidden] ssh admin@build.example",
+      ],
+      [
+        "/opt/homebrew/bin/redis-cli",
+        "-a riverchat-pass -h 127.0.0.1",
+        "-a [hidden] -h 127.0.0.1",
+      ],
+      [
+        "/usr/local/bin/mysql",
+        "-uroot -pStonepad99 shop",
+        "-uroot -p [hidden] shop",
+      ],
+      [
+        "/usr/local/bin/docker",
+        "login -u sam -p Stonepadpassword registry.example",
+        "login -u sam -p [hidden] registry.example",
+      ],
+      [
+        "/usr/local/bin/node",
+        "server.js --password hunter22",
+        "server.js --password [hidden]",
+      ],
+      [
+        "/usr/local/bin/aws",
+        "configure set aws_secret_access_key wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+        "configure set aws_secret_access_key [hidden]",
+      ],
+      [
+        "/usr/local/bin/op",
+        "signin --session Xk2mVd9qLp",
+        "signin --session [hidden]",
+      ],
+      [
+        "/usr/local/bin/syncd",
+        "start pass=Riverchat2026 token=abc secret=xyz",
+        "start pass [hidden] token [hidden] secret [hidden]",
+      ],
+      [
+        "/usr/bin/curl",
+        "-u sam:Stonepad99 https://api.example",
+        "-u sam:[hidden] https://api.example",
+      ],
+    ];
+    for (const [program, args, out] of hidden)
+      expect(redactArguments(args, fakeHome, program), args).toBe(out);
+    // A header's value after its scheme, and redis-cli run by another program.
+    expect(
+      redactArguments(
+        "-H Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123 https://api.example",
+        fakeHome,
+        "/usr/bin/curl",
+      ),
+    ).toBe("-H Authorization: [hidden] [hidden] https://api.example");
+    expect(
+      redactArguments(
+        "-c redis-cli -a riverchat-pass ping",
+        fakeHome,
+        "/bin/sh",
+      ),
+    ).toBe("-c redis-cli -a [hidden] ping");
+    const kept: [string, string][] = [
+      ["/usr/bin/open", "-a Stonepad"],
+      ["/usr/bin/ssh", "-p 22 admin@build.example"],
+      ["/usr/bin/clang", "-pthread -O2 main.c"],
+      ["/bin/mkdir", "-p ~/Sync/new"],
+      ["/usr/local/bin/vite", "build --watch --port 4173"],
+    ];
+    for (const [program, args] of kept)
+      expect(redactArguments(args, fakeHome, program), args).toBe(args);
+  });
+
+  it("hides a credential pair or flag in a log line and keeps the rest of the line", () => {
+    expect(redactLine("auth ok user=sam pass=Riverchat2026", fakeHome)).toBe(
+      "auth ok user=sam pass [hidden]",
+    );
+    expect(
+      redactLine("session cookie sid=8f9a7b6c5d4e3f2a1b0c", fakeHome),
+    ).toBe("session cookie sid [hidden]");
+    expect(
+      redactLine(
+        "exec sshpass -p Riverchat2026 ssh admin@build.example",
+        fakeHome,
+      ),
+    ).toBe("exec sshpass -p [hidden] ssh admin@build.example");
+    expect(
+      redactLine(
+        "set aws_secret_access_key wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+        fakeHome,
+      ),
+    ).toBe("set aws_secret_access_key [hidden]");
+    expect(redactLine("session started for sam", fakeHome)).toBe(
+      "session started for sam",
+    );
+    expect(
+      redactLine(
+        "Upload failed: the server did not answer (timeout after 30 s)",
+        fakeHome,
+      ),
+    ).toBe("Upload failed: the server did not answer (timeout after 30 s)");
+  });
+});
+
 describe("the parsers", () => {
   it("reads every row of ps, its app and its time", () => {
     const rows = parsePs(fixture("ps-fields.txt"));
@@ -283,6 +391,45 @@ describe("logs", () => {
       "10:02:01 fault: [com.example.stonepad:store] Database is locked by another writer at ~/Library/Containers/com.example.stonepad/notes.db",
       "10:02:02 [com.example.stonepad:ui] Main thread blocked for 4200 ms",
     ]);
+  });
+
+  it("keeps the newest lines of a log that is longer than its cap", async () => {
+    const host = fakeHost();
+    const log = [
+      "Timestamp               Ty Process[PID:TID]",
+      ...Array.from(
+        { length: 4000 },
+        (_, index) =>
+          `2026-11-26 09:${String(55 + Math.floor(index / 1000)).padStart(2, "0")}:00.${String(index % 1000).padStart(3, "0")} Df Stonepad[4242:5fe3ad5] note ${index}`,
+      ),
+      "",
+    ].join("\n");
+    const exec = host.exec;
+    host.exec = async (file, args, limits) => {
+      if (file !== "/usr/bin/log") return exec(file, args, limits);
+      host.limits.push(limits);
+      // As a real program over a cap of 4 KB: the rest is cut, at the end that it keeps.
+      const cap = Math.min(limits.maxBytes, 4096);
+      const bytes = Buffer.from(log);
+      const kept =
+        limits.keep === "tail"
+          ? bytes.subarray(bytes.length - cap).toString()
+          : bytes.subarray(0, cap).toString();
+      return {
+        code: null,
+        stdout: kept,
+        timedOut: false,
+        cut: true,
+        missing: false,
+      };
+    };
+    const probes = new SystemProbes(host);
+    const found = await probes.logs("Stonepad", 5);
+    expect(found.cut).toBe(true);
+    expect(found.lines.at(-1)!.text).toBe("note 3999");
+    const { text } = await look({ what: "logs", name: "Stonepad" }, host);
+    expect(text).toMatch(/note 3999/);
+    expect(text).toMatch(/only its newest lines were read/);
   });
 
   it("reads the log of a pid by its executable's name", async () => {

@@ -134,15 +134,20 @@ describe("the process level in the chat", () => {
     expect(host.signals).toEqual([{ pid: 4242, signal: "SIGKILL" }]);
   });
 
-  it("does not use a yes that answered the computer task for a force quit", async () => {
+  it("gives a plain yes to the newest question, the force quit, and leaves the older computer question open", async () => {
     const computer = new FakeComputer()
       .run("send Sam the draft")
       .ask("approval", "Send this message to Sam?");
+    let later = () => {};
     const model = scriptedModel([
-      {
-        calls: [
-          call("process_act", { action: "force_quit", name: "Stonepad" }),
-        ],
+      () => {
+        // The model takes a moment: the force quit is asked after the computer's question.
+        later();
+        return {
+          calls: [
+            call("process_act", { action: "force_quit", name: "Stonepad" }),
+          ],
+        };
       },
       { text: "Force quit Stonepad? Say yes or no." },
       {
@@ -151,17 +156,165 @@ describe("the process level in the chat", () => {
           call("process_act", { action: "force_quit", name: "Stonepad" }),
         ],
       },
-      { text: "Sent." },
+      { text: "Force quit Stonepad." },
     ]);
     const { agent, host, clock } = setup({ model, computer });
+    later = () => {
+      clock.now += 1_000;
+    };
     await agent.answer([], "force quit Stonepad", "chat");
     clock.now += 15_000;
     await agent.answer([], "yes", "chat");
-    expect(computer.answers).toEqual(["yes"]);
+    expect(host.signals).toEqual([{ pid: 4242, signal: "SIGKILL" }]);
+    expect(computer.answers).toEqual([]);
+    expect(computer.waiting).toBe("approval");
+    expect(toolResult(model.requests[3]!, "answer_question")).toMatch(
+      /^Refused: The owner's "yes" answers the newest question they saw: "Force quit Stonepad/,
+    );
+  });
+
+  it("gives a plain yes to the computer task's question when it came after the force quit", async () => {
+    const computer = new FakeComputer().run("buy the Aero 7 headphones");
+    const model = scriptedModel([
+      {
+        calls: [
+          call("process_act", { action: "force_quit", name: "Stonepad" }),
+        ],
+      },
+      { text: "Force quit Stonepad (pid 4242)? Say yes or no." },
+      {
+        calls: [
+          call("process_act", { action: "force_quit", name: "Stonepad" }),
+        ],
+      },
+      { text: "It asks again." },
+    ]);
+    const { agent, host, clock } = setup({ model, computer });
+    await agent.answer([], "force quit Stonepad", "chat");
+    clock.now += 10_000;
+    computer.ask(
+      "approval",
+      "Click Place order on shop.example? It spends 48 dollars. Say yes or no.",
+    );
+    // The service reads the graph again every two seconds.
+    agent.refresh();
+    clock.now += 10_000;
+    await agent.answer([], "yes", "chat");
     expect(host.signals).toEqual([]);
     expect(toolResult(model.requests[3]!, "process_act")).toMatch(
-      /^Waiting for the owner's clear yes or no/,
+      /^Not done: the owner's "yes" answers another question/,
     );
+  });
+
+  it("takes a yes for an older question only when the owner names it", async () => {
+    const computer = new FakeComputer()
+      .run("send Sam the draft")
+      .ask("approval", "Send this message to Sam?");
+    let later = () => {};
+    const model = scriptedModel([
+      () => {
+        later();
+        return {
+          calls: [
+            call("process_act", { action: "force_quit", name: "Stonepad" }),
+          ],
+        };
+      },
+      { text: "Force quit Stonepad? Say yes or no." },
+      {
+        calls: [
+          call("answer_question", { answer: "yes, send it" }),
+          call("process_act", { action: "force_quit", name: "Stonepad" }),
+        ],
+      },
+      { text: "Sent it on. Stonepad still waits." },
+    ]);
+    const { agent, host, clock } = setup({ model, computer });
+    later = () => {
+      clock.now += 1_000;
+    };
+    await agent.answer([], "force quit Stonepad", "chat");
+    clock.now += 15_000;
+    await agent.answer([], "yes, send it", "chat");
+    expect(computer.answers).toEqual(["yes, send it"]);
+    expect(host.signals).toEqual([]);
+  });
+
+  it("does not give a yes that names an older question to the newer force quit", async () => {
+    const computer = new FakeComputer()
+      .run("send Sam the draft")
+      .ask("approval", "Send this message to Sam?");
+    let later = () => {};
+    const model = scriptedModel([
+      () => {
+        later();
+        return {
+          calls: [
+            call("process_act", { action: "force_quit", name: "Stonepad" }),
+          ],
+        };
+      },
+      { text: "Force quit Stonepad? Say yes or no." },
+      {
+        calls: [
+          call("process_act", { action: "force_quit", name: "Stonepad" }),
+          call("answer_question", { answer: "yes, send it" }),
+        ],
+      },
+      { text: "Sent it on. Stonepad still waits." },
+    ]);
+    const { agent, host, clock } = setup({ model, computer });
+    later = () => {
+      clock.now += 1_000;
+    };
+    await agent.answer([], "force quit Stonepad", "chat");
+    clock.now += 15_000;
+    await agent.answer([], "yes, send it", "chat");
+    expect(host.signals).toEqual([]);
+    expect(computer.answers).toEqual(["yes, send it"]);
+  });
+
+  it('lets the owner\'s "without saving" skip one question, for an app that they named', async () => {
+    const model = scriptedModel([
+      {
+        calls: [
+          call("process_act", { action: "force_quit", name: "Stonepad" }),
+          call("process_act", { action: "force_quit", name: "Riverchat" }),
+          call("process_act", { action: "force_quit", pid: 7000 }),
+        ],
+      },
+      { text: "Stonepad is gone. The others need your yes." },
+    ]);
+    const { agent, host } = setup({ model });
+    await agent.answer(
+      [],
+      "force quit Stonepad and Riverchat without saving",
+      "chat",
+    );
+    expect(host.signals).toEqual([{ pid: 4242, signal: "SIGKILL" }]);
+    const results = model.requests[1]!.messages.filter(
+      (message) => message.role === "tool",
+    ).map((message) => message.content);
+    expect(results[1]).toMatch(/^Not done yet: this needs the owner's yes/);
+    expect(results[2]).toMatch(/^Not done yet: this needs the owner's yes/);
+  });
+
+  it("ends the turn at the panel Stop while a look still runs", async () => {
+    const model = scriptedModel([
+      { calls: [call("system_look", { what: "processes" })] },
+      { text: "Stonepad is at full CPU." },
+    ]);
+    const { agent, host } = setup({ model });
+    // A look that never answers.
+    host.exec = () => new Promise(() => {});
+    const answer = agent.answer([], "why is my Mac so slow?", "chat");
+    await new Promise((done) => setTimeout(done, 5));
+    agent.abort();
+    const hung = new Promise((done) => setTimeout(() => done("hung"), 500));
+    expect(await Promise.race([answer, hung])).toEqual({
+      text: "Stopped.",
+      choices: [],
+    });
   });
 
   it("starts nothing in a turn where the owner said stop", async () => {

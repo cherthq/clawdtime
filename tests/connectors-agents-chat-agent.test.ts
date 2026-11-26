@@ -11,10 +11,15 @@ import {
   chatBrain,
   chatMode,
   trueAfterTheEnd,
+  trueClaims,
 } from "../connectors/agents/chat-agent.js";
-import { chatTools, effectTools } from "../connectors/agents/chat-tools.js";
+import {
+  chatTools,
+  effectTools,
+  unsaidStep,
+} from "../connectors/agents/chat-tools.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
-import { TaskGraph } from "../connectors/agents/task-graph.js";
+import { TaskGraph, type TaskNode } from "../connectors/agents/task-graph.js";
 import { Routines } from "../connectors/computer/routines.js";
 import { childEnvironment } from "../cli/task-desktop.js";
 import {
@@ -289,8 +294,8 @@ describe("the chat agent acts first", () => {
         id: "t",
         owner: "",
         ownerAt: now,
+        withheld: false,
         answered: false,
-        offered: "",
         said: [],
         via: "chat",
         stopTurn: false,
@@ -331,8 +336,8 @@ describe("the chat agent acts first", () => {
         id: "t",
         owner: "",
         ownerAt: now,
+        withheld: false,
         answered: false,
-        offered: "",
         said: [],
         via: "chat",
         stopTurn: false,
@@ -686,6 +691,188 @@ describe("turns that overlap", () => {
   });
 });
 
+describe("a reply that claims more than the task list", () => {
+  it("drops a claim that a task is done or bought while its node says it runs", async () => {
+    const computer = new FakeComputer();
+    const model = scriptedModel([
+      {
+        calls: [
+          call("computer_do", {
+            goal: "buy the Aero 7 headphones on shop.example",
+          }),
+        ],
+      },
+      { text: "Done. I ordered the Aero 7 headphones for 48 dollars." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const out = await agent.answer(
+      [],
+      "buy the Aero 7 headphones on shop.example",
+      "call",
+    );
+    expect(computer.state).toBe("running");
+    expect(out.text).not.toMatch(/\b(?:done|ordered)\b/i);
+    expect(out.text).toMatch(/^Working on: "buy the Aero 7 headphones/);
+  });
+
+  it("keeps the claim once the node says done", async () => {
+    const computer = new FakeComputer();
+    const submit = computer.submit.bind(computer);
+    computer.submit = async (id: string, text: string) => {
+      const out = await submit(id, text);
+      computer.finish("Ordered the Aero 7 headphones for 48 dollars.");
+      return out;
+    };
+    const model = scriptedModel([
+      {
+        calls: [
+          call("computer_do", {
+            goal: "buy the Aero 7 headphones on shop.example",
+          }),
+        ],
+      },
+      { text: "Done. I ordered the Aero 7 headphones for 48 dollars." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const out = await agent.answer(
+      [],
+      "buy the Aero 7 headphones on shop.example",
+      "chat",
+    );
+    expect(out.text).toBe(
+      "Done. I ordered the Aero 7 headphones for 48 dollars.",
+    );
+  });
+
+  it("drops a claim about an earlier task that still runs, and keeps the rest", async () => {
+    const computer = new FakeComputer().run("send Sam the draft on Slack");
+    const model = scriptedModel([
+      { text: "Yes, I sent Sam the draft. Stonepad uses most of the CPU." },
+    ]);
+    const { agent } = setup({ computer, model });
+    agent.refresh();
+    const out = await agent.answer(
+      [],
+      "did you send Sam the draft? and what is slow?",
+      "chat",
+    );
+    expect(out.text).toBe("Stonepad uses most of the CPU.");
+  });
+
+  it("reads a claim of done in its common forms, and no claim where there is none", () => {
+    const task = (state: TaskNode["state"]): TaskNode => ({
+      id: "c1",
+      kind: "computer",
+      title: "send Sam the draft on Slack",
+      state,
+      createdAt: now,
+      updatedAt: now,
+      links: {},
+      history: [],
+    });
+    const running = [task("running")];
+    for (const claim of [
+      "Done.",
+      "All done!",
+      "Message sent.",
+      "I've sent the draft to Sam.",
+      "The draft was sent.",
+      "Sent it on.",
+      "Yes, I posted it.",
+    ])
+      expect(trueClaims(claim, running, running), claim).toBe("");
+    for (const plain of [
+      "I started the draft for Sam.",
+      "It asks to send the draft. Yes or no?",
+      "I haven't sent it yet.",
+      "I'll tell you once it's done.",
+      "Nothing was sent.",
+    ])
+      expect(trueClaims(plain, running, running), plain).toBe(plain);
+    expect(
+      trueClaims("Done, the draft waits for your yes.", running, running),
+    ).toBe("The draft waits for your yes.");
+    const done = [task("done")];
+    expect(trueClaims("Message sent.", done, done)).toBe("Message sent.");
+  });
+
+  it("keeps a plain done for work that is no task", async () => {
+    const computer = new FakeComputer().run("search Aero 7 prices");
+    const model = scriptedModel([
+      {
+        calls: [
+          call("remember", { fact: "The owner prefers Safari over Chrome." }),
+        ],
+      },
+      { text: "Done. Kept that you prefer Safari." },
+    ]);
+    const { agent } = setup({ computer, model, memory: true });
+    agent.refresh();
+    const out = await agent.answer(
+      [],
+      "remember that I prefer Safari over Chrome",
+      "chat",
+    );
+    expect(out.text).toBe("Done. Kept that you prefer Safari.");
+  });
+});
+
+describe("the panel Stop", () => {
+  const tick = () => new Promise((done) => setTimeout(done, 5));
+  /** A computer whose start waits until the test lets it go. */
+  const heldComputer = () => {
+    const computer = new FakeComputer();
+    let release!: () => void;
+    const held = new Promise<void>((done) => (release = done));
+    const submit = computer.submit.bind(computer);
+    computer.submit = async (id: string, text: string) => {
+      await held;
+      return submit(id, text);
+    };
+    return { computer, release: () => release() };
+  };
+
+  it("gives a message that comes while the stopped turn winds down a turn of its own", async () => {
+    const { computer, release } = heldComputer();
+    const model = scriptedModel([
+      { calls: [call("computer_do", { goal: "search Aero 7 headphones" })] },
+      { text: "Nothing listens on port 3000." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const first = agent.answer([], "search Aero 7 headphones", "chat");
+    await tick();
+    agent.abort();
+    const second = agent.answer([], "what is on port 3000?", "chat");
+    await tick();
+    release();
+    const [one, two] = await Promise.all([first, second]);
+    expect(one).toEqual({ text: "Stopped.", choices: [] });
+    expect(two).toEqual({
+      text: "Nothing listens on port 3000.",
+      choices: [],
+    });
+    expect(sentText(model.requests)).toContain("what is on port 3000?");
+    // The task that the stopped turn started as the Stop came does not go on.
+    expect(computer.state).toBe("canceled");
+  });
+
+  it("stops a task that started after a stop message, while its start was on the way", async () => {
+    const { computer, release } = heldComputer();
+    const model = scriptedModel([
+      { calls: [call("computer_do", { goal: "search Aero 7 headphones" })] },
+      { text: "Stopped." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const first = agent.answer([], "search Aero 7 headphones", "chat");
+    await tick();
+    const stop = agent.answer([], "stop", "chat");
+    await tick();
+    release();
+    await Promise.all([first, stop]);
+    expect(computer.state).toBe("canceled");
+  });
+});
+
 describe("without a model, and the next step", () => {
   it("still stops in code and tells the state", async () => {
     const computer = new FakeComputer().run("check my Instagram DMs");
@@ -920,6 +1107,103 @@ describe("holes that a review found", () => {
     ]);
   });
 
+  it("sees a send word in a goal, and no denial of it as said", () => {
+    const unsaid: [string, string[], string][] = [
+      [
+        "draft a reply to Sam and send it",
+        ["draft a reply to Sam but do not send it"],
+        "send",
+      ],
+      [
+        "message Sam on Riverchat that I am late",
+        ["tell Sam I'm late"],
+        "message",
+      ],
+      ["email Sam the report", ["write the report for Sam"], "email"],
+      ["e-mail Sam the report", ["write the report for Sam"], "e mail"],
+      ["text Sam hello", ["hello"], "text"],
+      ["dm Sam the link to the doc", ["find the link to the doc"], "dm"],
+      ["tell Dana the meeting moved", ["check when the meeting is"], "tell"],
+      [
+        "invite Dana to the standup",
+        ["add the standup to my calendar"],
+        "invite",
+      ],
+      [
+        "rsvp yes to the party on Riverchat",
+        ["check the party on Riverchat"],
+        "rsvp",
+      ],
+      [
+        "answer Sam's question on Riverchat",
+        ["read Sam's question on Riverchat"],
+        "answer",
+      ],
+      ["reply to Sam", ["don't reply to Sam yet, just read it"], "reply"],
+      [
+        "post the photo on Riverchat",
+        ["never post it, just open the photo"],
+        "post",
+      ],
+    ];
+    for (const [goal, said, step] of unsaid)
+      expect(unsaidStep(goal, said), goal).toBe(step);
+    const fine: [string, string[]][] = [
+      ["read me my newest email", ["read me my newest email"]],
+      ["check my email", ["check my mail"]],
+      ["tell me the weather in Lisbon", ["look up the weather in Lisbon"]],
+      ["copy the text on the page", ["copy what the page says"]],
+      ["text Sam hello", ["text Sam hello"]],
+      ["email Sam the report", ["e-mail Sam the report"]],
+      ["message Sam that I'm late", ["send Sam a message that I'm late"]],
+      [
+        "draft a reply to Sam but don't send it",
+        ["draft a reply to Sam but don't send it"],
+      ],
+      ["answer the question on the page", ["what does the page ask?"]],
+    ];
+    for (const [goal, said] of fine)
+      expect(unsaidStep(goal, said), goal).toBeNull();
+  });
+
+  it("lets a plain yes to ClawdTime's own offer carry none of its words, as the guide says", async () => {
+    const computer = new FakeComputer();
+    const model = scriptedModel([
+      {
+        calls: [call("computer_do", { goal: "send Sam the draft on Slack" })],
+      },
+      { text: "Tell me in your words what to do with the draft." },
+    ]);
+    const { agent } = setup({ computer, model });
+    await agent.answer(
+      [
+        {
+          role: "user",
+          text: "write a draft for Sam",
+          at: now - 2000,
+          via: "chat",
+        },
+        {
+          role: "assistant",
+          text: "Want me to send Sam the draft on Slack?",
+          at: now - 1000,
+          via: "chat",
+        },
+      ],
+      "yes",
+      "chat",
+    );
+    expect(computer.submits).toEqual([]);
+    expect(model.requests[1]!.messages.at(-1)!.content).toMatch(
+      /^Refused: The goal says "send"/,
+    );
+    const guide = readFileSync(
+      new URL("../docs/SUPERVISOR.md", import.meta.url),
+      "utf8",
+    );
+    expect(guide).not.toMatch(/offer of a next step\s+carries the words/);
+  });
+
   it("takes no yes that the owner sent before the question existed", async () => {
     let time = now;
     const root = tempRoot();
@@ -1046,6 +1330,55 @@ describe("holes that a review found", () => {
     );
   });
 
+  it("gives a plain yes to the newest question: a coding agent's request that came after the computer's", async () => {
+    let time = now;
+    const root = tempRoot();
+    const computer = new FakeComputer()
+      .run("send the report")
+      .ask("approval", "Send the report to Dana?");
+    const world = chatWorld(root, { computer, now: () => time });
+    const first = new ChatAgent({ world, model: null, root });
+    first.refresh();
+    time += 5_000;
+    const request = openDesk(world, "npm test");
+    time += 5_000;
+    const model = scriptedModel([
+      { calls: [call("answer_question", { answer: "yes" })] },
+      { text: "Allowed npm test. The report still waits for your yes." },
+    ]);
+    const agent = new ChatAgent({ world, model, root, graph: first.graph });
+    await agent.answer([], "yes", "chat");
+    expect(world.desk.take(request.id)).toMatchObject({ decision: "allow" });
+    expect(computer.answers).toEqual([]);
+    expect(computer.waiting).toBe("approval");
+  });
+
+  it("gives a plain yes to the computer's question when it came after a coding agent's request", async () => {
+    let time = now;
+    const root = tempRoot();
+    const computer = new FakeComputer().run("send the report");
+    const world = chatWorld(root, { computer, now: () => time });
+    const request = openDesk(world, "npm test");
+    time += 5_000;
+    computer.ask("approval", "Send the report to Dana?");
+    const first = new ChatAgent({ world, model: null, root });
+    first.refresh();
+    time += 5_000;
+    const desk = first.graph.bySource(`desk:${request.id}`)!;
+    const model = scriptedModel([
+      { calls: [call("answer_question", { id: desk.id, answer: "yes" })] },
+      { calls: [call("answer_question", { answer: "yes" })] },
+      { text: "Sent. npm test still waits." },
+    ]);
+    const agent = new ChatAgent({ world, model, root, graph: first.graph });
+    await agent.answer([], "yes", "chat");
+    expect(model.requests[1]!.messages.at(-1)!.content).toMatch(
+      /^Refused: The owner's "yes" answers the newest question they saw: "Send the report to Dana\?"/,
+    );
+    expect(computer.answers).toEqual(["yes"]);
+    expect(world.desk.take(request.id)).toBeNull();
+  });
+
   it("decides a request of an agent only by a message that is a plain yes or no", async () => {
     for (const said of [
       "ok, now search for running shoes",
@@ -1090,6 +1423,38 @@ describe("holes that a review found", () => {
     expect(two.text).toMatch(
       /^The call ended before this action could be completed/,
     );
+  });
+
+  it("keeps a code that answers ClawdTime's own question out of the model, the graph and the engine", async () => {
+    const computer = new FakeComputer()
+      .run("log me into shop.example")
+      .ask("question", "What's the code they texted you?");
+    const model = scriptedModel([
+      { calls: [call("answer_question", { answer: "" })] },
+      { text: "Type the code on the Mac yourself." },
+    ]);
+    const { agent } = setup({ computer, model });
+    await agent.answer(
+      [
+        {
+          role: "user",
+          text: "log me into shop.example",
+          at: now - 3000,
+          via: "chat",
+        },
+        {
+          role: "assistant",
+          text: "What's the code they texted you?",
+          at: now - 2000,
+          via: "chat",
+        },
+      ],
+      "482913",
+      "chat",
+    );
+    expect(sentText(model.requests)).not.toContain("482913");
+    expect(computer.answers).toEqual([]);
+    expect(readFileSync(agent.graph.file, "utf8")).not.toContain("482913");
   });
 
   it("keeps a secret out of the model when the owner splits it over two messages", async () => {

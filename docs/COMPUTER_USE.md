@@ -541,8 +541,9 @@ gets only the one line of a fact (see An app that does not answer).
 
 Each look only reads. It runs fixed programs (`ps`, `lsof`, `log`,
 `launchctl list`, `sysctl`, `memory_pressure`, `df`, `lsappinfo`) with
-`execFile`, never a shell, each with a timeout of 2 to 20 seconds and a cap
-on its output. The child gets a fixed path and the C locale as its only
+`execFile` (a log with `spawn`), never a shell, each with a timeout of 2 to 20 seconds and a cap
+on its output. A log that is longer than its cap keeps its newest lines, and
+the answer says so. The child gets a fixed path and the C locale as its only
 environment. A name, a pid, a port and a label must parse before anything
 runs: a name has letters, digits, spaces and a few marks only, and goes into
 the log predicate between double quotes.
@@ -551,7 +552,12 @@ What a look returns is data for the model, never an instruction, and it is
 cut like the result of every other tool. No look reads or returns an
 environment variable. An argument and a log line that look like a
 credential, by the same checks that the chat and the journal use, are
-hidden before they leave `connectors/system/`. The home folder is written as
+hidden before they leave `connectors/system/`. So is the value of a
+credential flag or pair that those checks alone miss: `-p VALUE` and
+`-pVALUE`, `--password VALUE`, `--session VALUE`, `-a VALUE` of `redis-cli`,
+`-u user:password`, `aws_secret_access_key VALUE`, the value of an
+`Authorization:` header, and `pass=`, `token=`, `secret=` or `sid=` with
+their values. The rest of the line stays. The home folder is written as
 `~`. A report is described by what it says, never by its file name, which
 can hold the name of the Mac. `lsof` sees only the processes of the owner.
 
@@ -560,19 +566,25 @@ the Dock does, so the app can save or show its own save sheet. A restart is
 such a quit, a wait of up to 8 seconds, and an open; an app that does not
 quit is not started again, and the answer says so. Both act at once. A force
 quit, and a stop of a process that is no app, can lose what is not saved:
-they are the `unsaved` row. They ask first, unless the owner's words ask to
-lose the changes ("without saving") or the owner's trust is on. The question
+they are the `unsaved` row. They ask first, unless the owner's trust is on,
+or the owner's words ask to lose the changes ("without saving") and name that
+app or process ("force quit Stonepad without saving"). Such words skip one
+question only: a second force quit in the same message asks. The question
 is the result of the tool, and the chat says it: "Force quit Stonepad (pid
 4242)? Changes that are not saved are lost. Say yes or no." Only the owner's
 own clear yes in a newer message, by the strict reader of the chat, within 5
 minutes and for the same process (its pid and its start time), lets it go.
 A yes that already answered another question in that message counts for
-nothing. A no ends it.
+nothing. A plain yes answers the newest question that the owner saw: while a
+newer question of the computer task or of an agent waits, the yes goes to
+that one, and the force quit is asked again. A no ends it.
 
 These are never touched, with trust on too: launchd, the kernel,
 WindowServer, loginwindow, a process of another user, and ClawdTime itself:
-its own process, the processes it runs in, the ones it started, its apps and
-its entry points.
+its own process, the processes it runs in, the ones it started, its apps, its
+entry points in a folder of any name (`scripts/task-server.ts`), the line
+agent (`agent.mjs start`, also from a release folder), the line's host
+(`line/host.sh`), and what runs under one of them, such as `chert dev`.
 
 ## Plans and multi-step tasks
 

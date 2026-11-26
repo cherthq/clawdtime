@@ -45,4 +45,42 @@ describe("words about secrets are not secrets", () => {
       withheld("studio-48213", "Type my pin.", "Which one: `home-77120`?"),
     ).toBe(true);
   });
+
+  it("holds back a short value typed right after ClawdTime's own question for a secret", () => {
+    const wifi = "What is the Wi-Fi password for Riverchat-Guest?";
+    expect(withheld("Riverchat2026", "connect to the guest wifi", wifi)).toBe(
+      true,
+    );
+    expect(
+      withheld(
+        "482913",
+        "log me into shop.example",
+        "What's the code they texted you?",
+      ),
+    ).toBe(true);
+    expect(
+      withheld(
+        "it's Riverchat2026",
+        "connect to the guest wifi",
+        "What is the Wi-Fi password?",
+      ),
+    ).toBe(true);
+    expect(withheld("4821", "", "Which PIN should I type?")).toBe(true);
+    expect(withheld("hunter22", "", "What's the license key?")).toBe(true);
+  });
+
+  it("lets a short answer through when the question asks for no secret, or offered it", () => {
+    expect(
+      withheld("94110", "find ramen near me", "Which zip code should I use?"),
+    ).toBe(false);
+    expect(withheld("Aero7", "", "Which model: Aero7 or Aero9?")).toBe(false);
+    expect(
+      withheld(
+        "studio-48213",
+        "",
+        "Which workspace gets the token: `studio-48213` or `home-77120`?",
+      ),
+    ).toBe(false);
+    expect(withheld("Riverchat2026", "", "")).toBe(false);
+  });
 });

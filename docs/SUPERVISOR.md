@@ -1705,7 +1705,10 @@ How it works:
 - Stop comes first, in code. A message that is a stop (read by the same stop
   reader as the chat above) stops the computer task before the model reads it,
   ends the turn that runs, and nothing new starts in that turn. The Stop button
-  of the panel ends the turn that runs too.
+  of the panel ends the turn that runs too. A tool that only reads is not
+  waited for. A tool that changes something gets the stop and ends first, and
+  a computer task that started just as you stopped is stopped. A message that
+  you send while the stopped turn winds down gets a turn of its own.
 - An answer never says the opposite of a result that is in the chat. The
   computer task that a turn started can end, and say its result in the chat,
   before the model has its answer. Then code drops each sentence of the answer
@@ -1735,19 +1738,37 @@ model changes:
   yes or no (or one of its choices), and one that is not shown whole is allowed
   only in its terminal.
 - One message answers one question, and only a question that was there when
-  the message came. The question must be the one that waits now, whatever id
-  the model names. While two wait (a question of the task and a request of an
-  agent), none is answered here: the request is answered in the list of
-  requests or its terminal, and then a yes here answers the task.
+  the message came. The question must be one that waits now, whatever id the
+  model names.
+- A plain yes or no answers the newest question that you saw: a question of
+  the computer task, a request of an agent, or a force quit. An older
+  question stays open: ClawdTime asks it again, or you name it in your
+  answer ("yes, send it"). A yes that names one question answers no other.
+  While two questions came at the same moment, a plain yes answers neither,
+  and ClawdTime asks which one you mean.
 - The computer engine takes the words of a goal as your yes, ahead of time, to
-  steps such as send, post, buy and delete. So a goal holds such a step only
-  where you said it; a plain yes to ClawdTime's own offer of a next step
-  carries the words of that offer.
+  steps such as send, post, reply, message, text, email, tell, invite, buy and
+  delete. So a goal holds such a step only where you said it. A step that you
+  said no to ("draft a reply but don't send it") is not said. A word such as
+  message, text or email counts as a step where the engine reads it as one:
+  at the start of a part of the goal ("text Sam hello"), not as a thing
+  ("read my newest email") and not when it turns to you ("tell me"). A plain
+  yes to an offer in ClawdTime's own words carries none of its words: say the
+  step yourself ("send it").
 - No argument, tool result or message that holds a password, a key or a code
   goes to the model or to memory, also when it is split over two messages ("my
-  bank password is", then the value).
+  bank password is", then the value). A short value that you type right after
+  ClawdTime's own question for a password, a code or a PIN ("What's the code
+  they texted you?", then "482913") is held back too, unless that question
+  offered the value as a choice. Such a message answers no question of a task
+  or an agent: you type the value on the Mac yourself.
 - After a call ends, nothing more starts from it. A message of a call never
   joins the turn of another message: it waits and takes its own.
+- An answer says that a task is done, sent or bought only when its node says
+  done. Code drops each sentence that claims more ("Done. I ordered the
+  headphones." while the order still runs): about the tasks that your message
+  started, added to or answered, or, with none, about the task that the
+  sentence names. When nothing is left, the answer is what the task does now.
 - Words for a task that runs are your own words, and the task goes on with
   them. Words that stop it go to the stop, and a question about how it goes
   gets the state: neither is handed to the task as a change.
@@ -1761,8 +1782,8 @@ question, `m` reach, with a number), a kind, a title in your words, a state
 (queued, running, waiting, done, failed, canceled), its times, a short history
 and links: spawned by, waits on, answers, follows up. It is fed only from the
 real sources: the snapshot and journal of the computer engine, the jobs, the
-routines, the reach and the desk. The model says that a task is done only when
-its node says done. Each request of the model gets a short view of it, at most
+routines, the reach and the desk. An answer says that a task is done only when
+its node says done, and code holds it to that. Each request of the model gets a short view of it, at most
 1,500 characters:
 
 ```text

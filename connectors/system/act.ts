@@ -8,13 +8,19 @@
  *   quit and an open.
  * - A force quit, and a stop of a process that is no app, lose what is not
  *   saved: the `unsaved` row. They ask first, unless the owner's own words
- *   ask to lose the changes ("without saving"), or the owner's trust is on.
+ *   ask to lose the changes ("without saving") and name this process, or
+ *   the owner's trust is on. Such words skip one question only: the caller
+ *   hears through `used` that they were spent.
  *   A yes counts only when it is the owner's own clear yes, by the strict
  *   reader of the chat, after the question, within five minutes, for the
- *   same process (its pid and its start time).
+ *   same process (its pid and its start time), and only when the caller
+ *   says that the yes is for this question: a plain yes answers the newest
+ *   question that the owner saw, and an older one is asked again.
  * - Never: launchd, the kernel, WindowServer, loginwindow, a process of
  *   another user, and ClawdTime itself (its own process, those it runs in,
- *   those it started, and its apps and entry points).
+ *   those it started, its apps and entry points in a folder of any name,
+ *   the line agent with its host and a release of it, and what runs under
+ *   one of them).
  */
 import { explicitApprovalNo, explicitApprovalYes } from "../agents/call.js";
 import { askPolicy, asksToLose, clean } from "../computer/guards.js";
@@ -46,6 +52,18 @@ const clawdtimeExecutable = /\/ClawdTime[^/]*\.app\/|(?:^|\/)clawdtime[^/]*$/i;
 /** A command line that runs an entry point of ClawdTime from its folder. */
 const clawdtimeEntry =
   /clawdtime\S*\/(?:scripts\/task-[\w-]+|cli\/(?:main|index|task-desktop)|line\/[\w-]+|dist\/[\w/-]+)\.[cm]?[jt]s\b|clawdtime\S*\/(?:media|gateway)\/[\w-]+\.py\b/i;
+/**
+ * A command line that runs ClawdTime by the names of its own files, from a
+ * folder of any name or a relative path: the task server and its kin, the
+ * desktop launcher, the line agent ("agent.mjs start", also from a release),
+ * the line's host ("line/host.sh", "host.sh keep agent"), and anything in a
+ * line folder of ClawdTime ("--env-file=~/clawdtime/line/.env.local").
+ */
+const clawdtimeOwnEntry =
+  /(?:^|[\s/])(?:scripts\/task-(?:server|handset|native-inspect|simulation)|cli\/task-desktop)\.[cm]?[jt]s\b|(?:^|[\s/=])agent\.mjs\s+start\b|(?:^|[\s/])line\/host\.sh\b|(?:^|[\s/])host\.sh\s+keep\s+(?:agent|dev)\b|clawdtime[^\s/]*\/line\//i;
+/** True when a command line runs a part of ClawdTime. */
+const runsClawdtime = (command: string) =>
+  clawdtimeEntry.test(command) || clawdtimeOwnEntry.test(command);
 
 /** ClawdTime's own process tree: itself, what it runs in, and what it started. */
 function ownTree(all: ProcessView[], self: { pid: number; ppid: number }) {
@@ -71,12 +89,16 @@ function ownTree(all: ProcessView[], self: { pid: number; ppid: number }) {
   return { inside, started };
 }
 
-/** Why this process is never touched here, or null. */
+/**
+ * Why this process is never touched here, or null. `commands`: the command
+ * line of each pid, to see a part of ClawdTime above this one.
+ */
 export function protectedReason(
   row: ProcessView,
   all: ProcessView[],
   command: string,
   self: { pid: number; ppid: number },
+  commands: ReadonlyMap<number, string> = new Map(),
 ): string | null {
   if (row.pid <= 1 || neverTouched.has(row.name))
     return `${label(row)} is a part of macOS that keeps the Mac running. ClawdTime never ends it.`;
@@ -86,16 +108,65 @@ export function protectedReason(
   if (
     tree.started.has(row.pid) ||
     clawdtimeExecutable.test(row.path) ||
-    clawdtimeEntry.test(command)
+    runsClawdtime(command)
   )
     return `${label(row)} is a part of ClawdTime. ClawdTime does not end itself: use Stop, or quit ClawdTime from its menu.`;
+  // What a part of ClawdTime started: chert dev under the line's host.
+  const byPid = new Map(all.map((item) => [item.pid, item]));
+  for (
+    let pid = row.ppid, guard = 0;
+    pid > 1 && guard < 32;
+    pid = byPid.get(pid)?.ppid ?? 0, guard++
+  ) {
+    const above = byPid.get(pid);
+    if (
+      (above && clawdtimeExecutable.test(above.path)) ||
+      runsClawdtime(commands.get(pid) ?? "")
+    )
+      return `${label(row)} runs under ClawdTime (pid ${pid}). ClawdTime does not end itself: use Stop, or quit ClawdTime from its menu.`;
+  }
   return null;
 }
 
+/** A question about a process that waits for the owner's yes or no. */
+export interface ProcessAsk {
+  /** The action, the pid and the start time of the process. */
+  key: string;
+  /** When it was asked, or asked again. */
+  at: number;
+  question: string;
+}
+
+/** The owner's newest words, for an action that may need their yes. */
+export interface OwnerWords {
+  words: string;
+  /** When they came: a yes is read from them only for a question that came before. */
+  at: number;
+  /** False when these words decide nothing for this question: they answer another one. */
+  mayDecide?: (ask: ProcessAsk) => boolean;
+  /** Hears when the words were used as a yes. */
+  used?: () => void;
+}
+
 export type ActVerdict =
-  | { kind: "act"; trusted: boolean }
+  | { kind: "act"; trusted: boolean; waived?: boolean }
   | { kind: "ask"; question: string }
   | { kind: "refuse"; reason: string };
+
+/** Words as a name is matched in them: lower case, letters and digits only. */
+const plainWords = (text: string) =>
+  ` ${text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()} `;
+/** True when the words name this process: its app, its name or its pid. */
+export function namesProcess(words: string, row: ProcessView): boolean {
+  const said = plainWords(words);
+  return [row.app, row.name, String(row.pid)].some((name) => {
+    const plain = name ? plainWords(name) : "";
+    return plain.trim() !== "" && said.includes(plain);
+  });
+}
 
 /** The ask policy for one action on one process that may be touched. */
 export function actVerdict(
@@ -116,7 +187,9 @@ export function actVerdict(
   if (row.isApp && action !== "force_quit")
     return { kind: "act", trusted: false };
   if (context.trust) return { kind: "act", trusted: true };
-  if (asksToLose(context.owner)) return { kind: "act", trusted: false };
+  // "Without saving" holds for the process that the same words name.
+  if (asksToLose(context.owner) && namesProcess(context.owner, row))
+    return { kind: "act", trusted: false, waived: true };
   const name = row.isApp ? row.app! : row.name;
   return {
     kind: "ask",
@@ -144,6 +217,19 @@ export class ProcessDesk {
     return this.options.trust;
   }
 
+  private forget(now: number) {
+    for (const [old, ask] of this.asks)
+      if (now - ask.at > askHoldsMs) this.asks.delete(old);
+  }
+
+  /** The questions that wait for the owner's yes now, oldest first. */
+  pending(): ProcessAsk[] {
+    this.forget(this.probes.host.now());
+    return [...this.asks]
+      .map(([key, ask]) => ({ key, ...ask }))
+      .sort((left, right) => left.at - right.at);
+  }
+
   /** When a process started, as ps says it, to tell a pid from a new one with the same number. */
   private async started(pid: number) {
     const result = await this.probes.host.exec(
@@ -154,12 +240,12 @@ export class ProcessDesk {
     return parseStart(result.stdout);
   }
 
-  /** Waits until the process ends or the time is over. True when it ended. */
-  private async ended(pid: number, ms: number) {
+  /** Waits until the process ends, the time is over or the owner stops. True when it ended. */
+  private async ended(pid: number, ms: number, signal?: AbortSignal) {
     const host = this.probes.host;
     for (let waited = 0; ; waited += pollMs) {
       if (!host.alive(pid)) return true;
-      if (waited >= ms) return false;
+      if (waited >= ms || signal?.aborted) return false;
       await host.sleep(pollMs);
     }
   }
@@ -193,8 +279,8 @@ export class ProcessDesk {
    */
   async act(
     input: { action: unknown; pid?: unknown; name?: unknown },
-    owner: { words: string; at: number; used?: () => void },
-    options: { background: boolean },
+    owner: OwnerWords,
+    options: { background: boolean; signal?: AbortSignal | undefined },
   ): Promise<string> {
     const action = processActions.find((item) => item === input.action);
     if (!action)
@@ -221,8 +307,8 @@ export class ProcessDesk {
   private async run(
     action: ProcessAction,
     target: { pid: number | null; name: string | null },
-    owner: { words: string; at: number; used?: () => void },
-    options: { background: boolean },
+    owner: OwnerWords,
+    options: { background: boolean; signal?: AbortSignal | undefined },
   ): Promise<string> {
     const host = this.probes.host;
     const found = await this.probes.find(target);
@@ -248,6 +334,7 @@ export class ProcessDesk {
       all,
       commands.get(row.pid) ?? "",
       host.self,
+      commands,
     );
     if (guarded) return guarded;
     const verdict = actVerdict(row, action, {
@@ -260,8 +347,7 @@ export class ProcessDesk {
     if (verdict.kind === "ask") {
       const key = `${action}|${row.pid}|${start?.started ?? ""}`;
       const now = host.now();
-      for (const [old, ask] of this.asks)
-        if (now - ask.at > askHoldsMs) this.asks.delete(old);
+      this.forget(now);
       const waiting = this.asks.get(key);
       if (!waiting) {
         this.asks.set(key, { at: now, question: verdict.question });
@@ -269,6 +355,15 @@ export class ProcessDesk {
       }
       const words = clean(owner.words, 600);
       const theirs = owner.at > waiting.at;
+      const said =
+        theirs &&
+        (explicitApprovalYes.test(words) || explicitApprovalNo.test(words));
+      if (said && owner.mayDecide && !owner.mayDecide({ key, ...waiting })) {
+        // The yes or no is for another question. This one is asked again,
+        // so it is the newest one when the owner answers next.
+        waiting.at = now;
+        return `Not done: the owner's "${clean(words, 40)}" answers another question, so it decides nothing here. This one still waits: ask it again in these words: "${waiting.question}" When they say yes, call process_act again with the same action and target.`;
+      }
       if (theirs && explicitApprovalNo.test(words)) {
         this.asks.delete(key);
         return "The owner said no, so nothing was done.";
@@ -279,7 +374,17 @@ export class ProcessDesk {
       this.asks.delete(key);
       owner.used?.();
     }
-    const done = await this.perform(action, row, options.background);
+    // The owner stopped while this was looked up: nothing is done.
+    if (options.signal?.aborted)
+      return "Not done: the owner stopped this. Nothing was changed.";
+    // The owner's words skipped this question: they skip no other one.
+    if (verdict.kind === "act" && verdict.waived) owner.used?.();
+    const done = await this.perform(
+      action,
+      row,
+      options.background,
+      options.signal,
+    );
     return verdict.kind === "act" && verdict.trusted
       ? `${done} The owner's trust is on, so no question was asked.`
       : done;
@@ -289,20 +394,22 @@ export class ProcessDesk {
     action: ProcessAction,
     row: ProcessView,
     background: boolean,
+    stop?: AbortSignal,
   ): Promise<string> {
     const host = this.probes.host;
     const name = row.isApp ? row.app! : row.name;
     if (action === "force_quit" || !row.isApp) {
-      const signal = action === "force_quit" ? "SIGKILL" : "SIGTERM";
-      const sent = host.signal(row.pid, signal);
+      const kind = action === "force_quit" ? "SIGKILL" : "SIGTERM";
+      const sent = host.signal(row.pid, kind);
       if (sent === "gone") return `${name} (pid ${row.pid}) had already ended.`;
       if (sent === "denied")
         return `macOS did not allow ClawdTime to end ${name} (pid ${row.pid}).`;
       const gone = await this.ended(
         row.pid,
-        signal === "SIGKILL" ? killWaitMs : termWaitMs,
+        kind === "SIGKILL" ? killWaitMs : termWaitMs,
+        stop,
       );
-      if (signal === "SIGKILL")
+      if (kind === "SIGKILL")
         return gone
           ? `Force quit ${name} (pid ${row.pid}). It no longer runs.`
           : `Force quit ${name} (pid ${row.pid}), and it still runs after ${killWaitMs / 1000} s: it may wait on the system.`;
@@ -316,7 +423,9 @@ export class ProcessDesk {
         ? `${name} had already ended, or macOS does not know it as an app.`
         : `macOS did not let ClawdTime ask ${name} to quit. Quit it on the screen, or ask for a force quit.`;
     const wait = action === "restart" ? restartWaitMs : quitWaitMs;
-    const gone = await this.ended(row.pid, wait);
+    const gone = await this.ended(row.pid, wait, stop);
+    if (action === "restart" && stop?.aborted)
+      return `Asked ${name} to quit${gone ? ", and it quit" : ""}. It was not opened again: the owner stopped this.`;
     if (action === "quit")
       return gone
         ? `${name} quit.`

@@ -131,6 +131,7 @@ export interface LogLook {
   faults: number;
   /** The lines that matter most, oldest first, already redacted. */
   lines: LogLine[];
+  /** The log was longer than its cap: only its newest lines were read. */
   cut: boolean;
 }
 
@@ -228,6 +229,7 @@ export class SystemProbes {
         const args = redactArguments(
           argumentsOf(commands.get(row.pid) ?? "", row.path),
           this.host.home,
+          row.path,
         ).toLowerCase();
         return args.includes(query) ? [{ ...row, matchedIn: "arguments" }] : [];
       });
@@ -271,6 +273,7 @@ export class SystemProbes {
       arguments: redactArguments(
         argumentsOf(started?.command ?? "", row.path),
         this.host.home,
+        row.path,
       ),
       threads: parseThreads(threads.stdout),
       files:
@@ -340,7 +343,8 @@ export class SystemProbes {
         "--predicate",
         `process == "${name}"`,
       ],
-      { timeoutMs: 20 * second, maxBytes: 8 * 1024 * 1024 },
+      // A log prints its oldest lines first: the newest are the ones kept.
+      { timeoutMs: 20 * second, maxBytes: 8 * 1024 * 1024, keep: "tail" },
     );
     const lines = parseLog(need(result, "log"));
     const serious = (line: LogLine) => line.level === "E" || line.level === "F";
