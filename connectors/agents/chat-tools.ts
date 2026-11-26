@@ -317,8 +317,9 @@ function answersAnother(
 
 /**
  * True when the owner's newest words may decide this question: they are no
- * plain yes or no, or the question is the newest one that they saw, or
- * their words name it.
+ * plain yes or no; or they name this question ("yes, send it"); or they
+ * name no open question and this is the newest one that the owner saw. A
+ * yes that names another question is never one for this one.
  */
 export function mayAnswer(
   world: ChatToolWorld,
@@ -328,9 +329,18 @@ export function mayAnswer(
 ): { ok: true } | { ok: false; reason: string } {
   const owner = clean(turn.owner, 600);
   if (!plainAnswer(owner)) return { ok: true };
-  const bound = newestSeen(openQuestions(world), turn.ownerAt);
-  if (bound.kind === "one" && bound.question.ref === ref) return { ok: true };
   if (namesQuestion(owner, words)) return { ok: true };
+  const open = openQuestions(world);
+  const named = open.filter(
+    (question) => question.ref !== ref && namesQuestion(owner, question.words),
+  );
+  if (named.length)
+    return {
+      ok: false,
+      reason: `The owner's "${clean(owner, 40)}" names another question: ${questionList(named)}. It decides nothing here: this question stays open, ask it again in its own words.`,
+    };
+  const bound = newestSeen(open, turn.ownerAt);
+  if (bound.kind === "one" && bound.question.ref === ref) return { ok: true };
   return { ok: false, reason: answersAnother(bound, owner) };
 }
 

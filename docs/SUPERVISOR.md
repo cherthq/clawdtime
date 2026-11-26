@@ -1743,8 +1743,9 @@ model changes:
 - A plain yes or no answers the newest question that you saw: a question of
   the computer task, a request of an agent, or a force quit. An older
   question stays open: ClawdTime asks it again, or you name it in your
-  answer ("yes, send it"). While two questions came at the same moment, a
-  plain yes answers neither, and ClawdTime asks which one you mean.
+  answer ("yes, send it"). A yes that names one question answers no other.
+  While two questions came at the same moment, a plain yes answers neither,
+  and ClawdTime asks which one you mean.
 - The computer engine takes the words of a goal as your yes, ahead of time, to
   steps such as send, post, reply, message, text, email, tell, invite, buy and
   delete. So a goal holds such a step only where you said it. A step that you

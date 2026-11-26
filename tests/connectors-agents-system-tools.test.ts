@@ -240,6 +240,40 @@ describe("the process level in the chat", () => {
     expect(host.signals).toEqual([]);
   });
 
+  it("does not give a yes that names an older question to the newer force quit", async () => {
+    const computer = new FakeComputer()
+      .run("send Sam the draft")
+      .ask("approval", "Send this message to Sam?");
+    let later = () => {};
+    const model = scriptedModel([
+      () => {
+        later();
+        return {
+          calls: [
+            call("process_act", { action: "force_quit", name: "Stonepad" }),
+          ],
+        };
+      },
+      { text: "Force quit Stonepad? Say yes or no." },
+      {
+        calls: [
+          call("process_act", { action: "force_quit", name: "Stonepad" }),
+          call("answer_question", { answer: "yes, send it" }),
+        ],
+      },
+      { text: "Sent it on. Stonepad still waits." },
+    ]);
+    const { agent, host, clock } = setup({ model, computer });
+    later = () => {
+      clock.now += 1_000;
+    };
+    await agent.answer([], "force quit Stonepad", "chat");
+    clock.now += 15_000;
+    await agent.answer([], "yes, send it", "chat");
+    expect(host.signals).toEqual([]);
+    expect(computer.answers).toEqual(["yes, send it"]);
+  });
+
   it('lets the owner\'s "without saving" skip one question, for an app that they named', async () => {
     const model = scriptedModel([
       {
