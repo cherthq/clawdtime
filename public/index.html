@@ -3,16 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="Your coding agent can FaceTime you. See its screen, say what to do, and get back to your day. ClawdTime pilot preview."
-    />
     <meta name="theme-color" content="#f4f1e8" />
-    <title>ClawdTime — Your coding agent can FaceTime you now.</title>
+    <!-- WEBSITE_METADATA -->
     <link rel="stylesheet" href="/assets/landing.css" />
     <script src="/assets/landing.js" defer></script>
+    <script src="/assets/website-analytics.js" defer></script>
   </head>
-  <body>
+  <body data-website-analytics="off" data-availability="preview">
     <svg
       class="symbol-library"
       xmlns="http://www.w3.org/2000/svg"
@@ -63,11 +60,15 @@
         >clawdtime<span class="brand-dot">_</span></a
       >
       <nav aria-label="Main navigation">
-        <a href="#how-it-works">How it works</a><a href="#pricing">Pricing</a
-        ><a href="#builders">For builders <span aria-hidden="true">↗</span></a>
+        <a href="#how-it-works">How it works</a
+        ><a href="#compatibility">Integrations</a
+        ><a href="/guides/getting-started">Setup guide</a>
       </nav>
-      <a class="button button-small" href="#text-it" data-text-it
-        >Text it <span aria-hidden="true">↗</span></a
+      <a
+        class="button button-small"
+        href="#availability"
+        data-metric-action="availability"
+        >Pilot availability <span aria-hidden="true">↗</span></a
       >
     </header>
     <main id="main">
@@ -77,29 +78,34 @@
             <span class="status-dot"></span> LESS TERMINAL. MORE LIFE.
           </div>
           <h1>
-            Your coding agent can <span class="highlight">FaceTime</span> you
-            now.
+            Your coding agent can <span class="highlight">FaceTime</span> you.
           </h1>
           <p class="hero-description">
-            When it’s stuck, it calls, shows you its screen, and you tell it
-            what to do. No more babysitting the terminal.
+            Step away from your Mac. When your agent needs a decision, ClawdTime
+            brings the question and screen to your phone, so you can review the
+            work and respond.
           </p>
           <div class="hero-action">
-            <a class="button button-primary" href="#text-it" data-text-it
-              ><svg><use href="#pixel-message" /></svg> Text it
+            <a
+              class="button button-primary"
+              href="#availability"
+              data-metric-action="availability"
+              ><svg><use href="#pixel-message" /></svg> See pilot availability
               <span class="button-arrow" aria-hidden="true">↗</span></a
             ><span class="handwritten"
-              >your agent has<br />your number now
+              >a quick call,<br />a clear next step
               <span aria-hidden="true">↙</span></span
             >
           </div>
           <p class="compatibility">
-            Built for <strong>Claude Code</strong> &amp; <strong>Codex</strong
-            ><br /><span>Cursor &amp; OpenClaw — coming soon</span>
+            For <strong>Codex</strong> &amp; <strong>Claude Code</strong
+            ><br /><a class="text-link" href="#compatibility"
+              >See tested agents and limitations ↗</a
+            >
           </p>
           <p class="preview-note">
-            <span class="status-dot"></span> Pilot preview · public calling
-            opens soon
+            <span class="status-dot"></span> Invited pilot · Mac companion
+            required
           </p>
         </div>
         <div class="hero-visual">
@@ -110,13 +116,13 @@
             class="demo-stage"
             id="call-demo"
             data-scene="0"
-            aria-label="Illustrated demo: your agent calls about a failing build, you say skip that test, and it continues."
+            aria-label="Illustrated demo: your agent asks which headline to use, you choose the first option, and it updates the draft."
           >
             <div class="desktop-window">
               <div class="window-bar">
                 <span class="window-controls" aria-hidden="true"
                   ><i></i><i></i><i></i></span
-                ><span>agent / my-next-big-thing</span><span>↗</span>
+                ><span>agent / landing-page-draft</span><span>↗</span>
               </div>
               <div class="terminal">
                 <div class="terminal-heading">
@@ -125,22 +131,23 @@
                     >NEEDS YOU</span
                   >
                 </div>
-                <p class="command">$ npm run test</p>
+                <p class="command">Review / homepage headline</p>
                 <div class="test-line">
-                  <span class="pass">PASS</span> auth.test.ts
-                  <span class="dim">(8)</span>
+                  <span class="pass">PASS</span> Layout checked
+                  <span class="dim"></span>
                 </div>
                 <div class="test-line">
-                  <span class="pass">PASS</span> api.test.ts
-                  <span class="dim">(12)</span>
+                  <span class="pass">PASS</span> Copy drafted
+                  <span class="dim"></span>
                 </div>
                 <div class="test-line">
-                  <span class="test-badge fail" id="test-badge">FAIL</span>
-                  flaky.test.ts <span class="dim">(1)</span>
+                  <span class="test-badge fail" id="test-badge">REVIEW</span>
+                  Choose a headline <span class="dim"></span>
                 </div>
                 <div class="terminal-output" id="terminal-output">
-                  <span class="error-text">× Timed out after 5000ms</span
-                  ><br /><span class="dim">One test. One quick question.</span>
+                  <span class="error-text"
+                    >A: “Good work doesn’t need a desk.”</span
+                  ><br /><span class="dim">B: “Bring your work with you.”</span>
                 </div>
                 <div class="agent-bubble" id="agent-bubble">
                   ↗ Calling you for a second opinion…
@@ -174,10 +181,10 @@
                   A little help over here?
                 </p>
                 <div class="phone-screen-mini" aria-hidden="true">
-                  <span>my-next-big-thing</span>
-                  <div>✓ auth.test.ts</div>
-                  <div>✓ api.test.ts</div>
-                  <div id="mini-test">× flaky.test.ts</div>
+                  <span>landing-page-draft</span>
+                  <div>✓ Layout checked</div>
+                  <div>✓ Copy drafted</div>
+                  <div id="mini-test">? Choose a headline</div>
                 </div>
                 <div class="phone-call-controls" aria-hidden="true">
                   <span class="decline">↙</span
@@ -190,11 +197,13 @@
             </div>
             <div class="speech-sticker" id="speech-sticker">
               <svg><use href="#pixel-wave" /></svg
-              ><span>“Skip that test.”</span>
+              ><span>“Use the first one.”</span>
             </div>
             <div class="call-caption">
               <span class="caption-number" id="caption-number">01</span
-              ><span id="call-caption">Build stuck. Your phone rings.</span>
+              ><span id="call-caption"
+                >A choice to make. Your phone rings.</span
+              >
             </div>
           </div>
           <div class="demo-footer">
@@ -224,13 +233,27 @@
             Code</span
           ><span class="agent-name"
             ><span aria-hidden="true">⌘</span> Codex</span
-          ><span class="agent-name future-agent"
-            >◩ Cursor <small>SOON</small></span
-          ><span class="agent-name future-agent"
-            >✴ OpenClaw <small>SOON</small></span
           >
         </div>
       </div>
+      <section
+        class="answer-section section-wrap"
+        aria-labelledby="what-is-clawdtime"
+      >
+        <p class="eyebrow">YOUR WORK. WITH A WAY TO REACH YOU.</p>
+        <h2 id="what-is-clawdtime">What is ClawdTime?</h2>
+        <p>
+          ClawdTime connects a paired coding-agent session to its human through
+          FaceTime and iMessage. The pilot lets an agent request attention,
+          share the selected Mac screen, and receive feedback. Setup requires an
+          invitation, a Mac companion and explicit permissions.
+        </p>
+        <p>
+          Built on Chert’s communications infrastructure. Support depends on the
+          agent and client surface;
+          <a href="#compatibility">check what has been tested</a>.
+        </p>
+      </section>
       <section class="section-wrap how-section" id="how-it-works">
         <div class="section-heading">
           <div>
@@ -246,10 +269,10 @@
           <li>
             <span class="step-number">01</span
             ><svg><use href="#pixel-message" /></svg>
-            <h3>Text the number.</h3>
+            <h3>Start with an invitation.</h3>
             <p>
-              A hello is all it takes. We text you a setup prompt with your
-              personal setup link.
+              Invited testers receive the pilot instructions and a private setup
+              link. Public self-serve access is not open yet.
             </p>
           </li>
           <li>
@@ -257,8 +280,8 @@
             ><svg><use href="#pixel-screen" /></svg>
             <h3>Paste the setup prompt.</h3>
             <p>
-              Give it to Claude Code or Codex. Your agent guides installation,
-              permissions, and one approved test call.
+              Give it to Claude Code or Codex. Your agent guides the trusted Mac
+              setup, permissions, and one separately authorized test call.
             </p>
             <span class="micro-label">MAC APP + CLAUDE CODE OR CODEX</span>
           </li>
@@ -267,15 +290,76 @@
             ><svg><use href="#pixel-facetime" /></svg>
             <h3>Go live your life.</h3>
             <p>
-              It FaceTimes you when it needs you. Look at the screen, say the
-              fix, carry on.
+              Use the connected agent to request a call when a decision or
+              visual review would help. Feedback returns to that workflow.
             </p>
           </li>
         </ol>
         <p class="section-footnote">
-          The launch experience, previewed here. Public onboarding and live-call
-          validation are still in progress.
-          <a class="text-link" href="/setup">See the setup steps ↗</a>
+          The pilot needs an operator-provided build and supervised setup.
+          Public downloads and broader live-call validation are still in
+          progress.
+          <a class="text-link" href="/guides/getting-started"
+            >See the setup steps ↗</a
+          >
+        </p>
+      </section>
+      <section class="section-wrap compatibility-section" id="compatibility">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">TESTED SURFACES / CHECKED NOVEMBER 13, 2026</p>
+            <h2>Same tools.<br />Clear expectations.</h2>
+          </div>
+          <p>
+            Connector checks and real calls are different kinds of evidence.
+            Here’s where the pilot stands.
+          </p>
+        </div>
+        <div class="integration-grid">
+          <article>
+            <span class="micro-label">CODEX</span>
+            <h3>A limited live pilot.</h3>
+            <p>
+              Screen sharing and voice feedback have been observed in a running
+              Codex desktop chat. Native control depends on that chat’s
+              available tools. Longer calls, reconnect and broader control still
+              need validation.
+            </p>
+            <p class="evidence-note">
+              CLI 0.166.0-alpha.5.1: synthetic connector checks. The desktop app
+              version was not recorded.
+            </p>
+            <a
+              class="text-link"
+              href="/integrations/codex"
+              data-metric-action="guide"
+              >Codex integration and limits ↗</a
+            >
+          </article>
+          <article>
+            <span class="micro-label">CLAUDE CODE</span>
+            <h3>Connector tested.</h3>
+            <p>
+              The cooperative connector has passed synthetic multi-turn checks
+              with Claude Code 2.1.311. The full Claude handset-call,
+              screen-control and reconnect workflow remains unverified.
+            </p>
+            <p class="evidence-note">
+              This is connector evidence, not a completed live-call
+              qualification.
+            </p>
+            <a
+              class="text-link"
+              href="/integrations/claude-code"
+              data-metric-action="guide"
+              >Claude Code integration and limits ↗</a
+            >
+          </article>
+        </div>
+        <p class="section-footnote">
+          Voice currently takes turns and can be slow. Cursor and OpenClaw are
+          planned. ClawdTime does not automatically take over an idle desktop
+          chat.
         </p>
       </section>
       <section class="highlights section-wrap">
@@ -307,8 +391,9 @@
             <svg><use href="#pixel-wave" /></svg>
             <h3>You just talk.</h3>
             <p>
-              “Try the other approach.” Give it the missing piece out loud, then
-              let it get back to work.
+              “Try the other approach.” Give it the missing piece by voice or
+              text. Pilot voice takes turns; response latency is still being
+              improved.
             </p>
           </article>
           <article class="privacy-card">
@@ -328,9 +413,8 @@
         <div class="section-wrap">
           <span class="eyebrow">A DIFFERENT KIND OF CALL TO ACTION.</span>
           <h2>
-            Every AI assistant texts you.<br /><span
-              >Ours FaceTimes you<br class="mobile-break" />
-              and shows you.</span
+            A question is easier<br />with the screen in view.<br /><span
+              >See it. Discuss it. Carry on.</span
             >
           </h2>
           <svg class="contrast-icon" aria-hidden="true">
@@ -343,7 +427,7 @@
         <div class="use-case-strip">
           <span>Stuck on a bug <span aria-hidden="true">↗</span></span
           ><span
-            >Before it pushes to main <span aria-hidden="true">↗</span></span
+            >Discuss a proposed change <span aria-hidden="true">↗</span></span
           ><span>Review this UI <span aria-hidden="true">↗</span></span
           ><span class="coming-soon"
             >Approve this post <small>COMING SOON</small></span
@@ -354,23 +438,25 @@
       </section>
       <section class="section-wrap builder-proof">
         <div>
-          <p class="eyebrow">
-            03 / BUILT FOR THE “WAIT, IT CAN DO THAT?” MOMENT
-          </p>
-          <h2>First calls.<br />Real reactions.</h2>
+          <p class="eyebrow">PILOT EVIDENCE</p>
+          <h2>Small steps.<br />Real observations.</h2>
           <p>
-            We’re getting the first builders on the line.<br />Their clips
-            belong here. Yours could be next.
+            The Codex desktop pilot has carried screen sharing and spoken
+            feedback in a running chat. That is a starting point, not a general
+            reliability claim.
           </p>
+          <a class="text-link" href="/integrations/codex#tested"
+            >What has been tested ↗</a
+          >
         </div>
         <div class="proof-placeholder">
-          <svg><use href="#pixel-message" /></svg
-          ><strong
-            >The first “my agent just<br />FaceTimed me” is coming.</strong
-          ><span>BUILDER CLIPS COMING SOON</span>
+          <svg><use href="#pixel-screen" /></svg
+          ><strong>The demo above<br />is an illustration.</strong
+          ><span>ILLUSTRATED WORKFLOW</span>
           <p>
-            Real calls. Real builders. We’ll share the numbers when the pilot is
-            live.
+            A real, approved demonstration will be added when it is ready to
+            share. Public onboarding and wider physical validation are still in
+            progress.
           </p>
         </div>
       </section>
@@ -378,25 +464,25 @@
         <div class="section-heading">
           <div>
             <p class="eyebrow">04 / A SMALL PRICE FOR YOUR AFTERNOON BACK</p>
-            <h2>Start with a hello.</h2>
+            <h2>Invited pilot.<br />Pricing comes next.</h2>
           </div>
           <span class="outline-label">PLANNED LAUNCH PRICING</span>
         </div>
         <div class="pricing-strip">
           <div>
             <span class="eyebrow">FIRST CALLS</span>
-            <h3>On us.</h3>
-            <p>Try the moment. No card required.</p>
+            <h3>Planned free calls.</h3>
+            <p>Allowances are not available yet.</p>
           </div>
           <div>
             <span class="eyebrow">PRO</span>
             <h3>~$25<span>/ month</span></h3>
-            <p>For the “call me when you need me” life.</p>
+            <p>Proposed price. Not an active subscription.</p>
           </div>
           <div>
             <span class="eyebrow">YOUR OWN NUMBER</span>
             <h3>Dedicated line.</h3>
-            <p>A direct line between your agent and you.</p>
+            <p>Availability and pricing to be announced.</p>
           </div>
         </div>
         <div class="pricing-bottom">
@@ -425,7 +511,9 @@
                   width="812"
                   height="332" /></span
               ><span class="repo-status"
-                >⌘ OPEN-SOURCE RELEASE COMING SOON</span
+                ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
+                  >⌘ VIEW THE SOURCE ↗</a
+                ></span
               >
             </div>
           </div>
@@ -435,12 +523,12 @@
             </div>
             <pre><code><span class="code-comment"># When your agent needs a human.</span>
 <span class="code-purple">await</span> <span class="code-green">facetime_me</span>(
-    reason=<span class="code-orange">"One test is failing."</span>,
+    reason=<span class="code-orange">"The UI needs a decision."</span>,
     question=<span class="code-orange">"Take a look with me?"</span>
 )</code></pre>
             <div class="code-footer">
               Pilot MCP tool: <code>request_attention</code>
-              <a href="/agents"
+              <a href="/guides/getting-started"
                 >Setup guide <span aria-hidden="true">↗</span></a
               >
             </div>
@@ -454,59 +542,86 @@
         </div>
         <div class="faq-list">
           <details>
-            <summary>No iPhone? <span aria-hidden="true">+</span></summary>
+            <summary>
+              Can my coding agent call me? <span aria-hidden="true">+</span>
+            </summary>
             <p>
-              FaceTime links can be opened in a browser on Android or Windows.
-              ClawdTime’s link-based joining flow is planned; it hasn’t been
-              validated in this pilot yet.
+              ClawdTime provides an explicit attention request in a connected
+              pilot session. The agent can request a FaceTime call when it needs
+              input. It does not detect every blocked process or intercept every
+              native approval.
+              <a href="#compatibility">See the tested integrations</a>.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Do I need a Mac and iPhone? <span aria-hidden="true">+</span>
+            </summary>
+            <p>
+              The pilot requires macOS 14 or later, Node 24 or later, an
+              operator-provided Mac companion and the intended invited
+              iMessage/FaceTime handset. Android and Windows joining have not
+              been validated.
+              <a href="/guides/getting-started">Check setup requirements</a>.
             </p>
           </details>
           <details id="screen-safety">
             <summary>
-              Is my screen safe? <span aria-hidden="true">+</span>
-            </summary>
-            <p>
-              Screen sharing is off until you enable it. You choose the display
-              and authorize the paired session; screen access is bound to the
-              call. Computer control requires separate permission. Local Stop,
-              lock, sleep, or disconnect ends access. Screen frames and audio
-              are transient, not saved as recordings.
-            </p>
-          </details>
-          <details>
-            <summary>
-              Which agents does it work with? <span aria-hidden="true">+</span>
-            </summary>
-            <p>
-              The local pilot has tested cooperative Claude Code and Codex CLI
-              flows. The basic Codex screen and text-return loop has passed on a
-              handset; natural voice still needs live qualification. Cursor and
-              OpenClaw integrations are coming later; existing desktop sessions
-              aren’t automatically taken over.
-            </p>
-          </details>
-          <details>
-            <summary>
-              Can I try a real call right now? <span aria-hidden="true">+</span>
-            </summary>
-            <p>
-              Invited testers can text ClawdTime and give the returned setup
-              prompt to their coding agent. Setup stays in that chat through
-              permissions, one approved screen-sharing call, and a Messages
-              follow-up. Public Mac downloads aren’t ready yet.
-            </p>
-          </details>
-          <details>
-            <summary>
-              Can I call or text it to start work?
+              Can I share or control my screen?
               <span aria-hidden="true">+</span>
             </summary>
             <p>
-              Your coding agent starts calls and sends a follow-up. During a
-              call, talk or text naturally to ask questions or direct the work.
-              Calling ClawdTime yourself or starting new work from Messages is
-              planned. Voice currently takes turns: listening pauses while the
-              agent speaks.
+              You select the Mac display and explicitly enable sharing. Computer
+              input needs separate permission and a supported control mode.
+              Local Stop ends ClawdTime capture and input; cancellation of a
+              native tool already running depends on that tool.
+              <a href="/privacy">Read the screen and data details</a>.
+            </p>
+          </details>
+          <details>
+            <summary>
+              What happens if I don’t answer? <span aria-hidden="true">+</span>
+            </summary>
+            <p>
+              A missed call is not approval. ClawdTime preserves the request
+              outcome; it does not blindly redial or treat silence as permission
+              to act.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Can I call or text it to start new work?
+              <span aria-hidden="true">+</span>
+            </summary>
+            <p>
+              The current pilot starts with a connected agent session. General
+              task initiation from Messages and waking arbitrary idle chats are
+              not publicly available. New execution modes in development are
+              separate from the deployed pilot.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Are screens and audio recorded? <span aria-hidden="true">+</span>
+            </summary>
+            <p>
+              Screen frames and audio are transient, not saved as recordings.
+              ClawdTime retains operational records needed for pairing,
+              authorization and delivery outcomes. That is different from saying
+              nothing is stored.
+              <a href="/privacy">See what the pilot handles</a>.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Can I sign up today? <span aria-hidden="true">+</span>
+            </summary>
+            <p>
+              Access is invitation-only. There is no public signup, public
+              notarized Mac download or active subscription. Invited testers can
+              follow the <a href="/guides/getting-started">setup guide</a>;
+              everyone else can review
+              <a href="#availability">pilot availability</a>.
             </p>
           </details>
         </div>
@@ -514,54 +629,61 @@
       <section class="final-cta section-wrap">
         <svg aria-hidden="true"><use href="#pixel-facetime" /></svg>
         <h2>Your agent’s got a question.<br />You’ve got a life.</h2>
-        <a class="button button-primary" href="#text-it" data-text-it
-          ><svg><use href="#pixel-message" /></svg> Text it
+        <a
+          class="button button-primary"
+          href="#availability"
+          data-metric-action="availability"
+          ><svg><use href="#pixel-message" /></svg> See pilot availability
           <span class="button-arrow" aria-hidden="true">↗</span></a
-        ><span class="micro-label">SAY HELLO. THEN GO DO YOUR THING.</span>
+        ><span class="micro-label"
+          >INVITED PILOT. YOUR EXISTING CODING WORKFLOW.</span
+        >
       </section>
-      <section id="text-it" class="text-fallback section-wrap">
-        <!-- TEXT_CONTACT -->
-        <p>
-          Texting is not enabled on this instance. The live pilot is available
-          to invited testers.
-        </p>
-        <!-- /TEXT_CONTACT -->
+      <section id="availability" class="section-wrap availability-section">
+        <div>
+          <p class="eyebrow">CURRENT AVAILABILITY</p>
+          <h2>An invited pilot,<br />with a guided start.</h2>
+          <p>
+            Public signup and downloads are not open yet. If you have an
+            invitation, your pilot contact provides the trusted build and setup
+            instructions.
+          </p>
+        </div>
+        <div>
+          <a
+            class="button"
+            href="/guides/getting-started"
+            data-pilot-setup
+            data-metric-action="setup"
+            >Invited? Start setup <span aria-hidden="true">↗</span></a
+          >
+          <p class="availability-note">
+            The setup guide explains prerequisites. When texting is enabled,
+            this opens a Messages draft; you choose whether to send it.
+          </p>
+          <div id="text-it" class="text-fallback">
+            <!-- TEXT_CONTACT -->
+            <p>
+              Texting is not enabled on this instance. Use the instructions
+              supplied with your invitation.
+            </p>
+            <!-- /TEXT_CONTACT -->
+          </div>
+        </div>
       </section>
     </main>
     <footer class="site-footer section-wrap">
-      <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a
-      ><span>Good work doesn’t need a desk.</span
-      ><span class="footer-attribution"
-        >© 2026 ClawdTime · Built on
-        <img
-          class="chert-logo"
-          src="/assets/chert-logo.png"
-          alt="Chert"
-          width="812"
-          height="332"
-      /></span>
+      <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>
+      <nav aria-label="Footer">
+        <a href="/integrations/codex">Codex</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/guides/getting-started">Setup</a
+        ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+        ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
+          >GitHub ↗</a
+        >
+      </nav>
+      <span>© 2026 ClawdTime · Built on Chert</span>
     </footer>
-    <dialog id="text-dialog" aria-labelledby="text-dialog-title">
-      <button class="dialog-close" aria-label="Close" type="button">×</button
-      ><span class="eyebrow">YOU’RE EARLY.</span>
-      <div class="dialog-icon">
-        <svg><use href="#pixel-message" /></svg>
-      </div>
-      <h2 id="text-dialog-title">A hello starts it all.</h2>
-      <p>
-        Texting is not enabled on this instance. Use the live ClawdTime website
-        and your invited test handset to start setup.
-      </p>
-      <div class="message-preview">
-        <span>YOUR FIRST MESSAGE</span>
-        <p>Hey ClawdTime</p>
-      </div>
-      <p class="dialog-note">
-        Preview mode. Nothing is sent, and no call is placed.
-      </p>
-      <button class="button dialog-done" type="button">
-        Got it <span aria-hidden="true">↗</span>
-      </button>
-    </dialog>
   </body>
 </html>

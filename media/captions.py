@@ -46,6 +46,7 @@ class CaptionScene:
         self.feedback = 'listening'
         self.pending_sequence = None
         self.agent_text = ''
+        self.two_way_listening = False
         self.subtitle_at = self.clock()
         self.presentation = None
         self.presentation_binding = None
@@ -64,6 +65,7 @@ class CaptionScene:
         self.feedback = 'listening'
         self.pending_sequence = None
         self.policy_at = None
+        self.two_way_listening = False
         self.presentation = None
         self.presentation_binding = None
         self.presentation_sequence = max(self.presentation_sequence, self.presentation_floor)
@@ -94,6 +96,10 @@ class CaptionScene:
         elif policy.get('state') == 'paused' or policy.get('muted') is True:
             self.clear('paused')
         elif capture_allowed(policy):
+            two_way = policy.get('twoWayListening') is True
+            if self.two_way_listening != two_way:
+                self.revision += 1
+            self.two_way_listening = two_way
             target = 'speaking' if speaking else 'listening'
             if self.state not in ('listening', 'speaking'):
                 self.segments.clear()
@@ -187,6 +193,7 @@ class CaptionScene:
                     del entry['summary']
                     self.revision += 1
         return {'title': self.title, 'state': self.state,
+                'twoWayListening': self.two_way_listening,
                 'activityLabel':activity_label(self.presentation),
                 'activitySummary':((self.presentation.get('outcome', {}).get('summary', '')
                     if self.presentation['work'] in ('completed','canceled','uncertain') else self.presentation.get('currentSummary', '')) if self.presentation and not self.presentation.get('_readiness') else ''),
@@ -195,7 +202,7 @@ class CaptionScene:
                 'page': max(0, int((self.clock() - self.subtitle_at) / 5))}
 
     def hearing(self, text):
-        if self.snapshot()['state'] != 'listening':
+        if self.snapshot()['state'] != 'listening' and not (self.state == 'speaking' and self.two_way_listening):
             return
         text = clean_text(text, 8000)[-500:]
         if self.preview != text or self.feedback != 'hearing':
@@ -321,7 +328,7 @@ class CaptionRenderer:
             }.get(state, ('Captions unavailable', 'Check this chat to continue.'))
             return label, self.lines([text], limit=line_count)
         if snapshot.get('agentText'):
-            label = 'Agent speaking · mic paused' if state == 'speaking' else 'Listening · your turn'
+            label = ('Speaking · still listening' if snapshot.get('twoWayListening') else 'Agent speaking · mic paused') if state == 'speaking' else 'Listening · your turn'
             lines = self.lines([snapshot['agentText']], limit=None)
             pages = max(1, (len(lines) + line_count - 1) // line_count)
             page = snapshot.get('page', 0) % pages
@@ -351,7 +358,7 @@ class CaptionRenderer:
         draw.text((472,410), label, font=self.label_font, fill='#64dfaa')
         for index, line in enumerate(lines):
             draw.text((472,442+43*index),line,font=self.body_font,fill='white')
-        footer = ('Mic resumes after reply' if snapshot['state'] == 'speaking' else
+        footer = (('You can interrupt' if snapshot.get('twoWayListening') else 'Mic resumes after reply') if snapshot['state'] == 'speaking' else
                   'Say Stop to stop sharing' if snapshot['state'] == 'listening' else 'Check this chat to continue')
         draw.text((472,633),footer,font=self.label_font,fill='#b5c3d7')
         if snapshot.get('activityLabel') and snapshot['state'] in ('listening', 'speaking'):
@@ -364,6 +371,15 @@ class CaptionRenderer:
                 summary += '…'
             draw.text((472,353),summary,font=self.label_font,fill='white')
         return Image.alpha_composite(image,layer)
+
+    def camera_overlay(self, image, snapshot):
+        # Reserve the bottom strip, outside the source viewport and context row.
+        image=image.copy();draw=ImageDraw.Draw(image)
+        label,lines=self.subtitle(snapshot,1)
+        text=clean_text(label+' · '+(' '.join(lines)),140)
+        while text and draw.textlength(text,font=self.label_font)>1232:text=text[:-1]
+        draw.text((24,692),text,font=self.label_font,fill='#b5c3d7')
+        return image
 
     def render(self, snapshot):
         # Center-safe for a 9:16 phone crop of the 16:9 transport. All essential
@@ -401,12 +417,14 @@ class CaptionRenderer:
 
 
 class CaptionPublisher:
-    def __init__(self, scene, room, sdk=None, screen=None):
+    def __init__(self, scene, room, sdk=None, screen=None, document=None):
         if sdk is None:
             from livekit import rtc
             sdk = rtc
         self.scene, self.room, self.sdk = scene, room, sdk
         self.screen = screen
+        self.fps = 15 if getattr(getattr(screen, "owner", None), "env", {}).get("CLAWDTIME_SCREEN_CAMERA_ENABLED") == "true" else FPS
+        self.document = document
         self.renderer = CaptionRenderer()
         self.source = None
         self.publication = None
@@ -421,12 +439,25 @@ class CaptionPublisher:
         snapshot = self.scene.snapshot()
         if self.screen:
             self.screen.expire()
+        if self.document:
+            self.document.expire()
+        use_document = bool(self.document and self.document.image is not None)
         use_screen = bool(self.screen and (self.screen.screen_call or self.screen.selection or self.screen.starting))
-        revision = (snapshot['revision'], snapshot['page'], self.screen.revision if self.screen else None, use_screen)
-        if revision != self.last_revision:
-            image = self.renderer.overlay(self.screen.render(), snapshot) if use_screen else self.renderer.render(snapshot)
+        revision = (snapshot['revision'], snapshot['page'], self.screen.revision if self.screen else None, use_screen,
+                    self.document.revision if self.document else None, use_document)
+        camera=getattr(self.screen,'camera',None) if use_screen and not use_document else None
+        camera_revision=camera.status()['revision'] if camera else None
+        if revision != self.last_revision or (self.screen and getattr(self.screen,'camera',None)):
+            image = self.document.render() if use_document else (self.renderer.camera_overlay(self.screen.render(), snapshot) if use_screen and getattr(self.screen,'camera',None) else self.renderer.overlay(self.screen.render(), snapshot) if use_screen else self.renderer.render(snapshot))
             self.frame = self.sdk.VideoFrame(WIDTH, HEIGHT, self.sdk.VideoBufferType.RGBA, image.tobytes())
             self.last_revision = revision
+        # Rendering/encoding can itself cross a target witness deadline. Never
+        # publish that expired crop or mark, even on the synchronous renderer.
+        if camera:
+            self.screen.expire()
+            if self.screen.camera is not camera or camera.status()['revision']!=camera_revision:
+                self.frame=None;self.last_revision=None
+                return
         self.source.capture_frame(self.frame)
         if self.screen:
             self.screen.diagnostics.emitted(screen=bool(self.screen.frame))
@@ -438,7 +469,7 @@ class CaptionPublisher:
         try:
             track = self.sdk.LocalVideoTrack.create_video_track('clawdtime-screen', self.source)
             options = self.sdk.TrackPublishOptions(source=self.sdk.TrackSource.SOURCE_CAMERA,
-                simulcast=False, video_encoding=self.sdk.VideoEncoding(max_framerate=FPS, max_bitrate=1500000),
+                simulcast=False, video_encoding=self.sdk.VideoEncoding(max_framerate=self.fps, max_bitrate=1500000),
                 video_codec=self.sdk.VideoCodec.H264)
             self.publication = await self.room.local_participant.publish_track(track, options)
             self.emit()
@@ -450,7 +481,10 @@ class CaptionPublisher:
     async def run(self):
         try:
             while not self.closed:
-                await asyncio.sleep(1 / FPS)
+                # The encoding ceiling supports later negotiated camera motion;
+                # legacy peers retain their original publication cadence.
+                cadence = 15 if self.screen and getattr(self.screen, "camera", None) else FPS
+                await asyncio.sleep(1 / cadence)
                 self.emit()
         except asyncio.CancelledError:
             raise

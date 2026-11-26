@@ -12,8 +12,8 @@ or physical FaceTime screen delivery. Viewing must pass before testing control.
 
 Use an isolated Python 3.12 virtual environment in
 `~/Library/Application Support/ClawdTimeGateway`; do not install into Chert's
-runtime. Install `requirements.txt` into that environment. Copy `service.py` and
-`relay.py`, then start `python relay.py` under an owner-controlled LaunchAgent.
+runtime. Install `requirements.txt` into that environment. Copy the matched runtime
+files and `release-source.json` listed below, then start `python relay.py` under an owner-controlled LaunchAgent.
 Environment:
 
 - `DEVICE_GATEWAY_KEY`: fresh 32+ character gateway-only secret. Set the same key
@@ -59,6 +59,11 @@ itself publicly. Fixed helper origins allow HTTPS, loopback HTTP, or Tailscale
 - Frames and input text are never persisted by the gateway. Persisted records
   contain bindings, hashes, timestamps and receipts. Logs never print pixels,
   input text, tokens, or full request bodies.
+- Negotiated camera frame fetches allow up to three seconds for native frame
+  production and acknowledged stream cleanup. Returned frames still must be no
+  older than two seconds; stale pixels are rejected and prior input frame authority
+  is cleared. Other helper requests retain their 1.5-second timeout. A timeout is
+  not retried, and no uncertain input is replayed.
 - A control receipt marked `submitted` means the OS accepted an input event; it
   does not verify what the application did. Unknown results are reconciled by GET
   against the same action ID and never automatically reissued.
@@ -117,7 +122,7 @@ with generated relay request IDs, fixed stages, UTC timestamps, durations and
 statuses. Readiness polling is excluded; no payloads, paths, screen pixels or input
 text are recorded. Preserve the receipt tables when updating or inspecting it.
 A response-submitted stage is not proof of media receipt. Copy
-`relay_diagnostics.py` together with `service.py` and `relay.py` for a gateway
+`relay_diagnostics.py` and `native_relay.py` together with `service.py` and `relay.py` for a gateway
 source update; only the coordinating lead restarts the existing process after
 known call/lease cleanup. No companion replacement or permission reset is needed.
 
@@ -143,3 +148,62 @@ Readiness also returns the validated exact `activeLeaseId` when the helper has a
 active lease, alongside `activeLease`. Execution handoff checks that identity and
 current local armed/available/permission status after helper acknowledgement;
 a late acknowledgement cannot substitute another lease or override local Stop.
+
+Protocol-3 text-session leases omit `callId` and carry exact grant/project authority.
+`POST /v1/devices/:device/text-grants` only proposes a grant; the companion's local
+menu review is the sole approval action. Read status with
+`GET /v1/devices/:device/text-grants/:grant`. No relay route can approve a grant.
+Existing epoch/freshness/unknown-effect rules apply, and text receipts validate the
+exact grant/session rather than substituting a call. See [local grant scope](../docs/DEVICE.md#text-session-local-control-grants).
+
+## Camera wire compatibility
+
+Camera-version-1 leases are additive only to protocol 2 and require an exact
+selected surface. Creation checks the registered helper's advertised camera
+version; an old helper is refused before a camera lease is forwarded. The gateway
+forwards only the bounded `X-Camera-Frame` metadata header (up to 2048 base64
+characters) alongside the existing frame headers. Native camera dimensions may be
+up to 8192×8192 with a 32-million-pixel budget; the existing 2 MiB frame payload cap
+still applies. Non-camera leases retain 1280×720 bounds. Selection/owner fields
+cannot change in a renewal, including during executor transitions. The relay never
+caches pixels and retains existing tombstones/unknown-action receipts.
+
+Selected-window fallback actions are refused at the gateway before reserving an
+action receipt or contacting the helper. This matches the media/backend/native
+window-input guard and avoids turning a known unsupported target into an unknown
+external-effect receipt. Existing receipts remain queryable/reconcilable without
+reposting. Native CUA uses its own qualified tools under broker ownership; window
+camera coordinates never authorize a global click or keyboard target.
+
+The production read-only `POST /v1/leases/:id/presentation/resolve` route accepts
+only an exact window, optional process-lifetime hash, expected authority and its
+original short expiry. It requires the current version-2 selected-display camera
+lease in view mode with executor `none`, checks it again after the helper read,
+and never calls activation/input routes or retries. Resolver refusal does not
+retire an otherwise healthy capture lease. Only bounded metadata is returned;
+helper private error text is discarded. Both relay allowlists permit only this
+exact path with POST. `livePresentationVersion: 1` is forwarded only by scoped
+readiness for an allowed viewer on an attached display.
+
+### Production native activation
+
+`nativeActivationVersion: 1` is forwarded only for a controller-authorized attached
+display. `/v1/leases/{id}/native/prepare|dispatch` are authenticated narrow POSTs;
+`GET /v1/leases/{id}/native/{operation}` reconciles retained results even after
+lease Stop. Only Finder/TextEdit operations under current native ownership are
+valid. The gateway persists a device-wide reservation before dispatch and refuses
+replacement input/ownership while its result is uncertain. Duplicate IDs never
+resend input, including prepare after a completed dispatch. Preserve the
+`native_activations` table during deployment; receipt GET is the recovery path.
+
+Gateway rollout must copy `native_relay.py` together with `service.py`,
+`relay.py`, `relay_diagnostics.py`, `start.py` and the existing requirements.
+A gateway started from the repository uses these matched sources directly.
+Preserve its configured SQLite path and unknown rows; do not create an empty
+replacement database for an upgrade.
+
+Authenticated `GET /v1/version` returns the startup-loaded source manifest SHA,
+a deterministic SHA-256 over the five Python runtime files and capability version.
+Copy the release staging `release-source.json` containing the exact source SHA.
+The tracked development manifest deliberately reports `development`. This metadata
+contains no device configuration or secrets and does not authorize any activity.

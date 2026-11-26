@@ -20,6 +20,11 @@ struct HelperStatus: Codable {
   let panelCommand: PanelCommand?
   let retiredPanelCommands: [PanelCommand]
   let presentationVersion: Int
+  let textControlVersion: Int
+  let cameraVersion: Int
+  let livePresentationVersion: Int
+  let nativeActivationVersion: Int
+  let localEnableGeneration: Int
 }
 
 @MainActor final class DeviceApp: NSObject, NSApplicationDelegate {
@@ -28,9 +33,13 @@ struct HelperStatus: Codable {
   let policy: DevicePolicy
   let localPolicy: LocalExecutionPolicy
   let backgroundLedger: BackgroundExecutionStore
-  var unresolvedInputCount: Int { ledger.unresolvedActionCount + max(localLedger.unresolvedActions, backgroundLedger.unresolvedActions) }
+  var unresolvedInputCount: Int {
+    ledger.unresolvedActionCount + nativeHost.store.unresolved + max(localLedger.unresolvedActions, backgroundLedger.unresolvedActions)
+  }
   let localLedger: LocalExecutionStore
   let ledger: ReceiptStore
+  let nativeHost: InstalledNativeHost
+  let presentationHost=InstalledPresentationHost()
   let preferences: ControlPreferenceStore
   let controlPanel = ControlPanelState()
   let capture = ScreenCapture()
@@ -48,6 +57,7 @@ struct HelperStatus: Codable {
   var localFrameFocus: LocalFocusWitness?
   let localTargetProofs = LocalTargetProofs<LocalTargetSnapshot>()
   var localTargetGeneration = -1
+  var cameraMetadata: CameraFrameMetadata?
   var setupWindow: NSWindow?
   var setupStateLabel: NSTextField?
   var setupScreenLabel: NSTextField?
@@ -65,6 +75,7 @@ struct HelperStatus: Codable {
     try validateLocalOnlyConfiguration(config, localOnly: localOnly)
     self.config = config; self.localOnly = localOnly
     self.ledger = try ReceiptStore(url: ledgerURL)
+    self.nativeHost = try InstalledNativeHost(url: ledgerURL.deletingLastPathComponent().appendingPathComponent("native/receipts.json"))
     self.preferences = try ControlPreferenceStore(
       url: ledgerURL.deletingLastPathComponent().appendingPathComponent("control-policy.json"),
       deviceId: config.deviceId)
@@ -80,6 +91,7 @@ struct HelperStatus: Codable {
     let menu = NSMenu()
     menu.addItem(withTitle: "Control Panel…", action: #selector(showSetup), keyEquivalent: "")
       .target = self
+    menu.addItem(withTitle: "Review text control request…", action: #selector(reviewTextGrant), keyEquivalent: "").target = self
     menu.addItem(.separator())
     menu.addItem(
       withTitle: "Enable authorized screen work locally", action: #selector(arm), keyEquivalent: ""
@@ -175,6 +187,26 @@ struct HelperStatus: Codable {
     policy.arm()
     updateIndicator()
   }
+  @objc func reviewTextGrant() {
+    guard let grant = policy.pendingTextGrant else {
+      showError("No text-control request is awaiting local review.")
+      return
+    }
+    let alert = NSAlert()
+    alert.messageText = "Allow this text session to control the selected display?"
+    alert.informativeText = "Project: \(grant.projectRoot)\nSession: \(grant.sessionId)\nMember: \(grant.memberId)\nDisplay: \(grant.displayId)\nActions: \(grant.actions.joined(separator: ", "))\nExpires: \(Date(timeIntervalSince1970: grant.expiresAt / 1000))\nStop sharing revokes this grant."
+    alert.addButton(withTitle: "Allow scoped session")
+    alert.addButton(withTitle: "Reject")
+    if alert.runModal() == .alertFirstButtonReturn {
+      do {
+        guard unresolvedInputCount == 0 else {
+          throw HelperError(409, "Reconcile outstanding input before allowing control.")
+        }
+        try policy.approveTextGrant(id: grant.id, now: Date(), sessionAvailable: session.available)
+      } catch { showError(error.localizedDescription) }
+    } else { policy.rejectTextGrant() }
+    updateIndicator()
+  }
   @objc func stop() {
     controlPanel.clearActivity(stop: true)
     stopWork(reason: .explicitLocalStop)
@@ -192,6 +224,8 @@ struct HelperStatus: Codable {
     localFrameFocus = nil
     localTargetProofs.clear()
     policy.stop(disarm: true, reason: reason)
+    nativeHost.cancel()
+    presentationHost.cancel()
     updateIndicator()
   }
   @objc func unavailable(_ notification: Notification) {
@@ -234,6 +268,7 @@ struct HelperStatus: Codable {
     alert.runModal()
   }
   func updateIndicator() {
+    if !policy.armed || policy.lease == nil { nativeHost.cancel();presentationHost.cancel() }
     if policy.lease == nil { controlPanel.clearActivity(stop: true) }
     refreshSetup()
     let state =
@@ -329,7 +364,29 @@ struct HelperStatus: Codable {
             historicalObservedActionCount: ledger.historicalObservedActionCount,
             historicalUnverifiedActionCount: ledger.historicalUnverifiedActionCount,
             panelCommand: controlPanel.command,
-            retiredPanelCommands: controlPanel.retiredCommands, presentationVersion: 1))
+            retiredPanelCommands: controlPanel.retiredCommands, presentationVersion: 1,
+            textControlVersion: 1, cameraVersion: 1, livePresentationVersion: 1, nativeActivationVersion: 1, localEnableGeneration: policy.localEnableGeneration))
+      }
+      if request.method == "POST", request.path == "/v1/text-grants" {
+        let grant = try decode(TextControlGrant.self, request.body)
+        guard (ledger.unresolvedActionCount + nativeHost.store.unresolved) == 0 else {
+          throw HelperError(409, "Reconcile outstanding input before requesting control.")
+        }
+        try policy.proposeTextGrant(grant, now: Date(), sessionAvailable: session.available)
+        return try .json(["state": policy.textGrant?.id == grant.id ? "active" : "pending", "id": grant.id])
+      }
+      if request.method == "DELETE", parts.count == 3, parts[0] == "v1", parts[1] == "text-grants", validID(parts[2]) {
+        policy.revokeTextGrant(id: parts[2])
+        updateIndicator()
+        return try .json(["revoked":true])
+      }
+      if request.method == "GET", parts.count == 3, parts[0] == "v1", parts[1] == "text-grants", validID(parts[2]) {
+        _ = try? policy.check(now: Date(), sessionAvailable: session.available)
+        struct GrantStatus: Encodable { let state: String; let grant: TextControlGrant? }
+        if let grant = policy.textGrant, grant.id == parts[2] {
+          return try .json(GrantStatus(state: "active", grant: grant))
+        }
+        return try .json(GrantStatus(state: policy.pendingTextGrant?.id == parts[2] ? "pending" : "unavailable", grant: nil))
       }
       if request.method == "POST", request.path == "/v1/panel" {
         let telemetry = try decode(PanelTelemetry.self, request.body)
@@ -345,20 +402,27 @@ struct HelperStatus: Codable {
         // Authenticated metadata only: no TCC request, lease, frame or input.
         return try .json(config.displays)
       }
+      if request.method == "GET", request.path == "/v1/camera-surfaces" {
+        return try .json(await capture.cameraSurfaces())
+      }
       if request.method == "GET", request.path == "/v1/displays" {
         return try .json(await capture.displays())
       }
       if request.method == "POST", request.path == "/v1/leases" {
         let lease = try decode(Lease.self, request.body)
         guard backgroundLedger.unresolvedActions == 0 else { throw HelperError(409, "Unresolved background controller blocks helper admission.") }
+        guard nativeHost.store.unresolved == 0 else { throw HelperError(409,"native_operation_unresolved") }
         guard CGPreflightScreenCaptureAccess(), CGDisplayIsActive(lease.displayId) != 0 else {
           throw HelperError(403, "Screen Recording and a configured active display are required.")
         }
         guard !ledger.isHistoricallyRetiredLease(lease.id) else {
           throw HelperError(409, "This historical lease is retired; its input cannot be replayed.")
         }
-        if (unresolvedInputCount) > 0 && (lease.mode == "control" || (lease.protocolVersion == 2 && lease.executor != "none")) {
+        if unresolvedInputCount > 0 && (lease.mode == "control" || ([2, 3].contains(lease.protocolVersion ?? 0) && lease.executor != "none")) {
           throw HelperError(409, "Reconcile outstanding input before granting an executor.")
+        }
+        if policy.lease == nil, let surface = lease.surface {
+          _ = try await capture.cameraTarget(surface, initial: true)
         }
         try policy.begin(
           lease, now: Date(), sessionAvailable: session.available,
@@ -370,6 +434,43 @@ struct HelperStatus: Codable {
         throw HelperError(404, "Unknown route.")
       }
       let leaseId = parts[2]
+      if parts.count == 5, parts[3] == "native", request.method == "GET" {
+        return HTTPResponse(headers:["Cache-Control":"no-store"],body:try JSONSerialization.data(withJSONObject:nativeHost.store.receipt(id:parts[4],leaseId:leaseId)))
+      }
+      if parts.count == 5, parts[3] == "native", request.method == "POST", ["prepare","dispatch"].contains(parts[4]) {
+        let envelope=try NativeActivationEnvelope.decode(request.body,now:Date().timeIntervalSince1970*1000)
+        guard envelope.expected["leaseId"] as? String == leaseId else { throw HelperError(409,"native_lease_changed") }
+        let generation=policy.generation
+        let allowed = { [self] in
+          guard policy.generation == generation, CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(),
+            CGDisplayIsActive(envelope.expected["displayId"] as? UInt32 ?? 0) != 0,
+            policy.preferences.policy != .viewOnly, ledger.unresolvedActionCount == 0,
+            let lease=try? policy.requireLease(leaseId,now:Date(),sessionAvailable:session.available),
+            envelope.matches(lease,device:config.deviceId,now:Date()),
+            config.displays.contains(where: { $0.displayId == lease.displayId && $0.controllers.contains(lease.memberId) }) else { return false }
+          return true
+        }
+        let result=try await nativeHost.run(envelope,dispatch:parts[4] == "dispatch",allowed:allowed)
+        return HTTPResponse(headers:["Cache-Control":"no-store"],body:try JSONSerialization.data(withJSONObject:result))
+      }
+      if request.method == "POST", parts.count == 5, parts[3] == "presentation", parts[4] == "resolve" {
+        let value = try LeasePresentationRequest.decode(request.body, now: Date().timeIntervalSince1970 * 1000)
+        let lease = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
+        guard value.expected.leaseId == leaseId, value.matches(lease, now: Date()), (ledger.unresolvedActionCount + nativeHost.store.unresolved) == 0,
+          let native = value.nativeRequest(now: Date().timeIntervalSince1970 * 1000) else { throw HelperError(409, "presentation_authority_unavailable") }
+        let generation = policy.generation
+        let allowed = { [self] in
+          guard policy.generation == generation,CGPreflightScreenCaptureAccess(),AXIsProcessTrusted(),
+            CGDisplayIsActive(value.expected.displayId) != 0,
+            let current=try? policy.requireLease(leaseId,now:Date(),sessionAvailable:session.available),
+            value.matches(current,now:Date()),ledger.unresolvedActionCount+nativeHost.store.unresolved == 0 else { return false }
+          return true
+        }
+        let observation=try await presentationHost.resolve(native,allowed:allowed)
+        guard allowed(),value.processIdentity.map({ observation["processIdentity"] as? String == $0 }) ?? true,
+          ["appActive","windowFocused","windowOnScreen"].allSatisfy({ observation[$0] as? Bool == true }) else { throw HelperError(409,"presentation_authority_unavailable") }
+        return HTTPResponse(headers: ["Cache-Control":"no-store"], body: try JSONSerialization.data(withJSONObject: observation))
+      }
       if parts.count == 5, parts[3] == "actions", request.method == "GET" {
         return try .json(ledger.get(parts[4], leaseId: leaseId))
       }
@@ -388,12 +489,27 @@ struct HelperStatus: Codable {
           policy.invalidateFrame()
           throw HelperError(409, "Display geometry changed; obtain a new frame.")
         }
+        var inputBounds: CGRect? = nil
+        if let surface = lease.surface {
+          guard surface.kind == "display" else {
+            throw HelperError(403, "Selected-window fallback input is unavailable until exact hit-target qualification; use native tools or an authorized display.")
+          }
+          let (_, geometry) = try await capture.cameraTarget(surface)
+          guard let metadata = cameraMetadata, metadata.surface == surface,
+            metadata.source == geometry else {
+            policy.invalidateFrame()
+            throw HelperError(409, "Selected window geometry changed; obtain a new frame.")
+          }
+          _ = try policy.validateAction(action, leaseId: leaseId, now: Date(), sessionAvailable: session.available,
+            accessibility: AXIsProcessTrusted())
+          inputBounds = CGRect(x: geometry.originX, y: geometry.originY, width: geometry.pointWidth, height: geometry.pointHeight)
+        }
         _ = try ledger.begin(action, lease: lease, now: Date())
         do {
           _ = try policy.validateAction(
             action, leaseId: leaseId, now: Date(), sessionAvailable: session.available,
             accessibility: AXIsProcessTrusted())
-          try postInput(action, displayId: lease.displayId)
+          try postInput(action, displayId: lease.displayId, surfaceBounds: inputBounds)
           policy.invalidateFrame()
           return try .json(
             ledger.finish(
@@ -405,16 +521,23 @@ struct HelperStatus: Codable {
           throw error
         }
       }
+      if request.method == "DELETE", parts.count == 3, policy.isRetiredLease(leaseId) {
+        // Local Stop already revoked this exact grant. Acknowledge its tombstone
+        // without requiring armed state, rearming, or clearing input receipts.
+        return try .json(["stopped":true])
+      }
       let lease = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
       if request.method == "DELETE", parts.count == 3 {
         policy.stop()
+        nativeHost.cancel()
+        presentationHost.cancel()
         updateIndicator()
         return try .json(["stopped": true])
       }
       if request.method == "POST", parts.count == 4, parts[3] == "renew" {
         let renewed = try decode(Lease.self, request.body)
         guard renewed.id == leaseId else { throw HelperError(409, "Wrong lease renewal.") }
-        if renewed.executorEpoch != lease.executorEpoch && (unresolvedInputCount) > 0 {
+        if renewed.executorEpoch != lease.executorEpoch && unresolvedInputCount > 0 {
           throw HelperError(409, "Reconcile outstanding input before changing executor.")
         }
         try policy.renew(
@@ -431,12 +554,23 @@ struct HelperStatus: Codable {
         let generation = policy.generation
         let bounds = CGDisplayBounds(lease.displayId)
         policy.invalidateFrame()
-        let frame = try await capture.capture(lease.displayId)
+        cameraMetadata = nil
+        let frame: CapturedFrame
+        if let surface = lease.surface {
+          let captured = try await capture.cameraFrame(surface)
+          cameraMetadata = captured.metadata
+          frame = CapturedFrame(jpeg: captured.jpeg, width: captured.metadata.source.width, height: captured.metadata.source.height)
+        } else { frame = try await capture.capture(lease.displayId) }
         _ = try policy.requireLease(leaseId, now: Date(), sessionAvailable: session.available)
-        guard policy.generation == generation, Date().timeIntervalSince(startedAt) <= 2,
-          CGDisplayBounds(lease.displayId) == bounds
-        else {
-          throw HelperError(409, "Capture ended or switched while awaiting the frame.")
+        if lease.surface != nil {
+          guard policy.generation == generation else { throw CaptureRefusal(.authorityChanged) }
+          guard Date().timeIntervalSince(startedAt) <= 2 else { throw CaptureRefusal(.frameStale) }
+          guard CGDisplayBounds(lease.displayId) == bounds else { throw CaptureRefusal(.displayChanged) }
+        } else {
+          guard policy.generation == generation, Date().timeIntervalSince(startedAt) <= 2,
+            CGDisplayBounds(lease.displayId) == bounds else {
+            throw HelperError(409, "Capture ended or switched while awaiting the frame.")
+          }
         }
         let stamp = FrameStamp(
           id: UUID().uuidString, leaseId: leaseId, displayId: lease.displayId,
@@ -444,13 +578,18 @@ struct HelperStatus: Codable {
         try policy.recordFrame(stamp)
         try ledger.observedFrame(leaseId: leaseId, capturedAt: stamp.capturedAt)
         frameBounds = bounds
-        return HTTPResponse(
-          contentType: "image/jpeg",
-          headers: [
+        var headers = [
             "X-Frame-Id": stamp.id,
             "X-Captured-At": frameCaptureTimestamp(stamp.capturedAt),
             "X-Frame-Width": String(frame.width), "X-Frame-Height": String(frame.height),
-          ], body: frame.jpeg)
+        ]
+        if let metadata = cameraMetadata {
+          headers["X-Camera-Frame"] = try JSONEncoder().encode(metadata).base64EncodedString()
+        }
+        return HTTPResponse(
+          contentType: "image/jpeg",
+          headers: headers, body: frame.jpeg)
+
       }
       throw HelperError(404, "Unknown route.")
     } catch {
@@ -466,6 +605,151 @@ struct HelperStatus: Codable {
     do {
       let args = CommandLine.arguments
       let localOnly = Bundle.main.bundleIdentifier == "com.clawdtime.local-control"
+      if args.contains("--native-observe") {
+        guard args.count == 4, args[1] == "--native-observe", args[2] == "--target",
+          let bytes = args[3].data(using: .utf8), bytes.count <= 1024 else {
+          throw HelperError(400, "Use --native-observe --target with one exact window object.")
+        }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { exit(2) }
+        Task { @MainActor in
+          do {
+            let result = try nativeObservation(bytes)
+            let data = try JSONSerialization.data(withJSONObject: result)
+            guard data.count <= 8192 else { exit(2) }
+            FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10])); exit(0)
+          } catch {
+            let reason = (error as? HelperError)?.message ?? "observation_unavailable"
+            let data = try? JSONSerialization.data(withJSONObject: ["error":"native_observation_unavailable","reason":reason])
+            if let data { FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10])) }
+            exit(2)
+          }
+        }
+        application.run()
+        return
+      }
+      if args.contains("--preview-presentation-resolver") || args.contains("--installed-presentation-resolver") {
+        guard args.count == 2 else { throw HelperError(400, "Invalid read-only resolver arguments.") }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+        PreviewPresentationResolver(installed:args.contains("--installed-presentation-resolver")).run()
+        application.run()
+        return
+      }
+      if args.contains("--preview-native-executor") || args.contains("--installed-native-executor") {
+        guard args.count == 2 else { throw HelperError(400, "Invalid native preview arguments.") }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+        PreviewNativeExecutor(installed: args.contains("--installed-native-executor")).run()
+        application.run()
+        return
+      }
+      let cameraModes = ["--camera-list", "--camera-frame", "--camera-stream", "--camera-probe", "--camera-check", "--camera-local-status", "--camera-inspect", "--camera-find-window", "--camera-inspect-query"]
+      if args.contains(where: { $0.hasPrefix("--camera-") && !cameraModes.contains($0) }) {
+        throw HelperError(400, "Unsupported camera development mode; rebuild the development helper.")
+      }
+      if cameraModes.contains(where: args.contains) {
+        let probeLimits = try CameraProbeLimits(arguments: args)
+        let allowed = Set(cameraModes + ["--surface", "--query", "--probe-seconds"])
+        guard args.indices.dropFirst().allSatisfy({ allowed.contains(args[$0]) || args[$0].hasPrefix("{") || args[$0 - 1] == "--probe-seconds" }),
+          cameraModes.filter(args.contains).count == 1 else { throw HelperError(400, "Invalid camera preview arguments.") }
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+        Task { @MainActor in
+          do {
+            let capture = ScreenCapture()
+            if args.contains("--camera-local-status") {
+              guard args.count == 2 else { throw HelperError(400, "Local status takes no target arguments.") }
+              let refusal = LocalSessionGuard().refusal
+              let value: [String: Any] = ["sessionAvailable": refusal == nil,
+                "sessionReason": refusal?.rawValue ?? "available", "screenPermission": CGPreflightScreenCaptureAccess(),
+                "accessibilityPermission": AXIsProcessTrusted()]
+              print(String(data: try JSONSerialization.data(withJSONObject: value), encoding: .utf8)!)
+            } else if args.contains("--camera-list") {
+              print(String(data: try JSONEncoder().encode(await capture.cameraSurfaces()), encoding: .utf8)!)
+            } else if args.contains("--camera-find-window") || args.contains("--camera-inspect-query") {
+              guard let index = args.firstIndex(of: "--query"), index + 1 < args.count,
+                let bytes = args[index + 1].data(using: .utf8) else { throw HelperError(400, "Exact --query JSON required.") }
+              struct Query: Decodable { let bundleId: String; let title: String }
+              let query = try JSONDecoder().decode(Query.self, from: bytes)
+              if args.contains("--camera-inspect-query") {
+                print(String(data: try JSONEncoder().encode(await capture.cameraInspectQuery(bundleId: query.bundleId, title: query.title)), encoding: .utf8)!)
+              } else {
+                let surface = try await capture.cameraFindWindow(bundleId: query.bundleId, title: query.title)
+                print(String(data: try JSONEncoder().encode(surface), encoding: .utf8)!)
+              }
+            } else {
+              guard let index = args.firstIndex(of: "--surface"), index + 1 < args.count,
+                let bytes = args[index + 1].data(using: .utf8) else { throw HelperError(400, "Explicit --surface JSON required.") }
+              let surface = try JSONDecoder().decode(CameraSurface.self, from: bytes)
+              if args.contains("--camera-stream") {
+                try await CameraDisplayStream().run(surface)
+                return
+              }
+              if args.contains("--camera-check") {
+                // Run current exact-target guards without starting a capture.
+                _ = try await capture.cameraTarget(surface)
+                print("{\"captureAvailable\":true}")
+                exit(0)
+              }
+              if args.contains("--camera-inspect") {
+                print(String(data: try JSONEncoder().encode(await capture.cameraInspect(surface)), encoding: .utf8)!)
+                exit(0)
+              }
+              if args.contains("--camera-probe") {
+                // Explicit development-only capture of the same chosen surface.
+                // Bounded count/runtime, no configuration, listener or pixel output.
+                let deadline = DispatchWorkItem {
+                  fputs("Camera probe stopped at its \(probeLimits.processDeadlineSeconds)-second development deadline.\n", stderr)
+                  exit(2)
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + Double(probeLimits.processDeadlineSeconds), execute: deadline)
+                defer { deadline.cancel() }
+                guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
+                _ = try await capture.cameraTarget(surface, initial: true)
+                let started = ProcessInfo.processInfo.systemUptime
+                var frames = 0
+                do {
+                  while frames < probeLimits.maxFrames && ProcessInfo.processInfo.systemUptime - started < Double(probeLimits.seconds) {
+                    guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
+                    let frameStarted = ProcessInfo.processInfo.systemUptime
+                    _ = try await capture.cameraFrame(surface)
+                    guard LocalSessionGuard().available else { throw CaptureRefusal(.authorityChanged) }
+                    guard ProcessInfo.processInfo.systemUptime - frameStarted < 2 else { throw CaptureRefusal(.frameStale) }
+                    frames += 1
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                  }
+                } catch {
+                  print("{\"frames\":\(frames),\"completed\":false,\"elapsedMs\":\(Int((ProcessInfo.processInfo.systemUptime - started) * 1000))}")
+                  throw error
+                }
+                print("{\"frames\":\(frames),\"completed\":true,\"elapsedMs\":\(Int((ProcessInfo.processInfo.systemUptime - started) * 1000))}")
+                exit(0)
+              }
+              let started = Date()
+              guard LocalSessionGuard().available else { throw HelperError(423, "Active unlocked local session required.") }
+              let frame = try await capture.cameraFrame(surface)
+              guard LocalSessionGuard().available, Date().timeIntervalSince(started) < 2 else { throw HelperError(423, "Local session unavailable or capture stale.") }
+              struct Output: Encodable { var frameId: String; var capturedAt: String; var camera: CameraFrameMetadata; var jpegBase64: String }
+              print(String(data: try JSONEncoder().encode(Output(frameId: UUID().uuidString,
+                capturedAt: frameCaptureTimestamp(started), camera: frame.metadata, jpegBase64: frame.jpeg.base64EncodedString())), encoding: .utf8)!)
+            }
+            exit(0)
+          } catch {
+            if let refusal = error as? CaptureRefusal {
+              fputs("Camera preview refused: \(refusal.reason.rawValue)\n", stderr)
+            } else if let failure = error as? CaptureFailure {
+              fputs("Camera preview unavailable: \(failure.reason.rawValue), native_code=\(failure.nativeCode.map(String.init) ?? "none")\n", stderr)
+            } else {
+              fputs("Camera preview unavailable: \((error as? HelperError)?.message ?? "capture failed")\n", stderr)
+            }
+            exit((error as? HelperError)?.status == 425 ? 75 : 2)
+          }
+        }
+        application.run()
+        return
+      }
       let reconciliationMode = args.contains("--reconcile-legacy-receipts")
       guard !localOnly || !reconciliationMode else { throw HelperError(403, "Local Control does not reconcile call-helper receipts.") }
       if reconciliationMode && (args.contains("--list-displays") || args.contains("--check-config")) {

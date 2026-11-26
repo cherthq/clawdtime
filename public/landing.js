@@ -1,29 +1,5 @@
 document.documentElement.classList.add("js");
 
-const dialog = document.querySelector("#text-dialog");
-if (dialog) {
-  document.querySelectorAll("[data-text-it]").forEach((link) => {
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      dialog.showModal();
-    });
-  });
-  dialog.querySelectorAll(".dialog-close, .dialog-done").forEach((button) => {
-    button.addEventListener("click", () => dialog.close());
-  });
-  dialog.addEventListener("click", (event) => {
-    if (event.target !== dialog) return;
-    const bounds = dialog.getBoundingClientRect();
-    if (
-      event.clientX < bounds.left ||
-      event.clientX > bounds.right ||
-      event.clientY < bounds.top ||
-      event.clientY > bounds.bottom
-    )
-      dialog.close();
-  });
-}
-
 const demo = document.querySelector("#call-demo");
 if (demo) {
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -35,38 +11,38 @@ if (demo) {
   const scenes = [
     {
       status: "NEEDS YOU",
-      badge: "FAIL",
-      caption: "Build stuck. Your phone rings.",
+      badge: "REVIEW",
+      caption: "A choice to make. Your phone rings.",
       eyebrow: "INCOMING FACETIME",
       subtitle: "A little help over here?",
-      output: "× Timed out after 5000ms",
-      detail: "One test. One quick question.",
+      output: "A: “Good work doesn’t need a desk.”",
+      detail: "B: “Bring your work with you.”",
       agent: "↗ Calling you for a second opinion…",
-      mini: "× flaky.test.ts",
-      speech: "“Skip that test.”",
+      mini: "? Choose a headline",
+      speech: "“Use the first one.”",
     },
     {
       status: "YOU’RE CONNECTED",
-      badge: "FAIL",
-      caption: "See the screen. Say the fix.",
+      badge: "REVIEW",
+      caption: "See the options. Make the choice.",
       eyebrow: "FACETIME · SCREEN SHARING",
       subtitle: "Your Mac, right here.",
-      output: "× Timed out after 5000ms",
+      output: "A: “Good work doesn’t need a desk.”",
       detail: "Waiting for your direction…",
-      agent: "→ You: “Skip that test.”",
-      mini: "× flaky.test.ts",
-      speech: "“Skip that test.”",
+      agent: "→ You: “Use the first one.”",
+      mini: "? Choose a headline",
+      speech: "“Use the first one.”",
     },
     {
       status: "BACK TO WORK",
-      badge: "SKIP",
+      badge: "READY",
       caption: "Unblocked. Back to your day.",
       eyebrow: "FACETIME · SCREEN SHARING",
       subtitle: "Got it. Carrying on.",
-      output: "✓ Build passed · 1 test skipped",
-      detail: "20 passed · 1 skipped",
+      output: "✓ Headline updated in the draft",
+      detail: "Your choice. Your agent carries on.",
       agent: "✓ Your agent is carrying on.",
-      mini: "− flaky.test.ts skipped",
+      mini: "✓ First headline selected",
       speech: "“On it. Thanks!”",
     },
   ];

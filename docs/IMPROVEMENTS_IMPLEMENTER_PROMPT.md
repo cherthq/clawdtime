@@ -1,5 +1,12 @@
 # Implementer prompt: ClawdTime improvements
 
+**Historical A–F handoff:** `STATUS.md` now records this implementation as locally
+complete. Do not rerun it merely because this prompt is present. The November 13
+follow-up implements iMessage-first control and gated two-way voice described in
+[VOICE_INTERACTION_PLAN.md](VOICE_INTERACTION_PLAN.md) and section 8 of the
+improvements plan. Current implementation evidence is in `STATUS.md`; this
+historical prompt does not authorize a rollout or physical call.
+
 Copy the prompt below into the implementation chat. This file and the detailed
 plan were prepared as uncommitted drafts on November 13, 2026. The user subsequently authorized implementation, commits and a push to
 `origin/improvements`; they do not authorize a live test.

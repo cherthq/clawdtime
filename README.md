@@ -3,7 +3,7 @@
 <p align="center"><strong>A computer use agent for your Mac</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.4.0-blue" alt="Version 0.4.0">
   <a href="https://www.clawdtime.com"><img src="https://img.shields.io/badge/ClawdTime-Website-black" alt="ClawdTime website"></a>
   <img src="https://img.shields.io/badge/status-internal_pilot-orange" alt="Internal pilot">
 </p>
@@ -70,17 +70,35 @@ tools) and an iPhone.
 
 `clawdtime computer doctor` says what is ready and what is missing.
 
+## Opt-in previews
+
+These parts are off until you select them. Tests cover them, but they still
+need a check on a real Mac and phone before you rely on them.
+
+- **Window sharing.** Share one window or one display on a call, and crop
+  and zoom it. `npm run preview:camera` opens a local preview with no call.
+- **Prepared walkthroughs.** The agent stages a walkthrough of two apps and
+  raises each exact window in turn. `npm run prepare:presentation`, then
+  `npm run test:presentation`.
+- **Streaming voice.** A new session can use `--voice-frontend elevenlabs`.
+  `npm run test:voice:camera` checks the path with no provider or phone.
+- **Text sessions.** A paired person can control a scoped session by iMessage.
+  You approve each grant on the Mac.
+
 ## Read more
 
-| Page                                                       | What it covers                                                  |
-| ---------------------------------------------------------- | --------------------------------------------------------------- |
-| [INSTRUCTIONS.md](INSTRUCTIONS.md)                         | The full user guide: every command, setting and phrase          |
-| [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md)                   | The Chert line step by step: calls, texts and the line agent    |
-| [AGENTS.md](AGENTS.md)                                     | Rules for coding agents that work in this repository            |
-| [docs/COMPUTER_USE.md](docs/COMPUTER_USE.md)               | How computer use works: the planner, the checks and the limits  |
-| [docs/SUPERVISOR.md](docs/SUPERVISOR.md)                   | The chat, voice, memory, the trove and answers to coding agents |
-| [docs/AUTOMATIC_CALL_ZOOM.md](docs/AUTOMATIC_CALL_ZOOM.md) | Zoom on the call video                                          |
-| [docs/AGENT_BOARD.md](docs/AGENT_BOARD.md)                 | The coding agent sessions on this Mac                           |
-| [docs/DESKTOP_SPACES.md](docs/DESKTOP_SPACES.md)           | Moves between desktops and apps                                 |
-| [docs/CODING_DEMO_DESKTOP.md](docs/CODING_DEMO_DESKTOP.md) | The desktop service and the panel: options, recovery and limits |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)               | The parts and how they connect                                  |
+| Page                                                                             | What it covers                                                  |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [INSTRUCTIONS.md](INSTRUCTIONS.md)                                               | The full user guide: every command, setting and phrase          |
+| [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md)                                         | The Chert line step by step: calls, texts and the line agent    |
+| [AGENTS.md](AGENTS.md)                                                           | Rules for coding agents that work in this repository            |
+| [docs/COMPUTER_USE.md](docs/COMPUTER_USE.md)                                     | How computer use works: the planner, the checks and the limits  |
+| [docs/SUPERVISOR.md](docs/SUPERVISOR.md)                                         | The chat, voice, memory, the trove and answers to coding agents |
+| [docs/AUTOMATIC_CALL_ZOOM.md](docs/AUTOMATIC_CALL_ZOOM.md)                       | Zoom on the call video                                          |
+| [docs/AGENT_BOARD.md](docs/AGENT_BOARD.md)                                       | The coding agent sessions on this Mac                           |
+| [docs/DESKTOP_SPACES.md](docs/DESKTOP_SPACES.md)                                 | Moves between desktops and apps                                 |
+| [docs/CODING_DEMO_DESKTOP.md](docs/CODING_DEMO_DESKTOP.md)                       | The desktop service and the panel: options, recovery and limits |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                     | The parts and how they connect                                  |
+| [docs/CONVERSATIONAL_CONTROL_RELEASE.md](docs/CONVERSATIONAL_CONTROL_RELEASE.md) | The opt-in voice, text and job previews, and their checks       |
+| [docs/AUDIO_QUALIFICATION.md](docs/AUDIO_QUALIFICATION.md)                       | The audio test mode for a line                                  |
+| [media/README.md](media/README.md)                                               | The media service, the camera preview and its checks            |

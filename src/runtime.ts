@@ -1,3 +1,4 @@
+import { activeAudioQualification } from "./attention/audio-qualification.js";
 import { PanelSynchronizer } from "./control/panel.js";
 import { retireObsoleteNotice as retireNotice } from "./control/obsolete-notice.js";
 import { SetupService } from "./pairing/setup.js";
@@ -25,6 +26,22 @@ import { MediaDevicePort } from "../media/device-port.js";
 import { configuredConversationAgent } from "./control/conversation.js";
 import { createApp } from "./app.js";
 import type { AttentionRequest, Pairing } from "./contracts.js";
+import { RemoteExecutionRunner } from "./control/remote-runner.js";
+import { JobBroker } from "./attention/jobs.js";
+import { AttachmentService } from "./attention/attachments.js";
+import { NativeAttachmentPort } from "./transport/attachments.js";
+import { DocumentService } from "./control/documents.js";
+import {
+  JobConversation,
+  configuredTextModel,
+} from "./control/job-conversation.js";
+import {
+  BoundedDesktopRunner,
+  RoutedExecutionRunner,
+  configuredDesktopPlanner,
+} from "./control/desktop-runner.js";
+import { MediaTextDevicePort } from "./control/text-device.js";
+import { CodexAppServerRunner } from "../connectors/codex/runner.js";
 
 interface Tester {
   memberId: string;
@@ -210,12 +227,86 @@ export function createRuntime(
       transport.bindingFingerprint(),
     );
   const service = new ClawdTime(store, transport);
+  const codexRunner = new CodexAppServerRunner({
+    enabled:
+      env.CLAWDTIME_CONVERSATION_ENABLED === "true" &&
+      env.CLAWDTIME_CODEX_RUNNER_ENABLED === "true" &&
+      mode !== "standby",
+    version: env.CLAWDTIME_CODEX_RUNNER_VERSION ?? "unqualified",
+    binary: env.CLAWDTIME_CODEX_BINARY,
+    model: env.CLAWDTIME_EXECUTOR_MODEL,
+    projectRoots: env.CLAWDTIME_EXECUTOR_PROJECT_ROOTS
+      ? z
+          .array(z.string().min(1))
+          .max(20)
+          .parse(
+            parseProtectedJSON<{ roots: unknown }>(
+              `{"roots":${env.CLAWDTIME_EXECUTOR_PROJECT_ROOTS}}`,
+            ).roots,
+          )
+      : [],
+  });
+  const textDevice =
+    config && env.CLAWDTIME_TEXT_CONTROL_ENABLED === "true"
+      ? new MediaTextDevicePort(config.mediaOrigin, config.mediaKey)
+      : undefined;
+  const desktopPlanner = configuredDesktopPlanner(env);
+  const desktopRunner =
+    textDevice && desktopPlanner
+      ? new BoundedDesktopRunner(service, textDevice, desktopPlanner, {
+          enabled: mode !== "standby",
+          adapter: "custom",
+          version: "text-control-v1",
+        })
+      : undefined;
+  const remoteRunner = new RemoteExecutionRunner(
+    service,
+    env.CLAWDTIME_CONVERSATION_ENABLED === "true" && mode !== "standby",
+  );
+  const documentRunner = new RemoteExecutionRunner(
+    service,
+    env.CLAWDTIME_CONVERSATION_ENABLED === "true" &&
+      env.CLAWDTIME_DOCUMENTS_ENABLED === "true" &&
+      mode !== "standby",
+    "remote-documents",
+  );
+  const jobs = new JobBroker(service, [
+    remoteRunner,
+    documentRunner,
+    new RoutedExecutionRunner(codexRunner, desktopRunner),
+  ]);
+  const documents =
+    env.CLAWDTIME_CONVERSATION_ENABLED === "true" &&
+    env.CLAWDTIME_DOCUMENTS_ENABLED === "true" &&
+    mode !== "standby"
+      ? new DocumentService(service, jobs, origin)
+      : undefined;
+  if (
+    documents &&
+    transport instanceof NativeTransport &&
+    env.CLAWDTIME_DOCUMENT_SEND_ENABLED === "true"
+  )
+    documents.attachments = new AttachmentService(
+      service,
+      new NativeAttachmentPort(transport),
+      documents,
+    );
+  const conversation =
+    env.CLAWDTIME_CONVERSATION_ENABLED === "true" && mode !== "standby"
+      ? new JobConversation(service, jobs, configuredTextModel(env), documents)
+      : undefined;
   const setup = new SetupService(service);
   const device = config
     ? new MediaDevicePort(config.mediaOrigin, config.mediaKey)
     : new SimulatedDevice();
   const control = new ControlCoordinator(store, device),
-    viewing = new Viewing(store, device, Date.now, transport.mode === "live");
+    viewing = new Viewing(
+      store,
+      device,
+      Date.now,
+      transport.mode === "live",
+      env.CLAWDTIME_SCREEN_CAMERA_ENABLED === "true",
+    );
   const panel = new PanelSynchronizer(service, control);
   const human = new HumanRouter(
     service,
@@ -227,7 +318,12 @@ export function createRuntime(
   );
   const vault = config ? new Vault(config.encryptionKey) : undefined;
   const app = createApp(service, control, human, {
+    documentRunner,
+    documents,
     origin,
+    conversation,
+    textDevice,
+    remoteRunner,
     compatibleOrigins,
     reportError,
     retireSetupInvitation:
@@ -248,6 +344,32 @@ export function createRuntime(
     operatorToken: env.CLAWDTIME_OPERATOR_TOKEN,
     mediaToken: env.CLAWDTIME_MEDIA_TOKEN,
     simulation: mode === "simulation",
+    websiteAnalyticsEnabled: env.CLAWDTIME_WEBSITE_ANALYTICS_ENABLED === "true",
+    audioQualificationReadiness:
+      transport instanceof NativeTransport
+        ? async () => {
+            const [media, line] = await Promise.all([
+              transport.audioQualificationReadiness(),
+              transport.preflight({
+                requireIdle: true,
+                requireDeviceGateway: false,
+              }),
+            ]);
+            return { ...media, transportReady: line.liveReady };
+          }
+        : undefined,
+    audioQualificationEnabled:
+      env.CLAWDTIME_AUDIO_QUALIFICATION_ENABLED === "true",
+    screenCameraEnabled: env.CLAWDTIME_SCREEN_CAMERA_ENABLED === "true",
+    livePresentationEnabled: env.CLAWDTIME_LIVE_PRESENTATION_ENABLED === "true",
+    nativeActivationEnabled: env.CLAWDTIME_NATIVE_ACTIVATION_ENABLED === "true",
+    elevenLabsEnabled: env.CLAWDTIME_ELEVENLABS_ENABLED === "true",
+    elevenLabsReadiness:
+      transport instanceof NativeTransport
+        ? () => transport.elevenLabsReadiness()
+        : undefined,
+    twoWayVoiceEnabled: env.CLAWDTIME_TWO_WAY_VOICE_ENABLED === "true",
+    remoteAudioIsolated: env.CLAWDTIME_REMOTE_AUDIO_ISOLATED === "true",
     dispatchEnabled: mode !== "standby",
     publicTextNumber:
       live && env.CLAWDTIME_PUBLIC_TEXTING === "true"
@@ -267,6 +389,7 @@ export function createRuntime(
       });
   for (const n of store.all<Inbound>("inbound"))
     if (n.state === "running") store.put("inbound", { ...n, state: "unknown" });
+  const frontendTasks = new Set<Promise<void>>();
   let ticking = false;
   let stopping = false;
   let finishTick: (() => void) | undefined;
@@ -284,6 +407,7 @@ export function createRuntime(
       "line_handoff",
       "handoff_boundary",
       "native_identity",
+      "native_text_transport",
       "native_cursor",
       "logical_identity",
       "line_occupancy",
@@ -295,7 +419,7 @@ export function createRuntime(
       )
     )
       throw new Error(
-        "Inbound polling requires verified exclusive ownership and an exact retained boundary.",
+        "Inbound polling requires verified exclusive ownership, an exact retained boundary, and the configured text transport.",
       );
   }
   async function pollInbox() {
@@ -332,6 +456,8 @@ export function createRuntime(
     if (maintenance) return maintenance;
     maintenance = (async () => {
       service.expireSessions();
+      documents?.maintain();
+      await maintainTextGrants();
       human.turns.prune();
       setup.expire();
       if (!live || !(transport instanceof NativeTransport) || !config || !vault)
@@ -378,6 +504,11 @@ export function createRuntime(
             continue;
           store.put("inbound", { ...item, state: "running" });
           try {
+            if (requests[0]!.audioQualification !== undefined) {
+              service.stopAudioQualification(requests[0]!.id);
+              store.put("inbound", { ...item, sealed: "", state: "done" });
+              continue;
+            }
             await human.receive({
               eventId: event.id,
               requestId: requests[0]!.id,
@@ -387,6 +518,19 @@ export function createRuntime(
               channel: "text",
               text: event.text,
             });
+            const session = store.get<import("./contracts.js").AgentSession>(
+              "session",
+              requests[0]!.sessionId,
+            );
+            if (conversation && session?.conversation) {
+              await conversation.receive(
+                conversation.binding(session),
+                { channel: "text", eventId: event.id },
+                event.text,
+              );
+              store.put("inbound", { ...item, sealed: "", state: "done" });
+              continue;
+            }
             store.transaction(() => {
               store.put<Notice>("notice", {
                 id: `${event.id}:notice`,
@@ -425,11 +569,52 @@ export function createRuntime(
     });
     return maintenance;
   }
+  async function maintainTextGrants() {
+    if (!textDevice) return;
+    for (const grant of store.all<import("./contracts.js").TextControlGrant>(
+      "text_control_grant",
+    )) {
+      const session = store.get<import("./contracts.js").AgentSession>(
+        "session",
+        grant.sessionId,
+      );
+      const pairing = store.get<Pairing>("pairing", grant.pairingId);
+      if (
+        grant.state === "active" &&
+        !stopping &&
+        mode !== "standby" &&
+        session?.state !== "stopped" &&
+        session &&
+        pairing?.revokedAt === undefined &&
+        pairing &&
+        service.clock() - (session.lastSeenAt ?? session.createdAt) < 20_000 &&
+        grant.expiresAt > service.clock()
+      )
+        continue;
+      store.put("text_control_grant", { ...grant, state: "revoked" });
+      if (store.get("text_grant_revocation", grant.id)) continue;
+      store.put("text_grant_revocation", {
+        id: grant.id,
+        state: "dispatching",
+      });
+      try {
+        await textDevice.revokeGrant(grant.deviceId, grant.id);
+        store.put("text_grant_revocation", {
+          id: grant.id,
+          state: "confirmed",
+        });
+      } catch {
+        store.put("text_grant_revocation", { id: grant.id, state: "unknown" });
+      }
+    }
+  }
   async function tick() {
     if (ticking || stopping) return;
     ticking = true;
     try {
       service.expireSessions();
+      documents?.maintain();
+      await maintainTextGrants();
       human.turns.prune();
       setup.expire();
       if (live && transport instanceof NativeTransport && config && vault) {
@@ -470,6 +655,15 @@ export function createRuntime(
                   p.lineId === event.lineId &&
                   p.revokedAt === undefined,
               );
+            const audioTest =
+              pairing && activeAudioQualification(store, pairing);
+            if (audioTest) {
+              if (isImmediateStop(event.text))
+                service.stopAudioQualification(audioTest.id);
+              // Audio-test text cannot become task input, a notice, or a future replay.
+              store.put("inbound", { ...item, sealed: "", state: "done" });
+              continue;
+            }
             if (setup.receive(event)) {
               store.put("inbound", { ...item, state: "done" });
               continue;
@@ -487,6 +681,74 @@ export function createRuntime(
                 displayId: tester.displayId,
               });
             } else {
+              const selected = conversation?.selected(pairing);
+              if (
+                selected &&
+                !/^\/(?:sessions|use)(?:\s|$)/i.test(event.text.trim())
+              ) {
+                if (isImmediateStop(event.text)) {
+                  const request = store
+                    .all<AttentionRequest>("attention")
+                    .find(
+                      (r) =>
+                        r.sessionId === selected.id &&
+                        ["connected", "awaiting_input", "ringing"].includes(
+                          r.state,
+                        ),
+                    );
+                  if (request)
+                    await human.receive({
+                      eventId: event.id,
+                      requestId: request.id,
+                      memberId: pairing.memberId,
+                      lineId: event.lineId,
+                      conversationId: event.conversationId,
+                      channel: "text",
+                      text: event.text,
+                    });
+                }
+                const task = conversation!
+                  .receive(
+                    conversation!.binding(selected),
+                    { channel: "text", eventId: event.id },
+                    event.text,
+                  )
+                  .then(() => {
+                    store.put("inbound", {
+                      ...item,
+                      sealed: "",
+                      state: "done",
+                    });
+                  })
+                  .catch(() => {
+                    store.put("inbound", {
+                      ...item,
+                      sealed: "",
+                      state: "unknown",
+                    });
+                  })
+                  .finally(() => frontendTasks.delete(task));
+                frontendTasks.add(task);
+                continue;
+              }
+              const textFirst = store
+                .all<import("./contracts.js").AgentSession>("session")
+                .some(
+                  (session) =>
+                    session.pairingId === pairing.id &&
+                    session.interaction?.version === 1 &&
+                    session.state !== "stopped" &&
+                    service.clock() -
+                      (session.lastSeenAt ?? session.createdAt) <
+                      20_000 &&
+                    (session.lastSeenAt ?? session.createdAt) <=
+                      service.clock() + 1000,
+                );
+              const routed =
+                textFirst ||
+                /^\/(?:sessions|use)(?:\s|$)/i.test(event.text.trim())
+                  ? human.turns.resolveTextTarget(pairing.id, event)
+                  : undefined;
               const pending = store
                 .all<AttentionRequest>("attention")
                 .filter(
@@ -496,13 +758,17 @@ export function createRuntime(
                       r.state,
                     ),
                 );
-              if (pending.length !== 1)
+              const requestId =
+                routed?.requestId ??
+                (!routed && pending.length === 1 ? pending[0]!.id : undefined);
+              if (routed?.reply) reply = routed.reply;
+              else if (!requestId)
                 reply =
                   "There is no single pending agent request. Start an attention request from your connected coding agent. Starting general work from Messages is planned.";
               else {
                 const result = (await human.receive({
                   eventId: event.id,
-                  requestId: pending[0]!.id,
+                  requestId,
                   memberId: pairing.memberId,
                   lineId: event.lineId,
                   conversationId: event.conversationId,
@@ -518,12 +784,13 @@ export function createRuntime(
                 if (
                   store.get<import("./contracts.js").AgentSession>(
                     "session",
-                    pending[0]!.sessionId,
+                    store.get<AttentionRequest>("attention", requestId)!
+                      .sessionId,
                   )?.protocolVersion === 2 &&
                   result.accepted &&
                   !result.stopped
                 ) {
-                  // The exact originating agent supplies speech; no parallel narrator.
+                  // Negotiated status/result effects are drained once by the service.
                   store.put("inbound", { ...item, sealed: "", state: "done" });
                   continue;
                 }
@@ -562,6 +829,7 @@ export function createRuntime(
         for (const n of store
           .all<Notice>("notice")
           .filter((n) => n.state === "pending")) {
+          if (activeAudioQualification(store, n.pairing)) continue;
           const dispatch = {
             startedAt: Date.now(),
             operationOrigin: `text_${hash(n.id).slice(0, 32)}`,
@@ -605,6 +873,10 @@ export function createRuntime(
         }
       }
       if (stopping) return;
+      if (conversation) {
+        jobs.dispatch();
+        conversation.reportUpdates();
+      }
       if (mode === "standby") {
         for (const r of store.all<AttentionRequest>("attention"))
           if (
@@ -676,6 +948,12 @@ export function createRuntime(
   }
   async function stop() {
     stopping = true;
+    await documents?.attachments?.stop();
+    documents?.close();
+    await jobs.stop();
+    await maintainTextGrants();
+    await codexRunner.close();
+    await Promise.allSettled(frontendTasks);
     if (maintenance) await maintenance.catch(() => {});
     if (inboxPoll) await inboxPoll.catch(() => {});
     if (ticking)
@@ -683,5 +961,16 @@ export function createRuntime(
         finishTick = resolve;
       });
   }
-  return { app, store, service, control, human, transport, tick, stop };
+  return {
+    app,
+    store,
+    service,
+    control,
+    human,
+    transport,
+    jobs,
+    conversation,
+    tick,
+    stop,
+  };
 }

@@ -46,11 +46,14 @@ class DeviceActions:
 
     async def post(self,request):
         sid=request.match_info['id'];body=await request.json()
+        session=self.owner.sessions.get(sid)
+        if session and getattr(session, 'audio_qualification', False):
+            raise web.HTTPConflict(text='Acoustic sessions cannot execute device actions.')
         required={'id','leaseId','callId','memberId','deviceId','displayId','frameId','type'}
-        if not isinstance(body,dict) or not required.issubset(body) or not set(body).issubset(required|{'x','y','text','deltaY','sessionId','executorEpoch','policyRevision'}):raise web.HTTPBadRequest()
+        if not isinstance(body,dict) or not required.issubset(body) or not set(body).issubset(required|{'x','y','text','deltaY','sessionId','executorEpoch','policyRevision','presentation'}):raise web.HTTPBadRequest()
         if any(not isinstance(body[k],str) or not 0<len(body[k])<=160 for k in required-{'displayId'}):raise web.HTTPBadRequest()
         if any(not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',body[k]) for k in ('id','leaseId','callId','memberId','deviceId','frameId')):raise web.HTTPBadRequest()
-        action={k:v for k,v in body.items() if k not in ('leaseId','callId','memberId','deviceId','displayId')}
+        action={k:v for k,v in body.items() if k not in ('leaseId','callId','memberId','deviceId','displayId','presentation')}
         kind=action['type'];keys={'id','frameId','type'}|({'x','y'} if kind=='click' else {'x','y','deltaY'} if kind=='scroll' else {'text'} if kind=='type' else set())
         if kind not in ('click','scroll','type') or set(action) not in (keys,keys|{'sessionId','executorEpoch','policyRevision'}):raise web.HTTPBadRequest()
         if kind in ('click','scroll') and any(type(action[k]) not in (int,float) or not 0<=action[k]<=1 for k in ('x','y')):raise web.HTTPBadRequest()
@@ -65,27 +68,38 @@ class DeviceActions:
         if not session or not session.screen:raise web.HTTPConflict()
         policy=await self.owner.backend(f'/media/{sid}/policy')
         session.screen.update(policy)
-        current=session.screen.status();selection=session.screen.selection
-        if not selection or current['state']!='viewing' or selection['mode']!='control' or current['frameId']!=body['frameId'] or any(selection[k]!=body[k] for k in ('leaseId','callId','memberId','deviceId','displayId')):
-            raise web.HTTPConflict(text='Fresh authorized control frame required.')
-        if selection.get('protocolVersion')==2:
-            if any(body.get(k)!=selection[k] for k in ('sessionId','executorEpoch','policyRevision')) or selection['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
-        elif any(k in body for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()
-        # Recheck after authorization await; never dispatch a duplicate concurrently.
-        previous=self.db.execute('SELECT session,fingerprint FROM device_actions WHERE id=?',(body['id'],)).fetchone()
-        if previous:
-            if previous!=(sid,fingerprint):raise web.HTTPConflict()
+        async with session.screen.frame_lock:
+            current=session.screen.status();selection=session.screen.selection
+            if not selection or current['state']!='viewing' or selection['mode']!='control' or current['frameId']!=body['frameId'] or any(selection[k]!=body[k] for k in ('leaseId','callId','memberId','deviceId','displayId')):
+                raise web.HTTPConflict(text='Fresh authorized control frame required.')
+            if selection.get('protocolVersion')==2:
+                if any(body.get(k)!=selection[k] for k in ('sessionId','executorEpoch','policyRevision')) or selection['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
+            elif any(k in body for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()
+            if session.screen.camera:
+                camera=session.screen.camera
+                state=camera.status()
+                if state['surface']['kind']=='window':raise web.HTTPConflict(text='Selected-window fallback input awaits exact native hit-target qualification.')
+                if state['state']!='live' or state['moving']:raise web.HTTPConflict(text='Fresh stable unpaused camera required.')
+                if 'presentation' in body:
+                    if kind not in ('click','scroll'):raise web.HTTPBadRequest(text='Presentation coordinates require a point action.')
+                    try:action['x'],action['y']=camera.map_input(body['presentation'],action['x'],action['y'])
+                    except ValueError:raise web.HTTPConflict(text='Presentation changed; observe again.')
+            elif 'presentation' in body:raise web.HTTPConflict(text='Camera was not negotiated.')
+            # Recheck after authorization await; never dispatch a duplicate concurrently.
+            previous=self.db.execute('SELECT session,fingerprint FROM device_actions WHERE id=?',(body['id'],)).fetchone()
+            if previous:
+                if previous!=(sid,fingerprint):raise web.HTTPConflict()
+                return web.json_response(self.receipt(sid,body['id']))
+            if self.db.execute("SELECT id FROM device_actions WHERE session=? AND lease=? AND state IN ('accepted','unknown')",(sid,body['leaseId'])).fetchone():
+                raise web.HTTPConflict(text='The previous input requires reconciliation before another action.')
+            self.db.execute('INSERT INTO device_actions VALUES(?,?,?,?,?,NULL)',(body['id'],sid,body['leaseId'],fingerprint,'accepted'));self.db.commit()
+            try:
+                status,raw,_=await session.screen.request('POST',f"/v1/leases/{body['leaseId']}/actions",action)
+                if status!=200:raise ValueError('Input outcome uncertain')
+                self.store(sid,body['id'],json.loads(raw))
+            except BaseException:
+                self.db.execute("UPDATE device_actions SET state='unknown' WHERE id=?",(body['id'],));self.db.commit()
+                raise
+            finally:
+                session.screen.invalidate_input(body['frameId'],body['leaseId'])
             return web.json_response(self.receipt(sid,body['id']))
-        if self.db.execute("SELECT id FROM device_actions WHERE session=? AND lease=? AND state IN ('accepted','unknown')",(sid,body['leaseId'])).fetchone():
-            raise web.HTTPConflict(text='The previous input requires reconciliation before another action.')
-        self.db.execute('INSERT INTO device_actions VALUES(?,?,?,?,?,NULL)',(body['id'],sid,body['leaseId'],fingerprint,'accepted'));self.db.commit()
-        try:
-            status,raw,_=await session.screen.request('POST',f"/v1/leases/{body['leaseId']}/actions",action)
-            if status!=200:raise ValueError('Input outcome uncertain')
-            self.store(sid,body['id'],json.loads(raw))
-        except BaseException:
-            self.db.execute("UPDATE device_actions SET state='unknown' WHERE id=?",(body['id'],));self.db.commit()
-            raise
-        finally:
-            session.screen.invalidate_input(body['frameId'],body['leaseId'])
-        return web.json_response(self.receipt(sid,body['id']))

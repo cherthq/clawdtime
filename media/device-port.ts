@@ -1,4 +1,17 @@
+import {
+  cameraFrameSchema,
+  cameraCommandSchema,
+  cameraStatusSchema,
+  cameraReceiptSchema,
+  type CameraCommand,
+  type PresentationReference,
+} from "../src/camera-contracts.js";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
+import {
+  CameraOperationError,
+  cameraErrorCodeSchema,
+} from "../src/camera-errors.js";
 import type {
   ControlLease,
   DevicePort,
@@ -39,18 +52,23 @@ export class MediaDevicePort implements DevicePort {
   private path(lease: ControlLease, suffix: string): string {
     return `/sessions/${mediaSessionId(lease.requestId)}/screen${suffix}`;
   }
-  private async api(path: string, body?: Wire): Promise<Wire> {
+  private async api(
+    path: string,
+    body?: Wire,
+    timeoutMs = 4000,
+    camera = false,
+  ): Promise<Wire> {
     const response = await this.request(this.origin + path, {
       method: body ? "POST" : "GET",
       redirect: "error",
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Authorization: `Bearer ${this.key}`,
         "Content-Type": "application/json",
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    if (!response.ok)
+    if (!response.ok && !camera)
       throw new Error(
         `Media operation refused (${response.status}); reconcile before retrying.`,
       );
@@ -62,7 +80,7 @@ export class MediaDevicePort implements DevicePort {
       const { done, value } = await reader.read();
       if (done) break;
       length += value.length;
-      if (length > 3 * 1024 * 1024) {
+      if (length > (camera && !response.ok ? 1024 : 3 * 1024 * 1024)) {
         await reader.cancel();
         throw new Error("Media response exceeds bound.");
       }
@@ -71,6 +89,12 @@ export class MediaDevicePort implements DevicePort {
     const result: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (!result || typeof result !== "object" || Array.isArray(result))
       throw new Error("Malformed media response.");
+    if (!response.ok) {
+      const code = cameraErrorCodeSchema.safeParse((result as Wire).errorCode);
+      throw new CameraOperationError(
+        code.success ? code.data : "camera_transport_failed",
+      );
+    }
     return result as Wire;
   }
   /** Registered-helper metadata only: this does not grant, arm or capture. */
@@ -130,6 +154,72 @@ export class MediaDevicePort implements DevicePort {
     )
       throw new Error("Media lease binding mismatch.");
   }
+  async cameraStatus(lease: ControlLease) {
+    try {
+      return cameraStatusSchema.parse(
+        await this.api(this.path(lease, "/camera"), undefined, 4000, true),
+      );
+    } catch (error) {
+      throw error instanceof CameraOperationError
+        ? error
+        : new CameraOperationError("camera_transport_failed");
+    }
+  }
+  async cameraCommand(lease: ControlLease, command: CameraCommand) {
+    const parsed = cameraCommandSchema.safeParse(command);
+    if (!parsed.success)
+      throw new CameraOperationError("camera_invalid_command");
+    try {
+      return cameraReceiptSchema.parse(
+        await this.api(this.path(lease, "/camera"), parsed.data, 4000, true),
+      );
+    } catch (error) {
+      throw error instanceof CameraOperationError
+        ? error
+        : new CameraOperationError("camera_transport_failed");
+    }
+  }
+  async resolvePresentation(
+    lease: ControlLease,
+    input: Parameters<NonNullable<DevicePort["resolvePresentation"]>>[1],
+  ) {
+    return this.api(this.path(lease, "/presentation/resolve"), input);
+  }
+  async nativePrepare(
+    lease: ControlLease,
+    envelope: Parameters<NonNullable<DevicePort["nativePrepare"]>>[1],
+  ) {
+    return this.api(this.path(lease, "/native/prepare"), envelope);
+  }
+  async nativeDispatch(
+    lease: ControlLease,
+    envelope: Parameters<NonNullable<DevicePort["nativeDispatch"]>>[1],
+  ) {
+    return this.api(this.path(lease, "/native/dispatch"), envelope);
+  }
+  async nativeReceipt(
+    lease: ControlLease,
+    operationId: string,
+    fingerprint: string,
+  ) {
+    return this.api(
+      this.path(
+        lease,
+        `/native/receipts/${encodeURIComponent(operationId)}?fingerprint=${encodeURIComponent(fingerprint)}`,
+      ),
+    );
+  }
+  async livePresentation(
+    lease: ControlLease,
+    presentation: Parameters<NonNullable<DevicePort["livePresentation"]>>[1],
+    fingerprint: string,
+  ) {
+    return this.api(
+      this.path(lease, "/presentation"),
+      { presentation, fingerprint },
+      8000,
+    );
+  }
   async frame(lease: ControlLease): Promise<ScreenFrame> {
     // Read-only retries allow the video capture loop to produce its next frame.
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -152,13 +242,24 @@ export class MediaDevicePort implements DevicePort {
           !Number.isInteger(result.width) ||
           !Number.isInteger(result.height) ||
           Number(result.width) < 1 ||
-          Number(result.width) > 1280 ||
+          Number(result.width) > (lease.cameraVersion === 1 ? 8192 : 1280) ||
           Number(result.height) < 1 ||
-          Number(result.height) > 720 ||
+          Number(result.height) > (lease.cameraVersion === 1 ? 8192 : 720) ||
           typeof result.jpegBase64 !== "string" ||
           typeof result.sha256 !== "string"
         )
           throw new Error("Fresh bound screen frame required.");
+        const camera =
+          lease.cameraVersion === 1
+            ? cameraFrameSchema.parse(result.camera)
+            : undefined;
+        if (
+          camera &&
+          (!isDeepStrictEqual(camera.surface, lease.surface) ||
+            camera.source.width !== result.width ||
+            camera.source.height !== result.height)
+        )
+          throw new Error("Camera source geometry mismatch.");
         const image = Buffer.from(result.jpegBase64, "base64");
         if (
           image.length > 2 * 1024 * 1024 ||
@@ -166,6 +267,7 @@ export class MediaDevicePort implements DevicePort {
         )
           throw new Error("Screen frame integrity mismatch.");
         return {
+          ...(camera ? { camera } : {}),
           id: result.frameId,
           capturedAt: at,
           width: Number(result.width),
@@ -187,6 +289,7 @@ export class MediaDevicePort implements DevicePort {
     const observed = await this.frame(lease);
     return {
       frame: {
+        ...(observed.camera ? { camera: observed.camera } : {}),
         id: observed.id,
         capturedAt: observed.capturedAt,
         width: observed.width,
@@ -200,6 +303,7 @@ export class MediaDevicePort implements DevicePort {
     frame: Frame,
     action: InputAction,
     actionId: string,
+    presentation?: PresentationReference,
   ): Promise<{ submitted: boolean }> {
     const { kind, ...fields } = action;
     const result = await this.api(this.path(lease, "/actions"), {
@@ -211,6 +315,7 @@ export class MediaDevicePort implements DevicePort {
       displayId: Number(lease.displayId),
       frameId: frame.id,
       type: kind,
+      ...(presentation ? { presentation } : {}),
       ...(lease.protocolVersion === 2
         ? {
             sessionId: lease.sessionId,

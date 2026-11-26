@@ -153,7 +153,7 @@ class CaptionFlowTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task,return_exceptions=True)
 
-    async def test_v2_activation_is_silent_and_duplicate_activation_does_not_greet_again(self):
+    async def test_v2_activation_greets_once_and_duplicate_activation_does_not_repeat(self):
         session=self.fixture_session()
         session.active=False
         session.activation=None
@@ -166,7 +166,7 @@ class CaptionFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status,200)
         self.assertTrue(session.active)
         self.assertEqual(session.protocol_version,2)
-        session.say.assert_not_awaited()
+        session.say.assert_awaited_once_with('Hey, this is your agent.')
         self.assertEqual(session.caption_scene.snapshot()['state'],'listening')
 
     async def test_exact_spoken_text_is_subtitled_with_one_greeting_and_cleared_on_tts_failure(self):
@@ -186,11 +186,8 @@ class CaptionFlowTests(unittest.IsolatedAsyncioTestCase):
             posted.append(kwargs['json']['text'])
             self.assertEqual(session.caption_scene.snapshot()['agentText'],kwargs['json']['text'])
             return context
-        async def playout():
-            while True:
-                item=await session.audio.get()
-                if isinstance(item,asyncio.Future):item.set_result(None)
-        pump=asyncio.create_task(playout())
+        session.source=AsyncMock()
+        pump=asyncio.create_task(session.publish())
         try:
             with patch.object(self.service.http,'post',side_effect=post):
                 await session.say('Here is the synthetic decision.')

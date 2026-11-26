@@ -1,4 +1,8 @@
-import { sessionCapabilities, type ProtocolOptions } from "./protocol.js";
+import {
+  sessionCapabilities,
+  sessionInteraction,
+  type ProtocolOptions,
+} from "./protocol.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -28,7 +32,7 @@ import {
 import type { Adapter } from "../../src/contracts.js";
 
 const instructions =
-  "ClawdTime carries calls and human turns for THIS coding session. Check connection_status.protocolVersion: v2 uses conversation_turns, acknowledge_turn, conversation_progress and conversation_reply; ordinary file work can continue while sharing. Native approvals remain required. Shared-screen input requires exclusive execution ownership and a verified matching surface. Fallback is off by default. Stable IDs and unknown receipts prohibit replay. Legacy v1: yield_control, attention_result, acknowledge_response, resume_agent; remain paused until release.";
+  "ClawdTime carries calls and human turns for THIS coding session. Check connection_status.protocolVersion: v2 uses conversation_inbox for this running session’s text requests, conversation_turns, acknowledge_turn, conversation_progress and conversation_reply; negotiated replies default to the incoming channel; ordinary file work can continue while sharing. Native approvals remain required. Shared-screen input requires exclusive ownership, latest expectedCursor, no active hold and a verified matching surface. Native interruption is host-dependent. conversation_timing reports local HTTP intervals only. Fallback is off by default. Stable IDs and unknown receipts prohibit replay. Legacy v1: yield_control, attention_result, acknowledge_response, resume_agent; remain paused until release.";
 export function mcpOutput(value: unknown) {
   const content: (
     | { type: "text"; text: string }
@@ -38,8 +42,13 @@ export function mcpOutput(value: unknown) {
     const { dataUrl, ...metadata } = value as Record<string, unknown>;
     if (
       typeof dataUrl !== "string" ||
-      dataUrl.length > 2_000_000 ||
-      !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(dataUrl)
+      dataUrl.length >
+        "data:image/jpeg;base64,".length +
+          Math.ceil((2 * 1024 * 1024) / 3) * 4 ||
+      !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(dataUrl) ||
+      Buffer.from(dataUrl.slice("data:image/jpeg;base64,".length), "base64")
+        .length >
+        2 * 1024 * 1024
     )
       throw new Error(
         "Invalid transient screen image; no image or input returned.",
@@ -63,7 +72,15 @@ export async function startMcp(options: {
   nativeControl?: ProtocolOptions["nativeControl"];
   sharedSurface?: boolean;
   nativeCancellation?: boolean;
+  messageUpdates?: boolean;
+  conversation?: ProtocolOptions["conversation"];
+  documentAccess?: ProtocolOptions["documentAccess"];
+  screenCamera?: ProtocolOptions["screenCamera"];
+  voiceFrontend?: ProtocolOptions["voiceFrontend"];
+  livePresentation?: ProtocolOptions["livePresentation"];
+  nativeActivation?: ProtocolOptions["nativeActivation"];
 }) {
+  sessionCapabilities(options);
   const connection = loadConnection(
     options.connection,
     options.project,
@@ -111,6 +128,24 @@ export async function startMcp(options: {
     run.runId !== runId
   )
     throw new Error("Run identity mismatch.");
+  if (
+    run.session &&
+    (JSON.stringify(run.session.conversation) !==
+      JSON.stringify(options.conversation) ||
+      JSON.stringify(run.session.documentAccess) !==
+        JSON.stringify(options.documentAccess) ||
+      JSON.stringify(run.session.screenCamera) !==
+        JSON.stringify(options.screenCamera) ||
+      JSON.stringify(run.session.voiceFrontend) !==
+        JSON.stringify(options.voiceFrontend) ||
+      (run.session.capabilities?.livePresentationVersion === 1) !==
+        (options.livePresentation === true) ||
+      (run.session.capabilities?.nativeActivationVersion === 1) !==
+        (options.nativeActivation === true))
+  )
+    throw new Error(
+      "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
+    );
   secureWrite(statePath, run);
   let client: ClawdTimeClient | undefined;
   let connecting: Promise<ClawdTimeClient> | undefined;
@@ -136,10 +171,31 @@ export async function startMcp(options: {
             hostId: connection.hostId,
             protocolVersion: options.protocolVersion ?? 2,
             capabilities: sessionCapabilities(options),
+            interaction: sessionInteraction(options),
+            conversation: options.conversation,
+            documentAccess: options.documentAccess,
+            screenCamera: options.screenCamera,
+            voiceFrontend: options.voiceFrontend,
           });
           run = { ...run, session: result.session, token: result.token };
           secureWrite(statePath, run);
         }
+        if (
+          JSON.stringify(run.session?.voiceFrontend) !==
+          JSON.stringify(options.voiceFrontend)
+        )
+          throw new Error(
+            "Server did not confirm the selected voice frontend. Preserve this registration; do not downgrade or retry it.",
+          );
+        if (
+          (run.session?.capabilities?.livePresentationVersion === 1) !==
+            (options.livePresentation === true) ||
+          (run.session?.capabilities?.nativeActivationVersion === 1) !==
+            (options.nativeActivation === true)
+        )
+          throw new Error(
+            "Server did not confirm the selected live presentation/native activation capabilities. Preserve this registration; do not downgrade or retry it.",
+          );
         const scoped = new ClawdTimeClient(connection.baseUrl, run.token!);
         // Reconnect refreshes liveness immediately, but expired/stopped tokens stay rejected.
         await scoped.heartbeat();

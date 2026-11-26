@@ -1,14 +1,20 @@
 import { z } from "zod";
 import { DomainError } from "../storage/security.js";
 import type { NativeTransportConfig } from "./native.js";
+import { textTransportSchema } from "./native-messages.js";
 export class PreflightBlocked extends DomainError {
   constructor(message: string) {
     super(503, message);
   }
 }
+/** Where a call stopped when its native dial request was provably never sent. */
+export type NotDispatchedPhase = "media_prepare" | "pre_dial_check";
 /** The effect was refused before any external dispatch, so no outcome is uncertain. */
 export class NotDispatched extends DomainError {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly phase?: NotDispatchedPhase,
+  ) {
     super(503, message);
   }
 }
@@ -116,6 +122,7 @@ export function configurationChecks(
       mediaKey: z.string().min(32),
       encryptionKey: z.string().regex(/^[a-f0-9]{64}$/i),
       testerAllowlist: z.array(z.string().regex(/^\+[1-9]\d{7,14}$/)).min(1),
+      textTransport: textTransportSchema.optional(),
     })
     .safeParse(config);
   const independent =

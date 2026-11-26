@@ -9,6 +9,9 @@ import {
   SimulatedDevice,
 } from "../src/control/coordinator.js";
 import { ExecutionCoordinator } from "../src/control/execution.js";
+import { Interruptions } from "../src/control/interruptions.js";
+import { ControlTiming } from "../src/control/timing.js";
+import { readFileSync } from "node:fs";
 import { HumanRouter } from "../src/control/human-router.js";
 import { Viewing } from "../src/control/viewing.js";
 import { createApp } from "../src/app.js";
@@ -42,7 +45,7 @@ class Device extends SimulatedDevice {
     };
   }
 }
-async function fixture(native = true) {
+async function fixture(native = true, interaction = false) {
   const store = new Store(),
     service = new ClawdTime(store, new SimulationTransport()),
     device = new Device(),
@@ -70,17 +73,29 @@ async function fixture(native = true) {
     projectRoot: "/fixture",
     externalSessionId: "fixture",
     hostId: "fixture",
+    ...(interaction
+      ? {
+          interaction: {
+            version: 1 as const,
+            commandChannel: "imessage_first" as const,
+            messageUpdates: true,
+          },
+        }
+      : {}),
     capabilities: {
       cooperativePause: true,
       polling: true,
       nativeControl: native ? "browser" : "none",
       sharedSurface: native,
+      ...(interaction ? { voiceInteractionVersion: 1 as const } : {}),
     },
   });
   const app = createApp(service, control, human, {
     origin: "http://127.0.0.1",
     simulation: true,
     mediaToken: "m".repeat(64),
+    twoWayVoiceEnabled: interaction,
+    remoteAudioIsolated: interaction,
   });
   const execution = new ExecutionCoordinator(service, control);
   const r = service.requestAttention(s.token, {
@@ -138,6 +153,250 @@ async function fixture(native = true) {
     app,
   };
 }
+describe("interaction input and timing boundaries", () => {
+  it("emits the same negotiated voice policy consumed by Python and retains legacy half duplex", async () => {
+    const fixturePolicy = JSON.parse(
+      readFileSync(
+        new URL("./fixtures/voice-policy.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    for (const opted of [false, true]) {
+      const h = await fixture(true, opted);
+      for (let n = 0; n < 3; n++)
+        await h.send(`turn_${n}`, "Synthetic instruction.");
+      const response = await h.app.request(
+        `/media/${mediaSessionId(h.r.id)}/policy`,
+        { headers: { authorization: `Bearer ${"m".repeat(64)}` } },
+      );
+      const policy = await response.json();
+      const expected = { ...fixturePolicy };
+      if (!opted) delete expected.voiceInteractionVersion;
+      expect(policy).toMatchObject({
+        ...expected,
+        callId: h.service.status(h.s.token, h.r.id).callId,
+        expiresAt: policy.expiresAt,
+        voiceMode: opted ? "two_way" : "half_duplex",
+        remoteAudioIsolated: opted,
+      });
+      if (!opted) expect(policy).not.toHaveProperty("voiceInteractionVersion");
+      h.store.close();
+    }
+  });
+  it("blocks stale and unread text at ownership acquisition, then permits the current acknowledged cursor", async () => {
+    const h = await fixture(true, true);
+    await h.send("first", "Choose the first fixture.");
+    const body = {
+      expectedEpoch: 0,
+      executor: "native",
+      previousOutcome: "idle",
+      backgroundActorsStopped: true,
+      expectedCursor: 1,
+    };
+    expect((await h.api("execution", body)).status).toBe(409);
+    const poll = await (await h.api("turns")).json();
+    expect((await h.api("ack", { turnId: poll.turns[0].id })).status).toBe(200);
+    await h.send("correction", "Choose the second fixture.");
+    expect((await h.api("execution", body)).status).toBe(409);
+    const next = await (await h.api("turns")).json();
+    await h.api("ack", { turnId: next.turns[1].id });
+    expect(
+      (await h.api("execution", { ...body, expectedCursor: 2 })).status,
+    ).toBe(200);
+    expect(h.device.inputs).toEqual([]);
+    h.store.close();
+  });
+  it("rechecks a correction that arrives during asynchronous local preflight", async () => {
+    const h = await fixture(true, true);
+    const original = h.device.readiness.bind(h.device);
+    let inject = true;
+    h.device.readiness = async () => {
+      if (inject) {
+        inject = false;
+        await h.send("during", "Wait for my correction.");
+      }
+      return original();
+    };
+    expect(
+      (
+        await h.api("execution", {
+          expectedEpoch: 0,
+          executor: "native",
+          previousOutcome: "idle",
+          backgroundActorsStopped: true,
+          expectedCursor: 0,
+        })
+      ).status,
+    ).toBe(409);
+    expect((await (await h.api("execution")).json()).executor).toBe("none");
+    h.store.close();
+  });
+  it("keeps a confirmed grant recoverable when a correction arrives during synchronization", async () => {
+    const h = await fixture(true, true);
+    const create = h.device.createLease.bind(h.device);
+    let inject = true;
+    h.device.createLease = async (lease) => {
+      await create(lease);
+      if (inject) {
+        inject = false;
+        await h.send("during_grant", "Wait for my correction.");
+      }
+    };
+    expect(
+      (
+        await h.api("execution", {
+          expectedEpoch: 0,
+          executor: "native",
+          previousOutcome: "idle",
+          backgroundActorsStopped: true,
+          expectedCursor: 0,
+        })
+      ).status,
+    ).toBe(409);
+    const ownership = await (await h.api("execution")).json();
+    expect(ownership).toMatchObject({
+      executor: "native",
+      epoch: 1,
+      state: "working",
+    });
+    expect(
+      (
+        await h.api("execution", {
+          expectedEpoch: 1,
+          executor: "none",
+          previousOutcome: "completed",
+          backgroundActorsStopped: true,
+        })
+      ).status,
+    ).toBe(200);
+    expect(h.device.inputs).toEqual([]);
+    h.store.close();
+  });
+  it("accepts only qualified fresh interruptions and exposes the hold without generating a command", async () => {
+    const h = await fixture(true, true);
+    const sid = mediaSessionId(h.r.id),
+      call = h.service.status(h.s.token, h.r.id).callId!;
+    const payload = {
+      callId: call,
+      participantIdentity: `worker-${sid}`,
+      interruptionId: "interrupt_1",
+      playbackGeneration: 1,
+      at: new Date().toISOString(),
+    };
+    const post = (body: unknown, token = "m".repeat(64)) =>
+      h.app.request(`/media/${sid}/interrupt`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    expect((await post(payload, "wrong")).status).toBe(401);
+    expect(
+      (await post({ ...payload, participantIdentity: "wrong" })).status,
+    ).toBe(403);
+    expect(
+      (
+        await post({
+          ...payload,
+          at: new Date(Date.now() - 5000).toISOString(),
+        })
+      ).status,
+    ).toBe(409);
+    const receipt = await (await post(payload)).json();
+    expect(await (await post(payload)).json()).toEqual(receipt);
+    const state = await (await h.api("execution")).json();
+    expect(state.hold.active).toBe(true);
+    expect((await (await h.api("turns")).json()).turns).toEqual([]);
+    expect(
+      (
+        await h.api("execution", {
+          expectedEpoch: 0,
+          executor: "native",
+          previousOutcome: "idle",
+          backgroundActorsStopped: true,
+          expectedCursor: 0,
+        })
+      ).status,
+    ).toBe(409);
+    h.store.saveState(`muted:${h.r.id}`, true);
+    expect((await post({ ...payload, interruptionId: "muted" })).status).toBe(
+      403,
+    );
+    h.store.close();
+  });
+  it("expires candidate holds without extending them on replay or changing execution ownership", () => {
+    const store = new Store();
+    let now = 100_000;
+    const service = new ClawdTime(store, new SimulationTransport(), {
+      clock: () => now,
+    });
+    const interruptions = new Interruptions(service);
+    const input = {
+      callId: "call",
+      participantIdentity: "worker",
+      interruptionId: "once",
+      playbackGeneration: 1,
+      at: new Date(now).toISOString(),
+    };
+    const before = interruptions.accept("request", input);
+    now += 2500;
+    expect(interruptions.accept("request", input)).toEqual(before);
+    expect(interruptions.status("request").active).toBe(false);
+    expect(() =>
+      interruptions.accept("request", { ...input, interruptionId: "stale" }),
+    ).toThrow("stale");
+    expect(store.all("execution")).toEqual([]);
+    store.close();
+  });
+  it("captures one validated image instead of two and records observation timing", async () => {
+    const h = await fixture();
+    h.device.policy = "agent_tools_with_fallback";
+    await h.transition(0, "clawdtime");
+    let plain = 0,
+      images = 0;
+    const frame = h.device.frame.bind(h.device);
+    h.device.frame = async (lease) => {
+      plain++;
+      return frame(lease);
+    };
+    Object.assign(h.device, {
+      frameImage: async (lease: ControlLease) => {
+        images++;
+        return {
+          frame: await frame(lease),
+          dataUrl: "data:image/jpeg;base64,fixture",
+        };
+      },
+    });
+    const observed = await h.execution.observe(h.s.token, h.r.id, 1);
+    expect(observed.frame.id).toBeTruthy();
+    expect([plain, images]).toEqual([0, 1]);
+    expect(
+      h.control.timing.snapshot(h.r.id).events.map((e) => e.event),
+    ).toContain("frame_completed");
+    h.store.close();
+  });
+  it("bounds timing metadata and resets process scope on clock reversal", () => {
+    let now = 100;
+    const timing = new ControlTiming("synthetic", () => now);
+    const correlation = timing.attempt("private-path-must-not-leak");
+    timing.record("request", "frame_started", correlation);
+    now += 23;
+    timing.record("request", "frame_completed", correlation);
+    const first = timing.snapshot("request");
+    expect(first.events[1]!.elapsedMs - first.events[0]!.elapsedMs).toBe(23);
+    expect(JSON.stringify(first)).not.toContain("private-path");
+    for (let i = 0; i < 80; i++)
+      timing.record("request", "frame_started", timing.attempt("request"));
+    expect(timing.snapshot("request").events).toHaveLength(64);
+    now = 10;
+    expect(timing.snapshot("request").processId).not.toBe(first.processId);
+    expect(timing.snapshot("request").events).toEqual([]);
+  });
+});
+
 describe("version 2 sharing and execution", () => {
   it("delivers multiple turns to the active same session without invoking a controller or stopping sharing", async () => {
     const h = await fixture();

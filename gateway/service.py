@@ -4,6 +4,8 @@ Lease/action metadata is durable; frames are never cached or persisted. Unknown
 creation or input outcomes are not retried. Local stop requires a fresh lease ID.
 """
 import asyncio
+import base64
+import math
 from datetime import datetime, timezone
 import hashlib
 import hmac
@@ -19,9 +21,34 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, web
 from relay_diagnostics import RelayDiagnostics, request_id, milliseconds
+from native_relay import NativeRelay
+
+class CameraGeometryChanged(web.HTTPClientError):
+    status_code = 425
 
 ID = re.compile(r'^[A-Za-z0-9_-]{1,160}$')
 MAX_FRAME = 2 * 1024 * 1024
+CAPTURE_ERRORS = frozenset(('output_registration','stream_start','stream_interrupted',
+    'frame_deadline','frame_decode','stop_deadline','stop_failed','target_before','target_after'))
+CAMERA_REFUSALS = frozenset(('window_missing','window_owner_changed','window_owner_unavailable',
+    'window_layer','window_geometry','initial_placement','other_display','app_hidden',
+    'capture_window_ambiguous','lifecycle_witness_unavailable','lifecycle_witness_ambiguous',
+    'lifecycle_witness_unreadable','window_minimized','capture_busy','capture_dimensions',
+    'authority_changed','frame_stale','display_changed'))
+
+
+def camera_refusal_headers(headers):
+    reason=headers.get('X-ClawdTime-Camera-Refusal')
+    return {'X-ClawdTime-Camera-Refusal':reason} if reason in CAMERA_REFUSALS else {}
+
+
+def capture_error_headers(headers):
+    reason=headers.get('X-ClawdTime-Capture-Error')
+    if reason not in CAPTURE_ERRORS:return {}
+    result={'X-ClawdTime-Capture-Error':reason}
+    code=headers.get('X-ClawdTime-Capture-Code','')
+    if re.fullmatch(r'-?(?:0|[1-9][0-9]{0,4})',code):result['X-ClawdTime-Capture-Code']=code
+    return result
 
 
 def timestamp(value):
@@ -45,18 +72,46 @@ def valid_origin(value):
     raise ValueError('Helper must use HTTPS or a loopback/Tailscale IP')
 
 
+def validate_presentation_resolve(value,lease):
+    if not isinstance(value,dict) or set(value)-{'processIdentity'}!={'version','window','expected','expiresAt'} or type(value['version']) is not int or value['version']!=1:raise web.HTTPBadRequest()
+    w=value['window'];e=value['expected']
+    if not isinstance(w,dict) or set(w)!={'appId','windowId','ownerPid','displayId'} or w['appId'] not in ('com.apple.finder','com.apple.TextEdit') or not isinstance(w['windowId'],str) or not re.fullmatch('[1-9][0-9]{0,9}',w['windowId']) or int(w['windowId'])>0xffffffff or type(w['ownerPid']) is not int or not 0<w['ownerPid']<=0x7fffffff:raise web.HTTPBadRequest()
+    if not isinstance(e,dict) or set(e)!={'requestId','sessionId','leaseId','epoch','cursor','policyRevision','displayId'} or any(not isinstance(e[k],str) or not ID.fullmatch(e[k]) for k in ('requestId','sessionId','leaseId')) or any(type(e[k]) is not int or e[k]<0 for k in ('epoch','cursor','policyRevision','displayId')) or e['policyRevision']<1 or not 0<e['displayId']<=0xffffffff or type(w['displayId']) is not int or w['displayId']!=e['displayId']:raise web.HTTPBadRequest()
+    if 'processIdentity' in value and (not isinstance(value['processIdentity'],str) or not re.fullmatch('[0-9a-f]{64}',value['processIdentity'])):raise web.HTTPBadRequest()
+    if type(value['expiresAt']) not in (int,float) or not math.isfinite(value['expiresAt']) or not time.time()*1000<value['expiresAt']<=time.time()*1000+2000:raise web.HTTPConflict()
+    if (lease.get('protocolVersion')!=2 or lease.get('cameraVersion')!=1 or lease.get('mode')!='view' or lease.get('executor')!='none'
+        or lease.get('surface',{}).get('kind')!='display' or lease.get('surface',{}).get('displayId')!=e['displayId']
+        or any(lease.get(k)!=e[v] for k,v in (('id','leaseId'),('sessionId','sessionId'),('executorEpoch','epoch'),('policyRevision','policyRevision'),('displayId','displayId')))):
+        raise web.HTTPConflict(text='presentation_authority_unavailable')
+
+
 def validate_lease(body):
     required={'id','deviceId','memberId','callId','displayId','mode','expiresAt'}
     authority={'protocolVersion','sessionId','executorEpoch','policyRevision','executor'}
-    if not isinstance(body, dict) or set(body) not in (required,required|authority):
+    camera={'cameraVersion','surface'}
+    text_required=(required-{'callId'})|authority|{'authority'}
+    if not isinstance(body, dict) or set(body) not in (required,required|authority,text_required,required|authority|camera):
         raise web.HTTPBadRequest()
-    if any(not isinstance(body[k], str) or not ID.fullmatch(body[k]) for k in ('id','deviceId','memberId','callId')):
+    if any(not isinstance(body[k], str) or not ID.fullmatch(body[k]) for k in ('id','deviceId','memberId') + (('callId',) if 'callId' in body else ())):
         raise web.HTTPBadRequest()
     if type(body['displayId']) is not int or not 0 <= body['displayId'] <= 0xffffffff or body['mode'] not in ('view','control'):
         raise web.HTTPBadRequest()
     if 'protocolVersion' in body:
-        if body['protocolVersion']!=2 or not isinstance(body['sessionId'],str) or not ID.fullmatch(body['sessionId']) or any(type(body[k]) is not int or body[k]<0 for k in ('executorEpoch','policyRevision')) or body['policyRevision']<1 or body['executor'] not in ('none','native','clawdtime') or (body['mode']=='control' and body['executor']!='clawdtime'):
+        if type(body['protocolVersion']) is not int or body['protocolVersion'] not in (2,3) or not isinstance(body['sessionId'],str) or not ID.fullmatch(body['sessionId']) or any(type(body[k]) is not int or body[k]<0 for k in ('executorEpoch','policyRevision')) or body['policyRevision']<1 or body['executor'] not in ('none','native','clawdtime') or (body['mode']=='control' and body['executor']!='clawdtime'):
             raise web.HTTPBadRequest()
+    if 'cameraVersion' in body or 'surface' in body:
+        target=body.get('surface')
+        if (body.get('protocolVersion')!=2 or type(body.get('cameraVersion')) is not int or body['cameraVersion']!=1 or
+                not isinstance(target,dict) or target.get('kind') not in ('display','window') or
+                set(target)!=({'kind','id','displayId'}|({'ownerPid'} if target.get('kind')=='window' else set())) or
+                target.get('displayId')!=body['displayId'] or type(target.get('displayId')) is not int or
+                not isinstance(target.get('id'),str) or not re.fullmatch(r'[1-9][0-9]{0,9}',target['id']) or not 0<int(target['id'])<=0xffffffff or
+                (target['kind']=='display' and int(target['id'])!=body['displayId']) or
+                (target['kind']=='window' and (type(target.get('ownerPid')) is not int or not 0<target['ownerPid']<=0x7fffffff))):raise web.HTTPBadRequest()
+    if body.get('protocolVersion') == 3:
+        a=body.get('authority')
+        if 'callId' in body or not isinstance(a,dict) or set(a)!={'kind','grantId','projectId'} or a['kind']!='text_session' or not isinstance(a['grantId'],str) or not ID.fullmatch(a['grantId']) or not isinstance(a['projectId'],str) or not a['projectId'].startswith('/') or len(a['projectId'])>1024 or not a['projectId'].isprintable():raise web.HTTPBadRequest()
+    elif 'authority' in body or 'callId' not in body:raise web.HTTPBadRequest()
     try:
         remaining = timestamp(body['expiresAt']) - time.time()
         if not 0 < remaining <= 30:
@@ -105,6 +160,14 @@ class Gateway:
           UPDATE leases SET state=CASE WHEN state IN ('creating','creating_unknown') THEN 'creating_unknown' ELSE 'stopped' END WHERE state!='stopped';
           UPDATE actions SET state='unknown' WHERE state IN ('accepted','dispatching');''')
         self.db.commit()
+        source=json.loads(Path(__file__).with_name('release-source.json').read_text())
+        if not isinstance(source,dict) or set(source)!={'sourceRevision'} or not isinstance(source['sourceRevision'],str) or not re.fullmatch(r'(?:development|[a-f0-9]{40})',source['sourceRevision']):raise ValueError('Invalid release source manifest')
+        runtime=Path(__file__).parent
+        digest=hashlib.sha256()
+        for name in ('native_relay.py','relay.py','relay_diagnostics.py','service.py','start.py'):
+            digest.update(name.encode()+b'\0'+(runtime/name).read_bytes()+b'\0')
+        self.version={'sourceRevision':source['sourceRevision'],'runtimeSha256':digest.hexdigest(),'nativeActivationVersion':1}
+        self.native_activation = NativeRelay(self)
         self.relay_diagnostics = RelayDiagnostics(self.db)
         self.http = None
 
@@ -153,6 +216,11 @@ class Gateway:
             raise web.HTTPForbidden()
         async with self.http.request(method,config['url']+'/v1/leases'+suffix,
                 headers={'Authorization':'Bearer '+config['key']},
+                # Native camera waits up to 1.5s for a frame plus 350ms for
+                # acknowledged stop. Let that bounded operation report its result;
+                # frame() still rejects pixels older than two seconds. Input and
+                # lease requests retain the original short/uncertain-outcome limit.
+                **({'timeout':ClientTimeout(total=3,connect=.7)} if frame and body.get('cameraVersion')==1 else {}),
                 **({'json':payload} if payload is not None else {}),allow_redirects=False) as response:
             limit = MAX_FRAME if frame else 16384
             chunks, size = [], 0
@@ -163,18 +231,40 @@ class Gateway:
             raw = b''.join(chunks)
             if response.status >= 300:
                 logging.warning('helper_response_refused operation=%s status=%s','frame' if frame else 'lease',response.status)
+                if response.status==503 and frame and body.get('cameraVersion')==1:
+                    diagnostic=capture_error_headers(response.headers)
+                    if diagnostic:
+                        logging.warning('helper_capture_failed reason=%s native_code=%s',
+                            diagnostic['X-ClawdTime-Capture-Error'],diagnostic.get('X-ClawdTime-Capture-Code','none'))
+                        raise web.HTTPServiceUnavailable(headers=diagnostic)
+                if response.status==425 and frame and body.get('cameraVersion')==1:
+                    raise CameraGeometryChanged(text='Selected camera geometry changed; pixels discarded.')
                 if response.status in (403,404,409,410,423):
+                    diagnostic={}
+                    if response.status==409 and frame and body.get('cameraVersion')==1:
+                        diagnostic=camera_refusal_headers(response.headers)
+                        if diagnostic:
+                            logging.warning('helper_camera_refused reason=%s',diagnostic['X-ClawdTime-Camera-Refusal'])
                     self.stop(body['id'])
-                    raise web.HTTPGone(text='Device lease stopped; request a fresh lease explicitly.')
+                    raise web.HTTPGone(text='Device lease stopped; request a fresh lease explicitly.',headers=diagnostic)
                 raise web.HTTPServiceUnavailable()
             return raw,dict(response.headers)
 
     async def create(self, request):
         body = await request.json()
         fingerprint = validate_lease(body)
+        if self.native_activation.blocked(body['deviceId']):raise web.HTTPConflict(text='Native operation unresolved.')
         if body['deviceId'] not in self.devices:
             raise web.HTTPForbidden()
-        old = self.db.execute('SELECT fingerprint,state FROM leases WHERE id=?',(body['id'],)).fetchone()
+        if body.get('cameraVersion')==1:
+            config=self.devices[body['deviceId']]
+            async with self.http.get(config['url']+'/v1/status',headers={'Authorization':'Bearer '+config['key']},allow_redirects=False) as response:
+                raw=await response.content.read(16385)
+                if response.status!=200 or len(raw)>16384:raise web.HTTPBadGateway()
+                helper=json.loads(raw)
+                if helper.get('deviceId')!=body['deviceId'] or type(helper.get('cameraVersion')) is not int or helper['cameraVersion']!=1:
+                    raise web.HTTPConflict(text='Helper does not support selected camera capture.')
+        old = self.db.execute('SELECT fingerprint,state FROM leases WHERE id=?' ,(body['id'],)).fetchone()
         if old:
             if old[0] != fingerprint:raise web.HTTPConflict()
             self.active(body['id'])
@@ -200,9 +290,10 @@ class Gateway:
         row = self.db.execute('SELECT fingerprint FROM leases WHERE id=?',(lease_id,)).fetchone()
         transition=fingerprint!=row[0]
         if body['id'] != lease_id:raise web.HTTPConflict()
+        if transition and self.native_activation.blocked(body['deviceId']):raise web.HTTPConflict(text='Native operation unresolved.')
         if transition:
             mutable={'mode','executorEpoch','policyRevision','executor','expiresAt'}
-            if old.get('protocolVersion')!=2 or body.get('protocolVersion')!=2 or body['executorEpoch']<=old['executorEpoch'] or any(body[k]!=v for k,v in old.items() if k not in mutable):raise web.HTTPConflict()
+            if old.get('protocolVersion') not in (2,3) or body.get('protocolVersion')!=old.get('protocolVersion') or body['executorEpoch']<=old['executorEpoch'] or any(body[k]!=v for k,v in old.items() if k not in mutable):raise web.HTTPConflict()
             if self.db.execute("SELECT id FROM actions WHERE lease=? AND state IN ('accepted','unknown','dispatching')",(lease_id,)).fetchone():raise web.HTTPConflict(text='Input outcome requires reconciliation.')
             # Persist the proposed authority before the helper effect. Lost replies
             # leave a tombstone; no old owner may continue dispatching.
@@ -247,12 +338,19 @@ class Gateway:
             frame_id = normalized['x-frame-id']
             captured = timestamp(normalized['x-captured-at'])
             width,height = int(normalized['x-frame-width']),int(normalized['x-frame-height'])
-            if normalized.get('content-type','').split(';')[0]!='image/jpeg' or not ID.fullmatch(frame_id) or not -.5 <= time.time()-captured <= 2 or not 0 < width <= 1280 or not 0 < height <= 720 or not raw.startswith(b'\xff\xd8'):
+            if normalized.get('content-type','').split(';')[0]!='image/jpeg' or not ID.fullmatch(frame_id) or not -.5 <= time.time()-captured <= 2 or not 0 < width <= (8192 if body.get('cameraVersion')==1 else 1280) or not 0 < height <= (8192 if body.get('cameraVersion')==1 else 720) or width*height>32_000_000 or not raw.startswith(b'\xff\xd8'):
                 raise ValueError()
         except (KeyError,ValueError,TypeError):
             raise web.HTTPBadGateway(text='Invalid or stale device frame.')
-        self.db.execute('UPDATE leases SET frame=?,captured=? WHERE id=?',(frame_id,captured,lease_id));self.db.commit()
-        return web.Response(body=raw,content_type='image/jpeg',headers={k:normalized[k.lower()] for k in ('X-Frame-Id','X-Captured-At','X-Frame-Width','X-Frame-Height')})
+        if body.get('cameraVersion')==1:
+            try:
+                encoded=normalized['x-camera-frame']
+                if len(encoded)>2048:raise ValueError()
+                metadata=json.loads(base64.b64decode(encoded,validate=True))
+                if metadata.get('version')!=1 or metadata.get('surface')!=body['surface'] or metadata.get('source',{}).get('width')!=width or metadata['source'].get('height')!=height:raise ValueError()
+            except (KeyError,ValueError,TypeError):raise web.HTTPBadGateway(text='Invalid camera frame identity.')
+        self.db.execute('UPDATE leases SET frame=?,captured=? WHERE id=?' ,(frame_id,captured,lease_id));self.db.commit()
+        return web.Response(body=raw,content_type='image/jpeg',headers={k:normalized[k.lower()] for k in ('X-Frame-Id','X-Captured-At','X-Frame-Width','X-Frame-Height')+ (('X-Camera-Frame',) if body.get('cameraVersion')==1 else ())})
 
     async def action(self, request):
         lease_id = request.match_info['id']
@@ -263,9 +361,12 @@ class Gateway:
             if prior != (lease_id,fingerprint):raise web.HTTPConflict()
             return await self.action_receipt(lease_id,action['id'])
         body,frame,captured = self.active(lease_id)
-        if body.get('protocolVersion')==2:
+        if body.get('cameraVersion')==1 and body.get('surface',{}).get('kind')=='window':
+            raise web.HTTPConflict(text='Selected-window fallback input is unavailable; use qualified native tools.')
+        if body.get('protocolVersion') in (2,3):
             if any(action.get(k)!=body[k] for k in ('sessionId','executorEpoch','policyRevision')) or body['executor']!='clawdtime':raise web.HTTPConflict(text='Stale input owner.')
         elif any(k in action for k in ('sessionId','executorEpoch','policyRevision')):raise web.HTTPConflict()
+        if self.native_activation.blocked(body['deviceId']):raise web.HTTPConflict(text='Native operation unresolved.')
         if body['mode'] != 'control' or frame != action['frameId'] or captured is None or time.time()-captured > 2:
             raise web.HTTPConflict(text='A fresh control frame is required.')
         self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?,NULL)',(action['id'],lease_id,fingerprint,'{}','accepted'));self.db.commit()
@@ -278,7 +379,12 @@ class Gateway:
         return await self.action_receipt(lease_id,action['id'],refresh=False)
 
     def record_receipt(self, body, action_id, receipt):
-        if any(receipt.get(k) != v for k,v in {'id':action_id,'leaseId':body['id'],'deviceId':body['deviceId'],'memberId':body['memberId'],'callId':body['callId']}.items()) or receipt.get('state') not in ('dispatching','submitted','unknown'):
+        binding={'id':action_id,'leaseId':body['id'],'deviceId':body['deviceId'],'memberId':body['memberId']}
+        if body.get('protocolVersion')==3:
+            if 'callId' in receipt:raise ValueError('Text receipt must not fabricate a call')
+            binding.update({key:body[key] for key in ('authority','sessionId','executorEpoch','policyRevision','protocolVersion')})
+        else:binding['callId']=body['callId']
+        if any(receipt.get(k) != v for k,v in binding.items()) or receipt.get('state') not in ('dispatching','submitted','unknown'):
             raise ValueError('Receipt ownership mismatch')
         self.db.execute('UPDATE actions SET state=?,receipt=? WHERE id=?',(receipt['state'],json.dumps(receipt),action_id));self.db.commit()
 
@@ -327,6 +433,14 @@ class Gateway:
         if active_lease is not None and (not isinstance(active_lease,str) or not ID.fullmatch(active_lease)):
             raise web.HTTPBadGateway(text='Invalid active helper lease identity.')
         local={'activeLeaseId':active_lease} if active_lease is not None else {}
+        if status.get('textControlVersion')==1 and type(status.get('localEnableGeneration')) is int and status['localEnableGeneration']>=0:
+            local.update(textControlVersion=1,localEnableGeneration=status['localEnableGeneration'])
+        if type(status.get('cameraVersion')) is int and status['cameraVersion']==1:
+            local['cameraVersion']=1
+        if scoped.get('controlAllowed') and scoped.get('displayAttached') and type(status.get('nativeActivationVersion')) is int and status['nativeActivationVersion']==1:
+            local['nativeActivationVersion']=1
+        if scoped.get('viewAllowed') and scoped.get('displayAttached') and type(status.get('livePresentationVersion')) is int and status['livePresentationVersion']==1:
+            local['livePresentationVersion']=1
         if type(status.get('presentationVersion')) is int and status['presentationVersion']==1:
             local['presentationVersion']=1
         if 'controlPolicy' in status or 'policyRevision' in status:
@@ -339,6 +453,39 @@ class Gateway:
                 local['panelCommand']=command
         return web.json_response({**local,**{k:status[k] for k in ('deviceId','armed','available','screenPermission','controlPermission')},
             'activeLease':bool(status.get('activeLeaseId')),'displays':displays,**scoped},headers={'Cache-Control':'no-store'})
+
+    async def presentation_resolve(self, request):
+        lease_id=request.match_info['id'];data=await request.content.read(8193)
+        if len(data)>8192:raise web.HTTPRequestEntityTooLarge(max_size=8192,actual_size=len(data))
+        try:value=json.loads(data)
+        except (ValueError,TypeError):raise web.HTTPBadRequest()
+        lease,_,_=self.active(lease_id)
+        validate_presentation_resolve(value,lease)
+        config=self.devices[lease['deviceId']]
+        # Read-only refusal does not retire a healthy capture lease. No retries.
+        async with self.http.post(config['url']+f'/v1/leases/{lease_id}/presentation/resolve',
+                headers={'Authorization':'Bearer '+config['key']},json=value,allow_redirects=False,timeout=1.5) as response:
+            raw=await response.content.read(8193)
+            if len(raw)>8192:raise web.HTTPBadGateway()
+            if response.status!=200:
+                try:reason=json.loads(raw).get('error')
+                except (ValueError,AttributeError):reason=None
+                allowed={'presentation_resolver_busy','presentation_authority_unavailable','presentation_target_changed','presentation_resolver_unavailable'}
+                return web.json_response({'error':'presentation_resolver_unavailable','reason':reason if reason in allowed else 'presentation_resolver_unavailable'},status=409)
+        current,_,_=self.active(lease_id);validate_presentation_resolve(value,current)
+        try:observation=json.loads(raw)
+        except (ValueError,TypeError):raise web.HTTPBadGateway()
+        if not isinstance(observation,dict) or set(observation)!={'window','observedAt','processIdentity','windowBounds','appActive','windowFocused','windowOnScreen'} or observation.get('window')!=value['window']:
+            raise web.HTTPBadGateway()
+        bounds=observation.get('windowBounds');observed=observation.get('observedAt');identity=observation.get('processIdentity')
+        if (not isinstance(identity,str) or not re.fullmatch('[0-9a-f]{64}',identity)
+            or value.get('processIdentity',identity)!=identity
+            or type(observed) not in (int,float) or not time.time()*1000-2000<observed<=time.time()*1000+100
+            or not isinstance(bounds,dict) or set(bounds)!={'x','y','width','height'}
+            or any(type(v) not in (int,float) or not math.isfinite(v) or abs(v)>65536 for v in bounds.values())
+            or bounds['width']<=0 or bounds['height']<=0
+            or any(observation[k] is not True for k in ('appActive','windowFocused','windowOnScreen'))):raise web.HTTPBadGateway()
+        return web.json_response(observation,headers={'Cache-Control':'no-store'})
 
     async def panel(self, request):
         device_id=request.match_info['device']
@@ -363,6 +510,22 @@ class Gateway:
             if len(raw)>16384:raise web.HTTPBadGateway()
             return web.Response(status=response.status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
 
+    async def text_grant(self, request):
+        device=request.match_info['device']
+        config=self.devices.get(device)
+        if not ID.fullmatch(device) or not config:raise web.HTTPNotFound()
+        grant=request.match_info.get('grant')
+        if grant is not None and not ID.fullmatch(grant):raise web.HTTPBadRequest()
+        body=await request.json() if request.method=='POST' else None
+        if body is not None and (not isinstance(body,dict) or body.get('deviceId')!=device):raise web.HTTPBadRequest()
+        path='/v1/text-grants'+('/'+grant if grant else '')
+        async with self.http.request(request.method,config['url']+path,
+                headers={'Authorization':'Bearer '+config['key']},
+                **({'json':body} if body is not None else {}),allow_redirects=False) as response:
+            raw=await response.content.read(16385)
+            if len(raw)>16384:raise web.HTTPBadGateway()
+            return web.Response(status=response.status,body=raw,content_type='application/json',headers={'Cache-Control':'no-store'})
+
     def app(self):
         @web.middleware
         async def auth(request,handler):
@@ -376,13 +539,25 @@ class Gateway:
                 except Exception:return web.json_response({'error':'Device operation uncertain; reconcile before retry.'},status=503)
             finally:request_id.reset(context)
         app=web.Application(middlewares=[auth],client_max_size=65536)
+        async def version(request):
+            device=request.match_info.get('device')
+            if device is not None and device not in self.devices:raise web.HTTPNotFound()
+            return web.json_response(self.version,headers={'Cache-Control':'no-store'})
+        app.router.add_get('/v1/version',version)
+        app.router.add_get('/v1/devices/{device}/version',version)
         app.router.add_get('/v1/devices/{device}/readiness',self.readiness)
         app.router.add_get('/v1/devices/{device}/readiness/{member}/{display}',self.readiness)
         app.router.add_post('/v1/devices/{device}/panel',self.panel)
+        app.router.add_post('/v1/devices/{device}/text-grants',self.text_grant)
+        app.router.add_get('/v1/devices/{device}/text-grants/{grant}',self.text_grant)
+        app.router.add_delete('/v1/devices/{device}/text-grants/{grant}',self.text_grant)
         app.router.add_post('/v1/leases',self.create)
         app.router.add_post('/v1/leases/{id}/renew',self.renew)
         app.router.add_delete('/v1/leases/{id}',self.close)
         app.router.add_get('/v1/leases/{id}/frame',self.frame)
+        app.router.add_post('/v1/leases/{id}/presentation/resolve',self.presentation_resolve)
+        app.router.add_post('/v1/leases/{id}/native/{stage:prepare|dispatch}',self.native_activation.post)
+        app.router.add_get('/v1/leases/{id}/native/{operation}',self.native_activation.get)
         app.router.add_post('/v1/leases/{id}/actions',self.action)
         async def receipt(request):return await self.action_receipt(request.match_info['id'],request.match_info['action'])
         app.router.add_get('/v1/leases/{id}/actions/{action}',receipt)

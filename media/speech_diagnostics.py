@@ -8,9 +8,9 @@ import hashlib
 import re
 import uuid
 
-EVENTS = frozenset('capture_open capture_close capture_reset capture_error provider_invalid provider_vad_start provider_final provider_empty_final provider_interim provider_empty_interim provider_utterance_end provider_boundary_ignored provider_duplicate provider_stale provider_other utterance_emitted utterance_discarded queue_accepted callback_started callback_accepted callback_refused callback_failed reply_deferred reply_cancelled playback_started playback_completed playback_failed playback_unknown segment_rejected'.split())
+EVENTS = frozenset('capture_open capture_close capture_reset capture_error provider_invalid provider_vad_start provider_final provider_empty_final provider_interim provider_empty_interim provider_utterance_end provider_boundary_ignored provider_duplicate provider_stale provider_other utterance_emitted utterance_discarded queue_accepted callback_started callback_accepted callback_refused callback_failed reply_deferred reply_cancelled playback_started playback_completed playback_failed playback_unknown segment_rejected speech_onset interruption_detected playback_cleared interruption_reported interruption_unconfirmed tts_requested tts_first_byte audio_first_published audio_last_published event_loop_lag voice_response_audio'.split())
 COUNTERS = EVENTS | frozenset(('audio_frames', 'audio_bytes', 'audio_nonzero_frames', 'audio_sent_frames'))
-REASONS = frozenset('generation_change connection_closed policy_closed priority_stop complete character_limit fragment_limit duration_limit interim_retracted human_speaking newer_human_turn authorization_closed capture_stopped playback_failed playback_interrupted invalid_segment stale_queue obsolete_generation queue_full authority_closed callback_stale callback_refused callback_timeout callback_transport callback_invalid_response'.split())
+REASONS = frozenset('generation_change connection_closed policy_closed priority_stop complete character_limit fragment_limit duration_limit interim_retracted human_speaking newer_human_turn authorization_closed capture_stopped playback_failed playback_interrupted invalid_segment stale_queue obsolete_generation queue_full authority_closed callback_stale callback_refused callback_timeout callback_transport callback_invalid_response human_interruption newer_revision duplex_disabled'.split())
 PHASES = frozenset(('idle', 'vad_grace', 'collecting', 'waiting_final', 'settling', 'quarantined'))
 BOUND = 999999999
 
@@ -44,7 +44,8 @@ class SpeechDiagnostics:
         self.dirty = True
 
     def event(self, event, generation=0, reason=None, segment=None, characters=None,
-              start_ms=None, duration_ms=None, word_end_ms=None, endpoint=None, correlation_id=None):
+              start_ms=None, duration_ms=None, word_end_ms=None, endpoint=None, correlation_id=None,
+              playback_generation=None, queue_depth=None):
         if event not in EVENTS or (reason is not None and reason not in REASONS):
             raise ValueError('Unrecognized speech diagnostic category')
         now = self.clock()
@@ -71,6 +72,10 @@ class SpeechDiagnostics:
             value['segment'] = bounded(segment)
         if characters is not None:
             value['characters'] = bounded(characters, 8001)
+        if playback_generation is not None:
+            value['playbackGeneration'] = bounded(playback_generation)
+        if queue_depth is not None:
+            value['queueDepth'] = bounded(queue_depth, 100)
         for key, number in [('startMs',start_ms),('durationMs',duration_ms),('lastWordEndMs',word_end_ms)]:
             if number is not None:
                 value[key] = bounded(number,86400000)

@@ -1,0 +1,935 @@
+import asyncio
+import base64
+import copy
+import json
+from pathlib import Path
+import tempfile
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, Mock, patch
+
+from aiohttp import ClientSession, WSCloseCode, web
+from aiohttp.test_utils import TestClient, TestServer
+from livekit import rtc
+
+from elevenlabs_frontend import (ElevenLabsFrontend, TOOL_PARAMETERS, allowed,
+                                AUDIO_QUEUE_BYTES, AUDIO_QUEUE_EVENTS, AUDIO_EVENT_BYTES, FrontendFault,
+                                bounded_context, client_tool_definitions, validate_agent, validate_configured_agent, provider_get)
+from server import Service, Session
+from speech_diagnostics import SpeechDiagnostics
+from elevenlabs_agent_config import configuration
+
+
+def policy():
+    return {'conversationVersion': 1, 'conversationFrontend': 'elevenlabs',
+            'protocolVersion': 2, 'voiceInteractionVersion': 1, 'voiceMode': 'two_way',
+            'remoteAudioIsolated': True, 'state': 'listening', 'callId': 'call',
+            'expiresAt': '2099-01-01T00:00:00Z', 'conversationRevision': 0}
+
+
+def env():
+    return {'MEDIA_ELEVENLABS_ENABLED': 'true', 'MEDIA_TWO_WAY_VOICE_ENABLED': 'true',
+            'ELEVENLABS_API_KEY': 'synthetic-not-a-key', 'ELEVENLABS_AGENT_ID': 'agent_fixture'}
+
+
+def agent_config():
+    return {'agent_id': 'agent_fixture', 'conversation_config': {
+        'asr': {'user_input_audio_format': 'pcm_16000'},
+        'tts': {'agent_output_audio_format': 'pcm_16000', 'model_id': 'eleven_flash_v2'},
+        'turn': {'silence_end_call_timeout': -1},
+        'agent': {'prompt': {'llm': 'gemini-2.5-flash', 'tools': client_tool_definitions()}},
+        'conversation': {'max_duration_seconds': 600, 'client_events': ['audio', 'interruption', 'user_transcript', 'agent_response']}},
+        'platform_settings': {'auth': {'enable_auth': True}, 'queueing_config': {'enabled': False},
+            'privacy': {'record_voice': False, 'retention_days': 0, 'delete_audio': True, 'delete_transcript_and_pii': True},
+            'overrides': {'conversation_config_override': {'agent': {'prompt': {'prompt': True}, 'first_message': True}}}}}
+
+
+def context(sequence=0):
+    return {'sequence': sequence, 'context': 'Fixture task. No work has executed.', 'updates': [],
+            'cameraTargets': [{'id': 'target_one', 'label': 'Prepared fixture region'}]}
+
+
+def metadata():
+    return {'type': 'conversation_initiation_metadata', 'conversation_initiation_metadata_event': {
+        'conversation_id': 'conversation_fixture', 'agent_output_audio_format': 'pcm_16000',
+        'user_input_audio_format': 'pcm_16000'}}
+
+
+def transcript(identity=1, text='Inspect the fixture and explain the result'):
+    return {'type': 'user_transcript', 'user_transcription_event': {'event_id': identity, 'user_transcript': text}}
+
+
+class FrontendTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.owner = SimpleNamespace(env=env(), backend=AsyncMock(return_value={'accepted': True, 'reply': 'Queued; not complete.'}))
+        self.parent = SimpleNamespace(id='ct_' + 'a' * 40, owner=self.owner, active=True, allowed=True,
+            closing=False, pause_latched=False, two_way=True, policy_at=time.monotonic(), call_id='call',
+            speaking=False, playback_generation=0, conversation_revision=0, first_audio_published=False,
+            audio=asyncio.Queue(maxsize=100), playback_event=Mock(), request_failure=Mock(),
+            observe_audio_activity=Mock(), stream=None)
+        self.frontend = ElevenLabsFrontend(self.parent)
+        self.frontend.ws = SimpleNamespace(closed=False, send_json=AsyncMock(), close=AsyncMock())
+        def cancel(*args, **kwargs):
+            self.frontend.cutoff()
+            self.parent.playback_generation += 1
+            while not self.parent.audio.empty():
+                item = self.parent.audio.get_nowait()[1]
+                if isinstance(item, asyncio.Future): item.cancel()
+        self.owner.cancel_speech = Mock(side_effect=cancel)
+        await self.frontend.handle(metadata())
+
+    async def asyncTearDown(self):
+        await self.frontend.close()
+
+    async def invoke(self, name='send_to_agent', identity='tool1', utterance='u1', **kwargs):
+        await self.frontend.handle({'type': 'client_tool_call', 'client_tool_call': {
+            'tool_call_id': identity, 'tool_name': name,
+            'parameters': ({'text': kwargs.pop('text', self.frontend.latest['text'] if self.frontend.latest else 'Unobserved request'), **kwargs} if name == 'send_to_agent' else kwargs)}})
+        await asyncio.gather(*list(self.frontend.tasks), return_exceptions=True)
+
+    async def test_disabled_and_nonisolated_policy_cannot_enable_frontend(self):
+        self.assertTrue(allowed(policy(), env()))
+        for change in ({'remoteAudioIsolated': False}, {'voiceMode': 'half_duplex'},
+                       {'conversationFrontend': 'gpt_live'}, {'protocolVersion': 1}):
+            self.assertFalse(allowed({**policy(), **change}, env()))
+        for key in env():
+            changed = env(); changed.pop(key)
+            self.assertFalse(allowed(policy(), changed))
+
+    async def test_actual_transcript_once_only_even_with_different_tool_ids(self):
+        await self.frontend.handle(transcript(text='Use the selected option and run the fixture test.'))
+        await self.invoke()
+        await self.invoke(identity='tool2')
+        await self.invoke(identity='tool1')
+        self.owner.backend.assert_awaited_once()
+        path, body = self.owner.backend.call_args.args
+        self.assertTrue(path.endswith('/voice/intent'))
+        self.assertEqual(body['text'], 'Use the selected option and run the fixture test.')
+        self.assertEqual(body['qualifiedRemoteAudio'], True)
+        self.assertNotIn('api_managed', json.dumps(body))
+
+    async def test_unobserved_stale_and_model_rewritten_text_cannot_execute(self):
+        await self.invoke()
+        await self.frontend.handle(transcript())
+        await self.frontend.handle(transcript(2, 'Actually wait.'))
+        await self.invoke(identity='old', text='Inspect the fixture and explain the result')
+        await self.invoke(identity='rewritten', utterance='u2', text='Delete everything')
+        self.owner.backend.assert_not_awaited()
+
+    async def test_duplicate_transcript_is_read_only_and_changed_event_fails(self):
+        await self.frontend.handle(transcript())
+        count = self.frontend.ws.send_json.await_count
+        await self.frontend.handle(transcript())
+        self.assertEqual(self.frontend.ws.send_json.await_count, count)
+        with self.assertRaises(ValueError):
+            await self.frontend.handle(transcript(text='Changed instruction'))
+        self.owner.backend.assert_not_awaited()
+
+    async def test_legacy_transcript_without_event_id_is_bounded_and_not_reconnected(self):
+        event = transcript(); del event['user_transcription_event']['event_id']
+        await self.frontend.handle(event)
+        await self.invoke()
+        await self.frontend.handle(event)
+        await self.invoke(identity='duplicate')
+        self.owner.backend.assert_awaited_once()
+        self.assertEqual(self.frontend.latest['id'], 'ulocal1')
+        event['user_transcription_event']['user_transcript'] = 'Inspect another fixture.'
+        await self.frontend.handle(event)
+        self.assertEqual(self.frontend.latest['id'], 'ulocal2')
+
+    async def test_unknown_callback_never_retries_under_same_or_new_tool_id(self):
+        self.owner.backend.side_effect = TimeoutError()
+        await self.frontend.handle(transcript())
+        await self.invoke()
+        await self.invoke(identity='tool2')
+        self.owner.backend.assert_awaited_once()
+        result = self.frontend.ws.send_json.call_args.args[0]
+        self.assertTrue(result['is_error'])
+        self.assertIn('unconfirmed', result['result'])
+
+    async def test_backend_acceptance_is_async_while_audio_and_ping_continue(self):
+        entered, finish = asyncio.Event(), asyncio.Event()
+        async def delayed(*args):
+            entered.set(); await finish.wait(); return {'accepted': True, 'reply': 'Queued.'}
+        self.owner.backend.side_effect = delayed
+        output = self.frontend.spawn(self.frontend.output())
+        await self.frontend.handle(transcript())
+        await self.frontend.handle({'type': 'client_tool_call', 'client_tool_call': {
+            'tool_call_id': 'work', 'tool_name': 'send_to_agent', 'parameters': {'text': 'Inspect the fixture and explain the result'}}})
+        await entered.wait()
+        tools = [task for task in self.frontend.tasks if task is not output]
+        await self.frontend.handle({'type': 'ping', 'ping_event': {'event_id': 4}})
+        await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 5,
+            'audio_base_64': base64.b64encode(b'\x01\x00' * 1600).decode()}})
+        published = await asyncio.wait_for(self.parent.audio.get(), 1)
+        self.assertEqual(len(published[1]), 1920)
+        self.assertTrue(any(published[1]))
+        self.assertEqual(self.frontend.ws.send_json.call_args.args[0], {'type': 'pong', 'event_id': 4})
+        finish.set()
+        await asyncio.gather(*tools)
+
+    async def test_capture_sends_continuous_resampled_pcm_without_microphone(self):
+        class SyntheticStream:
+            def __init__(self, *args, **kwargs): self.frames = 0
+            def __aiter__(self): return self
+            async def __anext__(self):
+                self.frames += 1
+                if self.frames > 12: raise StopAsyncIteration
+                return SimpleNamespace(frame=rtc.AudioFrame(b'\x08\x00' * 960, 48000, 1, 960))
+            async def aclose(self): pass
+        with patch('elevenlabs_frontend.rtc.AudioStream', SyntheticStream):
+            await self.frontend.capture(object())
+        audio = [call.args[0]['user_audio_chunk'] for call in self.frontend.ws.send_json.await_args_list
+                 if 'user_audio_chunk' in call.args[0]]
+        self.assertEqual(len(audio), 2)
+        self.assertTrue(all(len(base64.b64decode(item)) == 3200 for item in audio))
+        self.assertTrue(all(any(base64.b64decode(item)) for item in audio))
+        self.assertIsNone(self.parent.stream)
+
+    async def test_cutoff_between_dequeue_and_consumer_does_not_corrupt_byte_bound(self):
+        queue = self.frontend.audio_events
+        original = queue.get
+        async def interleaved():
+            value = await original()
+            self.frontend.cutoff()
+            return value
+        queue.get = interleaved
+        self.frontend.spawn(self.frontend.output())
+        await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+            'audio_base_64': base64.b64encode(b'\x03\x00' * 1600).decode()}})
+        await asyncio.sleep(.02)
+        self.assertEqual(self.frontend.audio_bytes, 0)
+        self.assertTrue(self.parent.audio.empty())
+
+    async def test_prepared_camera_only_and_no_code_action(self):
+        await self.frontend.context(context())
+        await self.frontend.handle(transcript(text='Show and highlight that fixture.'))
+        await self.invoke('show_target', target_id='unknown')
+        self.owner.backend.assert_not_awaited()
+        await self.invoke('show_target', identity='focus', target_id='target_one')
+        await self.invoke('annotate_target', identity='mark', target_id='target_one')
+        await self.invoke('show_overview', identity='overview')
+        bodies = [call.args[1] for call in self.owner.backend.await_args_list]
+        self.assertEqual([body['action'] for body in bodies], ['focus', 'annotate', 'overview'])
+        self.assertTrue(all('text' not in body and 'x' not in body for body in bodies))
+
+    async def test_context_revocation_removes_prepared_targets_and_sequences_cannot_regress(self):
+        await self.frontend.context(context(2))
+        value = context(3); value['cameraTargets'] = []
+        await self.frontend.context(value)
+        await self.frontend.handle(transcript())
+        await self.invoke('show_target', target_id='target_one')
+        self.owner.backend.assert_not_awaited()
+        with self.assertRaises(ValueError): await self.frontend.context(context(2))
+
+    async def test_end_requires_actual_hangup_and_is_once_only(self):
+        for index, text in enumerate(('Do not hang up.', 'The file is called goodbye.', 'Do you think we should hang up?',
+                                     'If the test passes, hang up.', 'Keep talking; not goodbye.'), 1):
+            await self.frontend.handle(transcript(index, text))
+            await self.invoke('end_call', identity='refused' + str(index))
+        self.owner.backend.assert_not_awaited()
+        await self.frontend.handle(transcript(6, 'Please hang up now.'))
+        await self.invoke('end_call', identity='end', utterance='u2')
+        await self.invoke('end_call', identity='end_again', utterance='u2')
+        self.owner.backend.assert_awaited_once()
+        self.assertTrue(self.owner.backend.call_args.args[0].endswith('/voice/end'))
+        self.assertEqual(set(self.owner.backend.call_args.args[1]), {'eventId', 'callId', 'qualifiedRemoteAudio'})
+
+    async def test_stop_and_policy_loss_block_new_tools_audio_and_context(self):
+        await self.frontend.handle(transcript())
+        self.parent.pause_latched = True
+        await self.invoke()
+        self.owner.backend.assert_not_awaited()
+        with self.assertRaises(ValueError): await self.frontend.verified_reply('Completed fixture check.')
+        self.parent.pause_latched = False
+        self.parent.policy_at = time.monotonic() - 3
+        await self.invoke(identity='stale')
+        self.owner.backend.assert_not_awaited()
+
+    async def test_interruption_clears_output_and_late_same_response_cannot_resume(self):
+        event = {'type': 'audio', 'audio_event': {'event_id': 7,
+            'audio_base_64': base64.b64encode(b'\x02\x00' * 1600).decode()}}
+        await self.frontend.handle(event)
+        self.assertEqual(self.frontend.audio_bytes, 3200)
+        await self.frontend.handle({'type': 'interruption', 'interruption_event': {'event_id': 7}})
+        self.assertEqual(self.frontend.audio_bytes, 0)
+        await self.frontend.handle(event)
+        self.assertTrue(self.frontend.audio_events.empty())
+        event['audio_event']['event_id'] = 8
+        await self.frontend.handle(event)
+        self.assertEqual(self.frontend.audio_events.qsize(), 1)
+
+    async def test_real_resampler_output_is_tagged_and_revoked_before_late_audio(self):
+        self.frontend.spawn(self.frontend.output())
+        await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+            'audio_base_64': base64.b64encode(b'\x03\x00' * 1600).decode()}})
+        item = await asyncio.wait_for(self.parent.audio.get(), 1)
+        self.assertEqual(len(item[1]), 1920)
+        self.assertEqual(item[0], self.parent.playback_generation)
+        self.owner.cancel_speech()
+        self.assertFalse(self.parent.speaking)
+        self.assertTrue(self.parent.audio.empty())
+
+    async def test_progress_dedup_and_no_false_playback_ack(self):
+        value = context(1); value['updates'] = [{'id': 'turn1', 'revision': 1, 'text': 'Agent reports the fixture test passed.'}]
+        await self.frontend.context(value)
+        count = self.frontend.ws.send_json.await_count
+        await self.frontend.context(value)
+        self.assertEqual(self.frontend.ws.send_json.await_count, count)
+        self.assertNotIn('completed', self.frontend.__dict__)
+        self.assertFalse(self.frontend.pending_reports)
+
+    async def test_verified_report_triggers_once_without_human_or_tool_authority(self):
+        await self.frontend.handle(transcript())
+        self.frontend.latest['at'] -= 1
+        await self.frontend.verified_reply('The original agent reports a passing fixture check.')
+        self.frontend.spawn(self.frontend.report())
+        await asyncio.sleep(.12)
+        reports = [call.args[0] for call in self.frontend.ws.send_json.await_args_list if call.args[0]['type'] == 'user_message']
+        self.assertEqual(len(reports), 1)
+        await self.frontend.handle(transcript(2, reports[0]['text']))
+        self.assertEqual(self.frontend.latest['id'], 'u1')
+        outcome = await self.frontend.execute_tool('synthetic_trigger', 'send_to_agent', {'text': self.frontend.latest['text']})
+        self.assertTrue(outcome[1])
+        self.owner.backend.assert_not_awaited()
+        await self.frontend.handle(transcript(3, 'Inspect the second fixture.'))
+        self.assertFalse(self.frontend.report_only)
+        # Avoid gathering the long-running report loop in invoke().
+        outcome = await self.frontend.execute_tool('human', 'send_to_agent', {'text': self.frontend.latest['text']})
+        self.assertFalse(outcome[1])
+        self.owner.backend.assert_awaited_once()
+
+    async def test_new_human_transcript_discards_pending_narration(self):
+        await self.frontend.verified_reply('Old completion report.')
+        self.assertEqual(len(self.frontend.pending_reports), 1)
+        await self.frontend.handle(transcript(text='Actually cancel the next step.'))
+        self.assertFalse(self.frontend.pending_reports)
+
+    async def test_report_burst_waits_for_output_and_new_human_preempts(self):
+        await self.frontend.verified_reply('First explicit answer.')
+        self.frontend.spawn(self.frontend.report())
+        await asyncio.sleep(.12)
+        await self.frontend.verified_reply('Second explicit answer.')
+        await self.frontend.verified_reply('Third explicit answer.')
+        await asyncio.sleep(.22)
+        reports = [call.args[0] for call in self.frontend.ws.send_json.await_args_list if call.args[0]['type'] == 'user_message']
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(self.frontend.pending_reports[0][1], 'Third explicit answer.')
+        await self.frontend.handle(transcript(text='Wait, explain the earlier choice.'))
+        self.assertFalse(self.frontend.pending_reports)
+        self.assertIsNone(self.frontend.report_in_flight_at)
+        self.assertFalse(self.frontend.report_only)
+
+    async def test_report_output_timeout_does_not_retry_or_send_queued_report(self):
+        await self.frontend.verified_reply('First explicit answer.')
+        self.frontend.spawn(self.frontend.report())
+        await asyncio.sleep(.12)
+        await self.frontend.verified_reply('Later answer.')
+        self.frontend.report_in_flight_at -= 11
+        await asyncio.sleep(.12)
+        self.assertTrue(self.frontend.report_stalled)
+        self.assertFalse(self.frontend.pending_reports)
+        reports = [call.args[0] for call in self.frontend.ws.send_json.await_args_list if call.args[0]['type'] == 'user_message']
+        self.assertEqual(len(reports), 1)
+
+    async def test_latency_metrics_are_process_scoped_metadata_not_handset_evidence(self):
+        self.parent.generation = 2
+        self.parent.speech_diagnostics = SpeechDiagnostics(self.parent.id, lambda _: None)
+        await self.frontend.handle(transcript())
+        await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 2,
+            'audio_base_64': base64.b64encode(b'\x01\x00' * 1600).decode()}})
+        await self.invoke()
+        events = list(self.parent.speech_diagnostics.events)
+        self.assertEqual([event['event'] for event in events], ['provider_final', 'voice_response_audio', 'callback_started', 'callback_accepted'])
+        self.assertTrue(all(event['generation'] == 2 for event in events))
+        self.assertTrue(all('text' not in event for event in events))
+        self.assertGreaterEqual(events[1]['durationMs'], 0)
+        self.assertGreaterEqual(events[-1]['durationMs'], 0)
+
+    async def test_audio_malformed_and_queue_overflow_fail_closed(self):
+        for encoded in ('bad!', base64.b64encode(b'\x01').decode()):
+            with self.assertRaises(ValueError):
+                await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1, 'audio_base_64': encoded}})
+        self.frontend.audio_bytes = AUDIO_QUEUE_BYTES
+        with self.assertRaisesRegex(FrontendFault, 'audio_byte_capacity'):
+            await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1, 'audio_base_64': 'AAA='}})
+
+    async def test_provider_burst_exceeding_old_bound_drains_at_real_time(self):
+        # Three seconds synthesized immediately, played at the production 20 ms
+        # cadence. The old two-second provider queue fails before output starts.
+        event = {'type': 'audio', 'audio_event': {'event_id': 1,
+            'audio_base_64': base64.b64encode(b'\x01\x00' * 1600).decode()}}
+        for _ in range(30):
+            await self.frontend.handle(event)
+        self.assertEqual(self.frontend.audio_bytes, 96000)
+        completed = asyncio.Event()
+        frames = []
+        async def consume():
+            while True:
+                self.parent.policy_at = time.monotonic()
+                generation, item = await self.parent.audio.get()
+                if isinstance(item, asyncio.Future):
+                    item.set_result(None)
+                    completed.set()
+                else:
+                    frames.append(item)
+                    await asyncio.sleep(.02)
+        consumer = asyncio.create_task(consume())
+        self.frontend.spawn(self.frontend.output(), 'output')
+        try:
+            await asyncio.wait_for(completed.wait(), 5)
+            self.assertGreaterEqual(len(frames), 150)
+            self.assertTrue(all(len(frame) == 1920 for frame in frames))
+            self.assertEqual(self.frontend.audio_bytes, 0)
+            self.parent.request_failure.assert_not_called()
+        finally:
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+
+    async def test_observed_provider_packet_shape_and_event_size_bounds(self):
+        # Real probe metadata observed 79,882 decoded bytes (2.496 seconds),
+        # valid PCM16; use fresh synthetic zero samples, never provider content.
+        for size in (79882, AUDIO_EVENT_BYTES):
+            await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+                'audio_base_64': base64.b64encode(bytes(size)).decode()}})
+        self.assertEqual(self.frontend.audio_bytes, 79882 + AUDIO_EVENT_BYTES)
+        before = self.frontend.audio_events.qsize()
+        with self.assertRaisesRegex(FrontendFault, 'audio_event_size'):
+            await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+                'audio_base_64': base64.b64encode(bytes(AUDIO_EVENT_BYTES + 2)).decode()}})
+        self.assertEqual(self.frontend.audio_events.qsize(), before)
+        self.assertEqual(self.frontend.audio_bytes, 79882 + AUDIO_EVENT_BYTES)
+
+    async def test_burst_interruption_clears_queued_and_inflight_audio(self):
+        self.parent.audio = asyncio.Queue(maxsize=1)
+        event = {'type': 'audio', 'audio_event': {'event_id': 1,
+            'audio_base_64': base64.b64encode(b'\x01\x00' * 16000).decode()}}
+        for _ in range(10):
+            await self.frontend.handle(event)
+        self.frontend.spawn(self.frontend.output(), 'output')
+        await asyncio.sleep(.02)
+        self.assertEqual(self.frontend.audio_bytes, 320000)  # Includes blocked chunk.
+        await self.frontend.handle({'type': 'interruption', 'interruption_event': {'event_id': 1}})
+        self.assertEqual(self.frontend.audio_bytes, 0)
+        self.assertTrue(self.frontend.audio_events.empty())
+
+        self.assertTrue(self.parent.audio.empty())
+        await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 2, 'audio_base_64': 'AAA='}})
+        await asyncio.sleep(.02)
+        self.assertGreaterEqual(self.frontend.audio_bytes, 0)
+        # A blocked old producer never enqueues after cutoff.
+        self.assertTrue(self.parent.audio.empty())
+        self.parent.request_failure.assert_not_called()
+        await self.frontend.close()
+        self.assertEqual(self.frontend.audio_bytes, 0)
+        self.assertTrue(self.frontend.audio_events.empty())
+
+    async def test_real_session_publisher_playout_pause_does_not_fail_burst(self):
+        # Exercise the production publisher, including its prior SDK barrier.
+        # The 300 ms output queue deadline fails while that legal wait lasts.
+        entered, release, published = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def playout():
+            entered.set()
+            await release.wait()
+        async def capture(frame):
+            if any(bytes(frame.data)):
+                published.set()
+        self.parent.source = SimpleNamespace(wait_for_playout=playout, capture_frame=capture)
+        self.parent.speech_cancelled = False
+        previous = asyncio.get_running_loop().create_future()
+        self.parent.audio.put_nowait((0, previous))
+        publisher = asyncio.create_task(Session.publish(self.parent))
+        output = None
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            await self.frontend.handle({'type': 'audio', 'audio_event': {'event_id': 1,
+                'audio_base_64': base64.b64encode(b'\x01\x00' * 48000).decode()}})
+            output = self.frontend.spawn(self.frontend.output(), 'output')
+            await asyncio.sleep(.55)
+            self.assertEqual(self.parent.audio.qsize(), 100)
+            self.assertEqual(self.frontend.audio_bytes, 96000)
+            self.assertFalse(output.done())
+            self.parent.request_failure.assert_not_called()
+            release.set()
+            await asyncio.wait_for(published.wait(), 1)
+            self.parent.request_failure.assert_not_called()
+        finally:
+            publisher.cancel()
+            await asyncio.gather(publisher, return_exceptions=True)
+            if output:
+                output.cancel()
+                await asyncio.gather(output, return_exceptions=True)
+
+    async def test_blocked_output_checks_authority_epoch_and_cancellation(self):
+        for reason in ('authority', 'epoch', 'generation', 'close', 'cancel'):
+            with self.subTest(reason=reason):
+                self.parent.allowed = True
+                self.frontend.closed = False
+                self.parent.policy_at = time.monotonic()
+                self.parent.audio = asyncio.Queue(maxsize=1)
+                self.parent.audio.put_nowait((self.parent.playback_generation, b'occupied'))
+                barrier = asyncio.get_running_loop().create_future()
+                queued = asyncio.create_task(self.frontend.enqueue_output(
+                    self.parent.playback_generation, self.frontend.output_epoch, barrier))
+                await asyncio.sleep(.03)
+                if reason == 'authority': self.parent.allowed = False
+                elif reason == 'epoch': self.frontend.cutoff()
+                elif reason == 'generation': self.parent.playback_generation += 1
+                elif reason == 'close': self.frontend.closed = True
+                else: queued.cancel()
+                if reason == 'cancel':
+                    with self.assertRaises(asyncio.CancelledError):
+                        await queued
+                else:
+                    self.assertFalse(await asyncio.wait_for(queued, .2))
+                self.assertTrue(barrier.cancelled())
+                self.parent.audio.get_nowait()
+                await asyncio.sleep(.03)
+                self.assertTrue(self.parent.audio.empty())
+        self.frontend.closed = False
+
+    async def test_nonprogressing_output_stops_at_three_second_bound(self):
+        self.parent.audio = asyncio.Queue(maxsize=1)
+        self.parent.audio.put_nowait((0, b'occupied'))
+        async def refresh_policy():
+            while True:
+                self.parent.policy_at = time.monotonic()
+                await asyncio.sleep(.02)
+        refreshing = asyncio.create_task(refresh_policy())
+        barrier = asyncio.get_running_loop().create_future()
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(FrontendFault, 'playback_queue_stalled'):
+                await asyncio.wait_for(self.frontend.enqueue_output(0, 0, barrier), 4)
+            self.assertGreaterEqual(time.monotonic() - started, 3)
+            self.assertTrue(barrier.cancelled())
+            self.assertEqual(self.parent.audio.qsize(), 1)
+        finally:
+            refreshing.cancel()
+            await asyncio.gather(refreshing, return_exceptions=True)
+
+    async def test_audio_event_capacity_rejection_is_atomic(self):
+        event = {'type': 'audio', 'audio_event': {'event_id': 1, 'audio_base_64': 'AAA='}}
+        for _ in range(AUDIO_QUEUE_EVENTS):
+            await self.frontend.handle(event)
+        with self.assertRaisesRegex(FrontendFault, 'audio_event_capacity'):
+            await self.frontend.handle(event)
+        self.assertEqual(self.frontend.audio_bytes, 2 * AUDIO_QUEUE_EVENTS)
+        self.assertEqual(self.frontend.audio_events.qsize(), AUDIO_QUEUE_EVENTS)
+
+    async def test_background_failure_logs_only_allowlisted_metadata(self):
+        async def broken():
+            raise ValueError('PRIVATE_TRANSCRIPT_AND_PROVIDER_BODY')
+        with self.assertLogs(level='ERROR') as logs:
+            task = self.frontend.spawn(broken(), 'read')
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn('stage=read code=task_invalid queuedBytes=0 queuedEvents=0', logs.output[0])
+        self.assertNotIn('PRIVATE', logs.output[0])
+        self.parent.request_failure.assert_called_once_with('task_failed', 'capture_loop')
+
+    async def test_short_provider_lifetime_refused_before_socket_or_context(self):
+        config = agent_config()
+        config['conversation_config']['conversation']['max_duration_seconds'] = 180
+        self.frontend.provider_get = AsyncMock(return_value=config)
+        self.frontend.open_socket = AsyncMock()
+        with self.assertRaisesRegex(ValueError, 'conversation lifetime'):
+            await self.frontend.start()
+        self.frontend.provider_get.assert_awaited_once_with('/agents/agent_fixture')
+        self.frontend.open_socket.assert_not_awaited()
+        self.owner.backend.assert_not_awaited()
+
+    async def test_abnormal_close_enum_is_logged_without_exception_details(self):
+        self.frontend.ws.close_code = WSCloseCode.ABNORMAL_CLOSURE
+        async def broken():
+            raise FrontendFault('provider_disconnected')
+        with self.assertLogs(level='ERROR') as logs:
+            task = self.frontend.spawn(broken(), 'read')
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+        self.assertIn('providerCloseCode=1006 providerCloseClass=abnormal', logs.output[0])
+        self.parent.request_failure.assert_called_once_with('task_failed', 'capture_loop')
+
+    async def test_provider_close_records_only_safe_metadata_and_never_reconnects(self):
+        connections = []
+        pong = []
+        async def socket(request):
+            connections.append(1)
+            ws = web.WebSocketResponse(); await ws.prepare(request)
+            await ws.send_json({'type': 'ping', 'ping_event': {'event_id': 12, 'ping_ms': 50}})
+            pong.append(await ws.receive_json())
+            await ws.close(code=1000, message=b'PRIVATE_PROVIDER_REASON_AND_TRANSCRIPT')
+            return ws
+        app = web.Application(); app.router.add_get('/socket', socket)
+        server = TestServer(app); await server.start_server()
+        try:
+            self.frontend.ws = await self.frontend.open_socket(server.make_url('/socket'))
+            self.frontend.socket_started_at = time.monotonic() - 181
+            self.frontend.provider_duration_seconds = 600
+            self.frontend.tool_receipts['already_submitted'] = {'state': 'unknown'}
+            self.frontend.open_socket = AsyncMock(side_effect=AssertionError('No reconnect'))
+            with self.assertLogs(level='ERROR') as logs:
+                task = self.frontend.spawn(self.frontend.read(), 'read')
+                await asyncio.gather(task, return_exceptions=True)
+                await asyncio.sleep(0)
+            self.assertEqual(pong, [{'type': 'pong', 'event_id': 12}])
+            self.assertEqual(connections, [1])
+            self.frontend.open_socket.assert_not_awaited()
+            self.owner.backend.assert_not_awaited()
+            self.parent.request_failure.assert_called_once_with('task_failed', 'capture_loop')
+            self.assertEqual(self.frontend.tool_receipts['already_submitted'], {'state': 'unknown'})
+            self.assertEqual(len(logs.output), 1)
+            self.assertIn('stage=read code=provider_disconnected', logs.output[0])
+            self.assertIn('providerCloseCode=1000 providerCloseClass=normal providerSessionMs=181', logs.output[0])
+            self.assertIn('providerLimitSeconds=600', logs.output[0])
+            self.assertNotIn('PRIVATE', logs.output[0])
+        finally:
+            await self.frontend.close()
+            await server.close()
+
+
+class ProviderContractTests(unittest.TestCase):
+    def test_provider_lifetime_is_explicit_and_supports_ten_minute_calls(self):
+        for duration in (600, 900, 7200):
+            config = agent_config()
+            config['conversation_config']['conversation']['max_duration_seconds'] = duration
+            validate_agent(config, client_tool_definitions())
+        for duration in (None, True, 180, 599, 600.0, '600', 7201):
+            with self.subTest(duration=duration):
+                config = agent_config()
+                config['conversation_config']['conversation']['max_duration_seconds'] = duration
+                with self.assertRaisesRegex(ValueError, 'conversation lifetime'):
+                    validate_agent(config, client_tool_definitions())
+        for silence in (None, False, 0, 180, '-1'):
+            with self.subTest(silence=silence):
+                config = agent_config()
+                config['conversation_config']['turn']['silence_end_call_timeout'] = silence
+                with self.assertRaisesRegex(ValueError, 'conversation lifetime'):
+                    validate_agent(config, client_tool_definitions())
+
+    def test_empty_provider_workflow_is_allowed_but_execution_surfaces_are_not(self):
+        config = agent_config()
+        inert = {'nodes': {'synthetic_start': {'type': 'start', 'edge_order': [], 'position': {'x': 0, 'y': 0},
+                                             'parent_subgraph_id': None, 'parent_frame_id': None}},
+                 'edges': {}, 'subgraphs': {}, 'frames': [], 'prevent_subagent_loops': True, 'version': 1}
+        for workflow in (None, {}, {'nodes': {}, 'edges': {}, 'prevent_subagent_loops': False}, inert,
+                         {**inert, 'frames': {}}):
+            validate_agent({**config, 'workflow': workflow}, client_tool_definitions())
+        for workflow in ({'nodes': {'start': {'type': 'start'}}}, {'edges': {'edge': {}}},
+                         {'unknown_execution': {}}, {'nodes': []}, {'prevent_subagent_loops': 'false'}):
+            with self.assertRaises(ValueError): validate_agent({**config, 'workflow': workflow}, client_tool_definitions())
+        for workflow in ({**inert, 'subgraphs': {'nested': {}}}, {**inert, 'frames': [{}]},
+                         {**inert, 'frames': {'synthetic_frame': {}}},
+                         {**inert, 'version': 2}, {**inert, 'nodes': {**inert['nodes'], 'second': inert['nodes']['synthetic_start']}}):
+            with self.assertRaises(ValueError): validate_agent({**config, 'workflow': workflow}, client_tool_definitions())
+        for key in ('parent_subgraph_id', 'parent_frame_id'):
+            changed = copy.deepcopy(inert); changed['nodes']['synthetic_start'][key] = 'synthetic_parent'
+            with self.assertRaises(ValueError): validate_agent({**config, 'workflow': changed}, client_tool_definitions())
+        with self.assertRaises(ValueError):
+            validate_agent({**config, 'procedures': {'procedure': {'type': 'free_form'}}}, client_tool_definitions())
+        changed = copy.deepcopy(config)
+        changed['conversation_config']['agent']['prompt']['native_mcp_server_ids'] = ['native_mcp_fixture']
+        with self.assertRaises(ValueError): validate_agent(changed, client_tool_definitions())
+        changed = copy.deepcopy(config); changed['platform_settings']['queueing_config']['enabled'] = True
+        with self.assertRaises(ValueError): validate_agent(changed, client_tool_definitions())
+
+    def test_offline_builder_matches_validation_without_secrets(self):
+        config = configuration('fixture_voice')
+        validate_agent(config, config['conversation_config']['agent']['prompt']['tools'])
+        self.assertEqual(len(config['conversation_config']['agent']['prompt']['tools']), 7)
+        self.assertEqual(config['conversation_config']['conversation']['max_duration_seconds'], 600)
+        self.assertEqual(config['conversation_config']['turn']['silence_end_call_timeout'], -1)
+        properties = [prop for tool in config['conversation_config']['agent']['prompt']['tools']
+                      for prop in tool['parameters']['properties'].values()]
+        self.assertEqual(len(properties), 3)
+        self.assertTrue(all(isinstance(prop.get('description'), str) and len(prop['description']) > 20 for prop in properties))
+        for value in ('', '../other', 'voice?secret=value'):
+            with self.assertRaises(ValueError): configuration(value)
+
+    def test_exact_agent_configuration_and_tools(self):
+        config = agent_config()
+        validate_agent(config, client_tool_definitions())
+        for key, value in [('record_voice', True), ('retention_days', 1), ('delete_audio', False)]:
+            changed = copy.deepcopy(config)
+            changed['platform_settings']['privacy'][key] = value
+            with self.assertRaises(ValueError): validate_agent(changed, client_tool_definitions())
+        for tools in ([], client_tool_definitions() + [{'type': 'webhook', 'name': 'execute'}]):
+            with self.assertRaises(ValueError): validate_agent(config, tools)
+        changed = client_tool_definitions(); changed[0]['parameters']['additionalProperties'] = True
+        with self.assertRaises(ValueError): validate_agent(config, changed)
+        changed = copy.deepcopy(config); changed['conversation_config']['agent']['prompt']['built_in_tools'] = {'transfer': {'type': 'system'}}
+        with self.assertRaises(ValueError): validate_agent(changed, client_tool_definitions())
+
+    def test_context_bounds_and_shape(self):
+        for value in ({}, {**context(), 'sequence': True}, {**context(), 'context': 'x' * 6001},
+                      {**context(), 'cameraTargets': [{'id': 'x', 'label': ''}]}):
+            with self.assertRaises(ValueError): bounded_context(value)
+
+
+class ServiceSpeechTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.settings = {**env(), 'MEDIA_DATABASE_PATH': str(Path(self.tmp.name) / 'media.sqlite'), 'MEDIA_API_KEY': 'm' * 32}
+        self.service = Service(self.settings)
+        self.client = TestClient(TestServer(self.service.app())); await self.client.start_server()
+        self.session = Session(self.service, {'id': 'ct_' + 'c' * 40, 'meetingId': 'm', 'lineId': 'l'})
+        self.service.sessions[self.session.id] = self.session
+        self.session.active = self.session.allowed = self.session.two_way = True
+        self.session.policy_at = time.monotonic(); self.session.call_id = 'call'
+        self.session.live_frontend = ElevenLabsFrontend(self.session)
+        self.session.live_frontend.verified_reply = AsyncMock()
+        self.session.say = AsyncMock()
+        self.session.close = AsyncMock()
+        self.service.backend = AsyncMock(return_value=policy())
+        self.headers = {'Authorization': 'Bearer ' + 'm' * 32}
+        self.body = {'id': 'reply1', 'text': 'Original agent verified the fixture.', 'callId': 'call', 'expectedRevision': 0}
+
+    async def asyncTearDown(self):
+        await self.client.close(); self.tmp.cleanup()
+
+    async def test_verified_reply_is_context_once_unknown_and_never_legacy_tts(self):
+        for _ in range(2):
+            response = await self.client.post(f'/sessions/{self.session.id}/speak', json=self.body, headers=self.headers)
+            self.assertEqual(response.status, 200)
+            self.assertEqual((await response.json())['state'], 'unknown')
+        self.session.live_frontend.verified_reply.assert_awaited_once_with(self.body['text'])
+        self.session.say.assert_not_awaited()
+        receipt = self.service.speech.get('reply1')
+        self.assertEqual(receipt['reason'], 'frontend_context_submitted')
+        second = Service(self.settings)
+        try:
+            self.assertEqual(second.speech.get('reply1')['state'], 'unknown')
+        finally: second.db.close()
+
+    async def test_lost_context_and_changed_fingerprint_do_not_resubmit(self):
+        self.session.live_frontend.verified_reply.side_effect = TimeoutError()
+        path = f'/sessions/{self.session.id}/speak'
+        response = await self.client.post(path, json=self.body, headers=self.headers)
+        self.assertEqual((await response.json())['reason'], 'frontend_context_unconfirmed')
+        response = await self.client.post(path, json={**self.body, 'text': 'Changed'}, headers=self.headers)
+        self.assertEqual(response.status, 409)
+        self.session.live_frontend.verified_reply.assert_awaited_once()
+
+    async def test_missing_configuration_rejects_activation_without_fallback(self):
+        self.service.env.pop('ELEVENLABS_API_KEY')
+        self.session.activation = None
+        response = await self.client.post(f'/sessions/{self.session.id}/activate', json={'callId': 'call'}, headers=self.headers)
+        self.assertEqual(response.status, 503)
+        self.session.say.assert_not_awaited()
+
+    async def test_unknown_frontend_and_hot_switch_are_refused(self):
+        self.service.backend.return_value = {**policy(), 'conversationFrontend': 'future_unknown'}
+        response = await self.client.post(f'/sessions/{self.session.id}/activate', json={'callId': 'call'}, headers=self.headers)
+        self.assertEqual(response.status, 409)
+        self.session.say.assert_not_awaited()
+
+    async def test_authenticated_readiness_is_read_only_and_sanitized(self):
+        with patch('elevenlabs_frontend.provider_get', new=AsyncMock(return_value=agent_config())) as get:
+            response = await self.client.get('/voice/elevenlabs/readiness')
+            self.assertEqual(response.status, 401)
+            get.assert_not_awaited()
+            response = await self.client.get('/voice/elevenlabs/readiness', headers=self.headers)
+            self.assertEqual(await response.json(), {'configured': True, 'agentValidated': True, 'ready': True})
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            self.assertEqual(get.call_args.args[1], '/agents/agent_fixture')
+            get.assert_awaited_once()
+
+    async def test_readiness_missing_config_and_provider_drift_fail_before_any_session(self):
+        with patch('elevenlabs_frontend.provider_get', new=AsyncMock()) as get:
+            self.service.env.pop('ELEVENLABS_API_KEY')
+            response = await self.client.get('/voice/elevenlabs/readiness', headers=self.headers)
+            self.assertEqual(await response.json(), {'configured': False, 'agentValidated': False, 'ready': False})
+            get.assert_not_awaited()
+            self.service.env.update(env())
+            config = agent_config(); config['platform_settings']['privacy']['retention_days'] = 30
+            get.return_value = config
+            response = await self.client.get('/voice/elevenlabs/readiness', headers=self.headers)
+            self.assertEqual(await response.json(), {'configured': True, 'agentValidated': False, 'ready': False})
+            get.side_effect = ValueError('sensitive provider payload must not escape')
+            response = await self.client.get('/voice/elevenlabs/readiness', headers=self.headers)
+            self.assertNotIn('sensitive', await response.text())
+            self.session.say.assert_not_awaited()
+
+    async def test_readiness_rejects_three_minute_provider_limit_without_starting_session(self):
+        config = agent_config()
+        config['conversation_config']['conversation']['max_duration_seconds'] = 180
+        with patch('elevenlabs_frontend.provider_get', new=AsyncMock(return_value=config)) as get:
+            response = await self.client.get('/voice/elevenlabs/readiness', headers=self.headers)
+            self.assertEqual(await response.json(), {'configured': True, 'agentValidated': False, 'ready': False})
+            get.assert_awaited_once_with(self.service, '/agents/agent_fixture')
+            self.service.backend.assert_not_awaited()
+            self.session.say.assert_not_awaited()
+
+    async def test_tool_ids_are_resolved_by_read_only_get_and_checked(self):
+        config = agent_config()
+        prompt = config['conversation_config']['agent']['prompt']
+        tools = prompt.pop('tools'); prompt['tool_ids'] = ['tool_' + str(index) for index in range(7)]
+        async def getter(path):
+            if path.startswith('/agents/'): return config
+            identity = path.split('/')[-1]
+            return {'id': identity, 'tool_config': tools[int(identity.split('_')[-1])]}
+        fake = AsyncMock(side_effect=getter)
+        await validate_configured_agent(self.service, fake)
+        self.assertEqual(fake.await_count, 8)
+        self.assertTrue(all(call.args[0].startswith(('/agents/', '/tools/')) for call in fake.await_args_list))
+        tools[0]['type'] = 'webhook'
+        with self.assertRaises(ValueError): await validate_configured_agent(self.service, fake)
+
+    async def test_dual_tool_representation_requires_equal_definitions_after_default_normalization(self):
+        config = agent_config()
+        prompt = config['conversation_config']['agent']['prompt']
+        prompt['tool_ids'] = ['tool_' + str(index) for index in range(7)]
+        resolved = copy.deepcopy(prompt['tools'])
+        for tool in resolved:
+            tool.update(execution_mode='immediate', interruption_mode='allow', pre_tool_speech='auto',
+                        assignments=[], tool_call_sound=None, tool_call_sound_behavior='auto',
+                        tool_error_handling_mode='auto', dynamic_variables={'dynamic_variable_placeholders': {}})
+            tool['parameters'].update(description='', dynamic_variable='', constant_value=None, is_omitted=False)
+            for prop in tool['parameters']['properties'].values():
+                prop.update(dynamic_variable='', constant_value=None, is_omitted=False, enum=None)
+        async def getter(path):
+            if path.startswith('/agents/'): return config
+            identity = path.split('/')[-1]
+            return {'id': identity, 'tool_config': resolved[int(identity.split('_')[-1])]}
+        await validate_configured_agent(self.service, getter)
+        resolved[0]['description'] = 'Different instruction semantics'
+        with self.assertRaises(ValueError): await validate_configured_agent(self.service, getter)
+
+
+class LoopbackProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_json_accumulates_delayed_network_chunks_through_eof(self):
+        config = agent_config()
+        payload = json.dumps(config).encode()
+        async def chunks(request):
+            response = web.StreamResponse(headers={'Content-Type': 'application/json'})
+            await response.prepare(request)
+            # First fragment ends inside a JSON string, as a normal network read can.
+            await response.write(payload[:29])
+            await asyncio.sleep(.02)
+            await response.write(payload[29:2713])
+            await asyncio.sleep(.02)
+            await response.write(payload[2713:])
+            await response.write_eof()
+            return response
+        app = web.Application(); app.router.add_get('/agents/agent_fixture', chunks)
+        server = TestServer(app); await server.start_server()
+        try:
+            async with ClientSession() as http:
+                owner = SimpleNamespace(http=http, env=env())
+                with patch('elevenlabs_frontend.API', str(server.make_url('')).rstrip('/')):
+                    self.assertEqual(await provider_get(owner, '/agents/agent_fixture'), config)
+        finally:
+            await server.close()
+
+    async def test_provider_reader_does_not_accept_complete_prefix_before_eof(self):
+        async def chunks(request):
+            response = web.StreamResponse(); await response.prepare(request)
+            await response.write(b'{"ok":true}')
+            await asyncio.sleep(.02)
+            await response.write(b' trailing invalid data')
+            await response.write_eof()
+            return response
+        app = web.Application(); app.router.add_get('/fixture', chunks)
+        server = TestServer(app); await server.start_server()
+        try:
+            async with ClientSession() as http:
+                with patch('elevenlabs_frontend.API', str(server.make_url('')).rstrip('/')):
+                    with self.assertRaises(ValueError):
+                        await provider_get(SimpleNamespace(http=http, env=env()), '/fixture')
+        finally:
+            await server.close()
+
+    async def test_provider_reader_enforces_size_limit_across_chunks(self):
+        async def chunks(request):
+            response = web.StreamResponse(); await response.prepare(request)
+            await response.write(b'{"value":"' + b'x' * (100 * 1024))
+            await asyncio.sleep(.02)
+            await response.write(b'x' * (29 * 1024) + b'"}')
+            await response.write_eof()
+            return response
+        app = web.Application(); app.router.add_get('/fixture', chunks)
+        server = TestServer(app); await server.start_server()
+        try:
+            async with ClientSession() as http:
+                with patch('elevenlabs_frontend.API', str(server.make_url('')).rstrip('/')):
+                    with self.assertRaisesRegex(ValueError, 'preflight unavailable'):
+                        await provider_get(SimpleNamespace(http=http, env=env()), '/fixture')
+        finally:
+            await server.close()
+
+    async def test_handshake_refuses_redirect_without_contacting_destination(self):
+        destination = Mock()
+        async def redirect(request): raise web.HTTPFound('/other')
+        async def other(request): destination(); return web.Response(text='unexpected')
+        app = web.Application(); app.router.add_get('/socket', redirect); app.router.add_get('/other', other)
+        server = TestServer(app); await server.start_server()
+        frontend = ElevenLabsFrontend(SimpleNamespace(speaking=False))
+        try:
+            with self.assertRaises(ValueError): await frontend.open_socket(server.make_url('/socket'))
+            destination.assert_not_called()
+        finally:
+            await frontend.close(); await server.close()
+
+    async def test_handshake_does_not_retry_connection_reset(self):
+        attempts = []
+        async def reset(request):
+            attempts.append(1); request.transport.abort(); return web.Response()
+        app = web.Application(); app.router.add_get('/socket', reset)
+        server = TestServer(app); await server.start_server()
+        frontend = ElevenLabsFrontend(SimpleNamespace(speaking=False))
+        try:
+            with self.assertRaises(Exception): await frontend.open_socket(server.make_url('/socket'))
+            self.assertEqual(attempts, [1])
+        finally:
+            await frontend.close(); await server.close()
+
+    async def test_real_websocket_handshake_tool_and_close_without_reconnect(self):
+        messages = []
+        done = asyncio.Event()
+        async def socket(request):
+            ws = web.WebSocketResponse(); await ws.prepare(request)
+            messages.append(await ws.receive_json())
+            await ws.send_json(metadata())
+            await ws.send_json(transcript())
+            await ws.send_json({'type': 'client_tool_call', 'client_tool_call': {
+                'tool_call_id': 'loopback_tool', 'tool_name': 'send_to_agent', 'parameters': {'text': 'Inspect the fixture and explain the result'}}})
+            async for message in ws:
+                value = json.loads(message.data); messages.append(value)
+                if value.get('type') == 'client_tool_result': done.set()
+            return ws
+        app = web.Application(); app.router.add_get('/socket', socket)
+        server = TestServer(app); await server.start_server()
+        async with ClientSession() as http:
+            calls = []
+            async def backend(path, body=None):
+                calls.append((path, body))
+                return context() if body is None else {'accepted': True, 'reply': 'Queued; original agent has not executed.'}
+            owner = SimpleNamespace(env=env(), backend=backend,
+                http=SimpleNamespace(ws_connect=lambda *a, **kw: http.ws_connect(server.make_url('/socket'), **kw)))
+            parent = SimpleNamespace(id='ct_' + 'd' * 40, owner=owner, active=True, allowed=True,
+                closing=False, pause_latched=False, two_way=True, policy_at=time.monotonic(), call_id='call',
+                speaking=False, audio=asyncio.Queue(), request_failure=Mock())
+            frontend = ElevenLabsFrontend(parent)
+            frontend.open_socket = lambda url: http.ws_connect(server.make_url('/socket'))
+            frontend.provider_get = AsyncMock(side_effect=[agent_config(), {'signed_url': 'wss://api.elevenlabs.io/v1/convai/conversation?fixture=true'}])
+            try:
+                await frontend.start()
+                await asyncio.wait_for(done.wait(), 2)
+                self.assertEqual(messages[0]['type'], 'conversation_initiation_client_data')
+                effects = [body for _, body in calls if body is not None]
+                self.assertEqual(len(effects), 1)
+                self.assertEqual(effects[0]['text'], transcript()['user_transcription_event']['user_transcript'])
+                self.assertEqual(frontend.provider_get.await_count, 2)
+                await frontend.ws.close()
+                await asyncio.sleep(.02)
+                parent.request_failure.assert_called_once()
+                self.assertEqual(frontend.provider_get.await_count, 2)
+            finally:
+                await frontend.close()
+        await server.close()
+
+
+if __name__ == '__main__':
+    unittest.main()

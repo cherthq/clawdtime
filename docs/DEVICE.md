@@ -18,6 +18,53 @@ Build/package with `./mac/scripts/package.sh`. This creates
 `CLAWDTIME_SIGNING_IDENTITY` can choose an installed Developer ID; notarization and
 external clean installation are separate, unverified release requirements.
 No build operation launches the app or changes macOS permissions.
+The bundle version comes from the root `package.json` (three numeric components).
+`CLAWDTIME_BUILD_NUMBER` selects an integer from 1 to 9999 and defaults to `5`;
+invalid version/build values fail before compilation or packaging. For example,
+`CLAWDTIME_BUILD_NUMBER=5 ./mac/scripts/package.sh` prepares the current `0.4.0`
+local review bundle. The label alone does not establish compatibility with a
+deployed stack: match exact artifact hashes and negotiated `cameraVersion:1`.
+Packaging alone does not install or release-qualify the app, and it does not
+contain or upgrade a native messaging provider.
+
+Local packaging check, November 17, 2026: current source produced version `0.4.0`,
+build `5`, arm64, with strict deep signature verification passing. Executable
+SHA-256: `2b325885a18d1ffeb341b42cdb721f959a669f2a15ac9de2db1e4958c3dc188e`.
+The signature is ad hoc with no Team ID. Bash syntax and seven invalid
+version/build fixtures passed; invalid values refused before compilation.
+This artifact includes selected-surface `cameraVersion:1` and existing native
+ownership integration; selected-window fallback input remains refused. That
+packaging check launched no app and performed no capture or installation; the
+subsequent authorized installation is recorded below.
+
+## Installed camera companion — November 17, 2026
+
+The coordinating lead installed version **0.4.0, build 5** at the stable
+`~/Applications/ClawdTime Companion.app` path. The existing private
+`~/Library/Application Support/ClawdTimeCompanion/mia-control-20261111`
+configuration, helper/gateway keys and receipt state were preserved. The helper
+was explicitly relaunched with that directory's `helper.json`; its loaded ACL
+contains both viewer and controller access for the same retained member and display.
+
+After the ad-hoc bundle update, authenticated helper status initially reported
+Screen Recording and Accessibility unavailable despite enabled Settings toggles.
+The lead removed and re-added **only the exact ClawdTime Companion entries** through
+macOS Settings. No global TCC reset occurred. Subsequent authenticated metadata
+reported `screenPermission:true`, `controlPermission:true`, `cameraVersion:1`,
+`armed:false` and `unresolvedActionCount:0`. Sharing remains stopped locally; these
+checks establish permission/readiness metadata, not capture or input acceptance.
+
+macOS **Quit & Reopen** dropped the custom configuration argument and loaded the
+default view-only `setup/helper.json`. The lead corrected this by explicitly
+relaunching the installed app with the retained custom control configuration and
+verifying its loaded ACL. Until deliberately migrated, this installation requires
+the same explicit `--config` path on each relaunch; ordinary opening does not
+select the custom configuration.
+
+Ad-hoc signed updates may require refreshing grants for the exact stable bundle.
+Developer ID distribution, notarization and clean-install acceptance remain
+unqualified. No screen capture, OS input or phone call was performed during this
+installation/readiness check, and no native messaging provider was upgraded.
 
 See mac/README.md for the pairing-receipt configuration generator, metadata-only
 display enumeration and launch. Installer refuses existing files and missing
@@ -670,3 +717,227 @@ without changing the window identity. The acknowledgment
 display. A fresh independently captured frame is still required before resuming
 sharing; this acknowledgment is not proof of handset visibility. Invalid commands
 close the renderer. No arbitrary content replacement or native input is exposed.
+
+## Text-session local control grants
+
+New source supports explicit text-only grants independently of FaceTime. The helper
+advertises `textControlVersion:1` and `localEnableGeneration` in readiness. The
+backend proposes a `TextControlGrant` through the authenticated gateway; this only
+creates a pending proposal. On the Mac, open the menu-bar companion and choose
+**Review text control request…**, inspect the exact project, session, member,
+display, actions and expiry, then select **Allow scoped session**. Reject and local
+Stop retire the ID. A remote request cannot approve itself or open a confirmation
+window automatically. The helper must already be enabled locally, with existing
+viewer/controller ACLs and required macOS permissions.
+
+The initial supported `surface` is exactly `display:<displayId>`: authorization
+covers the selected whole display, not an application sandbox. The project root is
+an exact binding, not a permission to execute arbitrary paths. Grants last at most
+15 minutes and permit only the listed click/type/scroll actions. Each lease still
+expires within 30 seconds and cannot outlive the grant. Native/fallback ownership
+uses the same lease/epoch and local policy. The normal local fallback preference is
+still required for helper input.
+
+Protocol 3 is an additive wire variant: omit `callId`, include
+`authority:{kind:"text_session",grantId,projectId}` and the existing exact
+session/executorEpoch/policyRevision/executor fields. `projectId` is the absolute
+project root, and the local approved grant identifies the same device/member/
+session/display. Old call-bound leases/receipts keep their original semantics.
+Text receipts record grant authority and session/epoch/revision; no fake call ID is
+created. Local Stop, lock/sleep/session loss, expiry, policy change, and process
+restart revoke the in-memory grant. A later Enable cannot revive it.
+
+This implementation was built and tested without replacing the installed companion
+or touching macOS permission grants. Physical text-only input, native/custom
+comparison trials, and local UI acceptance require an authorized current grant and
+freshly installed matching components. The local Stop controls ClawdTime's helper
+path; it cannot forcibly kill arbitrary tools running independently in another
+application. Native adapters must cooperate with the same broker ownership policy.
+
+Authenticated DELETE of the exact text-grant ID narrows authority and returns
+`{revoked:true}`; it cannot approve or replace a grant. Backend session loss or
+revocation uses this route without waiting for a call. Lost revoke acknowledgements
+remain unknown; local Stop and bounded lease/grant expiry still apply.
+
+## Argos general camera local source
+
+The opt-in general camera adds exact window/display selection and native-resolution
+capture, using the existing helper authorization and gateway. Window identity
+includes owning process and selected display, and cannot widen silently. Independent
+window capture does **not** qualify window input: this slice refuses selected-window
+fallback input until exact hit-target/focused-window qualification. The existing
+authorized display click/type/scroll path is retained. [The companion README](../mac/README.md#selected-surface-camera-capture-local-argos-slice)
+and [Argos review](IMPLEMENTATION_ARGOS_REVIEW.md) contain commands and current local
+evidence. Building this source does not replace the installed companion or modify
+its grants/configuration. Local Stop, lock/sleep and lease expiry retain their gates.
+
+### Native CUA alongside selected-window viewing
+
+The minimal local integration keeps independent-window capture as a presentation
+source and uses the original agent's existing native tools as the executor. Before
+an input, the agent must hold the current `native` executor epoch, satisfy current
+cursor/hold and local authorization checks, and independently identify the exact
+selected app/window in a fresh native-tool observation. Camera crops and annotations
+do not select a native input target. After one harmless fixture action, inspect the
+actual UI and the next shared frame; report verification separately from submission
+and release ownership. A native timeout is uncertain and must not be retried or
+converted into fallback input.
+
+The helper's existing global `CGEvent` click/scroll path and focused-element bounds
+check do not prove a selected-window hit target or focused-window identity. They
+remain unavailable for selected-window fallback. Qualifying such a future path
+requires exact target ownership/focus and occlusion checks, fresh geometry at dispatch,
+secure-input refusal, and local physical acceptance; native sharing acceptance alone
+is insufficient. Media, gateway and helper refuse this path before OS input; the
+gateway also refuses it before creating a new action receipt.
+
+Local Stop prevents further cooperating native dispatch, invalidates camera/control
+authority, and clears presentation. It cannot forcibly cancel an unrelated tool
+already running in the agent host; cancellation capability and uncertain outcomes
+must be reported honestly. The isolated native-review readiness policy is not an
+installed-device permission grant or evidence of handset/FaceTime acceptance.
+
+### Current-display activation rehearsal — November 17, 2026
+
+The lead physically verified prepared Finder → TextEdit → Finder activation on
+one selected display, including independent foreground/focus/on-screen checks and
+the outgoing preview. The original native CUA tool separately performed one
+verified disposable document edit/save and file move. Stop left no native owner
+and released the viewing lease. This qualifies normal windows on the current
+display only: off-Space, full-screen, minimized and multiple-display behavior remain
+unqualified. No installed helper, FaceTime path or handset was exercised. The
+[media evidence matrix](MEDIA_INTEGRATION.md#local-physical-evidence--november-17-2026)
+records measured cadence and limits.
+
+Native qualification supports a missing `NSRunningApplication.launchDate` using
+Apple's documented exact-PID `sysctl(KERN_PROC_PID)` process-start metadata; it
+never substitutes a PID or observation time for a process lifetime. Missing or
+changed lifetime evidence still refuses. Fixed qualification diagnostics identify
+media/broker authority, app identity, CG matching or AX candidate-scan stages;
+AX candidate failures do not necessarily identify the exact target as the cause.
+
+### Native tool foreground readiness — November 17 follow-up
+
+Native-tool UI access does not by itself qualify foreground presentation. In the
+lead's no-call check, CUA selected exact Window-menu entries and invoked exposed
+Raise actions; the disposable TextEdit window entered and exited fullscreen.
+Independent metadata observations nevertheless reported `appActive:false` and
+`windowOnScreen:false` in all 116 samples over about 25 seconds while fullscreen,
+and all 84 samples over about 18 seconds after restoration. `windowFocused:true`
+persisted. No document content was edited. This establishes an unresolved
+foreground-readiness failure for that run, not successful cross-Space switching.
+
+The observer requires both `NSRunningApplication.isActive` and exact
+`NSWorkspace.frontmostApplication` identity for `appActive`; Apple documents the
+latter as the app receiving key events. `windowFocused` compares this target
+app's `AXFocusedWindow`, which is separate from global activation. The onscreen
+flag comes from an exact CG window/PID/geometry witness and fails closed when that
+witness or its flag is unavailable. Consequently, false flags do not establish a
+particular Space, a virtual desktop, or the CUA provider's GUI-session identity.
+The observer's console/login/lock checks do not establish that another tool uses
+the same session. No such root cause has been proven.
+
+For lead-operated metadata qualification only:
+
+```sh
+mac/.build/debug/ClawdTimeCompanion --native-observe --target '{"appId":"com.apple.TextEdit","windowId":"EXACT_WINDOW_ID","ownerPid":123,"displayId":1}'
+```
+
+Replace the example PID/window/display with freshly identified exact values. This
+development command has a two-second watchdog, no capture/input verbs, and no
+lease or execution authority. Its three booleans are sampled evidence, not a
+persistent-foreground guarantee. Native input still needs current exclusive
+ownership and target verification; presentation additionally needs the exact
+window active, focused and onscreen in fresh independent observations. A tool's
+rendered app image or successful AX action cannot substitute for those checks.
+
+The read-only production resolver cannot activate a window. The original
+background preview executor used AppKit cooperative activation; that request did
+not establish foreground success in this run. The subsequent Accessibility
+activation change and its bounded physical acceptance are recorded below. Keep
+presentation unavailable when verification fails, without weakening guards or
+retrying an uncertain action.
+See Apple's [foreground-app definition](https://developer.apple.com/documentation/appkit/nsworkspace/frontmostapplication)
+and [cooperative activation contract](https://developer.apple.com/documentation/appkit/passing-control-from-one-app-to-another-with-cooperative-activation).
+
+### Prepared native activation repair — verified fixture sequence
+
+The lead subsequently verified Finder → TextEdit → Finder using three distinct
+prepared operations, each triggered once through the local preview's authenticated
+CUA button. All three receipts reached `verified` with `exact_window_observed` and
+independent active/focused/onscreen flags true. The first Finder and TextEdit
+preparations had active and onscreen false; the return Finder preparation was
+inactive but onscreen. No manual window arrangement or repeated effect was needed
+for this final sequence. Earlier uncertain receipts were retained unchanged.
+
+The preview executor now uses one public Accessibility `AXFrontmost=true` setter
+on the exact retained application. It first checks the root PID and whether that
+attribute is writable, then rechecks the original qualification deadline,
+permissions, app/process lifetime and exact AX window before dispatch. Setter
+failure remains attempted/unknown; there is no AppKit fallback, relaunch or second
+activation. Acknowledgment still requires independent post-effect verification.
+
+During the unchanged 600 ms read-only settling period, only an explicitly
+classified CG geometry transition may remain pending. The exact CG ID/PID,
+process lifetime, retained AX reference/title, nonminimized state and original
+display authority must remain intact. Pending clears earlier evidence; final
+verification must reacquire the original bounds and all three foreground flags.
+Identity loss, display/permission/Stop changes, original expiry or an unresolved
+transition at the deadline remain unknown. The setter is never retried.
+
+Ownership was released after each step. The final state was `none`/`idle` at epoch
+6; local CUA Stop then produced `none`/`paused` at epoch 7, released the lease and
+left no preview actors running. This was a local, no-call fixture acceptance with
+the production gate off. It does not qualify every Space layout, fullscreen,
+minimized or multiple-monitor cases, the cloud production path, or handset output.
+The final source passed 98 Swift tests and independent safety review.
+
+## Production native activation authority (staged, November 17)
+
+`nativeActivationVersion: 1` advertises a separate narrow capability. Backend and
+media admission require `CLAWDTIME_NATIVE_ACTIVATION_ENABLED=true`; its default is
+off. Existing leases and sessions do not acquire input authority from this flag.
+Only Finder/TextEdit activation and independently qualified window raise are
+accepted under a current protocol-2 native/view selected-display lease, controller
+ACL, local Enable, Accessibility, Screen Recording and native local policy.
+
+Authenticated helper routes are `POST /v1/leases/{lease}/native/prepare`,
+`POST .../native/dispatch` and read-only `GET .../native/{operation}`. The envelope
+binds the existing operation/fingerprint to media session, pairing, device/member
+and original planning expiry. Preparation observes current identity without input;
+dispatch requalifies that exact process/window/bounds within its original two-second
+native deadline. A new deadline cannot renew the same dispatched operation.
+
+The installed parent owns policy and private fsynced reservations in
+`<device>/native/receipts.json`. A disposable child executes the existing single
+AXFrontmost/AXRaise behavior. It asks the parent through inherited pipes for local
+authority immediately before the setter and throughout the existing 600 ms settle.
+The parent serves these checks on its policy actor without running AX there. Stop
+disarms and sends SIGKILL immediately; it never waits on AX or a cloud callback.
+The asynchronous request joins the child before completing its receipt. An already
+admitted OS request may have taken effect when Stop arrives; killed, interrupted or unconfirmed operations retain uncertainty rather than
+claiming cancellation or verified UI success. A matching child response proves
+that the host returned; if authority was lost before receipt completion, the
+receipt is only `returned`, never `verified`. A child result cannot restore stopped policy.
+
+Unknown receipts fence replacement leases, input and execution transfers. Read-only
+receipt retrieval survives Stop and restart. Ledger write failure poisons local
+admission, so an in-memory terminal result cannot clear the durable fence. Preserve
+both action and native receipt directories during upgrade and rollback. An older
+helper that cannot read native fences is not a safe rollback while any native
+operation is unresolved.
+
+New source tests cover exact scope/deadline checks, duplicate reservations, durable
+restart uncertainty, competing helper locks and poisoned receipt writes. They are
+not physical acceptance. See STATUS.md for lead-run local and production evidence.
+
+The read-only production presentation resolver also runs in a separate child.
+Helper policy, exact lease and Stop generation are checked before and after each
+awaited read; Stop kills and asynchronously joins it. The parent's main actor
+never performs the resolver's AX calls. The existing 180 ms read budget remains;
+an idle child is retired at the last read’s original absolute authority expiry
+(at most two seconds), and retirement owns the child slot until
+its exact process/handles are joined and cleared. A simultaneous new read cannot
+inherit or erase an older child's resources. The installed child's bounded 256-ID
+history covers the existing admitted presentation lifetime; preview retains its
+64-ID bound. Neither mode renews timestamps or authority to fit transport delays.

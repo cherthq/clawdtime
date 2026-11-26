@@ -1,0 +1,1682 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { ClawdTime } from "../src/attention/service.js";
+import { Store } from "../src/storage/store.js";
+import { SimulationTransport } from "../src/transport/simulation.js";
+import type { SessionRegistration } from "../src/contracts.js";
+import type {
+  ControlLease,
+  Frame,
+  InputAction,
+  ActionReceipt,
+} from "../src/contracts.js";
+import type {
+  CameraSelection,
+  CameraStatus,
+  CameraCommand,
+  PresentationReference,
+} from "../src/camera-contracts.js";
+import { cameraFrameSchema } from "../src/camera-contracts.js";
+import {
+  ControlCoordinator,
+  SimulatedDevice,
+} from "../src/control/coordinator.js";
+import { HumanRouter } from "../src/control/human-router.js";
+import { Viewing } from "../src/control/viewing.js";
+import { createApp } from "../src/app.js";
+import { MediaDevicePort, mediaSessionId } from "../media/device-port.js";
+import { CAMERA_ERROR_CODES } from "../src/camera-errors.js";
+import { cameraCommandSchema } from "../src/camera-contracts.js";
+
+const stores: Store[] = [];
+afterEach(() => {
+  for (const store of stores.splice(0)) store.close();
+});
+
+const displayCamera = {
+  version: 1 as const,
+  surface: { kind: "display" as const, id: "1", displayId: 1 },
+};
+const registration: SessionRegistration = {
+  protocolVersion: 2,
+  interaction: {
+    version: 1,
+    commandChannel: "imessage_first",
+    messageUpdates: false,
+  },
+  adapter: "codex",
+  adapterVersion: "synthetic-camera-test",
+  projectRoot: "/disposable-camera-fixture",
+  externalSessionId: "camera-session",
+  hostId: "fixture-host",
+  screenCamera: displayCamera,
+  capabilities: {
+    cooperativePause: true,
+    polling: true,
+    screenCameraVersion: 1,
+  },
+};
+
+function registrationFixture() {
+  const store = new Store();
+  stores.push(store);
+  const transport = new SimulationTransport();
+  let now = Date.now();
+  const service = new ClawdTime(store, transport, { clock: () => now });
+  const pairing = service.claimPairing({
+    token: service.createPairingInvite({
+      memberId: "fixture-human",
+      recipient: "fixture-recipient",
+      conversationId: "fixture-conversation",
+      lineId: "fixture-line",
+      deviceId: "fixture-mac",
+      displayId: "1",
+    }).token,
+    deviceId: "fixture-mac",
+    displayId: "1",
+    allowView: true,
+    allowControl: true,
+  });
+  return {
+    store,
+    service,
+    transport,
+    pairing,
+    clock: () => now,
+    advance: (ms: number) => {
+      now += ms;
+    },
+  };
+}
+
+describe("screen camera immutable session negotiation", () => {
+  it("keeps legacy sessions off and requires an explicit matching v2 selection", () => {
+    const f = registrationFixture();
+    const { screenCamera: _selection, ...old } = registration;
+    const legacy = {
+      ...old,
+      capabilities: { cooperativePause: true, polling: true },
+    };
+    const first = f.service.registerSession(f.pairing.token, legacy);
+    expect(first.session.screenCamera).toBeUndefined();
+    expect(first.session.capabilities.screenCameraVersion).toBeUndefined();
+    expect(() =>
+      f.service.registerSession(f.pairing.token, registration),
+    ).toThrow("binding differs");
+    const fresh = f.service.registerSession(f.pairing.token, {
+      ...registration,
+      externalSessionId: "fresh-camera-session",
+    });
+    expect(fresh.session.screenCamera).toEqual(displayCamera);
+    expect(fresh.session.capabilities.screenCameraVersion).toBe(1);
+    expect(f.transport.calls).toHaveLength(0);
+    expect(f.store.all("lease")).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+  });
+
+  it("rejects incomplete, legacy, forged, wrong-display and document negotiations", () => {
+    const f = registrationFixture();
+    const { screenCamera: _selection, ...withoutSelection } = registration;
+    const cases = [
+      withoutSelection,
+      {
+        ...registration,
+        capabilities: { cooperativePause: true, polling: true },
+      },
+      { ...registration, protocolVersion: 1 },
+      { ...registration, screenCamera: { ...displayCamera, version: 2 } },
+      {
+        ...registration,
+        screenCamera: {
+          version: 1,
+          surface: { kind: "display", id: "2", displayId: 2 },
+        },
+      },
+      {
+        ...registration,
+        screenCamera: {
+          version: 1,
+          surface: {
+            kind: "display",
+            id: "1",
+            displayId: 1,
+            arbitraryAuthority: true,
+          },
+        },
+      },
+      {
+        ...registration,
+        documentAccess: {
+          version: 1,
+          readOnly: true,
+          expiresAt: f.clock() + 10000,
+        },
+        conversation: {
+          version: 1,
+          runnerId: "remote-documents",
+          executionSession: "api_managed",
+        },
+      },
+      {
+        ...registration,
+        audioQualification: {
+          version: 1,
+          executionDisabled: true,
+          expiresAt: f.clock() + 10000,
+        },
+      },
+    ];
+    for (const value of cases)
+      expect(() =>
+        f.service.registerSession(
+          f.pairing.token,
+          value as SessionRegistration,
+        ),
+      ).toThrow();
+    expect(f.store.all("session")).toHaveLength(0);
+    expect(f.transport.calls).toHaveLength(0);
+  });
+
+  it("reconnects the exact surface and rejects another window, device scope or opt-out", () => {
+    const f = registrationFixture();
+    const window = {
+      ...registration,
+      screenCamera: {
+        version: 1 as const,
+        surface: {
+          kind: "window" as const,
+          id: "7",
+          displayId: 1,
+          ownerPid: 123,
+        },
+      },
+    };
+    const first = f.service.registerSession(f.pairing.token, window);
+    const again = f.service.registerSession(f.pairing.token, window);
+    expect(again.session.id).toBe(first.session.id);
+    expect(again.token).not.toBe(first.token);
+    for (const surface of [
+      { ...window.screenCamera.surface, id: "8" },
+      { ...window.screenCamera.surface, ownerPid: 124 },
+      { ...window.screenCamera.surface, displayId: 2 },
+    ])
+      expect(() =>
+        f.service.registerSession(f.pairing.token, {
+          ...window,
+          screenCamera: { version: 1, surface },
+        }),
+      ).toThrow();
+    expect(() =>
+      f.service.registerSession(f.pairing.token, {
+        ...window,
+        screenCamera: undefined,
+        capabilities: { cooperativePause: true, polling: true },
+      }),
+    ).toThrow("binding differs");
+    expect(f.store.all("session")).toHaveLength(1);
+  });
+});
+
+async function cameraFixture(
+  enabled = true,
+  opted = true,
+  selection: CameraSelection = displayCamera,
+  nativeSharedSurface = false,
+  voice = false,
+) {
+  const f = registrationFixture();
+  class CameraDevice extends SimulatedDevice {
+    cameraVersion: number | undefined = 1;
+    commands: CameraCommand[] = [];
+    statusCalls = 0;
+    revision = 0;
+    frameSequence = 1;
+    dispatched: {
+      frame: Frame;
+      action: InputAction;
+      presentation?: PresentationReference;
+    }[] = [];
+    statusOverride: Partial<CameraStatus> = {};
+    frameOverride: Partial<Frame> = {};
+    readinessOverride: Record<string, unknown> = {};
+    receiptCommandId?: string;
+    beforeReadiness?: () => void | Promise<void>;
+    beforeStatus?: () => void | Promise<void>;
+    beforeCommand?: () => void | Promise<void>;
+    async frame(lease: ControlLease): Promise<Frame> {
+      if (!this.leases.has(lease.id)) throw new Error("Stopped");
+      return {
+        id: `source_${this.frameSequence}`,
+        capturedAt: f.clock(),
+        width: 2000,
+        height: 1000,
+        camera: {
+          version: 1,
+          surface: selection.surface,
+          geometryGeneration: "geometry_1",
+          contentRevision: "content_1",
+          source: {
+            width: 2000,
+            height: 1000,
+            originX: -1000,
+            originY: 0,
+            pointWidth: 1000,
+            pointHeight: 500,
+            displayOriginX: -1000,
+            displayOriginY: 0,
+            displayPointWidth: 1000,
+            displayPointHeight: 500,
+          },
+        },
+        ...this.frameOverride,
+      };
+    }
+    async action(
+      lease: ControlLease,
+      frame: Frame,
+      action: InputAction,
+      actionId: string,
+      presentation?: PresentationReference,
+    ) {
+      this.dispatched.push({ frame, action, presentation });
+      const result = await super.action(lease, frame, action, actionId);
+      this.frameSequence++;
+      return result;
+    }
+    async readiness() {
+      await this.beforeReadiness?.();
+      return {
+        cameraVersion: this.cameraVersion,
+        controlPolicy: "agent_tools_with_fallback",
+        policyRevision: 1,
+        controlAllowed: true,
+        armed: true,
+        available: true,
+        screenPermission: true,
+        viewAllowed: true,
+        displayAttached: true,
+        activeLease: this.leases.size > 0,
+        activeLeaseId: this.leases.keys().next().value,
+        ...this.readinessOverride,
+      };
+    }
+    async cameraStatus(lease: ControlLease): Promise<CameraStatus> {
+      this.statusCalls++;
+      await this.beforeStatus?.();
+      return {
+        version: 1,
+        sessionId: lease.sessionId,
+        deviceId: lease.deviceId,
+        leaseId: lease.id,
+        revision: this.revision,
+        state: "live",
+        surface: selection.surface,
+        sourceFrameId: `source_${this.frameSequence}`,
+        capturedAt: f.clock(),
+        geometryGeneration: "geometry_1",
+        contentRevision: "content_1",
+        crop: { x: 0, y: 0, width: 1, height: 1 },
+        source: {
+          width: 2000,
+          height: 1000,
+          originX: -1000,
+          originY: 0,
+          pointWidth: 1000,
+          pointHeight: 500,
+          displayOriginX: -1000,
+          displayOriginY: 0,
+          displayPointWidth: 1000,
+          displayPointHeight: 500,
+        },
+        output: {
+          width: 1280,
+          height: 720,
+          viewport: { x: 0, y: 40, width: 1280, height: 640 },
+        },
+        pinned: false,
+        moving: false,
+        annotations: [],
+        context: null,
+        ...this.statusOverride,
+      };
+    }
+    async cameraCommand(_lease: ControlLease, command: CameraCommand) {
+      await this.beforeCommand?.();
+      this.commands.push(command);
+      return {
+        version: 1 as const,
+        commandId: this.receiptCommandId ?? command.commandId,
+        revision: ++this.revision,
+        state: "accepted" as const,
+      };
+    }
+  }
+  const device = new CameraDevice();
+  const control = new ControlCoordinator(f.store, device, f.clock);
+  const human = new HumanRouter(f.service, control);
+  const viewing = new Viewing(f.store, device, f.clock, false, enabled);
+  const agent = f.service.registerSession(
+    f.pairing.token,
+    opted
+      ? {
+          ...registration,
+          screenCamera: selection,
+          ...(voice
+            ? {
+                voiceFrontend: {
+                  version: 1 as const,
+                  provider: "elevenlabs" as const,
+                },
+              }
+            : {}),
+          capabilities: {
+            ...registration.capabilities,
+            ...(voice ? { voiceInteractionVersion: 1 as const } : {}),
+            ...(nativeSharedSurface
+              ? { nativeControl: "desktop" as const, sharedSurface: true }
+              : {}),
+          },
+        }
+      : {
+          ...registration,
+          screenCamera: undefined,
+          capabilities: { cooperativePause: true, polling: true },
+        },
+  );
+  const request = f.service.requestAttention(agent.token, {
+    taskId: "camera-task",
+    idempotencyKey: "camera-review",
+    reason: "review",
+    question: "Review synthetic disposable camera content.",
+  });
+  await f.service.drain();
+  f.service.observeCall(request.id, "connected", true);
+  await viewing.tick();
+  const app = createApp(f.service, control, human, {
+    origin: "http://127.0.0.1",
+    simulation: true,
+    mediaToken: "m".repeat(64),
+    screenCameraEnabled: enabled,
+    elevenLabsEnabled: voice,
+    twoWayVoiceEnabled: voice,
+    remoteAudioIsolated: voice,
+  });
+  const api = (body?: unknown, token = agent.token) =>
+    app.request(`/api/attention/${request.id}/conversation/camera`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const policy = (negotiate = true) =>
+    app.request(`/media/${mediaSessionId(request.id)}/policy`, {
+      headers: {
+        authorization: `Bearer ${"m".repeat(64)}`,
+        ...(negotiate ? { "X-ClawdTime-Camera": "1" } : {}),
+      },
+    });
+  const execution = (path: string, body?: unknown) =>
+    app.request(`/api/attention/${request.id}/conversation/${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        "content-type": "application/json",
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  return {
+    ...f,
+    device,
+    control,
+    human,
+    viewing,
+    agent,
+    request,
+    app,
+    api,
+    policy,
+    execution,
+  };
+}
+
+const focus = {
+  version: 1,
+  commandId: "focus_1",
+  expectedRevision: 0,
+  sourceFrameId: "source_1",
+  geometryGeneration: "geometry_1",
+  op: "focus_region",
+  rect: { x: 0.2, y: 0.2, width: 0.3, height: 0.3 },
+  durationMs: 450,
+  automatic: false,
+};
+
+describe("bounded camera failure diagnostics", () => {
+  const safeMessage =
+    "Camera operation was not confirmed; inspect the original operation without replaying it.";
+  async function failedCameraResponse(
+    stage: "status" | "command",
+    response: () => Response | Promise<Response>,
+  ) {
+    const f = await cameraFixture();
+    let calls = 0;
+    const port = new MediaDevicePort(
+      "http://127.0.0.1:49999",
+      "k".repeat(32),
+      async () => {
+        calls++;
+        return response();
+      },
+    );
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    if (stage === "status")
+      f.device.beforeStatus = async () => {
+        await port.cameraStatus(lease);
+      };
+    else
+      f.device.beforeCommand = async () => {
+        await port.cameraCommand(lease, cameraCommandSchema.parse(focus));
+      };
+    const result = await f.api(stage === "command" ? focus : undefined);
+    expect(calls).toBe(1);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+    return result;
+  }
+  it.each(CAMERA_ERROR_CODES)(
+    "preserves allowlisted %s across media and HTTP without exposing peer details or retrying",
+    async (code) => {
+      for (const stage of ["status", "command"] as const) {
+        const response = await failedCameraResponse(stage, () =>
+          Response.json(
+            {
+              errorCode: code,
+              error: "private peer details",
+              target: "private window title",
+            },
+            { status: 409 },
+          ),
+        );
+        expect(response.status).toBe(
+          code === "camera_transport_failed" ? 502 : 409,
+        );
+        expect(await response.json()).toEqual({
+          errorCode: code,
+          error: safeMessage,
+        });
+      }
+    },
+  );
+  it.each([
+    "unrecognized_code",
+    "malformed_json",
+    "oversized_error",
+    "invalid_success",
+    "network_failure",
+  ])(
+    "sanitizes %s as an unconfirmed transport outcome without replay",
+    async (failure) => {
+      for (const stage of ["status", "command"] as const) {
+        const response = await failedCameraResponse(stage, () => {
+          if (failure === "network_failure")
+            throw new Error("private connection details");
+          if (failure === "malformed_json")
+            return new Response("private upstream HTML", { status: 503 });
+          if (failure === "oversized_error")
+            return Response.json(
+              { errorCode: "camera_frame_stale", error: "private".repeat(500) },
+              { status: 409 },
+            );
+          if (failure === "invalid_success")
+            return Response.json({ error: "private malformed success" });
+          return Response.json(
+            {
+              errorCode: "private-unrecognized-code",
+              error: "private peer details",
+            },
+            { status: 409 },
+          );
+        });
+        expect(response.status).toBe(502);
+        expect(await response.json()).toEqual({
+          errorCode: "camera_transport_failed",
+          error: safeMessage,
+        });
+      }
+    },
+  );
+  it("keeps arbitrary non-camera exceptions sanitized and does not trust a lookalike error code", async () => {
+    const f = await cameraFixture();
+    let calls = 0;
+    f.device.beforeCommand = async () => {
+      calls++;
+      throw Object.assign(new Error("private peer details"), {
+        code: "camera_frame_stale",
+      });
+    };
+    const response = await f.api(focus);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      errorCode: "camera_transport_failed",
+      error: safeMessage,
+    });
+    expect(calls).toBe(1);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+  it.each(["network", "malformed_policy"])(
+    "labels readiness %s failures without polling or dispatching camera work",
+    async (failure) => {
+      const f = await cameraFixture();
+      let readinessCalls = 0;
+      f.device.beforeReadiness = () => {
+        readinessCalls++;
+        if (failure === "network")
+          throw new Error("private readiness connection detail");
+      };
+      if (failure === "malformed_policy")
+        f.device.readinessOverride = {
+          controlPolicy: "private unrecognized policy",
+        };
+      const response = await f.api(focus);
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        errorCode: "camera_transport_failed",
+        error: safeMessage,
+      });
+      expect(readinessCalls).toBe(1);
+      expect(f.device.statusCalls).toBe(0);
+      expect(f.device.commands).toHaveLength(0);
+      expect(f.device.inputs).toHaveLength(0);
+    },
+  );
+  it.each([
+    "camera_frame_stale",
+    "camera_source_mismatch",
+    "camera_authorization_required",
+    "camera_authority_changed",
+  ])(
+    "labels backend %s without weakening freshness or authority checks",
+    async (code) => {
+      const f = await cameraFixture();
+      if (code === "camera_frame_stale")
+        f.device.statusOverride = { capturedAt: f.clock() - 2001 };
+      if (code === "camera_source_mismatch")
+        f.device.statusOverride = { deviceId: "another-device" };
+      if (code === "camera_authorization_required")
+        f.device.readinessOverride = { armed: false };
+      if (code === "camera_authority_changed")
+        f.device.beforeStatus = () => {
+          const lease = f.store.all<ControlLease>("lease")[0]!;
+          f.store.put("lease", {
+            ...lease,
+            policyRevision: (lease.policyRevision ?? 0) + 1,
+          });
+        };
+      const response = await f.api();
+      expect(response.status).toBe(409);
+      expect((await response.json()).errorCode).toBe(code);
+      expect(f.device.statusCalls).toBe(
+        code === "camera_authorization_required" ? 0 : 1,
+      );
+      expect(f.device.inputs).toHaveLength(0);
+    },
+  );
+});
+
+describe("screen camera authenticated API and existing viewing lease", () => {
+  it.each(["readiness", "status", "command"] as const)(
+    "accepts an unchanged active viewing lease renewed during camera %s",
+    async (stage) => {
+      const f = await cameraFixture();
+      const original = f.store.all<ControlLease>("lease")[0]!;
+      f.advance(8500);
+      const renew = async () => {
+        await f.viewing.tick();
+        const current = f.store.get<ControlLease>("lease", original.id)!;
+        expect(current.expiresAt).toBeGreaterThan(original.expiresAt);
+        expect({ ...current, expiresAt: original.expiresAt }).toEqual(original);
+      };
+      if (stage === "readiness") f.device.beforeReadiness = renew;
+      if (stage === "status") f.device.beforeStatus = renew;
+      if (stage === "command") f.device.beforeCommand = renew;
+      const response = await f.api(stage === "command" ? focus : undefined);
+      expect(response.status).toBe(200);
+      expect(f.device.commands).toHaveLength(stage === "command" ? 1 : 0);
+      expect(f.device.inputs).toHaveLength(0);
+    },
+  );
+
+  it.each(["readiness", "status", "command"] as const)(
+    "still rejects expiry reduction or real authority changes during camera %s",
+    async (stage) => {
+      for (const patch of [
+        (lease: ControlLease) => ({ expiresAt: lease.expiresAt - 1 }),
+        (lease: ControlLease) => ({
+          policyRevision: (lease.policyRevision ?? 0) + 1,
+        }),
+        (lease: ControlLease) => ({
+          executorEpoch: (lease.executorEpoch ?? 0) + 1,
+        }),
+        (_lease: ControlLease) => ({ state: "unknown" as const }),
+      ]) {
+        const f = await cameraFixture();
+        const change = () => {
+          const lease = f.store.all<ControlLease>("lease")[0]!;
+          f.store.put("lease", {
+            ...lease,
+            expiresAt: lease.expiresAt + 1000,
+            ...patch(lease),
+          });
+        };
+        if (stage === "readiness") f.device.beforeReadiness = change;
+        if (stage === "status") f.device.beforeStatus = change;
+        if (stage === "command") f.device.beforeCommand = change;
+        expect(
+          (await f.api(stage === "command" ? focus : undefined)).status,
+        ).toBeGreaterThanOrEqual(400);
+        expect(f.device.commands).toHaveLength(stage === "command" ? 1 : 0);
+        expect(f.device.inputs).toHaveLength(0);
+      }
+    },
+  );
+
+  it("forwards a bounded camera command through the exact lease without claiming input ownership", async () => {
+    const f = await cameraFixture();
+    const response = await f.api();
+    expect(response.status).toBe(200);
+    const status = await response.json();
+    expect(status).toMatchObject({
+      version: 1,
+      sessionId: f.agent.session.id,
+      deviceId: "fixture-mac",
+      sourceFrameId: "source_1",
+      state: "live",
+    });
+    const commanded = await f.api(focus);
+    expect(commanded.status).toBe(200);
+    expect(await commanded.json()).toMatchObject({
+      commandId: "focus_1",
+      state: "accepted",
+    });
+    expect(f.device.commands).toEqual([focus]);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+    expect(f.store.all<ControlLease>("lease")[0]?.mode).toBe("view");
+    expect(f.transport.calls).toHaveLength(1);
+  });
+
+  it("requires backend opt-in, session opt-in and a version-qualified peer", async () => {
+    for (const [enabled, opted] of [
+      [false, true],
+      [true, false],
+    ]) {
+      const f = await cameraFixture(enabled, opted);
+      expect((await f.api()).status).toBe(409);
+      expect((await f.api(focus)).status).toBe(409);
+      expect(f.device.commands).toHaveLength(0);
+      expect(f.device.statusCalls).toBe(0);
+    }
+    const old = await cameraFixture();
+    old.device.cameraVersion = undefined;
+    expect((await old.api()).status).toBe(409);
+    expect((await old.api(focus)).status).toBe(409);
+    expect(old.device.commands).toHaveLength(0);
+  });
+
+  it("forwards an optional camera content reference without granting input or weakening Stop", async () => {
+    const f = await cameraFixture();
+    const command = { ...focus, contentRevision: "content_1" };
+    expect((await f.api(command)).status).toBe(200);
+    expect(f.device.commands).toEqual([command]);
+    expect(
+      (
+        await f.api({
+          ...command,
+          commandId: "invalid_content",
+          contentRevision: "",
+        })
+      ).status,
+    ).toBe(400);
+    f.store.saveState(`view-stopped:${f.request.id}`, true);
+    expect((await f.api({ ...command, commandId: "after_stop" })).status).toBe(
+      409,
+    );
+    expect(f.device.commands).toHaveLength(1);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+  });
+
+  it("rejects a different registered session before contacting the camera", async () => {
+    const f = await cameraFixture();
+    const other = f.service.registerSession(f.pairing.token, {
+      ...registration,
+      externalSessionId: "other-session",
+    });
+    expect((await f.api(undefined, other.token)).status).toBe(404);
+    expect((await f.api(focus, other.token)).status).toBe(404);
+    expect(f.device.statusCalls).toBe(0);
+    expect(f.device.commands).toHaveLength(0);
+  });
+
+  it("rejects stale or mismatched frame responses instead of exposing another source", async () => {
+    const f = await cameraFixture();
+    const overrides: Partial<CameraStatus>[] = [
+      { sessionId: "other_session" },
+      { deviceId: "other_mac" },
+      { leaseId: "other_lease" },
+      { surface: { kind: "window", id: "7", displayId: 1, ownerPid: 123 } },
+      { capturedAt: f.clock() - 2001 },
+      { capturedAt: f.clock() + 10000 },
+      { sourceFrameId: null },
+      { geometryGeneration: null },
+      { source: null },
+    ];
+    for (const override of overrides) {
+      f.device.statusOverride = override;
+      expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+    }
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("revalidates Stop, revocation, expiry and lease identity across camera awaits", async () => {
+    for (const invalidate of [
+      (f: Awaited<ReturnType<typeof cameraFixture>>) =>
+        f.store.saveState(`view-stopped:${f.request.id}`, true),
+      (f: Awaited<ReturnType<typeof cameraFixture>>) =>
+        f.store.put("pairing", { ...f.pairing.pairing, revokedAt: f.clock() }),
+      (f: Awaited<ReturnType<typeof cameraFixture>>) => f.advance(20001),
+      (f: Awaited<ReturnType<typeof cameraFixture>>) => {
+        const lease = f.store.all<ControlLease>("lease")[0]!;
+        f.store.put("lease", { ...lease, state: "released" });
+      },
+    ]) {
+      const f = await cameraFixture();
+      f.device.beforeStatus = () => {
+        invalidate(f);
+      };
+      expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+      expect((await f.api(focus)).status).toBeGreaterThanOrEqual(400);
+      expect(f.device.commands).toHaveLength(0);
+      expect(f.device.inputs).toHaveLength(0);
+    }
+  });
+
+  it("rejects malformed or unbounded commands before media dispatch", async () => {
+    const f = await cameraFixture();
+    for (const body of [
+      { ...focus, arbitraryMouseBypass: true },
+      { ...focus, rect: { x: 0.9, y: 0, width: 0.5, height: 1 } },
+      { ...focus, rect: { x: 0, y: 0, width: 0, height: 1 } },
+      { ...focus, durationMs: 1501 },
+      { ...focus, expectedRevision: -1 },
+      { ...focus, sourceFrameId: "" },
+      { ...focus, version: 2 },
+    ])
+      expect((await f.api(body)).status).toBe(400);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("publishes only the negotiated surface and never silently widens a camera session", async () => {
+    const enabled = await cameraFixture();
+    const selected = await (await enabled.policy()).json();
+    expect(selected.screenSelection).toMatchObject({
+      sessionId: enabled.agent.session.id,
+      cameraVersion: 1,
+      surface: displayCamera.surface,
+    });
+    const disabled = await cameraFixture(false);
+    expect(await (await disabled.policy()).json()).not.toHaveProperty(
+      "screenSelection",
+    );
+    const stopped = await cameraFixture();
+    stopped.store.saveState(`view-stopped:${stopped.request.id}`, true);
+    expect(await (await stopped.policy()).json()).not.toHaveProperty(
+      "screenSelection",
+    );
+    await stopped.viewing.tick();
+    expect(await (await stopped.policy()).json()).not.toHaveProperty(
+      "screenSelection",
+    );
+    const legacy = await cameraFixture(true, false);
+    const old = await (await legacy.policy(false)).json();
+    expect(old.screenSelection).toBeDefined();
+    expect(old.screenSelection).not.toHaveProperty("cameraVersion");
+    expect(old.screenSelection).not.toHaveProperty("surface");
+  });
+
+  it("requires the exact active helper lease and matching local policy revision", async () => {
+    const f = await cameraFixture();
+    for (const override of [
+      { activeLeaseId: "other_lease" },
+      { policyRevision: 2 },
+      { activeLease: false },
+      { screenPermission: false },
+      { armed: false },
+      { viewAllowed: false },
+      { available: false },
+      { displayAttached: false },
+    ]) {
+      f.device.readinessOverride = override;
+      expect((await f.api()).status).toBe(409);
+      expect((await f.api(focus)).status).toBe(409);
+    }
+    expect(f.device.statusCalls).toBe(0);
+    expect(f.device.commands).toHaveLength(0);
+  });
+
+  it("does not acknowledge a raced Stop or a receipt for another command", async () => {
+    const f = await cameraFixture();
+    f.device.beforeCommand = () => {
+      f.store.saveState(`view-stopped:${f.request.id}`, true);
+    };
+    expect((await f.api(focus)).status).toBeGreaterThanOrEqual(400);
+    expect(f.device.commands).toHaveLength(1);
+    expect(f.device.inputs).toHaveLength(0);
+    const other = await cameraFixture();
+    other.device.receiptCommandId = "wrong_command";
+    expect((await other.api(focus)).status).toBe(409);
+    expect(other.device.commands).toHaveLength(1);
+  });
+
+  it("rejects a restarted control authority without replaying camera work", async () => {
+    const f = await cameraFixture();
+    expect((await f.api(focus)).status).toBe(200);
+    new ControlCoordinator(f.store, f.device, f.clock);
+    expect((await f.api()).status).toBe(409);
+    expect((await f.api(focus)).status).toBe(409);
+    expect(f.device.commands).toHaveLength(1);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+});
+
+describe("selected-window presentation remains exact while placement moves offscreen", () => {
+  const selectedWindow: CameraSelection = {
+    version: 1,
+    surface: { kind: "window", id: "7", displayId: 1, ownerPid: 123 },
+  };
+  const windowSource = {
+    width: 1840,
+    height: 872,
+    originX: 130,
+    originY: 277,
+    pointWidth: 920,
+    pointHeight: 436,
+    displayOriginX: 0,
+    displayOriginY: 0,
+    displayPointWidth: 1512,
+    displayPointHeight: 982,
+  };
+
+  it("accepts exact selected-window frame metadata and status at negative or wholly offscreen origins", async () => {
+    const f = await cameraFixture(true, true, selectedWindow);
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    const original = await f.device.frame(lease);
+    for (const position of [
+      { originX: 130, originY: 277 },
+      { originX: -837, originY: 277 },
+      { originX: -2000, originY: 277 },
+      { originX: 130, originY: -500 },
+    ]) {
+      const source = { ...windowSource, ...position };
+      const metadata = { ...original.camera!, source };
+      expect(cameraFrameSchema.parse(metadata)).toMatchObject({
+        surface: selectedWindow.surface,
+        source,
+      });
+      f.device.statusOverride = { source };
+      const response = await f.api();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        surface: selectedWindow.surface,
+        source,
+        state: "live",
+      });
+    }
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+  });
+
+  it("still rejects display-source metadata extending outside its authorized display", async () => {
+    const f = await cameraFixture();
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    const frame = await f.device.frame(lease);
+    for (const position of [
+      { originX: -1001, originY: 0 },
+      { originX: -1000, originY: -1 },
+      { originX: 1, originY: 0 },
+      { originX: -1000, originY: 1 },
+    ]) {
+      const source = { ...frame.camera!.source, ...position };
+      expect(
+        cameraFrameSchema.safeParse({ ...frame.camera!, source }).success,
+      ).toBe(false);
+      f.device.statusOverride = { source };
+      expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+    }
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("keeps selected-window fallback input unavailable even when offscreen viewing works", async () => {
+    const f = await cameraFixture(true, true, selectedWindow);
+    f.device.statusOverride = { source: { ...windowSource, originX: -837 } };
+    expect((await f.api()).status).toBe(200);
+    expect((await f.api(focus)).status).toBe(200);
+    const result = await f.execution("execution", {
+      expectedEpoch: 0,
+      executor: "clawdtime",
+      previousOutcome: "idle",
+      backgroundActorsStopped: true,
+      expectedCursor: 0,
+    });
+    expect(result.status).toBe(409);
+    expect(await result.json()).toMatchObject({
+      error:
+        "Selected-window fallback input is unavailable until exact hit-target qualification.",
+    });
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+    expect(f.store.all<ControlLease>("lease")[0]?.mode).toBe("view");
+  });
+});
+
+describe("screen camera preserves the existing CUA ownership and receipts", () => {
+  const claim = {
+    expectedEpoch: 0,
+    executor: "clawdtime",
+    previousOutcome: "idle",
+    backgroundActorsStopped: true,
+    expectedCursor: 0,
+  };
+  const act = {
+    epoch: 1,
+    actionId: "camera_click_1",
+    frameId: "source_1",
+    action: { kind: "click", x: 0.5, y: 0.5 },
+    expectedCursor: 0,
+    presentation: {
+      revision: 0,
+      sourceFrameId: "source_1",
+      geometryGeneration: "geometry_1",
+    },
+  };
+
+  it("requires ownership, keeps pristine observations, forwards the exact transform reference and observes once", async () => {
+    const f = await cameraFixture();
+    expect((await f.execution("act", act)).status).toBeGreaterThanOrEqual(400);
+    expect(f.device.inputs).toHaveLength(0);
+    expect((await f.execution("execution", claim)).status).toBe(200);
+    const observation = await f.execution("observe", { epoch: 1 });
+    expect(observation.status).toBe(200);
+    expect(await observation.json()).toMatchObject({
+      frame: {
+        id: "source_1",
+        width: 2000,
+        height: 1000,
+        camera: {
+          geometryGeneration: "geometry_1",
+          surface: displayCamera.surface,
+        },
+      },
+    });
+    const result = await f.execution("act", act);
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({
+      id: "camera_click_1",
+      state: "observed",
+      afterFrame: { id: "source_2" },
+    });
+    expect(f.device.inputs).toEqual(["camera_click_1"]);
+    expect(f.device.dispatched[0]).toMatchObject({
+      frame: { id: "source_1", width: 2000, height: 1000 },
+      action: act.action,
+      presentation: act.presentation,
+    });
+    // A repeated action reconciles the original receipt after its view changed.
+    const replay = await f.execution("act", act);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({
+      id: "camera_click_1",
+      state: "observed",
+      afterFrame: { id: "source_2" },
+    });
+    expect(f.device.inputs).toHaveLength(1);
+    expect(f.store.get<ActionReceipt>("action", "camera_click_1")?.state).toBe(
+      "observed",
+    );
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 1,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  it("rejects frozen, moving, changed generation and changed camera revision before input", async () => {
+    for (const override of [
+      { state: "paused" as const },
+      { moving: true },
+      { revision: 1 },
+      { geometryGeneration: "geometry_2" },
+      { sourceFrameId: "source_2" },
+    ]) {
+      const f = await cameraFixture();
+      expect((await f.execution("execution", claim)).status).toBe(200);
+      expect((await f.execution("observe", { epoch: 1 })).status).toBe(200);
+      f.device.statusOverride = override;
+      expect((await f.execution("act", act)).status).toBe(409);
+      expect(f.device.inputs).toHaveLength(0);
+      expect(f.store.all("action")).toHaveLength(0);
+    }
+  });
+
+  it("rejects a zoom revision that changes during validation and still honors pending human corrections", async () => {
+    const f = await cameraFixture();
+    await f.execution("execution", claim);
+    await f.execution("observe", { epoch: 1 });
+    f.device.beforeStatus = () => {
+      f.device.revision++;
+    };
+    expect((await f.execution("act", act)).status).toBe(409);
+    expect(f.device.inputs).toHaveLength(0);
+    f.device.beforeStatus = undefined;
+    f.device.revision = 0;
+    await f.human.receive({
+      eventId: "correction",
+      requestId: f.request.id,
+      memberId: "fixture-human",
+      lineId: "fixture-line",
+      conversationId: "fixture-conversation",
+      channel: "text",
+      text: "Wait for the next synthetic choice.",
+    });
+    expect((await f.execution("act", act)).status).toBe(409);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("does not admit unreferenced source input from a frozen camera", async () => {
+    const f = await cameraFixture();
+    await f.execution("execution", claim);
+    await f.execution("observe", { epoch: 1 });
+    f.device.statusOverride = { state: "paused" };
+    const { presentation: _reference, ...sourceAction } = act;
+    expect((await f.execution("act", sourceAction)).status).toBe(409);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("refuses missing, wrong-surface and inconsistent pristine observation metadata", async () => {
+    const f = await cameraFixture();
+    expect((await f.execution("execution", claim)).status).toBe(200);
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    const valid = await f.device.frame(lease);
+    for (const override of [
+      { camera: undefined },
+      {
+        camera: {
+          ...valid.camera!,
+          surface: {
+            kind: "window" as const,
+            id: "7",
+            displayId: 1,
+            ownerPid: 123,
+          },
+        },
+      },
+      { width: 1999 },
+      { height: 999 },
+    ]) {
+      f.device.frameOverride = override;
+      expect(
+        (await f.execution("observe", { epoch: 1 })).status,
+      ).toBeGreaterThanOrEqual(400);
+    }
+    expect(f.store.state(`frame:${lease.id}`)).toBeUndefined();
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("cannot repurpose a completed input ID with a different presentation reference", async () => {
+    const f = await cameraFixture();
+    await f.execution("execution", claim);
+    await f.execution("observe", { epoch: 1 });
+    expect((await f.execution("act", act)).status).toBe(200);
+    expect(
+      (
+        await f.execution("act", {
+          ...act,
+          presentation: { ...act.presentation, revision: 1 },
+        })
+      ).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(f.device.inputs).toHaveLength(1);
+    expect(f.store.all("action")).toHaveLength(1);
+  });
+
+  it("does not attach a misleading pixel transform to keyboard input", async () => {
+    const f = await cameraFixture();
+    await f.execution("execution", claim);
+    await f.execution("observe", { epoch: 1 });
+    expect(
+      (
+        await f.execution("act", {
+          ...act,
+          action: { kind: "type", text: "disposable" },
+        })
+      ).status,
+    ).toBe(400);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+  });
+});
+
+describe("selected-window native ownership uses the current host without enabling fallback", () => {
+  const selectedWindow: CameraSelection = {
+    version: 1,
+    surface: { kind: "window", id: "7", displayId: 1, ownerPid: 123 },
+  };
+  const claim = {
+    expectedEpoch: 0,
+    executor: "native",
+    previousOutcome: "idle",
+    backgroundActorsStopped: true,
+    expectedCursor: 0,
+  };
+  const receive = (
+    f: Awaited<ReturnType<typeof cameraFixture>>,
+    eventId: string,
+    text: string,
+  ) =>
+    f.human.receive({
+      eventId,
+      requestId: f.request.id,
+      memberId: "fixture-human",
+      lineId: "fixture-line",
+      conversationId: "fixture-conversation",
+      channel: "text",
+      text,
+    });
+
+  it("claims and releases native ownership while preserving exact view-only surface authority", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    f.device.readinessOverride = { controlPolicy: "agent_tools_only" };
+    const original = f.store.all<ControlLease>("lease")[0]!;
+    const response = await f.execution("execution", claim);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      executor: "native",
+      epoch: 1,
+      state: "working",
+    });
+    expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+    expect(f.store.all<ControlLease>("lease")[0]).toMatchObject({
+      id: original.id,
+      mode: "view",
+      executor: "native",
+      executorEpoch: 1,
+      cameraVersion: 1,
+      surface: selectedWindow.surface,
+    });
+    expect((await f.api()).status).toBe(200);
+    expect((await f.api(focus)).status).toBe(200);
+    expect((await f.execution("observe", { epoch: 1 })).status).toBe(403);
+    expect(
+      (
+        await f.execution("act", {
+          epoch: 1,
+          actionId: "native_is_not_fallback",
+          frameId: "source_1",
+          action: { kind: "click", x: 0.5, y: 0.5 },
+          expectedCursor: 0,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 1,
+          executor: "clawdtime",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 1,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(200);
+    expect(f.store.all<ControlLease>("lease")[0]).toMatchObject({
+      id: original.id,
+      mode: "view",
+      executor: "none",
+      executorEpoch: 2,
+      surface: selectedWindow.surface,
+    });
+    expect(f.service.authenticateSession(f.agent.token).state).toBe("active");
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+  });
+
+  it("requires verified host capabilities and local control permission for native window ownership", async () => {
+    const unverified = await cameraFixture(true, true, selectedWindow);
+    expect((await unverified.execution("execution", claim)).status).toBe(403);
+    expect(unverified.store.all("execution")).toHaveLength(0);
+    for (const readinessOverride of [
+      { controlPolicy: "view_only" },
+      { controlAllowed: false },
+    ]) {
+      const f = await cameraFixture(true, true, selectedWindow, true);
+      f.device.readinessOverride = readinessOverride;
+      expect((await f.execution("execution", claim)).status).toBe(403);
+      expect(f.store.all("execution")).toHaveLength(0);
+      expect(f.device.inputs).toHaveLength(0);
+    }
+  });
+
+  it("requires acknowledgement of the latest human cursor before a native claim", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    await receive(f, "native_correction", "Use the disposable second item.");
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    const poll = await (await f.execution("turns")).json();
+    expect(
+      (await f.execution("ack", { turnId: poll.turns[0].id })).status,
+    ).toBe(200);
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    expect(
+      (await f.execution("execution", { ...claim, expectedCursor: 1 })).status,
+    ).toBe(200);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("keeps native outcome uncertain after Stop and prevents release from claiming completion", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    expect((await f.execution("execution", claim)).status).toBe(200);
+    await receive(f, "stop_native_window", "stop sharing");
+    const state = await (await f.execution("execution")).json();
+    expect(state).toMatchObject({
+      executor: "native",
+      state: "uncertain",
+      epoch: 2,
+    });
+    expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+    expect(await (await f.policy()).json()).not.toHaveProperty(
+      "screenSelection",
+    );
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 2,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(409);
+    expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("released");
+    expect(f.device.leases.size).toBe(0);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("latches an authenticated media Stop during native display ownership without claiming input completion", async () => {
+    const f = await cameraFixture(true, true, displayCamera, true);
+    expect((await f.execution("execution", claim)).status).toBe(200);
+    const lease = f.store.all<ControlLease>("lease")[0]!;
+    const notify = (leaseId: string) =>
+      f.app.request(`/media/${mediaSessionId(f.request.id)}/screen-stopped`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${"m".repeat(64)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ leaseId, reason: "helper_stopped" }),
+      });
+    expect((await notify("another_surface_lease")).status).toBe(403);
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "working",
+      epoch: 1,
+      viewingStopped: false,
+    });
+
+    expect((await notify(lease.id)).status).toBe(200);
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "uncertain",
+      epoch: 2,
+      viewingStopped: true,
+    });
+    expect(f.store.state(`view-stopped:${f.request.id}`)).toBe(true);
+    expect(await (await f.policy()).json()).not.toHaveProperty(
+      "screenSelection",
+    );
+    expect((await f.api(focus)).status).toBe(409);
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 2,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(409);
+    await f.viewing.tick();
+    await f.viewing.tick();
+    expect(f.store.all<ControlLease>("lease")).toHaveLength(1);
+    expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("released");
+    expect(f.device.leases.size).toBe(0);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("action")).toHaveLength(0);
+  });
+
+  it("does not acknowledge native ownership if Stop wins during helper synchronization", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    const create = f.device.createLease.bind(f.device);
+    f.device.createLease = async (lease) => {
+      await create(lease);
+      f.store.saveState(`view-stopped:${f.request.id}`, true);
+    };
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "uncertain",
+    });
+    expect(f.store.all<ControlLease>("lease")[0]?.state).toBe("unknown");
+    expect((await f.api()).status).toBeGreaterThanOrEqual(400);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+
+  it("refuses dispatch permission for a correction arriving during a confirmed native claim", async () => {
+    const f = await cameraFixture(true, true, selectedWindow, true);
+    const create = f.device.createLease.bind(f.device);
+    let corrected = false;
+    f.device.createLease = async (lease) => {
+      await create(lease);
+      if (!corrected) {
+        corrected = true;
+        await receive(
+          f,
+          "native_during_claim",
+          "Wait for a fresh observation.",
+        );
+      }
+    };
+    expect((await f.execution("execution", claim)).status).toBe(409);
+    // Grant acknowledgement succeeded; it remains reconcilable, not a fake input outcome.
+    expect(await (await f.execution("execution")).json()).toMatchObject({
+      executor: "native",
+      state: "working",
+      epoch: 1,
+      pendingDelivery: true,
+    });
+    expect(
+      (
+        await f.execution("execution", {
+          ...claim,
+          expectedEpoch: 1,
+          executor: "none",
+          previousOutcome: "completed",
+        })
+      ).status,
+    ).toBe(200);
+    expect(f.device.inputs).toHaveLength(0);
+  });
+});
+
+describe("Argos same-chat voice and prepared presentation", () => {
+  const prepared = {
+    version: 1,
+    context: "Review the disposable selected region.",
+    geometryGeneration: "geometry_1",
+    contentRevision: "content_1",
+    targets: [
+      {
+        id: "review",
+        label: "Review region",
+        rect: { x: 0.2, y: 0.2, width: 0.3, height: 0.3 },
+        annotation: { kind: "highlight" },
+      },
+    ],
+  };
+  async function fixture() {
+    const f = await cameraFixture(true, true, displayCamera, true, true);
+    const call =
+      f.store.all<import("../src/contracts.js").CallSession>("call")[0]!;
+    const media = (route: string, body?: unknown, token = "m".repeat(64)) =>
+      f.app.request(`/media/${mediaSessionId(f.request.id)}/voice/${route}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    const command = (eventId: string, action: string, targetId?: string) => ({
+      eventId,
+      action,
+      callId: call.id,
+      qualifiedRemoteAudio: true,
+      ...(targetId ? { targetId } : {}),
+    });
+    return { ...f, media, command, call };
+  }
+  it("selects streaming voice without a managed executor and keeps native control", async () => {
+    const f = await fixture();
+    expect(await (await f.policy()).json()).toMatchObject({
+      conversationFrontend: "elevenlabs",
+      voiceMode: "two_way",
+    });
+    expect(f.agent.session.conversation).toBeUndefined();
+    expect(f.agent.session.capabilities.nativeControl).toBe("desktop");
+    expect(() =>
+      f.service.registerSession(f.pairing.token, {
+        ...registration,
+        externalSessionId: "invalid-voice",
+        voiceFrontend: { version: 1, provider: "elevenlabs" },
+      }),
+    ).toThrow();
+    expect(() =>
+      f.service.registerSession(f.pairing.token, {
+        ...registration,
+        externalSessionId: f.agent.session.externalSessionId,
+      }),
+    ).toThrow("binding differs");
+  });
+  it("queues the original utterance once and supplies asynchronous verified progress", async () => {
+    const f = await fixture();
+    const body = {
+      eventId: "utterance_1",
+      callId: f.call.id,
+      qualifiedRemoteAudio: true,
+      text: "Inspect the project and explain the result.",
+    };
+    expect((await f.media("intent", body)).status).toBe(200);
+    expect((await f.media("intent", body)).status).toBe(200);
+    const poll = await (await f.execution("turns")).json();
+    expect(poll.turns).toHaveLength(1);
+    expect(poll.turns[0].text).toBe(body.text);
+    await f.execution("ack", { turnId: poll.turns[0].id });
+    await f.execution("progress", {
+      turnId: poll.turns[0].id,
+      state: "executing",
+      presentation: {
+        version: 1,
+        activity: {
+          activityId: "checking",
+          kind: "status",
+          summary: "Inspecting the disposable project.",
+        },
+      },
+    });
+    const context = await (await f.media("context")).json();
+    expect(context.updates).toHaveLength(1);
+    expect(context.updates[0].text).toContain(
+      "Inspecting the disposable project.",
+    );
+    expect(f.device.inputs).toHaveLength(0);
+    expect((await f.media("intent", { ...body, callId: "wrong" })).status).toBe(
+      403,
+    );
+    expect((await f.media("intent", body, "wrong")).status).toBe(401);
+  });
+  it("connects prepared focus/annotation/overview without desktop input and deduplicates tools", async () => {
+    const f = await fixture();
+    expect((await f.execution("voice/prepare", prepared)).status).toBe(200);
+    expect(await (await f.media("context")).json()).toMatchObject({
+      cameraTargets: [{ id: "review", label: "Review region" }],
+    });
+    const focus = f.command("focus_event", "focus", "review");
+    expect((await f.media("camera", focus)).status).toBe(200);
+    expect((await f.media("camera", focus)).status).toBe(200);
+    expect(f.device.commands).toHaveLength(1);
+    expect(f.device.commands[0]).toMatchObject({
+      op: "focus_region",
+      rect: prepared.targets[0]!.rect,
+      durationMs: 450,
+    });
+    expect(
+      (await f.media("camera", f.command("mark_event", "annotate", "review")))
+        .status,
+    ).toBe(200);
+    expect(f.device.commands[1]).toMatchObject({
+      op: "annotation_upsert",
+      annotation: { kind: "highlight" },
+    });
+    expect(
+      (await f.media("camera", f.command("wide_event", "overview"))).status,
+    ).toBe(200);
+    expect(f.device.inputs).toHaveLength(0);
+    expect(f.store.all("execution")).toHaveLength(0);
+    expect(
+      (await f.media("camera", { ...focus, action: "clear" })).status,
+    ).toBe(409);
+  });
+  it("refuses stale content/geometry, expired preparation, unknown targets and Stop", async () => {
+    const f = await fixture();
+    await f.execution("voice/prepare", prepared);
+    expect(
+      (await f.media("camera", f.command("bad", "focus", "unknown"))).status,
+    ).toBe(409);
+    for (const change of [
+      { contentRevision: "content_2" },
+      { geometryGeneration: "geometry_2" },
+    ]) {
+      f.device.statusOverride = change;
+      expect(
+        (await f.media("camera", f.command("stale", "focus", "review"))).status,
+      ).toBe(409);
+    }
+    f.device.statusOverride = {};
+    expect((await f.media("camera", f.command("stop", "stop"))).status).toBe(
+      200,
+    );
+    expect(
+      (await f.media("camera", f.command("after_stop", "focus", "review")))
+        .status,
+    ).toBe(409);
+    expect(f.device.commands).toHaveLength(0);
+    expect(f.device.leases.size).toBe(0);
+    expect(await (await f.media("context")).json()).toMatchObject({
+      cameraTargets: [],
+    });
+    expect(await (await f.policy()).json()).toMatchObject({
+      state: "listening",
+      conversationFrontend: "elevenlabs",
+    });
+    expect(
+      (
+        await f.media("end", {
+          eventId: "hangup",
+          callId: f.call.id,
+          qualifiedRemoteAudio: true,
+        })
+      ).status,
+    ).toBe(200);
+    expect(await (await f.policy()).json()).toMatchObject({ state: "ended" });
+  });
+  it("rejects a stale preparation and a revoked call during camera observation", async () => {
+    const f = await fixture();
+    f.device.statusOverride = { contentRevision: "new_content" };
+    expect((await f.execution("voice/prepare", prepared)).status).toBe(409);
+    f.device.statusOverride = {};
+    await f.execution("voice/prepare", prepared);
+    f.device.beforeStatus = () => {
+      f.store.put("call", { ...f.call, state: "ended" });
+    };
+    expect(
+      (await f.media("camera", f.command("revoked", "focus", "review"))).status,
+    ).toBe(409);
+    expect(f.device.commands).toHaveLength(0);
+  });
+  it("requires operator opt-in and fails closed instead of selecting legacy speech", async () => {
+    const f = await fixture();
+    const disabled = createApp(f.service, f.control, f.human, {
+      origin: "http://127.0.0.1",
+      simulation: true,
+      mediaToken: "m".repeat(64),
+      screenCameraEnabled: true,
+      twoWayVoiceEnabled: true,
+      remoteAudioIsolated: true,
+    });
+    const reply = await disabled.request(
+      `/media/${mediaSessionId(f.request.id)}/policy`,
+      { headers: { authorization: `Bearer ${"m".repeat(64)}` } },
+    );
+    expect(await reply.json()).toMatchObject({
+      state: "ended",
+      conversationFrontend: "elevenlabs",
+    });
+    expect(
+      (
+        await disabled.request(
+          `/media/${mediaSessionId(f.request.id)}/voice/context`,
+          { headers: { authorization: `Bearer ${"m".repeat(64)}` } },
+        )
+      ).status,
+    ).toBe(403);
+  });
+  it("bounds new camera effects while retaining original receipts", async () => {
+    const f = await fixture();
+    await f.execution("voice/prepare", prepared);
+    const cmd = f.command("original", "focus", "review");
+    expect((await f.media("camera", cmd)).status).toBe(200);
+    f.store.saveState(`voice-camera-count:${f.request.id}`, 512);
+    expect(
+      (await f.media("camera", f.command("overflow", "overview"))).status,
+    ).toBe(429);
+    expect((await f.media("camera", cmd)).status).toBe(200);
+    expect(f.device.commands).toHaveLength(1);
+  });
+  it("retains an unknown camera outcome without dispatching it again", async () => {
+    const f = await fixture();
+    await f.execution("voice/prepare", prepared);
+    f.device.beforeCommand = () => {
+      throw new Error("lost acknowledgement");
+    };
+    const cmd = f.command("unknown_outcome", "focus", "review");
+    const failed = await f.media("camera", cmd);
+    expect(failed.status).toBe(502);
+    expect((await failed.json()).errorCode).toBe("camera_transport_failed");
+    f.device.beforeCommand = undefined;
+    const repeated = await (await f.media("camera", cmd)).json();
+    expect(repeated).toMatchObject({ accepted: false });
+    expect(repeated.reply).toContain("unknown");
+    expect(f.device.commands).toHaveLength(0);
+  });
+});

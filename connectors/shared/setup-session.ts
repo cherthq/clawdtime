@@ -1,4 +1,8 @@
-import { sessionCapabilities, type ProtocolOptions } from "./protocol.js";
+import {
+  sessionCapabilities,
+  sessionInteraction,
+  type ProtocolOptions,
+} from "./protocol.js";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { dirname, join } from "node:path";
@@ -50,6 +54,8 @@ interface BridgeState {
     }
   >;
 }
+// Camera mutation state is ephemeral and deduplicated by the server generation/revision.
+// Never persist labels/context or build an unbounded durable high-rate camera ledger.
 const effects = new Set([
   "invite",
   "authorize",
@@ -63,7 +69,10 @@ const effects = new Set([
   "terminal-ack",
   "retry",
   ...Object.keys(conversationCommands).filter(
-    (name) => !isConversationRead(name as keyof typeof conversationCommands),
+    (name) =>
+      name !== "screen_camera_command" &&
+      name !== "prepare_voice_presentation" &&
+      !isConversationRead(name as keyof typeof conversationCommands),
   ),
 ]);
 const textArg = (args: Record<string, unknown>, key: string, max = 200) => {
@@ -84,10 +93,18 @@ export async function startSetupSession(options: {
   nativeControl?: ProtocolOptions["nativeControl"];
   sharedSurface?: boolean;
   nativeCancellation?: boolean;
+  messageUpdates?: boolean;
+  conversation?: ProtocolOptions["conversation"];
+  documentAccess?: ProtocolOptions["documentAccess"];
+  screenCamera?: ProtocolOptions["screenCamera"];
+  voiceFrontend?: ProtocolOptions["voiceFrontend"];
+  livePresentation?: ProtocolOptions["livePresentation"];
+  nativeActivation?: ProtocolOptions["nativeActivation"];
   input?: Readable;
   output?: Writable;
   request?: typeof fetch;
 }) {
+  sessionCapabilities(options);
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(options.runId))
     throw new Error(
       "Use a stable current-chat --run-id (16–100 letters, digits, underscore or hyphen).",
@@ -170,6 +187,24 @@ export async function startSetupSession(options: {
       throw new Error(
         "Setup bridge is closed or mismatched. Preserve its receipts; do not reopen a stopped session.",
       );
+    if (
+      run.session &&
+      (JSON.stringify(run.session.conversation) !==
+        JSON.stringify(options.conversation) ||
+        JSON.stringify(run.session.documentAccess) !==
+          JSON.stringify(options.documentAccess) ||
+        JSON.stringify(run.session.screenCamera) !==
+          JSON.stringify(options.screenCamera) ||
+        JSON.stringify(run.session.voiceFrontend) !==
+          JSON.stringify(options.voiceFrontend) ||
+        (run.session.capabilities?.livePresentationVersion === 1) !==
+          (options.livePresentation === true) ||
+        (run.session.capabilities?.nativeActivationVersion === 1) !==
+          (options.nativeActivation === true))
+    )
+      throw new Error(
+        "Existing run's execution architecture is immutable; preserve it and select a fresh run.",
+      );
     if (!run.token) {
       if (run.registrationIntentAt)
         throw new Error(
@@ -189,10 +224,31 @@ export async function startSetupSession(options: {
         hostId: connection.hostId,
         protocolVersion: options.protocolVersion ?? 2,
         capabilities: sessionCapabilities(options),
+        interaction: sessionInteraction(options),
+        conversation: options.conversation,
+        documentAccess: options.documentAccess,
+        screenCamera: options.screenCamera,
+        voiceFrontend: options.voiceFrontend,
       });
       run = { ...run, session: result.session, token: result.token };
       secureWrite(statePath, run);
+      if (
+        JSON.stringify(result.session.voiceFrontend) !==
+        JSON.stringify(options.voiceFrontend)
+      )
+        throw new Error(
+          "Server did not confirm the selected voice frontend. Preserve this registration; do not downgrade or retry it.",
+        );
     }
+    if (
+      (run.session?.capabilities?.livePresentationVersion === 1) !==
+        (options.livePresentation === true) ||
+      (run.session?.capabilities?.nativeActivationVersion === 1) !==
+        (options.nativeActivation === true)
+    )
+      throw new Error(
+        "Server did not confirm the selected live presentation/native activation capabilities. Preserve this registration; do not downgrade or retry it.",
+      );
     if (bridge.sessionId && bridge.sessionId !== run.session?.id)
       throw new Error("Setup session binding changed.");
     bridge.sessionId = run.session?.id;
@@ -211,9 +267,26 @@ export async function startSetupSession(options: {
       sessionId: run.session?.id,
       projectRoot: connection.projectRoot,
       adapter: connection.adapter,
-      currentChat: true,
+      currentChat:
+        run.session?.conversation?.executionSession !== "api_managed",
+      ...(run.session?.conversation
+        ? {
+            executionSession: run.session.conversation.executionSession,
+            runnerId: run.session.conversation.runnerId,
+          }
+        : {}),
       protocolVersion: run.session?.protocolVersion ?? 1,
-      next: "Keep this foreground bridge alive. Use this chat's native question tool for pre-call setup; during a call keep dialogue on the phone so Mac focus stays unchanged. Do not finalize or stop while setup is pending.",
+      ...(run.session?.voiceFrontend
+        ? { voiceFrontend: run.session.voiceFrontend }
+        : {}),
+      next:
+        run.session?.conversation?.executionSession === "api_managed"
+          ? run.session.conversation.runnerId === "remote-documents"
+            ? "Keep this registration bridge alive. Start executor-worker with this protected run for deterministic read-only document tools on the granted folder. No coding agent or desktop tools are used. Selection and exact-recipient sending require separate ordered authorization. Ctrl-C on the worker revokes document authority. No call is requested."
+            : run.session.conversation.runnerId === "remote-codex-app-server"
+              ? "Keep this registration bridge alive for heartbeats. Start executor-worker with this run's protected state to connect the separately selected local Codex executor. Inspect /api/jobs for actual worker readiness. This does not use this chat's native tools or request a call."
+              : "Keep this registration bridge alive for heartbeats. The configured backend runs the separately selected API-managed executor on its allowed local project. Inspect /api/jobs for actual executor readiness. This does not use this chat's native tools or request a call."
+          : "Keep this foreground bridge alive. Use this chat's native question tool for pre-call setup; during a call keep dialogue on the phone so Mac focus stays unchanged. Do not finalize or stop while setup is pending.",
     });
     const lines = createInterface({
       input,
@@ -265,18 +338,19 @@ export async function startSetupSession(options: {
             );
         }
         // Validate before persisting any effect intent.
-        const requestId = conversationCommand
-          ? textArg(args, "requestId")
-          : [
-                "result",
-                "diagnostics",
-                "ack",
-                "resume",
-                "complete",
-                "terminal-ack",
-              ].includes(command.command)
+        const requestId =
+          conversationCommand && conversationCommand !== "conversation_inbox"
             ? textArg(args, "requestId")
-            : undefined;
+            : [
+                  "result",
+                  "diagnostics",
+                  "ack",
+                  "resume",
+                  "complete",
+                  "terminal-ack",
+                ].includes(command.command)
+              ? textArg(args, "requestId")
+              : undefined;
         const responseId =
           command.command === "ack" ? textArg(args, "responseId") : undefined;
         const completeText =
@@ -330,10 +404,29 @@ export async function startSetupSession(options: {
             Number(args.controlEpoch) < 0)
         )
           throw new Error("Provide the current nonnegative controlEpoch.");
-        if (requestId && bridge.test?.requestId !== requestId)
-          throw new Error(
-            "Request does not belong to this setup test; read status first.",
-          );
+        if (
+          requestId &&
+          conversationCommand !== "conversation_timing" &&
+          bridge.test?.requestId !== requestId
+        ) {
+          // A text request can be created for this already-running session without
+          // a setup call. Never widen setup-only effects to another request.
+          const inbox =
+            conversationCommand && run.session?.interaction?.version === 1
+              ? await client.conversationInbox()
+              : undefined;
+          const owned = inbox?.requests
+            ?.slice(0, 100)
+            .some(
+              (request) =>
+                request.id === requestId &&
+                request.sessionId === run.session!.id,
+            );
+          if (!owned)
+            throw new Error(
+              "Request does not belong to this setup test or this exact session's live text inbox; read status first.",
+            );
+        }
         const fingerprint = createHash("sha256")
           .update(JSON.stringify([command.command, args]))
           .digest("hex");
@@ -540,7 +633,9 @@ export async function startSetupSession(options: {
             ? {
                 recorded: true,
                 reconcileWith:
-                  "conversation_turns or execution_status using the original request and identifiers",
+                  conversationCommand === "present_prepared_scene"
+                    ? "live_presentation_receipt using the original requestId and commandId"
+                    : "conversation_turns or execution_status using the original request and identifiers",
               }
             : result;
         secureWrite(bridgePath, bridge);

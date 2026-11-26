@@ -1,5 +1,19 @@
+import type {
+  CameraSelection,
+  CameraCommand,
+  CameraFrame,
+  CameraStatus,
+  CameraReceipt,
+  PresentationReference,
+} from "./camera-contracts.js";
 /** Versioned boundary; omitted protocolVersion retains v1 behavior. IDs are opaque, credentials never enter response/log objects. */
-export type Adapter = "claude-code" | "codex";
+export type Adapter = "claude-code" | "codex" | "audio-qualification";
+/** Dedicated, immutable, short-lived audio-only authority. Never grants execution. */
+export interface AudioQualification {
+  version: 1;
+  executionDisabled: true;
+  expiresAt: number;
+}
 /** Independent-task v1 is separate from legacy original-chat AgentSession authority. */
 export interface IndependentTaskSession {
   id: string;
@@ -242,6 +256,7 @@ export interface Pairing {
   allowControl: boolean;
 }
 export interface AgentSession {
+  audioQualification?: AudioQualification;
   id: string;
   pairingId: string;
   adapter: Adapter;
@@ -252,12 +267,34 @@ export interface AgentSession {
   createdAt: number;
   /** Immutable for the lifetime of this exact registered session. Omitted = legacy. */
   protocolVersion?: 1 | 2;
+  /** Explicit immutable opt-in; omitted sessions preserve their original delivery policy. */
+  interaction?: {
+    version: 1;
+    commandChannel: "imessage_first";
+    messageUpdates: boolean;
+  };
+  /** Explicit same-chat streaming voice selection; independent of execution host. */
+  voiceFrontend?: { version: 1; provider: "elevenlabs" };
+  /** New sessions only. A selected managed runner is distinct from this chat. */
+  conversation?: {
+    version: 1;
+    runnerId: string;
+    executionSession: "api_managed";
+  };
+  /** Immutable, explicitly selected local document root; never desktop input authority. */
+  documentAccess?: { version: 1; readOnly: true; expiresAt: number };
+  /** Explicit immutable selected surface; omitted means camera disabled. */
+  screenCamera?: CameraSelection;
   capabilities: {
     cooperativePause: boolean;
     polling: boolean;
     nativeControl?: "none" | "browser" | "desktop";
     sharedSurface?: boolean;
     nativeCancellation?: boolean;
+    voiceInteractionVersion?: 1;
+    screenCameraVersion?: 1;
+    livePresentationVersion?: 1;
+    nativeActivationVersion?: 1;
   };
   state: "active" | "yielded" | "stopped";
   controlEpoch: number;
@@ -280,6 +317,7 @@ export type AttentionState =
   | "failed"
   | "unknown";
 export interface AttentionRequest {
+  audioQualification?: AudioQualification;
   id: string;
   sessionId: string;
   pairingId: string;
@@ -297,6 +335,7 @@ export interface AttentionRequest {
   result?: string;
 }
 export interface CallSession {
+  audioQualification?: AudioQualification;
   id: string;
   requestId: string;
   pairingId: string;
@@ -319,6 +358,8 @@ export interface HumanResponse {
   acknowledgedSessionId?: string;
 }
 export interface ControlLease {
+  cameraVersion?: 1;
+  surface?: CameraSelection["surface"];
   id: string;
   requestId: string;
   sessionId: string;
@@ -341,6 +382,7 @@ export type InputAction =
   | { kind: "type"; text: string }
   | { kind: "scroll"; x: number; y: number; deltaY: number };
 export interface Frame {
+  camera?: CameraFrame;
   id: string;
   capturedAt: number;
   width: number;
@@ -373,6 +415,8 @@ export interface Transport {
     pairing: Pairing,
     text: string,
     effectId: string,
+    /** Recheck after asynchronous preflight, immediately before provider submission. */
+    beforeDispatch?: () => void,
   ): Promise<Record<string, unknown>>;
   speechStatus?(
     request: AttentionRequest,
@@ -388,6 +432,7 @@ export interface Transport {
     replyId: string,
     text: string,
     reconcileOnly?: boolean,
+    expectedRevision?: number,
   ): Promise<{
     state:
       "accepted" | "playing" | "completed" | "cancelled" | "failed" | "unknown";
@@ -397,11 +442,44 @@ export interface Transport {
 export interface DevicePort {
   createLease(lease: ControlLease): Promise<void>;
   frame(lease: ControlLease): Promise<Frame>;
+  cameraStatus?(lease: ControlLease): Promise<CameraStatus>;
+  cameraCommand?(
+    lease: ControlLease,
+    command: CameraCommand,
+  ): Promise<CameraReceipt>;
+  resolvePresentation?(
+    lease: ControlLease,
+    input: {
+      commandId: string;
+      window: import("./live-presentation-contracts.js").LivePresentationIntent["window"];
+      expected: import("./live-presentation-contracts.js").LivePresentation["expected"];
+      expiresAt: number;
+    },
+  ): Promise<unknown>;
+  livePresentation?(
+    lease: ControlLease,
+    presentation: import("./live-presentation-contracts.js").LivePresentation,
+    fingerprint: string,
+  ): Promise<unknown>;
+  nativePrepare?(
+    lease: ControlLease,
+    envelope: import("./production-native-contracts.js").ProductionNativeEnvelope,
+  ): Promise<unknown>;
+  nativeDispatch?(
+    lease: ControlLease,
+    envelope: import("./production-native-contracts.js").ProductionNativeEnvelope,
+  ): Promise<unknown>;
+  nativeReceipt?(
+    lease: ControlLease,
+    operationId: string,
+    fingerprint: string,
+  ): Promise<unknown>;
   action(
     lease: ControlLease,
     frame: Frame,
     action: InputAction,
     actionId: string,
+    presentation?: PresentationReference,
   ): Promise<{ submitted: boolean }>;
   release(lease: ControlLease): Promise<void>;
 }
@@ -414,12 +492,164 @@ export interface RequestAttentionInput {
 }
 export interface SessionRegistration {
   protocolVersion?: 1 | 2;
+  interaction?: AgentSession["interaction"];
+  conversation?: AgentSession["conversation"];
+  voiceFrontend?: AgentSession["voiceFrontend"];
+  documentAccess?: AgentSession["documentAccess"];
+  screenCamera?: CameraSelection;
   adapter: Adapter;
   adapterVersion: string;
   projectRoot: string;
   externalSessionId: string;
   hostId: string;
   capabilities: AgentSession["capabilities"];
+}
+
+/** Asynchronous conversation/execution boundary. Task text stays transient. */
+export type JobState =
+  | "queued"
+  | "running"
+  | "waiting_clarification"
+  | "waiting_approval"
+  | "cancel_requested"
+  | "succeeded"
+  | "failed"
+  | "canceled"
+  | "unknown";
+export interface JobBinding {
+  sessionId: string;
+  pairingId: string;
+  memberId: string;
+}
+export interface JobSource {
+  channel: "text" | "voice";
+  eventId: string;
+}
+export interface DocumentRootGrant extends JobBinding {
+  id: string;
+  projectRoot: string;
+  hostId: string;
+  expiresAt: number;
+  state: "active" | "revoked";
+}
+export interface DocumentCandidate {
+  id: string;
+  grantId: string;
+  name: string;
+  mimeType: string;
+  byteLength: number;
+  sha256: string;
+  previewSupport: "first_page" | "none";
+}
+export interface DocumentSelection extends JobBinding {
+  id: string;
+  grantId: string;
+  candidate: DocumentCandidate;
+  previewJobId: string;
+  previewRevision: number;
+  expiresAt: number;
+  sequence: number;
+}
+export interface DocumentOperation {
+  operation: "discover" | "preview" | "prepare_transfer";
+  grantId: string;
+  candidate?: DocumentCandidate;
+  transferId?: string;
+}
+export interface DocumentResult {
+  operation: DocumentOperation["operation"];
+  candidates?: DocumentCandidate[];
+  candidate?: DocumentCandidate;
+  assetId?: string;
+  transferId?: string;
+}
+export interface JobIntent {
+  instruction: string;
+  kind: "file" | "desktop" | "document";
+  preference: "auto" | "native" | "custom";
+  /** Explicit target, never a guessed currently focused field. */
+  target?: string;
+  grantId?: string;
+  /** Application-owned check, never executable model code. */
+  verification?: { kind: "file_contains"; path: string; expected: string };
+  document?: DocumentOperation;
+}
+export interface ExecutionResult {
+  outcome: "succeeded" | "failed" | "canceled" | "unknown";
+  summary: string;
+  verification?: {
+    verified: boolean;
+    method:
+      "file_read" | "ui_observation" | "document_digest" | "attachment_receipt";
+    evidenceId: string;
+  };
+  unresolvedEffectIds: string[];
+  document?: DocumentResult;
+}
+export interface ConversationJob extends JobBinding {
+  id: string;
+  version: 1;
+  source: JobSource;
+  runnerId: string;
+  revision: number;
+  instructionSequence: number;
+  kind: JobIntent["kind"];
+  preference: JobIntent["preference"];
+  state: JobState;
+  createdAt: number;
+  updatedAt: number;
+  dispatchId?: string;
+  result?: ExecutionResult;
+  /** Fixed operational labels only, no model transcript or file contents. */
+  progress?: string;
+}
+export interface RunnerCapabilities {
+  taskKinds?: JobIntent["kind"][];
+  id: string;
+  host:
+    "codex_app_server" | "bounded_desktop" | "local_documents" | "unavailable";
+  available: boolean;
+  reason?: string;
+  version: string;
+  nativeControl: "none" | "browser" | "desktop";
+  customControl: boolean;
+  cancellation: "cooperative" | "none";
+}
+export interface RunnerRequest {
+  job: ConversationJob;
+  intent: JobIntent;
+  projectRoot: string;
+  externalSessionId: string;
+}
+export type RunnerEvent =
+  | { type: "accepted" }
+  | {
+      type: "progress";
+      stage: "reasoning" | "observing" | "input" | "verifying";
+    }
+  | { type: "waiting_approval" };
+export interface ExecutionRunner {
+  capabilities(binding?: JobBinding): RunnerCapabilities;
+  run(
+    request: RunnerRequest,
+    emit: (event: RunnerEvent) => void,
+    signal: AbortSignal,
+  ): Promise<ExecutionResult>;
+}
+
+/** Separate authority variant; text control never fabricates a call. */
+export interface TextControlGrant extends JobBinding {
+  id: string;
+  kind: "text_session";
+  deviceId: string;
+  displayId: string;
+  projectRoot: string;
+  surface: string;
+  actions: InputAction["kind"][];
+  expiresAt: number;
+  policyRevision: number;
+  localEnableGeneration: number;
+  state: "active" | "revoked";
 }
 
 /** Setup stays with the originating agent; consent authorizes one exact test. */

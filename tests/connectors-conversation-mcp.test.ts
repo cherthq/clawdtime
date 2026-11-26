@@ -47,6 +47,7 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
     c.json({ session: service.heartbeat(token(c)) }),
   );
   app.get("/api/doctor", (c) => c.json(service.doctor(token(c))));
+  app.get("/api/conversation/inbox", (c) => c.json(turns.inbox(token(c))));
   app.post("/api/attention", async (c) => {
     const request = service.requestAttention(token(c), await c.req.json());
     await service.drain();
@@ -189,6 +190,7 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
       requestId,
       turnId: one.id,
       replyId: "reply-one",
+      channel: "voice",
       text: "Blue chosen.",
       expectedCursor: 1,
     });
@@ -204,6 +206,7 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
       requestId,
       turnId: one.id,
       replyId: "reply-one",
+      channel: "voice",
       text: "Green chosen.",
       expectedCursor: batch.value.cursor,
     });
@@ -227,6 +230,7 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
       requestId,
       turnId: one.id,
       replyId: "reply-one",
+      channel: "voice",
       text: "Green chosen.",
       expectedCursor: batch.value.cursor,
     });
@@ -257,6 +261,75 @@ it("v2 MCP keeps one exact session across ordered turns and reconnect without re
     await service.drain();
     expect(transport.calls).toHaveLength(1);
     expect(transport.ended).toHaveLength(1);
+    // An already-running exact MCP session can accept Messages work without
+    // placing another call; its default reply returns through Messages once.
+    const message = {
+      id: "synthetic-text-selection",
+      sender: binding.recipient,
+      lineId: binding.lineId,
+      conversationId: binding.conversationId,
+      text: `/use ${batch.value.session.id}`,
+    };
+    expect(turns.resolveTextTarget(grant.pairing.id, message).reply).toContain(
+      "Selected",
+    );
+    const input = {
+      ...message,
+      id: "synthetic-text-work",
+      text: "Describe the fixture.",
+    };
+    const routed = turns.resolveTextTarget(grant.pairing.id, input);
+    expect(routed.requestId).toBeTruthy();
+    const textTurn = turns.receive({
+      eventId: input.id,
+      memberId: binding.memberId,
+      lineId: binding.lineId,
+      conversationId: binding.conversationId,
+      requestId: routed.requestId!,
+      channel: "text",
+      text: input.text,
+    });
+    const inbox = await call(reconnected, "conversation_inbox");
+    expect(inbox.error).toBeFalsy();
+    expect(inbox.value.requests.map((r: any) => r.id)).toContain(
+      routed.requestId,
+    );
+    const textBatch = await call(reconnected, "conversation_turns", {
+      requestId: routed.requestId,
+    });
+    expect(textBatch.value.request.callId).toBeUndefined();
+    await call(reconnected, "acknowledge_turn", {
+      requestId: routed.requestId,
+      turnId: textTurn.id,
+    });
+    const textArgs = {
+      requestId: routed.requestId,
+      turnId: textTurn.id,
+      replyId: "text-reply",
+      text: "The synthetic fixture is blue.",
+      expectedCursor: textBatch.value.cursor,
+    };
+    const textReply = await call(reconnected, "conversation_reply", textArgs);
+    expect(textReply.error).toBeFalsy();
+    expect(textReply.value.channel).toBe("text");
+    expect(textReply.value.delivery).toBe("queued");
+    await service.drain();
+    const duplicate = await call(reconnected, "conversation_reply", textArgs);
+    expect(duplicate.error).toBeFalsy();
+    expect(duplicate.value.delivery).toBe("transport_acknowledged");
+    expect(
+      transport.messages.filter((m) => m.text === textArgs.text),
+    ).toHaveLength(1);
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.spoken).toHaveLength(1);
+    const timing = await call(reconnected, "conversation_timing", {
+      requestId: routed.requestId,
+    });
+    expect(
+      timing.value.connectorTiming.events.some(
+        (e: any) => e.event === "connector_reply_completed",
+      ),
+    ).toBe(true);
   } finally {
     await Promise.all(clients.map((c) => c.close()));
     await new Promise<void>((r) => server.close(() => r()));

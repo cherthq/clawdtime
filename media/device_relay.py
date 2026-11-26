@@ -94,11 +94,22 @@ class DeviceRelay:
 
     async def connect(self,request):
         devices=declared_devices(request)
-        for s in self.live():
-            claimed=self.claimed(s)
-            if (devices is None and claimed is None) or (devices is not None and claimed is not None and devices&claimed):
-                raise web.HTTPConflict(text='A device gateway is already connected for this device.')
-        socket=web.WebSocketResponse(max_msg_size=3*1024*1024,heartbeat=10)
+        # The same authenticated gateway reconnecting after a network drop must
+        # not wait for its half-dead previous socket to time out. The newest
+        # connection for a device replaces the stale one; requests pending on the
+        # old socket fail as unknown (never replayed).
+        stale=[s for s in self.live() if (devices is None and self.claimed(s) is None) or (devices is not None and self.claimed(s) is not None and devices&self.claimed(s))]
+        if devices is not None and any(not self.claimed(s)<=devices for s in stale):
+            raise web.HTTPConflict(text='A device gateway is already connected for another device set.')
+        socket=web.WebSocketResponse(max_msg_size=3*1024*1024,heartbeat=20)
+        if stale and not socket.can_prepare(request).ok:
+            raise web.HTTPBadRequest(text='A WebSocket upgrade is required.')
+        for old in stale:
+            self.sockets.pop(id(old),None)
+            for lease in [l for l,s in self.leases.items() if s is old]:self.leases.pop(lease,None)
+            for owner,future in list(self.pending.values()):
+                if owner is old and not future.done():future.set_exception(ConnectionError('Gateway replaced; outcome unknown'))
+            asyncio.ensure_future(old.close(code=4000,message=b'Replaced by a newer gateway connection'))
         # Reserve before the handshake yields so competing sockets cannot replace it.
         self.sockets[id(socket)]=(socket,devices)
         try:
@@ -113,7 +124,7 @@ class DeviceRelay:
                     if future.done():continue
                     raw=base64.b64decode(item['body'],validate=True)
                     if len(raw)>MAX_BODY or type(item['status']) is not int or not 100<=item['status']<=599 or not isinstance(item.get('headers'),dict):raise ValueError()
-                    headers={k.lower():v for k,v in item['headers'].items() if isinstance(k,str) and isinstance(v,str) and len(k)<100 and len(v)<300}
+                    headers={k.lower():v for k,v in item['headers'].items() if isinstance(k,str) and isinstance(v,str) and len(k)<100 and len(v)<(2049 if k.lower()=='x-camera-frame' else 300)}
                     future.set_result((item['status'],raw,headers))
                 except Exception:
                     await socket.close(code=1008,message=b'Invalid gateway response')
@@ -126,7 +137,7 @@ class DeviceRelay:
         return socket
 
     async def request(self,method,path,body=None,device=None):
-        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel))',path) or ('/devices/' in path and method!=('POST' if path.endswith('/panel') else 'GET')):
+        if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not re.fullmatch(r'/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|presentation/resolve|native/[A-Za-z0-9_-]{1,160}|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:version|readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel|text-grants(?:/[A-Za-z0-9_-]{1,160})?))',path) or (path.endswith('/presentation/resolve') and method!='POST') or ('/native/' in path and method!=('POST' if path.endswith(('/native/prepare','/native/dispatch')) else 'GET')) or ('/devices/' in path and method not in (('POST',) if path.endswith(('/panel','/text-grants')) else ('GET','DELETE') if '/text-grants/' in path else ('GET',))):
             if not self.connected:raise ConnectionError('Device gateway unavailable')
             raise ValueError('Invalid relay operation')
         socket=self.route(path,body,device)

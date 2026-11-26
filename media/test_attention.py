@@ -93,6 +93,22 @@ if __name__ == '__main__':
     unittest.main()
 
 class DeviceReadinessBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_presentation_readiness_is_off_by_default_and_scoped(self):
+        import json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            owner=Service({'MEDIA_DATABASE_PATH':str(Path(folder)/'media.sqlite'),'MEDIA_API_KEY':'m'*32})
+            client=TestClient(TestServer(owner.app()));await client.start_server()
+            try:
+                body={'deviceId':'device_fixture','livePresentationVersion':1,'cameraVersion':1}
+                with patch('server.gateway_request',AsyncMock(return_value=(200,json.dumps(body).encode(),{}))):
+                    headers={'Authorization':'Bearer '+'m'*32};path='/devices/device_fixture/readiness/member_fixture/1'
+                    self.assertNotIn('livePresentationVersion',await (await client.get(path,headers=headers)).json())
+                    owner.env.update(CLAWDTIME_LIVE_PRESENTATION_ENABLED='true',CLAWDTIME_SCREEN_CAMERA_ENABLED='true')
+                    self.assertEqual((await (await client.get(path,headers=headers)).json())['livePresentationVersion'],1)
+                    self.assertNotIn('livePresentationVersion',await (await client.get('/devices/device_fixture/readiness',headers=headers)).json())
+            finally:await client.close()
+
     async def test_media_requires_own_key_and_forwards_only_exact_readiness_path(self):
         from unittest.mock import patch
         from server import Service

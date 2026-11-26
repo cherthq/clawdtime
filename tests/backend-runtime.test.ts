@@ -275,7 +275,7 @@ describe("runtime standby and mode boundaries", () => {
       }
     },
   );
-  it.each(["acknowledged", "provider_503"] as const)(
+  it.each(["acknowledged", "provider_503", "receipt_unavailable"] as const)(
     "strips tester audit metadata and preserves once-only notice outcome: %s",
     async (outcome) => {
       const dir = mkdtempSync(join(tmpdir(), "clawdtime-runtime-pair-"));
@@ -360,12 +360,23 @@ describe("runtime standby and mode boundaries", () => {
       let activePolls = 0,
         maxPolls = 0;
       const sends: Record<string, unknown>[] = [];
+      const methods: string[] = [];
       vi.stubGlobal(
         "fetch",
         async (url: string | URL | Request, init?: RequestInit) => {
+          methods.push(init?.method ?? "GET");
           const u = new URL(String(url)),
             body = init?.body ? JSON.parse(String(init.body)) : undefined;
           let result: unknown;
+          if (u.pathname.startsWith("/api/v1/text-operations/v1/"))
+            return new Response(
+              JSON.stringify({
+                ...(outcome === "receipt_unavailable"
+                  ? { error: "Not found" }
+                  : { found: false, origin: u.pathname.split("/").at(-1) }),
+              }),
+              { status: 404 },
+            );
           if (u.pathname === "/api/v1/whoami")
             result = {
               healthy: true,
@@ -485,6 +496,21 @@ describe("runtime standby and mode boundaries", () => {
         });
         try {
           await runtime.tick();
+          if (outcome === "receipt_unavailable") {
+            expect(runtime.store.state("heartbeat")).toMatchObject({
+              ok: false,
+            });
+            expect(runtime.store.state(`messages:${lineId}`)).toMatchObject(
+              config.handoff.baseline,
+            );
+            expect(maxPolls).toBe(0);
+            expect(sends).toHaveLength(0);
+            expect(methods.every((method) => method === "GET")).toBe(true);
+            for (const kind of ["inbound", "invite", "notice", "call", "media"])
+              expect(runtime.store.all(kind)).toHaveLength(0);
+            expect(runtime.store.effects()).toHaveLength(0);
+            return;
+          }
           expect(
             runtime.store.all<{ state: string }>("inbound").map((i) => i.state),
           ).toEqual(["done"]);

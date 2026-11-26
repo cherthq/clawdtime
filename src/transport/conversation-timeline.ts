@@ -21,7 +21,9 @@ export type TimelineEvent =
   | "reply_accepted"
   | "outcome_reported"
   | "end_requested"
-  | "cleanup_confirmed";
+  | "cleanup_confirmed"
+  | "message_queued"
+  | "message_acknowledged";
 /** Bounded metadata only. UTC is observation, elapsedMs is process-local. */
 export class ConversationTimeline {
   processId = randomUUID().replaceAll("-", "");

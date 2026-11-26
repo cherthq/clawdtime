@@ -18,6 +18,7 @@ export class Viewing {
     readonly device: DevicePort,
     readonly now = Date.now,
     readonly live = false,
+    readonly screenCameraEnabled = false,
   ) {}
   private captureAllowed(lease: ControlLease) {
     const current = this.store.get<ControlLease>("lease", lease.id);
@@ -42,6 +43,9 @@ export class Viewing {
       current.deviceId === lease.deviceId &&
       current.displayId === lease.displayId &&
       !!session &&
+      session.audioQualification === undefined &&
+      request?.audioQualification === undefined &&
+      call?.audioQualification === undefined &&
       (session.protocolVersion === 2
         ? session.state !== "stopped"
         : session.state === "yielded") &&
@@ -150,6 +154,9 @@ export class Viewing {
           p.revokedAt === undefined &&
           p.allowView &&
           !!s &&
+          s.audioQualification === undefined &&
+          r.audioQualification === undefined &&
+          c?.audioQualification === undefined &&
           (s.protocolVersion === 2
             ? s.state !== "stopped"
             : s.state === "yielded") &&
@@ -223,7 +230,7 @@ export class Viewing {
             )
         )
           continue;
-        let policy: { policyRevision: number } | undefined;
+        let policy: { policyRevision: number; cameraVersion?: 1 } | undefined;
         if (s.protocolVersion === 2) {
           const device = this.device as DevicePort & Partial<PolicyDevice>;
           if (!device.readiness) continue;
@@ -255,7 +262,9 @@ export class Viewing {
           )
             continue;
         }
+        if (s.screenCamera && (!this.screenCameraEnabled || policy?.cameraVersion !== 1)) continue;
         const lease: ControlLease = {
+          ...(s.screenCamera ? {cameraVersion: 1 as const, surface: s.screenCamera.surface} : {}),
           id: `view_${randomUUID()}`,
           requestId: r.id,
           sessionId: s.id,

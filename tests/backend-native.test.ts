@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { hash } from "../src/storage/security.js";
+import { describe, it, expect, vi } from "vitest";
+import { ConversationService } from "../src/attention/conversation.js";
 import { Store } from "../src/storage/store.js";
 import { ClawdTime } from "../src/attention/service.js";
 import {
@@ -55,6 +57,11 @@ function fixture() {
       path = parsed.pathname,
       body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ url: String(url), method: init?.method ?? "GET", body });
+    if (path.startsWith("/api/v1/text-operations/v1/"))
+      return new Response(
+        JSON.stringify({ found: false, origin: path.split("/").at(-1) }),
+        { status: 404 },
+      );
     let result: unknown = {};
     if (path === "/api/v1/whoami")
       result = {
@@ -131,6 +138,14 @@ function fixture() {
         armed: true,
         controlPermission: true,
         controlAllowed: true,
+      };
+    else if (path === "/audio-qualification/readiness")
+      result = {
+        version: 1,
+        enabled: true,
+        directKeyConfigured: true,
+        websocketQualified: true,
+        sdk: { available: true, reason: "qualified_version" },
       };
     else if (path === "/sessions")
       result = {
@@ -225,6 +240,150 @@ function fixture() {
   };
 }
 describe("native protocol integration without live traffic", () => {
+  it.each([
+    ["readiness", "correction"],
+    ["identity", "correction"],
+    ["readiness", "revocation"],
+    ["identity", "revocation"],
+    ["readiness", "deadline"],
+    ["identity", "deadline"],
+  ] as const)(
+    "closes text dispatch after %s await when %s arrives",
+    async (boundary, change) => {
+      const store = new Store();
+      let mutate = () => {};
+      const submission = vi.fn();
+      const request = async (url: string | URL | Request) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/v1/whoami") {
+          await Promise.resolve();
+          if (boundary === "identity") mutate();
+          return new Response(
+            JSON.stringify({
+              healthy: true,
+              phone_line: {
+                phone_line_id: "provider",
+                phone_number: config.binding.phone,
+                instance_id: "instance",
+              },
+            }),
+          );
+        }
+        submission(path);
+        throw new Error("Unexpected external submission in isolated race test");
+      };
+      const transport = new NativeTransport(
+        store,
+        config,
+        request as typeof fetch,
+      );
+      const service = new ClawdTime(store, transport);
+      vi.spyOn(transport, "preflight").mockImplementation(async () => {
+        await Promise.resolve();
+        if (boundary === "readiness") mutate();
+        return {
+          checkedAt: Date.now(),
+          mode: "live",
+          liveReady: true,
+          bindingFingerprint: "fixture",
+          checks: [],
+        };
+      });
+      try {
+        const invite = service.createPairingInvite({
+          memberId: "member",
+          recipient: "+15550000001",
+          conversationId: "iMessage;-;+15550000001",
+          lineId: logicalLineId,
+          deviceId: "mac",
+          displayId: "1",
+        });
+        const paired = service.claimPairing({
+          token: invite.token,
+          deviceId: "mac",
+          displayId: "1",
+          allowView: true,
+          allowControl: true,
+        });
+        const agent = service.registerSession(paired.token, {
+          protocolVersion: 2,
+          adapter: "codex",
+          adapterVersion: "fixture",
+          projectRoot: "/synthetic",
+          externalSessionId: "text-race",
+          hostId: "mac",
+          capabilities: { cooperativePause: true, polling: true },
+          interaction: {
+            version: 1,
+            commandChannel: "imessage_first",
+            messageUpdates: false,
+          },
+        });
+        const conversation = new ConversationService(service);
+        const event = {
+          id: "fixture-inbound",
+          lineId: logicalLineId,
+          sender: paired.pairing.recipient,
+          conversationId: paired.pairing.conversationId,
+          text: "Use blue.",
+        };
+        const requestId = conversation.resolveTextTarget(
+          paired.pairing.id,
+          event,
+        ).requestId!;
+        const input = {
+          eventId: event.id,
+          requestId,
+          memberId: "member",
+          lineId: logicalLineId,
+          conversationId: event.conversationId,
+          channel: "text" as const,
+          text: event.text,
+        };
+        const turn = conversation.receive(input);
+        conversation.acknowledge(agent.token, requestId, turn.id);
+        const reply = {
+          turnId: turn.id,
+          replyId: "fixture-reply",
+          text: "The old answer.",
+        };
+        await conversation.reply(agent.token, requestId, reply);
+        mutate = () => {
+          if (change === "correction")
+            conversation.receive({
+              ...input,
+              eventId: "fixture-correction",
+              text: "Actually use green.",
+            });
+          else if (change === "revocation")
+            store.put("pairing", { ...paired.pairing, revokedAt: Date.now() });
+          else
+            store.put("attention", {
+              ...store.get<AttentionRequest>("attention", requestId)!,
+              deadline: Date.now() - 1,
+            });
+        };
+        await service.drain();
+        const effect = store
+          .effects()
+          .find((item) => item.payload.stage === "reply")!;
+        expect(effect).toMatchObject({
+          state: "failed",
+          result: {
+            reason: expect.stringContaining("no external effect attempted"),
+          },
+        });
+        expect(effect.payload.text).toBeUndefined();
+        expect(submission).not.toHaveBeenCalled();
+        await service.drain();
+        expect(submission).not.toHaveBeenCalled();
+        expect(store.effect(effect.id)?.state).toBe("failed");
+      } finally {
+        store.close();
+      }
+    },
+  );
+
   it("publishes same-agent replies once and reconciles after lost acceptance without another POST", async () => {
     const f = fixture();
     await f.app.drain();
@@ -682,6 +841,80 @@ describe("native protocol integration without live traffic", () => {
     });
     f.store.close();
   });
+  it("records ElevenLabs ownership and submits the initial task narration only once", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.events(["bridge_ready"]);
+    const request = async (url: string | URL | Request, init?: RequestInit) =>
+      new URL(String(url)).pathname.endsWith("/activate")
+        ? new Response(
+            JSON.stringify({
+              activated: true,
+              conversationFrontend: "elevenlabs",
+            }),
+          )
+        : f.request(url, init);
+    const transport = new NativeTransport(
+      f.store,
+      config,
+      request as typeof fetch,
+    );
+    const observe = (id: string, state: any, qualified?: boolean) =>
+      f.app.observeCall(id, state, qualified);
+    await transport.pollCalls(observe);
+    await transport.pollCalls(observe);
+    expect(f.store.get("media", mediaSessionId(f.attention.id))).toMatchObject({
+      conversationFrontend: "elevenlabs",
+      state: "active",
+    });
+    const speech = f.requests.filter((r) => r.url.endsWith("/speak"));
+    expect(speech).toHaveLength(1);
+    expect(speech[0]!.body.text).toBe("Fixture question");
+    f.store.close();
+  });
+  it("confirmed GPTLive activation omits legacy question while retaining old receipt reconciliation", async () => {
+    const f = fixture();
+    await f.app.drain();
+    f.events(["bridge_ready"]);
+    const request = async (url: string | URL | Request, init?: RequestInit) => {
+      if (new URL(String(url)).pathname.endsWith("/activate"))
+        return new Response(
+          JSON.stringify({ activated: true, conversationFrontend: "gpt_live" }),
+        );
+      return f.request(url, init);
+    };
+    const transport = new NativeTransport(
+      f.store,
+      config,
+      request as typeof fetch,
+    );
+    const observe = (id: string, state: any, qualified?: boolean) =>
+      f.app.observeCall(id, state, qualified);
+    await transport.pollCalls(observe);
+    const mediaId = mediaSessionId(f.attention.id);
+    expect(f.store.get("media", mediaId)).toMatchObject({
+      conversationFrontend: "gpt_live",
+      state: "active",
+    });
+    const restarted = new NativeTransport(f.store, config, f.request);
+    await restarted.pollCalls(observe);
+    expect(f.requests.filter((r) => r.url.endsWith("/speak"))).toHaveLength(0);
+    expect(f.store.get("speech", `${f.attention.id}:question`)).toBeUndefined();
+    f.store.put("speech", {
+      id: `${f.attention.id}:question`,
+      sessionId: mediaId,
+      requestId: f.attention.id,
+      state: "unknown",
+      fingerprint: "retained",
+    });
+    await restarted.pollCalls(observe);
+    expect(f.requests.filter((r) => r.url.endsWith("/speak"))).toHaveLength(0);
+    expect(f.store.get("speech", `${f.attention.id}:question`)).toMatchObject({
+      state: "completed",
+      fingerprint: "retained",
+    });
+    f.store.close();
+  });
   it("does not suppress an ordinary question because an unrelated setup test exists", async () => {
     const f = fixture();
     await f.app.drain();
@@ -848,9 +1081,11 @@ describe("native protocol integration without live traffic", () => {
     const f = fixture(),
       original = f.transport.media.bind(f.transport);
     let failing = true;
+    // A 503 is retried before the deadline (see the gateway test below); any
+    // other failure before the dial ends the call.
     f.transport.media = async (path, body) => {
       if (path === "/sessions" && failing)
-        throw new Error("Provider returned HTTP 503.");
+        throw new Error("Provider returned HTTP 500.");
       return original(path, body);
     };
     await f.app.drain();
@@ -891,7 +1126,7 @@ describe("native protocol integration without live traffic", () => {
     const f = fixture(),
       original = f.transport.media.bind(f.transport);
     f.transport.media = async (path, body) => {
-      if (path === "/sessions") throw new Error("Provider returned HTTP 503.");
+      if (path === "/sessions") throw new Error("Provider returned HTTP 500.");
       // The media service answers 404 to a close for a session it never created.
       if (path.endsWith("/close"))
         throw new Error("Provider returned HTTP 404.");
@@ -1100,6 +1335,189 @@ describe("native protocol integration without live traffic", () => {
     expect(
       f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
     ).toHaveLength(1);
+  });
+  it("closes a call whose media preparation fails before any dial and frees the line", async () => {
+    const f = fixture(),
+      original = f.transport.media.bind(f.transport);
+    f.transport.media = async (path, body) => {
+      if (path === "/sessions")
+        throw new Error("Media readiness not confirmed.");
+      return original(path, body);
+    };
+    await f.app.drain();
+    const localId = mediaSessionId(f.attention.id);
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toBe(false);
+    expect(f.store.effect(`${f.attention.id}:call`)).toMatchObject({
+      state: "failed",
+      result: { dialSent: false, replayAllowed: false, phase: "media_prepare" },
+    });
+    expect(f.store.get<CallSession>("call", localId)?.state).toBe("ended");
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("failed");
+    expect(f.store.get<{ state: string }>("media", localId)?.state).toBe(
+      "closed",
+    );
+    await f.app.drain();
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toBe(false);
+    const next = f.app.requestAttention(f.agent.token, {
+      taskId: "task",
+      idempotencyKey: "second",
+      reason: "decision",
+      question: "Fixture question",
+    });
+    expect(next.state).toBe("queued");
+  });
+  it("waits out a briefly unavailable media gateway and then dials exactly once", async () => {
+    const f = fixture(),
+      original = f.transport.media.bind(f.transport);
+    let refusals = 2;
+    f.transport.media = async (path, body) => {
+      if (path === "/sessions" && refusals-- > 0)
+        throw new Error("Provider returned HTTP 503.");
+      return original(path, body);
+    };
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("pending");
+    expect(
+      f.store.get<AttentionRequest>("attention", f.attention.id)?.state,
+    ).toBe("queued");
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("pending");
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("done");
+    expect(
+      f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toHaveLength(1);
+  });
+  it("keeps the outcome unknown when the native dial itself fails", async () => {
+    const f = fixture(),
+      original = f.transport.calls.bind(f.transport);
+    f.transport.calls = async (path, body, key) => {
+      if (path === "/api/v1/calls") throw new Error("socket hang up");
+      return original(path, body, key);
+    };
+    await f.app.drain();
+    expect(f.store.effect(`${f.attention.id}:call`)?.state).toBe("unknown");
+    expect(
+      f.store.get<CallSession>("call", mediaSessionId(f.attention.id))?.state,
+    ).toBe("unknown");
+  });
+});
+
+describe("operator reconciliation of a legacy undialed unknown call", () => {
+  const evidence = `sha256:${"a".repeat(64)}`;
+  function legacyUnknown(media: Record<string, unknown> = {}) {
+    const f = fixture(),
+      localId = mediaSessionId(f.attention.id),
+      effectId = `${f.attention.id}:call`;
+    f.store.putEffect({
+      id: effectId,
+      kind: "call",
+      state: "unknown",
+      payload: {
+        requestId: f.attention.id,
+        pairingId: f.attention.pairingId,
+        localCallId: localId,
+      },
+      createdAt: f.attention.createdAt,
+      result: {
+        reason: "External outcome uncertain; reconcile the existing effect ID.",
+      },
+    });
+    f.store.put("attention", {
+      ...f.attention,
+      state: "unknown",
+      deadline: Date.now() - 1,
+    });
+    f.store.put<CallSession>("call", {
+      id: localId,
+      requestId: f.attention.id,
+      pairingId: f.attention.pairingId,
+      state: "unknown",
+      remoteParticipantQualified: false,
+      createdAt: f.attention.createdAt,
+    });
+    f.store.put("media", {
+      id: localId,
+      requestId: f.attention.id,
+      state: "unknown",
+      ...media,
+    });
+    return { ...f, localId, effectId };
+  }
+  it("closes only with exact pre-dial proof, audits once and never dials", async () => {
+    const f = legacyUnknown();
+    const audit = f.app.reconcileUndialedCall({
+      requestId: f.attention.id,
+      evidenceReference: evidence,
+    });
+    expect(audit).toMatchObject({
+      dialSent: false,
+      replayAllowed: false,
+      effectId: f.effectId,
+    });
+    expect(
+      f.app.reconcileUndialedCall({
+        requestId: f.attention.id,
+        evidenceReference: evidence,
+      }),
+    ).toEqual(audit);
+    expect(() =>
+      f.app.reconcileUndialedCall({
+        requestId: f.attention.id,
+        evidenceReference: `sha256:${"b".repeat(64)}`,
+      }),
+    ).toThrow("incomplete");
+    expect(f.store.effect(f.effectId)?.state).toBe("failed");
+    expect(f.store.get<CallSession>("call", f.localId)?.state).toBe("ended");
+    await f.app.drain();
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toBe(false);
+    expect(
+      f.app.requestAttention(f.agent.token, {
+        taskId: "task",
+        idempotencyKey: "again",
+        reason: "decision",
+        question: "Fixture question",
+      }).state,
+    ).toBe("queued");
+  });
+  it.each([
+    ["sealed credentials", { credentials: "sealed" }],
+    ["a provider call ID", { providerCallId: nativeCallId }],
+    ["a non-unknown media state", { state: "dialing" }],
+  ])("refuses when the media record has %s", (_, media) => {
+    const f = legacyUnknown(media);
+    expect(() =>
+      f.app.reconcileUndialedCall({
+        requestId: f.attention.id,
+        evidenceReference: evidence,
+      }),
+    ).toThrow("incomplete");
+    expect(f.store.effect(f.effectId)?.state).toBe("unknown");
+    expect(
+      f.store.event(`undialed-call-reconciliation:${f.effectId}`),
+    ).toBeUndefined();
+  });
+  it("refuses before the attention deadline has passed", () => {
+    const f = legacyUnknown();
+    f.store.put("attention", {
+      ...f.attention,
+      state: "unknown",
+      deadline: Date.now() + 60_000,
+    });
+    expect(() =>
+      f.app.reconcileUndialedCall({
+        requestId: f.attention.id,
+        evidenceReference: evidence,
+      }),
+    ).toThrow("incomplete");
   });
 });
 
@@ -1461,6 +1879,328 @@ describe("conversation read-only call maintenance", () => {
       f.store.get<CallSession>("call", mediaSessionId(f.attention.id))?.state,
     ).toBe("connected");
     expect(f.store.effect(`${f.attention.id}:end`)?.state).toBe("pending");
+    f.store.close();
+  });
+});
+
+function qualificationFixture() {
+  const f = fixture();
+  // Close the ordinary synthetic fixture without dispatch; admission uses an idle line.
+  f.store.put("session", { ...f.agent.session, state: "stopped" });
+  f.store.put("attention", { ...f.attention, state: "canceled" });
+  const call = f.store.all<CallSession>("call")[0]!;
+  f.store.put("call", { ...call, state: "ended" });
+  const effect = f.store.effect(`${f.attention.id}:call`)!;
+  f.store.putEffect({ ...effect, state: "failed" });
+  const q = f.app.requestAudioQualification({
+    pairingId: f.pair.pairing.id,
+    idempotencyKey: "qualification-native-fixture",
+    durationSeconds: 60,
+    readyForOneCall: true,
+  });
+  return { ...f, q };
+}
+describe("execution-disabled qualification native preparation (synthetic providers)", () => {
+  it("prepares inert media without a device gateway or helper readiness; retains provider preflight", async () => {
+    const f = qualificationFixture();
+    const fetcher: typeof fetch = async (url, init) => {
+      if (new URL(String(url)).pathname === "/health")
+        return Response.json({
+          service: "clawdtime-media",
+          ok: true,
+          configured: true,
+          devicesConfigured: false,
+          deviceGatewayConnected: false,
+        });
+      return f.request(url, init);
+    };
+    const transport = new NativeTransport(f.store, config, fetcher);
+    expect((await transport.preflight({ requireIdle: true })).liveReady).toBe(
+      false,
+    );
+    const result = await transport.call(
+      f.q.request,
+      f.pair.pairing,
+      `${f.q.request.id}:call`,
+    );
+    expect(result.accepted).toBe(true);
+    const prepare = f.requests.find(
+      (r) => new URL(r.url).pathname === "/sessions",
+    )!;
+    expect(prepare.body).toMatchObject({
+      audioQualification: true,
+      screen: false,
+      captions: false,
+    });
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname.startsWith("/readiness/")),
+    ).toBe(false);
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname === "/api/v1/lines"),
+    ).toBe(true);
+    expect(
+      f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toHaveLength(1);
+    f.store.close();
+  });
+  it("Stop during preparation closes media before any native dial", async () => {
+    const f = qualificationFixture();
+    const transport = new NativeTransport(
+      f.store,
+      config,
+      async (url, init) => {
+        const response = await f.request(url, init);
+        if (new URL(String(url)).pathname === "/sessions")
+          f.app.stopAudioQualification(f.q.request.id);
+        return response;
+      },
+    );
+    await expect(
+      transport.call(f.q.request, f.pair.pairing, `${f.q.request.id}:call`),
+    ).rejects.toThrow();
+    expect(
+      f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toHaveLength(0);
+    expect(f.requests.some((r) => r.url.endsWith("/close"))).toBe(true);
+    f.store.close();
+  });
+  it("retains unknown media cleanup after Stop when close acknowledgement is lost", async () => {
+    const f = qualificationFixture();
+    const transport = new NativeTransport(
+      f.store,
+      config,
+      async (url, init) => {
+        if (new URL(String(url)).pathname.endsWith("/close"))
+          throw new Error("lost close acknowledgement");
+        const response = await f.request(url, init);
+        if (new URL(String(url)).pathname === "/sessions")
+          f.app.stopAudioQualification(f.q.request.id);
+        return response;
+      },
+    );
+    await expect(
+      transport.call(f.q.request, f.pair.pairing, `${f.q.request.id}:call`),
+    ).rejects.toThrow();
+    expect(
+      f.requests.filter((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toHaveLength(0);
+    expect(
+      f.store.get<any>("media", mediaSessionId(f.q.request.id)).state,
+    ).toBe("unknown");
+    expect(
+      f.app.audioQualificationStatus(f.q.request.id).cleanupConfirmed,
+    ).toBe(false);
+    f.store.close();
+  });
+  it.each(["deadline", "heartbeat", "call", "effect"] as const)(
+    "rejects altered %s authorization before network",
+    async (change) => {
+      const f = qualificationFixture();
+      let request = f.q.request,
+        effectId = `${request.id}:call`;
+      if (change === "deadline") {
+        const marker = {
+          ...request.audioQualification!,
+          expiresAt: f.q.session.createdAt + 300001,
+        };
+        request = {
+          ...request,
+          audioQualification: marker,
+          deadline: marker.expiresAt,
+        };
+        f.store.put("attention", request);
+        f.store.put("session", { ...f.q.session, audioQualification: marker });
+        const call = f.store
+          .all<CallSession>("call")
+          .find((c) => c.requestId === f.q.request.id)!;
+        f.store.put("call", { ...call, audioQualification: marker });
+      }
+      if (change === "heartbeat")
+        f.store.put("session", { ...f.q.session, lastSeenAt: NaN });
+      if (change === "call")
+        f.store.put("attention", { ...request, callId: "different" });
+      if (change === "effect") effectId = "different";
+      await expect(
+        f.transport.call(request, f.pair.pairing, effectId),
+      ).rejects.toThrow();
+      expect(f.requests).toHaveLength(0);
+      f.store.close();
+    },
+  );
+  it("direct message transport cannot speak for the reserved line", async () => {
+    const f = qualificationFixture();
+    await expect(
+      f.transport.message(f.pair.pairing, "do not send", "blocked"),
+    ).rejects.toThrow(/qualification/);
+    expect(f.requests).toHaveLength(0);
+    f.store.close();
+  });
+  it("readiness strips extraneous provider fields and fails closed on invalid data", async () => {
+    const f = qualificationFixture();
+    const transport = new NativeTransport(f.store, config, async () =>
+      Response.json({
+        version: 1,
+        enabled: true,
+        directKeyConfigured: true,
+        websocketQualified: true,
+        secret: "hidden",
+        sdk: { available: true, reason: "qualified_version", secret: "hidden" },
+      }),
+    );
+    const ready = await transport.audioQualificationReadiness();
+    expect(ready).not.toHaveProperty("secret");
+    expect(ready.sdk).not.toHaveProperty("secret");
+    const bad = new NativeTransport(f.store, config, async () =>
+      Response.json({ enabled: true }),
+    );
+    expect(await bad.audioQualificationReadiness()).toMatchObject({
+      enabled: false,
+      directKeyConfigured: false,
+      sdk: { available: false },
+    });
+    f.store.close();
+  });
+});
+
+function documentCallFixture() {
+  const f = fixture();
+  f.store.put("session", { ...f.agent.session, state: "stopped" });
+  f.store.put("attention", { ...f.attention, state: "canceled" });
+  const old = f.store.all<CallSession>("call")[0]!;
+  f.store.put("call", { ...old, state: "ended" });
+  f.store.putEffect({
+    ...f.store.effect(`${f.attention.id}:call`)!,
+    state: "failed",
+  });
+  const expiresAt = Date.now() + 300000;
+  const agent = f.app.registerSession(f.pair.token, {
+    adapter: "codex",
+    adapterVersion: "fixture",
+    externalSessionId: "documents-only",
+    projectRoot: "/fixture",
+    hostId: "host",
+    protocolVersion: 2,
+    conversation: {
+      version: 1,
+      runnerId: "remote-documents",
+      executionSession: "api_managed",
+    },
+    documentAccess: { version: 1, readOnly: true, expiresAt },
+    capabilities: { polling: true, cooperativePause: true },
+  });
+  const grant = {
+    id: `docgrant_${hash(agent.session.id).slice(0, 40)}`,
+    sessionId: agent.session.id,
+    pairingId: f.pair.pairing.id,
+    memberId: f.pair.pairing.memberId,
+    projectRoot: agent.session.projectRoot,
+    hostId: agent.session.hostId,
+    expiresAt,
+    state: "active" as const,
+  };
+  f.store.put("document_root_grant", grant);
+  const attention = f.app.requestAttention(agent.token, {
+    taskId: "preview",
+    idempotencyKey: "documents-only",
+    reason: "review",
+    question: "Synthetic document preview",
+  });
+  return { ...f, documentAgent: agent, documentAttention: attention, grant };
+}
+describe("read-only document call preparation", () => {
+  it("uses only immutable document media under exact scoped grant without helper or gateway", async () => {
+    const f = documentCallFixture();
+    const transport = new NativeTransport(f.store, config, async (url, init) =>
+      new URL(String(url)).pathname === "/health"
+        ? Response.json({
+            service: "clawdtime-media",
+            ok: true,
+            configured: true,
+            devicesConfigured: false,
+            deviceGatewayConnected: false,
+          })
+        : f.request(url, init),
+    );
+    await transport.call(
+      f.documentAttention,
+      f.pair.pairing,
+      `${f.documentAttention.id}:call`,
+    );
+    expect(
+      f.requests.find((r) => new URL(r.url).pathname === "/sessions")?.body,
+    ).toMatchObject({
+      documentOnly: true,
+      documentSessionId: f.documentAgent.session.id,
+      screen: false,
+      captions: true,
+    });
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname.startsWith("/readiness/")),
+    ).toBe(false);
+    f.store.close();
+  });
+  it("revocation during media preparation closes media without dialing", async () => {
+    const f = documentCallFixture();
+    const transport = new NativeTransport(
+      f.store,
+      config,
+      async (url, init) => {
+        const response = await f.request(url, init);
+        if (new URL(String(url)).pathname === "/sessions")
+          f.store.put("document_root_grant", { ...f.grant, state: "revoked" });
+        return response;
+      },
+    );
+    await expect(
+      transport.call(
+        f.documentAttention,
+        f.pair.pairing,
+        `${f.documentAttention.id}:call`,
+      ),
+    ).rejects.toThrow();
+    expect(
+      f.requests.some((r) => new URL(r.url).pathname === "/api/v1/calls"),
+    ).toBe(false);
+    expect(f.requests.some((r) => r.url.endsWith("/close"))).toBe(true);
+    f.store.close();
+  });
+  it.each(["memberId", "projectRoot", "hostId", "expiresAt"] as const)(
+    "refuses mismatched document grant %s before network",
+    async (field) => {
+      const f = documentCallFixture();
+      f.store.put("document_root_grant", {
+        ...f.grant,
+        [field]: field === "expiresAt" ? 1 : "different",
+      });
+      await expect(
+        f.transport.call(
+          f.documentAttention,
+          f.pair.pairing,
+          `${f.documentAttention.id}:call`,
+        ),
+      ).rejects.toThrow("document grant");
+      expect(f.requests).toHaveLength(0);
+      f.store.close();
+    },
+  );
+});
+
+describe("same-chat streaming voice dial readiness", () => {
+  it("refuses missing dedicated voice configuration before media preparation or dialing", async () => {
+    const f = fixture();
+    f.store.put("session", {
+      ...f.agent.session,
+      voiceFrontend: { version: 1, provider: "elevenlabs" },
+    });
+    await expect(
+      f.transport.call(f.attention, f.pair.pairing, `${f.attention.id}:call`),
+    ).rejects.toThrow("no call was placed");
+    expect(
+      f.requests.some(
+        (r) => new URL(r.url).pathname === "/voice/elevenlabs/readiness",
+      ),
+    ).toBe(true);
+    expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(0);
     f.store.close();
   });
 });
