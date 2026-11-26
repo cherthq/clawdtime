@@ -72,6 +72,7 @@ import {
   check,
   clean,
   focusedSecure,
+  pressedElements,
   pressesElement,
   quietCall,
   readsBeforeCall,
@@ -134,7 +135,13 @@ import {
   type CellMask,
   type FocusRect,
 } from "./visual-diff.js";
-import { BrowserClosed, BrowserInputUnknown, handErrors } from "./ports.js";
+import {
+  BrowserClosed,
+  BrowserInputUnknown,
+  handErrors,
+  rereadLimit,
+  type Reread,
+} from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import { directAddress, webAddress } from "./navigation.js";
 import { directOpening } from "./planner.js";
@@ -317,6 +324,37 @@ const postActionFollowUpMs = 180;
 const fastReverifyMaxAgeMs = 8_000;
 /** The pause before one more quick look, when only small regions away from the target changed. */
 const noiseLookMs = 150;
+/** How far an element read again may lie from its place in the planner's look, in points. */
+const rereadTolerance = 2;
+/**
+ * True when each element that the quick picture read again (`targets`) is as
+ * the planner's look gave it: the same role, name, value, state and place.
+ * One that the hands did not find, or that changed in any of these, is
+ * false, and the worker then walks the whole tree.
+ */
+function readAgain(
+  targets: readonly Reread[],
+  before: Observation,
+  seen: Observation,
+) {
+  return targets.every((target) => {
+    const was = before.elements.find((item) => item.id === target.id);
+    const now = seen.elements.find((item) => item.id === target.id);
+    return (
+      was !== undefined &&
+      now !== undefined &&
+      now.role === was.role &&
+      now.title === was.title &&
+      now.value === was.value &&
+      now.secure === was.secure &&
+      now.enabled === was.enabled &&
+      Math.abs(now.x - was.x) <= rereadTolerance &&
+      Math.abs(now.y - was.y) <= rereadTolerance &&
+      Math.abs(now.w - was.w) <= rereadTolerance &&
+      Math.abs(now.h - was.h) <= rereadTolerance
+    );
+  });
+}
 /** The margin around a point target, in points. In the menu bar a point target keeps its own small place. */
 const pointPad = 24;
 const menuBarPointPad = 4;
@@ -2337,12 +2375,40 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.noise = { place: { ...place, elements: [] }, cells };
   }
   /**
+   * The elements that a press reads again with the quick picture, in the
+   * same command, in place of a walk of the tree: those that it presses
+   * (`pressedElements`). Undefined when it must walk the tree: the hands do
+   * not read elements one by one, the press holds a text that only the
+   * picture shows, or it holds more than one look reads again.
+   */
+  private rereadOf(action: Action, before: Observation): Reread[] | undefined {
+    if (this.hands.readsTargets?.() !== true) return undefined;
+    const pressed = pressedElements(action, before);
+    if (
+      !pressed.length ||
+      pressed.length > rereadLimit ||
+      pressed.some((item) => item.role === "OCRText")
+    )
+      return undefined;
+    return pressed.map(({ id, role, x, y, w, h }) => ({
+      id,
+      role,
+      x,
+      y,
+      w,
+      h,
+    }));
+  }
+  /**
    * Fast pre-action visual re-verify: when eligible (non-typing/non-key, did
    * not pause for user approval, observation is <= 8s old, no secure elements
-   * on screen, no element under the press (`pressesElement`: its name and
-   * role are read again in the walk of the tree), and prior look carried a
-   * real JPEG), take an image-only observe
-   * first and skip the AX walk only when the surface is the same, the
+   * on screen, and prior look carried a real JPEG), take an image-only observe
+   * first. A press on an element (`pressesElement`) also reads its name and
+   * role again: a label can change in place with no change that the picture
+   * shows. Hands that read elements one by one read those of the press
+   * (`rereadOf`) in the same command, and the quick picture counts only when
+   * each of them is as the planner saw it. With other hands, a press walks
+   * the whole tree. Skip the AX walk only when the surface is the same, the
    * target's own region (zero cursor mask) is unchanged, and fewer than
    * `DIFF_MIN_CELLS` other cells changed outside the menu bar status area
    * and the regions that kept changing by themselves. When only a few cells
@@ -2359,6 +2425,10 @@ export class ComputerWorker implements DesktopExecutorPort {
     command: HandCommand,
     approved: boolean,
   ): Promise<Observation | null | "over"> {
+    const targets =
+      before !== null && pressesElement(action, before)
+        ? (this.rereadOf(action, before) ?? null)
+        : undefined;
     const canFastReverify =
       this.fastReverify &&
       !approved &&
@@ -2368,13 +2438,18 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.observedAt !== undefined &&
       this.now() - run.observedAt <= fastReverifyMaxAgeMs &&
       !before.elements.some((el) => el.secure) &&
-      !pressesElement(action, before) &&
+      targets !== null &&
       luminanceGridOf(before) !== null;
     if (canFastReverify) {
       const quick = async (): Promise<Observation | null | "over" | "held"> => {
         const handed = await this.hand(
           run,
-          { kind: "observe", image: true, elements: false },
+          {
+            kind: "observe",
+            image: true,
+            elements: false,
+            ...(targets ? { targets } : {}),
+          },
           "Check the screen",
         );
         if (handed.over) return "over";
@@ -2385,7 +2460,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         return seen &&
           seen.at >= before.at &&
           seen.at - before.at <= fastReverifyMaxAgeMs &&
-          sameSurface(before, seen)
+          sameSurface(before, seen) &&
+          (!targets || readAgain(targets, before, seen))
           ? seen
           : null;
       };

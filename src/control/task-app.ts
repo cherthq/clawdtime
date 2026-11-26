@@ -40,6 +40,8 @@ import { screenShownHeader } from "../../connectors/computer/presentation.js";
 export interface ComputerPort {
   /** The command that waits for the hands, when its number is after `after`. */
   next(after: number): unknown;
+  /** What more the panel can read, from the reads header of each of its reads. */
+  reads?(header: string | null | undefined): void;
   /** The same, held until a command waits or what runs changes, at most `ms`. */
   waitNext?(after: number, ms: number, signal?: AbortSignal): Promise<unknown>;
   /** The result of one command. False when no command waits for it. `cost` is a header of numbers only. */
@@ -391,6 +393,8 @@ export function createTaskApp(
       app.get("/desktop/hands/next", async (c) => {
         desktop.authorizePanel(credential(c));
         const after = handsAfterSchema.parse(c.req.query("after") ?? "0");
+        // What more this panel can read, said again with each read.
+        computer.reads?.(c.req.header("x-clawdtime-hands-reads"));
         const wait = c.req.query("wait");
         const ms = wait === undefined ? undefined : handsWaitSchema.parse(wait);
         // A held read: answered as soon as a command waits or what runs

@@ -64,6 +64,11 @@ export interface ComputerPort {
   /** `GET /desktop/hands/next`: the command that waits, and what runs. */
   next(after: number): HandsNext;
   /**
+   * The reads header of that same read: what more the panel can read
+   * (`handsReadsHeader`). Absent where no worker runs.
+   */
+  reads?(header: string | null | undefined): void;
+  /**
    * `GET /desktop/hands/next?wait=MS`: the same answer, held until a command
    * waits, what runs changes, or the time passes. Absent where no worker runs.
    */
@@ -144,6 +149,7 @@ export function computerPort(
     });
   return {
     next,
+    reads: (header) => hands.offer(header),
     waitNext: async (after, ms, signal) => {
       // What runs now. A change of it answers the held read too.
       const seen = JSON.stringify(worker.run());

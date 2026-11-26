@@ -94,15 +94,22 @@ public enum ElementCleaner {
   /// zero. With more than the contract holds, those of the best `rank` are kept, and
   /// they stay in the order of the tree.
   public static func clean(_ raw: [RawElement], within bounds: CGRect? = nil) -> [ScreenElement] {
-    var kept = raw.compactMap { element($0, within: bounds) }
+    cleanIndexed(raw, within: bounds).elements
+  }
+  /// The same elements as `clean`, and for each one the place in `raw` that it came from, so that the
+  /// hands can read that element of the tree again by its number.
+  public static func cleanIndexed(_ raw: [RawElement], within bounds: CGRect? = nil) -> (elements: [ScreenElement], sources: [Int]) {
+    var kept = raw.indices.compactMap { index in element(raw[index], within: bounds).map { (item: $0, source: index) } }
     if kept.count > maxElements {
       // A stable order: the rank first, then the place in the tree.
-      let chosen = Set(kept.indices.sorted { (rank(kept[$0]), $0) < (rank(kept[$1]), $1) }.prefix(maxElements))
+      let chosen = Set(kept.indices.sorted { (rank(kept[$0].item), $0) < (rank(kept[$1].item), $1) }.prefix(maxElements))
       kept = kept.indices.filter(chosen.contains).map { kept[$0] }
     }
-    return kept.enumerated().map { index, item in
-      ScreenElement(id: index, role: item.role, title: item.title, value: item.value, x: item.x, y: item.y, w: item.w, h: item.h,
-                    enabled: item.enabled, focused: item.focused, secure: item.secure)
+    let elements = kept.enumerated().map { index, pair in
+      let item = pair.item
+      return ScreenElement(id: index, role: item.role, title: item.title, value: item.value, x: item.x, y: item.y, w: item.w, h: item.h,
+                           enabled: item.enabled, focused: item.focused, secure: item.secure)
     }
+    return (elements, kept.map(\.source))
   }
 }

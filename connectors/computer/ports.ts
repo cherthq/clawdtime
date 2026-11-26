@@ -69,6 +69,24 @@ export const observationSchema = z
   .strict();
 export type Observation = z.infer<typeof observationSchema>;
 
+/**
+ * One element of the hands' last look whose name and role are read again
+ * just before a press: its number in that look, its role and its place there.
+ */
+export const rereadSchema = z
+  .object({
+    id: z.number().int().nonnegative(),
+    role: text(60).min(1),
+    x: finite,
+    y: finite,
+    w: finite.positive(),
+    h: finite.positive(),
+  })
+  .strict();
+export type Reread = z.infer<typeof rereadSchema>;
+/** The most elements that one look reads again. */
+export const rereadLimit = 8;
+
 /** One command for the hands. */
 export const handCommandSchema = z.discriminatedUnion("kind", [
   z
@@ -76,6 +94,13 @@ export const handCommandSchema = z.discriminatedUnion("kind", [
       kind: z.literal("observe"),
       image: z.boolean(),
       elements: z.boolean(),
+      /**
+       * Read only these elements of the last look again, one by one, with no
+       * walk of the tree: the look then gives only them, each with its number
+       * from that look, and leaves out one that it cannot find. Only for
+       * hands that say they can (`Hands.readsTargets`).
+       */
+      targets: z.array(rereadSchema).min(1).max(rereadLimit).optional(),
     })
     .strict(),
   z.object({ kind: z.literal("move"), x: finite, y: finite }).strict(),
@@ -250,6 +275,12 @@ export interface Hands {
    * do not answer in time; a command that could not run resolves with ok false.
    */
   run(command: HandCommand, label: string): Promise<HandResult>;
+  /**
+   * True when these hands read elements of their last look again one by one
+   * (`targets` of an observe command). Hands that leave it out never get
+   * such a look.
+   */
+  readsTargets?(): boolean;
 }
 
 /** One thing on a web page that a person could click or fill. */

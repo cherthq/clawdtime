@@ -250,6 +250,7 @@ final class PanelTransportTests: XCTestCase {
     XCTAssertEqual(read.run, .init(active: true, goal: "Save the note", step: 3, state: "running"))
     XCTAssertTrue(server.requests()[0].hasPrefix("GET /desktop/hands/next?after=7 "))
     XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    XCTAssertTrue(server.requests()[0].lowercased().contains("x-clawdtime-hands-reads: targets\r\n"))
     XCTAssertFalse(server.requests()[0].contains("Origin:"))
 
     try await client.handsResult(.done(8, interrupted: true))
@@ -292,6 +293,8 @@ final class PanelTransportTests: XCTestCase {
     let plain = try await client.handsNext(after: 8, wait: HandsPace.hold)
     XCTAssertFalse(plain.held)
     XCTAssertTrue(server.requests()[0].contains("Authorization: Bearer " + String(repeating: "synthetic", count: 8)))
+    // Each read says that these hands read the elements of their last look again one by one.
+    for read in server.requests().prefix(2) { XCTAssertTrue(read.lowercased().contains("x-clawdtime-hands-reads: targets\r\n"), read) }
     // What the command cost goes in its own header. The body is the same as with no cost.
     try await client.handsResult(.done(9, interrupted: true), cost: HandsCost(captureMs: 93, encodeMs: 21, imageBytes: 180_000, walkMs: 412, glideMs: 360))
     let posted = server.requests()[2]

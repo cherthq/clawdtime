@@ -352,8 +352,10 @@ import TaskPanelCore
     // A locked screen, or another person's session in front: the hands do nothing.
     guard sessionOpen else { return .failure(.refused) }
     switch command {
-    case .observe(let image, let elements):
+    case .observe(let image, let elements, let reread):
       shield(true)
+      observer.reread = reread
+      defer { observer.reread = [] }
       return await desktop.observe(observer: observer, image: image, elements: elements, accessibility: accessibility, pointer: input.pointer).map { Optional($0) }
     case .zoom(let x, let y, let w, let h, let width, let height):
       // A picture only: no app gets input, the Accessibility tree is not read, and the look of the hands stays.

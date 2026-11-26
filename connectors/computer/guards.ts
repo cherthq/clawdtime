@@ -2664,6 +2664,38 @@ export function pressesElement(action: Action, observation: Observation) {
   }
 }
 
+/**
+ * The elements of the look that the input presses, whose names and roles
+ * are read again just before it goes: for a click on an element or at a
+ * point inside one, that element and each larger one that holds it up to
+ * its control, as the checks judge the click (`pressedFrom`); for a drag,
+ * those of each end. Empty when the input presses no element of the look.
+ */
+export function pressedElements(
+  action: Action,
+  observation: Observation,
+): ScreenElement[] {
+  const from = (found: ScreenElement | null | undefined) =>
+    found ? pressedFrom(observation, found) : [];
+  const at = (x: number, y: number) => {
+    const point = screenPoint(observation, x, y);
+    return typeof point === "string" ? [] : from(under(observation, point));
+  };
+  const of = (id: number) =>
+    from(observation.elements.find((item) => item.id === id));
+  const row =
+    action.kind === "click_element"
+      ? of(action.element)
+      : action.kind === "click_at"
+        ? at(action.x, action.y)
+        : action.kind === "drag"
+          ? [action.from, action.to].flatMap((end) =>
+              "element" in end ? of(end.element) : at(end.x, end.y),
+            )
+          : [];
+  return [...new Set(row)];
+}
+
 /** The tab of a newer list that is the same as this one: the same address and title. Null when it is gone or two could be it. */
 export function sameTab(was: BrowserTab, tabs: BrowserTab[] | undefined) {
   const alike = (tabs ?? []).filter(

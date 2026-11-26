@@ -388,4 +388,47 @@ final class HandsContractTests: XCTestCase {
     XCTAssertNil(HandsZoom.region(x: .nan, y: 100, w: 240, h: 150, display: display))
     XCTAssertNil(HandsZoom.region(x: 100, y: 100, w: .infinity, h: 150, display: display))
   }
+
+  func testALookThatReadsElementsAgainCarriesTheirNumbersRolesAndPlaces() throws {
+    let json = #"{"kind":"observe","image":true,"elements":false,"targets":[{"id":3,"role":"AXButton","x":10,"y":20.5,"w":80,"h":24}]}"#
+    let target = HandsReread(id: 3, role: "AXButton", x: 10, y: 20.5, w: 80, h: 24)
+    let decoded = try command(json)
+    XCTAssertEqual(decoded, .observe(image: true, elements: false, reread: [target]))
+    XCTAssertEqual(try sorted(decoded), #"{"elements":false,"image":true,"kind":"observe","targets":[{"h":24,"id":3,"role":"AXButton","w":80,"x":10,"y":20.5}]}"#)
+    // A look with none writes no key: a service of an older build reads it as before.
+    XCTAssertEqual(try sorted(HandCommand.observe(image: true, elements: false)), #"{"elements":false,"image":true,"kind":"observe"}"#)
+    // It reads the tree, so it needs Accessibility, also with no walk.
+    XCTAssertEqual(decoded.missingRight(accessibility: false, screenRecording: true), .noAccessibility)
+    let element = #"{"id":3,"role":"AXButton","x":10,"y":20,"w":80,"h":24}"#
+    for refused in [
+      #"{"kind":"observe","image":true,"elements":false,"targets":[]}"#,
+      #"{"kind":"observe","image":true,"elements":false,"targets":[\#((0..<9).map { _ in element }.joined(separator: ","))]}"#,
+      #"{"kind":"observe","image":true,"elements":false,"targets":[{"id":-1,"role":"AXButton","x":10,"y":20,"w":80,"h":24}]}"#,
+      #"{"kind":"observe","image":true,"elements":false,"targets":[{"id":3,"role":"","x":10,"y":20,"w":80,"h":24}]}"#,
+      #"{"kind":"observe","image":true,"elements":false,"targets":[{"id":3,"role":"AXButton","x":10,"y":20,"w":0,"h":24}]}"#,
+      #"{"kind":"observe","image":true,"elements":false,"targets":[{"id":3,"role":"AXButton","x":10,"y":20,"w":80}]}"#,
+      #"{"kind":"observe","image":true,"elements":false,"targets":[{"id":3,"role":"AXButton","title":"Save","x":10,"y":20,"w":80,"h":24}]}"#,
+    ] { XCTAssertThrowsError(try command(refused), refused) }
+    XCTAssertNoThrow(try command(#"{"kind":"observe","image":true,"elements":false,"targets":[\#((0..<8).map { _ in element }.joined(separator: ","))]}"#))
+  }
+
+  func testAnElementIsReadAgainOnlyWhereTheLastLookHadItWithTheSameRole() {
+    let target = HandsReread(id: 3, role: "AXButton", x: 100, y: 40, w: 64, h: 24)
+    func seen(_ id: Int, _ role: String, x: Double = 100, w: Double = 64) -> ScreenElement {
+      ScreenElement(id: id, role: role, title: "Cancel", x: x, y: 40, w: w, h: 24, enabled: true, focused: false, secure: false)
+    }
+    // The hands' last look is the planner's: the same number, role and place.
+    XCTAssertTrue(target.names(seen(3, "AXButton")))
+    XCTAssertTrue(target.names(seen(3, "AXButton", x: 100.9)))
+    // Another number, another role or another place is another look, or another element.
+    XCTAssertFalse(target.names(seen(4, "AXButton")))
+    XCTAssertFalse(target.names(seen(3, "AXLink")))
+    XCTAssertFalse(target.names(seen(3, "AXButton", x: 102)))
+    XCTAssertFalse(target.names(seen(3, "AXButton", w: 70)))
+    // Found again by its place: the first of the chain from the element under the middle up, with the role, at the place.
+    XCTAssertEqual(target.middle, CGPoint(x: 132, y: 52))
+    XCTAssertEqual(target.pick([seen(9, "AXStaticText", x: 110, w: 40), nil, seen(9, "AXButton"), seen(9, "AXButton")]), 2)
+    XCTAssertNil(target.pick([seen(9, "AXStaticText"), seen(9, "AXButton", x: 90), seen(9, "AXGroup")]))
+    XCTAssertNil(target.pick([]))
+  }
 }

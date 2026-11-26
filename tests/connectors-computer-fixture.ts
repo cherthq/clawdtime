@@ -98,6 +98,34 @@ export class FakeHands implements Hands {
   }
 }
 
+/**
+ * Hands that read elements of their last look again one by one, as the
+ * panel does (`targets` of an observe command): such a look gives only the
+ * elements of the next screen with those numbers. `found` can leave one out,
+ * as the panel does when it cannot find it.
+ */
+export class RereadHands extends FakeHands {
+  found: (element: ScreenElement) => boolean = () => true;
+  readsTargets() {
+    return true;
+  }
+  override async run(command: HandCommand, label: string): Promise<HandResult> {
+    const result = await super.run(command, label);
+    if (command.kind !== "observe" || !command.targets || !result.observation)
+      return result;
+    const wanted = new Set(command.targets.map((target) => target.id));
+    return {
+      ...result,
+      observation: {
+        ...result.observation,
+        elements: result.observation.elements.filter(
+          (item) => wanted.has(item.id) && this.found(item),
+        ),
+      },
+    };
+  }
+}
+
 /** A planner that reads its actions from a list. After the list it gives up. */
 export class ScriptedPlanner implements Planner {
   readonly inputs: Parameters<Planner["next"]>[0][] = [];

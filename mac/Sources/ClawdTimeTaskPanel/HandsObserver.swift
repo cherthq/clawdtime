@@ -31,6 +31,12 @@ struct HandsDisplay {
   /// What the looks of the command that runs cost, for the timing of its step. The controller sets it
   /// back at the start of each command.
   var spent = HandsCost()
+  /// The elements that the look of the command that runs reads again (`HandsReread`). The controller sets
+  /// them for one observe command and clears them after it.
+  var reread: [HandsReread] = []
+  /// The elements of the last walk of the tree, with the element of the tree behind each number, so that
+  /// one of them can be read again with no walk. Only the newest walk counts.
+  private var memory: HandsTree.Memory?
 
   /// The app in front. ClawdTime is never its own subject: `OwnWindows.subject` holds the rule.
   private var frontApp: NSRunningApplication? {
@@ -52,26 +58,36 @@ struct HandsDisplay {
     let app = appOverride ?? frontApp
     let pid = accessibility ? app?.processIdentifier : nil
     let bounds = CGRect(x: 0, y: 0, width: map.width, height: map.height)
-    async let taken: Picture? = image ? capture(display, keepImage: elements) : nil
-    var window = "", found: [ScreenElement] = [], rawElements: [RawElement] = [], readFrame = bounds, readFrames: [CGRect] = [bounds]
+    // A look that reads elements again walks no tree, and its elements are those it read again.
+    let targets = reread, walks = elements && targets.isEmpty
+    async let taken: Picture? = image ? capture(display, keepImage: walks) : nil
+    var window = "", found: [ScreenElement] = [], sources: [Int] = [], rawElements: [RawElement] = [], nodes: [AXUIElement] = [],
+      readFrame = bounds, readFrames: [CGRect] = [bounds]
     if let pid {
       let began = Date()
+      // The last walk counts only for the app in front now.
+      let kept = memory?.pid == pid ? memory : nil
       // The tree is read off the main thread: an app that is slow to answer does not freeze the mascot.
-      let read = await Task.detached(priority: .userInitiated) {
-        HandsTree.read(pid: pid, elements: elements, screen: bounds, coverFrames: coverFrames)
+      let read = await Task.detached(priority: .userInitiated) { () -> (HandsTree.Reading, [ScreenElement]) in
+        let read = HandsTree.read(pid: pid, elements: walks, screen: bounds, coverFrames: coverFrames)
+        let again = targets.isEmpty ? [] : HandsTree.reread(targets, pid: pid, memory: kept, within: kept?.bounds ?? read.frame)
+        return (read, again)
       }.value
       spent.add(HandsCost(walkMs: HandsCost.milliseconds(Date().timeIntervalSince(began))))
-      window = read.window
-      rawElements = read.elements
-      readFrame = read.frame
-      readFrames = read.frames
-      found = ElementCleaner.clean(rawElements, within: readFrame)
+      window = read.0.window
+      rawElements = read.0.elements
+      nodes = read.0.nodes
+      readFrame = read.0.frame
+      readFrames = read.0.frames
+      if targets.isEmpty { (found, sources) = ElementCleaner.cleanIndexed(rawElements, within: readFrame) }
+      else { found = read.1 }
     }
+    if walks { memory = nil }
     let picture = await taken
     // A picture that was asked for and could not be taken fails the look.
     if image && picture == nil { return .failure(.failed) }
     if let picture { spent.add(HandsCost(captureMs: picture.captureMs, encodeMs: picture.encodeMs, imageBytes: picture.bytes)) }
-    if elements, image, let cgImage = picture?.cgImage, ScreenOCR.shouldRun(axElements: found) {
+    if walks, image, let cgImage = picture?.cgImage, ScreenOCR.shouldRun(axElements: found) {
       let ocrBegan = Date()
       let existing = found
       let ocrRects = readFrames
@@ -80,8 +96,15 @@ struct HandsDisplay {
       }.value
       spent.add(HandsCost(ocrMs: HandsCost.milliseconds(Date().timeIntervalSince(ocrBegan))))
       if !ocrRaw.isEmpty {
-        found = ElementCleaner.clean(rawElements + ocrRaw, within: readFrame)
+        (found, sources) = ElementCleaner.cleanIndexed(rawElements + ocrRaw, within: readFrame)
       }
+    }
+    if walks, let pid {
+      // Each number of this look with the element of the tree that it came from. A text that only the picture
+      // shows comes after the elements of the tree, and has none: it is never read again.
+      var behind: [Int: AXUIElement] = [:]
+      for (item, source) in zip(found, sources) where source < nodes.count { behind[item.id] = nodes[source] }
+      memory = HandsTree.Memory(pid: pid, elements: found, nodes: behind, bounds: readFrame)
     }
     let rawName = app?.localizedName ?? ""
     let appName = !rawName.isEmpty ? rawName : (appOverride != nil ? (app?.bundleIdentifier ?? "") : "")
@@ -150,13 +173,23 @@ struct HandsDisplay {
 /// Reads the Accessibility tree of one app's front window. Plain functions with
 /// no state, so they run on any thread.
 enum HandsTree {
-  struct Reading: Sendable {
+  struct Reading: @unchecked Sendable {
     var window = ""
     /// The bounding union of on-screen window frames read. Elements outside it are left out.
     var frame: CGRect
     /// Separate on-screen window rectangles (front window plus any matched popover/dropdown covers).
     var frames: [CGRect] = []
     var elements: [RawElement] = []
+    /// The element of the tree behind each of `elements`, in the same order.
+    var nodes: [AXUIElement] = []
+  }
+  /// The last walk of one app's tree: its elements as the look gave them, the element of the tree behind
+  /// each number, and the part of the screen that the elements were cut to.
+  struct Memory: @unchecked Sendable {
+    let pid: pid_t
+    let elements: [ScreenElement]
+    let nodes: [Int: AXUIElement]
+    let bounds: CGRect
   }
   private static let attributes = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
     kAXPlaceholderValueAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXEnabledAttribute, kAXFocusedAttribute,
@@ -183,21 +216,18 @@ enum HandsTree {
     }
     guard elements else { return reading }
     let deadline = ProcessInfo.processInfo.systemUptime + WalkLimits.look.seconds
+    var nodes: [AXUIElement] = []
     func visitNode(_ node: AXUIElement, visible: CGRect) -> WalkVisit<AXUIElement> {
       let values = many(node, attributes)
-      let role = text(values[0]) ?? "", subrole = text(values[1])
+      let role = text(values[0]) ?? ""
       var frame: CGRect?
       if let origin = point(values[6]), let size = size(values[7]) { frame = CGRect(origin: origin, size: size) }
       var raw: RawElement?
       // An element that does not show is not read further: its label is one more question to the app.
       if let frame, !role.isEmpty, !AccessibilityWalk.offScreen(frame, visible: visible) {
-        // A password field is never read: what it holds stops here.
-        let secure = ElementCleaner.isSecure(role: role, subrole: subrole)
-        raw = RawElement(role: role, subrole: subrole,
-          label: element(values[10]).flatMap { text(one($0, kAXTitleAttribute)) ?? text(one($0, kAXValueAttribute)) },
-          title: text(values[2]), description: text(values[3]), placeholder: text(values[5]),
-          value: secure ? nil : text(values[4]), frame: frame,
-          enabled: flag(values[8]) ?? true, focused: flag(values[9]) ?? false)
+        raw = rawElement(values, role: role, frame: frame)
+        // The walk keeps exactly the elements that say where they are and show: the same order as its list.
+        nodes.append(node)
       }
       let children = AccessibilityWalk.children(role: role, all: list(values[11]), visibleChildren: list(values[12]),
                                                 visibleRows: list(values[13]), header: element(values[14]))
@@ -237,7 +267,53 @@ enum HandsTree {
         totalVisited += extra.visited
       }
     }
+    // Both walks added one element of the tree for each element that they kept, in the same order.
+    reading.nodes = nodes.count == reading.elements.count ? nodes : []
     return reading
+  }
+
+  /// One element as the walk reads it, from the answers to `attributes`. A password field is never read:
+  /// what it holds stops here.
+  private static func rawElement(_ values: [AnyObject?], role: String, frame: CGRect) -> RawElement {
+    let subrole = text(values[1])
+    let secure = ElementCleaner.isSecure(role: role, subrole: subrole)
+    return RawElement(role: role, subrole: subrole,
+      label: element(values[10]).flatMap { text(one($0, kAXTitleAttribute)) ?? text(one($0, kAXValueAttribute)) },
+      title: text(values[2]), description: text(values[3]), placeholder: text(values[5]),
+      value: secure ? nil : text(values[4]), frame: frame,
+      enabled: flag(values[8]) ?? true, focused: flag(values[9]) ?? false)
+  }
+
+  /// One element of the tree as a look gives it, with the number `id`, cut to `bounds`. Nil when it says
+  /// nothing now, or no longer answers.
+  private static func screenElement(_ node: AXUIElement, id: Int, within bounds: CGRect) -> ScreenElement? {
+    let values = many(node, attributes)
+    guard let role = text(values[0]), !role.isEmpty, let origin = point(values[6]), let size = size(values[7]) else { return nil }
+    return ElementCleaner.element(rawElement(values, role: role, frame: CGRect(origin: origin, size: size)), id: id, within: bounds)
+  }
+
+  /// The elements `targets` of the last look, read again one by one, with no walk: each by the element of
+  /// the tree behind its number when `memory` is that look, else the element of the same role at the same
+  /// place, from the one under the middle of the place up through those that hold it. Each keeps its number.
+  /// One that cannot be found is left out, and the worker then walks the whole tree.
+  static func reread(_ targets: [HandsReread], pid: pid_t, memory: Memory?, within bounds: CGRect) -> [ScreenElement] {
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, 0.3)
+    return targets.prefix(HandsReread.limit).compactMap { target in
+      if let memory, memory.pid == pid, let was = memory.elements.first(where: { $0.id == target.id }), target.names(was),
+        let node = memory.nodes[target.id], let seen = screenElement(node, id: target.id, within: bounds) { return seen }
+      var found: AXUIElement?
+      let middle = target.middle
+      guard middle.x.isFinite, middle.y.isFinite,
+        AXUIElementCopyElementAtPosition(app, Float(middle.x), Float(middle.y), &found) == .success, var node = found else { return nil }
+      var chain: [ScreenElement?] = []
+      for _ in 0..<8 {
+        chain.append(screenElement(node, id: target.id, within: bounds))
+        guard let parent = element(one(node, kAXParentAttribute)) else { break }
+        node = parent
+      }
+      return target.pick(chain).flatMap { chain[$0] }
+    }
   }
 
   /// The frame and password-field state of the element that has the keyboard, in one Accessibility read.

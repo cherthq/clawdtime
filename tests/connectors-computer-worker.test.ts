@@ -17,6 +17,7 @@ import {
   type HandCommand,
   type Observation,
   type Planner,
+  type ScreenElement,
 } from "../connectors/computer/ports.js";
 import {
   ComputerWorker,
@@ -31,6 +32,7 @@ import {
   observation,
   page,
   pageElement,
+  RereadHands,
   ScriptedPlanner,
   terminalApp,
   until,
@@ -64,13 +66,17 @@ function setup(
     postActionSettleMs?: number;
     unchangedDone?: boolean;
     realClock?: boolean;
+    /** Hands that read elements of their last look again one by one. */
+    reread?: boolean;
   } = {},
 ) {
   const home =
     options.home ?? mkdtempSync(join(tmpdir(), "clawdtime-computer-worker-"));
   if (!options.home) roots.push(home);
   const clock = { now: 1_000_000 };
-  const hands = new FakeHands(options.screens ?? [save]);
+  const hands = options.reread
+    ? new RereadHands(options.screens ?? [save])
+    : new FakeHands(options.screens ?? [save]);
   const planner = new ScriptedPlanner(script);
   const said: string[] = [];
   const journal = new ComputerJournal(home, () => clock.now);
@@ -7147,6 +7153,157 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
         /target is no longer there\. Nothing was sent\./,
       );
     }
+  });
+
+  describe("hands that read the pressed elements again one by one", () => {
+    const cancel = element(1, { title: "Cancel" });
+    const target = { id: 1, role: "AXButton", x: 110, y: 200, w: 80, h: 24 };
+    const quickRead = {
+      kind: "observe",
+      image: true,
+      elements: false,
+      targets: [target],
+    };
+    const fullLook = { kind: "observe", image: false, elements: true };
+    // Inside element 1, as a point of the last image of 320 by 180.
+    const presses: Action[] = [
+      click,
+      { kind: "click_at", x: 33, y: 42 },
+      { kind: "drag", from: { element: 1 }, to: { x: 200, y: 150 } },
+    ];
+
+    it("read them with the quick picture in one command, walk no tree, and send the press when each is as the planner saw it", async () => {
+      for (const action of presses) {
+        const plannerLook = realObs(frameBase, [cancel]);
+        const { worker, hands } = setup([action, done], {
+          reread: true,
+          screens: [plannerLook, realObs(frameBase, [cancel]), plannerLook],
+        });
+        await worker.submit("reread_same", "Close the dialog");
+        await worker.idle();
+        expect(worker.snapshot().state, action.kind).toBe("completed");
+        expect(hands.sent, action.kind).toHaveLength(1);
+        expect(hands.commands.slice(0, 2), action.kind).toEqual([
+          { kind: "observe", image: true, elements: true },
+          quickRead,
+        ]);
+        expect(hands.commands, action.kind).not.toContainEqual(fullLook);
+      }
+    });
+
+    it("walk the whole tree when the name or the role changed in place, and send nothing", async () => {
+      for (const changed of [
+        element(1, { title: "Delete" }),
+        element(1, { title: "Cancel", role: "AXLink" }),
+      ])
+        for (const action of presses) {
+          const now = realObs(frameBase, [changed]);
+          const { worker, hands, planner } = setup([action, done], {
+            reread: true,
+            screens: [realObs(frameBase, [cancel]), now, now, now],
+          });
+          await worker.submit("reread_swap", "Close the dialog");
+          await worker.idle();
+          const name = `${action.kind} ${changed.role} ${changed.title}`;
+          expect(hands.sent, name).toEqual([]);
+          expect(hands.commands.slice(1, 3), name).toEqual([
+            quickRead,
+            fullLook,
+          ]);
+          expect(planner.inputs[1]!.history[0]!.outcome, name).toMatch(
+            /target is no longer there\. Nothing was sent\./,
+          );
+        }
+    });
+
+    it("walk the whole tree when the value, the state or the place changed, or the hands did not find the element", async () => {
+      const cases: [string, ScreenElement[], boolean][] = [
+        ["value", [element(1, { title: "Cancel", value: "1" })], true],
+        ["state", [element(1, { title: "Cancel", enabled: false })], true],
+        ["place", [element(1, { title: "Cancel", x: 140 })], true],
+        ["not found", [cancel], false],
+      ];
+      for (const [name, read, found] of cases) {
+        const { worker, hands } = setup([click, done], {
+          reread: true,
+          screens: [
+            realObs(frameBase, [cancel]),
+            realObs(frameBase, read),
+            realObs(frameBase, [cancel]),
+            realObs(frameBase, [cancel]),
+          ],
+        });
+        if (!found) (hands as RereadHands).found = () => false;
+        await worker.submit("reread_changed", "Close the dialog");
+        await worker.idle();
+        expect(hands.commands.slice(1, 3), name).toEqual([quickRead, fullLook]);
+        // The walk saw the button as it was: the press goes on that look.
+        expect(hands.sent, name).toEqual([
+          { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+        ]);
+      }
+    });
+
+    it("read again every element that a click presses: a named image and the button that holds it", async () => {
+      const icon = element(2, {
+        role: "AXImage",
+        title: "Trash",
+        x: 120,
+        y: 204,
+        w: 16,
+        h: 16,
+      });
+      const button = element(1, { title: "Cancel" });
+      const swapped = element(1, { title: "Delete" });
+      const { worker, hands } = setup(
+        [{ kind: "click_element", element: 2 }, done],
+        {
+          reread: true,
+          screens: [
+            realObs(frameBase, [button, icon]),
+            realObs(frameBase, [swapped, icon]),
+            realObs(frameBase, [swapped, icon]),
+          ],
+        },
+      );
+      await worker.submit("reread_row", "Close the dialog");
+      await worker.idle();
+      expect(hands.commands[1]).toEqual({
+        ...quickRead,
+        targets: [
+          { id: 2, role: "AXImage", x: 120, y: 204, w: 16, h: 16 },
+          target,
+        ],
+      });
+      // The button's name changed: the walk decides, and the yes of the question is for what it shows now.
+      expect(hands.commands[2]).toEqual(fullLook);
+    });
+
+    it("walk the whole tree when the planner's look is old or the person said yes, as before", async () => {
+      const { worker, hands, waiting } = setup(
+        [{ kind: "click_element", element: 1 }, done],
+        {
+          reread: true,
+          screens: [
+            realObs(frameBase, [
+              element(1, { title: "Delete" }),
+              element(2, {
+                role: "AXStaticText",
+                title:
+                  "This item will be deleted immediately. You can\u2019t undo this action.",
+                x: 10,
+                y: 300,
+              }),
+            ]),
+          ],
+        },
+      );
+      await worker.submit("reread_yes", "Tidy the list");
+      await waiting();
+      await worker.answer("yes");
+      await worker.idle();
+      expect(hands.commands[1]).toEqual(fullLook);
+    });
   });
 
   it("skips fast visual re-verify when fastReverify is false", async () => {
