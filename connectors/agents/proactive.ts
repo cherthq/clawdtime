@@ -1,3 +1,4 @@
+import { phoneTurn } from "./phone-turn.js";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -158,7 +159,7 @@ export class ProactiveSourceAdapter {
     if (this.jobReviews) void this.jobReviews.pump().catch(() => {});
     for (const job of this.jobs()) {
       const p = job.provenance;
-      if (!p || job.status === "retired_unknown") continue;
+      if (!p || p.sharedTask || job.status === "retired_unknown") continue;
       const run = this.jobRun(job);
       if (!run || run.state === "canceled" || run.state === "ended") continue;
       if (
@@ -255,6 +256,11 @@ export class ProactiveSourceAdapter {
     session: AgentSession,
     channel: CallChannel,
   ): { ok: boolean; said: string } {
+    if (phoneTurn.getStore()?.sharedTask)
+      return {
+        ok: false,
+        said: "This shared task needs the shared callback service. No dedicated-owner call was queued.",
+      };
     const watches = this.watches();
     const existing = watches.find(
       (w) =>

@@ -237,11 +237,31 @@ export class PhoneDesktop {
     call.expiresAt = this.now() + this.leaseMs;
     return { ok: true as const, expiresAt: call.expiresAt };
   }
+  inspect(callId: string) {
+    const call = this.get(callId);
+    if (call.uncertain) throw new DomainError(409, "phone_request_uncertain");
+    return { ok: true as const, expiresAt: call.expiresAt };
+  }
 
   close(callId: string) {
     identity.parse(callId);
     const call = this.calls.get(callId);
-    if (!call) throw new DomainError(403, "phone_call_expired");
+    if (!call) {
+      // A reduction can arrive before a delayed open on another HTTP socket.
+      // Retain that closed identity so it cannot gain authority afterward.
+      if (this.calls.size >= this.maxCalls)
+        throw new DomainError(429, "phone_call_capacity");
+      this.calls.set(callId, {
+        id: callId,
+        closed: true,
+        uncertain: false,
+        generation: 0,
+        expiresAt: this.now(),
+        owned: new Set(),
+        requests: new Map(),
+      });
+      return { ok: true as const };
+    }
     this.end(call);
     return { ok: true as const };
   }

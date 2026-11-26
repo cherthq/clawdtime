@@ -285,6 +285,10 @@ export class SharedNumber {
     connection.expiresAt = this.now() + 30_000;
     return { ...connection };
   }
+  /** Authenticated transport lookup. Never accept a client-selected device ID. */
+  deviceConnection(credential: string, connectionId: string) {
+    return { ...this.connection(credential, connectionId) };
+  }
   disconnect(credential: string, connectionId: string) {
     const connection = this.connection(credential, connectionId);
     this.store.transaction(() => this.fenceDevice(connection.deviceId));
@@ -391,6 +395,8 @@ export class SharedNumber {
     return this.store.transaction(() => {
       const call = this.call(callId);
       const pair = this.pairing(account.memberId);
+      if (call.expectedMemberId && call.expectedMemberId !== account.memberId)
+        throw refused();
       if (
         call.state !== "unknown_identity" ||
         this.slot() !== call.id ||
@@ -409,6 +415,16 @@ export class SharedNumber {
       });
       return { code, expiresAt: proof.expiresAt };
     });
+  }
+  /** The single waiting call locator is not authority. A code is delivered only
+   * to this authenticated account and must be presented on the pinned call. */
+  async pendingCall(accountProof: unknown) {
+    const account = await this.account(accountProof);
+    this.pairing(account.memberId);
+    const id = this.slot();
+    if (!id) return null;
+    const call = this.call(id);
+    return call.state === "unknown_identity" ? { callId: call.id } : null;
   }
 
   /** Caller binding is delivered by the authenticated call adapter, not model
@@ -472,6 +488,19 @@ export class SharedNumber {
         return { state: "unauthorized" as const };
       }
       const connection = this.connections.get(pair.deviceId);
+      const original = call.callbackTaskId
+        ? this.store.get<SharedTaskOwnership>(kind("task"), call.callbackTaskId)
+        : undefined;
+      if (
+        call.callbackTaskId &&
+        (!original ||
+          original.scope.pairingId !== pair.id ||
+          original.scope.deviceId !== pair.deviceId ||
+          original.scope.desktopInstanceId !== connection?.desktopInstanceId)
+      ) {
+        this.store.put(kind("call"), { ...call, state: "unauthorized" });
+        return { state: "unauthorized" as const };
+      }
       if (!connection || connection.expiresAt <= this.now()) {
         this.store.put(kind("call"), { ...call, state: "offline" });
         return { state: "offline" as const };
@@ -544,13 +573,19 @@ export class SharedNumber {
   createTask(
     callId: string,
     grantId: string,
-    input: { taskId: string; userTurnId: string; requestDigest: string },
+    input: {
+      taskId: string;
+      userTurnId: string;
+      requestDigest: string;
+      callbackRequested?: boolean;
+    },
   ) {
     const parsed = z
       .object({
         taskId: routingId,
         userTurnId: routingId,
         requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+        callbackRequested: z.boolean().optional(),
       })
       .strict()
       .parse(input);
@@ -586,6 +621,7 @@ export class SharedNumber {
         scope: call.scope!,
         userTurnId: parsed.userTurnId,
         requestDigest: parsed.requestDigest,
+        callbackRequested: parsed.callbackRequested === true,
         createdAt: this.now(),
       });
     });
@@ -630,6 +666,194 @@ export class SharedNumber {
         state: "queued",
         createdAt: this.now(),
       });
+    });
+  }
+  requestCallback(callId: string, grantId: string, taskId: string) {
+    return this.store.transaction(() => {
+      this.authorizeCall(callId, grantId, "control");
+      const task = this.store.get<SharedTaskOwnership>(kind("task"), taskId);
+      if (!task || task.callId !== callId) throw refused();
+      this.store.put(kind("task"), { ...task, callbackRequested: true });
+      return { ok: true };
+    });
+  }
+  /** Reserve the same durable slot used by inbound admissions before handoff.
+   * The original explicit request, pairing and desktop lifetime must survive. */
+  hasQueuedCallback() {
+    return (
+      !this.slot() &&
+      this.store
+        .all<SharedCallbackOwnership>(kind("callback"))
+        .some(
+          (c) =>
+            c.state === "queued" &&
+            this.store.get<SharedTaskOwnership>(kind("task"), c.taskId)
+              ?.callbackRequested,
+        )
+    );
+  }
+  claimCallback() {
+    return this.store.transaction(() => {
+      if (this.slot()) return null;
+      for (const callback of this.store.all<SharedCallbackOwnership>(
+        kind("callback"),
+      )) {
+        if (callback.state !== "queued") continue;
+        const task = this.store.get<SharedTaskOwnership>(
+          kind("task"),
+          callback.taskId,
+        );
+        if (!task?.callbackRequested) continue;
+        let pair: Pairing;
+        try {
+          pair = this.pairing(callback.scope.memberId);
+        } catch {
+          this.store.put(kind("callback"), { ...callback, state: "canceled" });
+          continue;
+        }
+        if (
+          pair.id !== callback.scope.pairingId ||
+          task.createdAt + 43_200_000 <= this.now()
+        ) {
+          this.store.put(kind("callback"), { ...callback, state: "canceled" });
+          continue;
+        }
+        const connection = this.connections.get(callback.scope.deviceId);
+        if (
+          !connection ||
+          connection.expiresAt <= this.now() ||
+          connection.desktopInstanceId !== callback.scope.desktopInstanceId
+        )
+          continue;
+        const claimed: SharedCallbackOwnership = {
+          ...callback,
+          state: "preparing",
+          roomId: `callback_${hash(callback.id)}`,
+        };
+        this.store.put(kind("callback"), claimed);
+        this.store.saveState(this.slotKey(), callback.id);
+        return claimed;
+      }
+      return null;
+    });
+  }
+  callback(id: string) {
+    const callback = this.store.get<SharedCallbackOwnership>(
+      kind("callback"),
+      id,
+    );
+    if (!callback || callback.lineId !== this.lineId) throw refused();
+    return callback;
+  }
+  callbackDialing(id: string) {
+    return this.store.transaction(() => {
+      const callback = this.callback(id);
+      if (callback.state !== "preparing" || this.slot() !== callback.id)
+        throw conflict();
+      // Recheck ownership after preparation, immediately before dial submission.
+      const pair = this.pairing(callback.scope.memberId);
+      const connection = this.connections.get(callback.scope.deviceId);
+      if (
+        pair.id !== callback.scope.pairingId ||
+        !connection ||
+        connection.expiresAt <= this.now() ||
+        connection.desktopInstanceId !== callback.scope.desktopInstanceId
+      )
+        throw refused();
+      return this.store.put<SharedCallbackOwnership>(kind("callback"), {
+        ...callback,
+        state: "dialing",
+      });
+    });
+  }
+  bindCallback(id: string, providerCallId: string) {
+    routingId.parse(providerCallId);
+    return this.store.transaction(() => {
+      const callback = this.callback(id);
+      if (
+        callback.state === "active" &&
+        callback.providerCallId === providerCallId
+      )
+        return this.call(callback.outboundCallId!);
+      if (
+        callback.state !== "dialing" ||
+        this.slot() !== callback.id ||
+        !callback.roomId
+      )
+        throw conflict();
+      const callId = `shared_call_${hash(JSON.stringify([this.lineId, providerCallId]))}`;
+      if (this.store.get(kind("call"), callId)) throw conflict();
+      const call = this.store.put<SharedCall>(kind("call"), {
+        id: callId,
+        lineId: this.lineId,
+        providerCallId,
+        roomId: callback.roomId,
+        participantId: "shared-bridge",
+        state: "unknown_identity",
+        createdAt: this.now(),
+        expectedMemberId: callback.scope.memberId,
+        callbackTaskId: callback.taskId,
+      });
+      this.store.put<SharedCallbackOwnership>(kind("callback"), {
+        ...callback,
+        state: "active",
+        providerCallId,
+        outboundCallId: call.id,
+      });
+      this.store.saveState(this.slotKey(), call.id);
+      return call;
+    });
+  }
+  activateCallback(id: string) {
+    const callback = this.callback(id);
+    if (callback.state !== "active" || !callback.outboundCallId)
+      throw refused();
+    const call = this.call(callback.outboundCallId);
+    if (!["unknown_identity", "admitted"].includes(call.state)) throw refused();
+    if (!call.activatedAt)
+      this.store.put(kind("call"), { ...call, activatedAt: this.now() });
+  }
+  walkthrough(callId: string, grantId: string) {
+    const call = this.authorizeCall(callId, grantId, "view");
+    const task = call.callbackTaskId
+      ? this.store.get<SharedTaskOwnership>(kind("task"), call.callbackTaskId)
+      : undefined;
+    if (
+      !task?.resultId ||
+      task.scope.memberId !== call.scope!.memberId ||
+      task.scope.deviceId !== call.scope!.deviceId ||
+      task.scope.desktopInstanceId !== call.scope!.desktopInstanceId
+    )
+      throw refused();
+    return { taskId: task.id, resultId: task.resultId };
+  }
+  callbackUnknown(id: string) {
+    const callback = this.callback(id);
+    if (["ended", "canceled"].includes(callback.state)) return;
+    this.store.put(kind("callback"), { ...callback, state: "unknown" });
+    if (callback.outboundCallId) {
+      const call = this.call(callback.outboundCallId);
+      this.store.put(kind("call"), { ...call, state: "outcome_unknown" });
+    }
+  }
+  /** Trusted adapter calls only after provider terminal, room absence and
+   * incoming-owner restoration are all independently observed. */
+  callbackClean(id: string) {
+    return this.store.transaction(() => {
+      const callback = this.callback(id);
+      if (callback.state === "ended") return;
+      if (["queued", "canceled"].includes(callback.state)) throw conflict();
+      if (callback.outboundCallId) {
+        const call = this.call(callback.outboundCallId);
+        this.store.put(kind("call"), {
+          ...call,
+          state: "ended",
+          cleanupAt: this.now(),
+        });
+      }
+      if ([callback.id, callback.outboundCallId].includes(this.slot() ?? ""))
+        this.store.saveState(this.slotKey(), null);
+      this.store.put(kind("callback"), { ...callback, state: "ended" });
     });
   }
 }

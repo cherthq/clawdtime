@@ -78,6 +78,43 @@ function fixture() {
 }
 
 describe("authenticated phone-to-desktop routes", () => {
+  it("binds shared launch ownership to the exact call and service and rejects changed task replay", async () => {
+    const f = fixture();
+    await f.post("open", f.call);
+    const sharedTask = {
+      taskId: "task-one",
+      callId: f.call.callId,
+      desktopInstanceId: f.call.instanceId,
+    };
+    const chat = {
+      ...f.call,
+      requestId: "shared-turn",
+      text: "Build a sample page",
+      sharedTask,
+    };
+    expect(
+      (
+        await f.post("chat", {
+          ...chat,
+          sharedTask: { ...sharedTask, callId: "other" },
+        })
+      ).status,
+    ).toBe(409);
+    expect(f.received).toHaveLength(0);
+    expect((await (await f.post("chat", chat)).json()).ok).toBe(true);
+    expect(f.received[0]).toMatchObject({ context: { sharedTask } });
+    expect(
+      (
+        await (
+          await f.post("chat", {
+            ...chat,
+            sharedTask: { ...sharedTask, taskId: "changed" },
+          })
+        ).json()
+      ).ok,
+    ).toBe(false);
+    expect(f.received).toHaveLength(1);
+  });
   it("rejects unauthenticated, browser-origin and previous-instance commands", async () => {
     const f = fixture();
     expect((await f.post("open", f.call, "wrong")).status).toBe(401);

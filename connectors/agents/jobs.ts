@@ -1,3 +1,8 @@
+import { phoneTurn } from "./phone-turn.js";
+import {
+  sharedTaskBindingSchema,
+  type SharedTaskBinding,
+} from "../../src/phone-desktop-contracts.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -62,6 +67,7 @@ export interface JobFacts {
     launcherPid: number | null;
     exitCode: number | null;
     resultDigest: string | null;
+    sharedTask?: SharedTaskBinding;
   };
   /** The job in the person's words, cut for a list. */
   job: string;
@@ -376,13 +382,15 @@ export class Jobs implements JobPort {
     const id = `${stamp}-${Math.random().toString(36).slice(2, 6).padEnd(4, "0")}`;
     const runId = randomUUID(),
       launchId = randomUUID();
-    this.beforeLaunch?.({
-      jobId: id,
-      runId,
-      launchId,
-      projectRoot: this.project,
-      agent,
-    });
+    const sharedTask = phoneTurn.getStore()?.sharedTask;
+    if (!sharedTask)
+      this.beforeLaunch?.({
+        jobId: id,
+        runId,
+        launchId,
+        projectRoot: this.project,
+        agent,
+      });
     const directory = join(this.folder, id);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(this.folder, 0o700);
@@ -475,6 +483,9 @@ export class Jobs implements JobPort {
         at: this.now(),
         runId,
         launchId,
+        ...(sharedTask
+          ? { sharedTask: sharedTaskBindingSchema.parse(sharedTask) }
+          : {}),
         projectRoot: this.project,
         agent,
       }),
@@ -770,6 +781,14 @@ export class Jobs implements JobPort {
           ? {
               provenance: {
                 version: 1 as const,
+                ...(sharedTaskBindingSchema.safeParse(requested.sharedTask)
+                  .success
+                  ? {
+                      sharedTask: sharedTaskBindingSchema.parse(
+                        requested.sharedTask,
+                      ),
+                    }
+                  : {}),
                 runId: requested.runId,
                 launchId: requested.launchId,
                 projectRoot: requested.projectRoot,

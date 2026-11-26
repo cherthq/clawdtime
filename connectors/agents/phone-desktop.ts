@@ -10,6 +10,8 @@ import type { System } from "./system.js";
 import {
   phoneChatPayloadSchema,
   phoneResponseSchema,
+  sharedTaskBindingSchema,
+  type SharedTaskBinding,
   type PhoneTurnContext,
 } from "../../src/phone-desktop-contracts.js";
 export { phoneChatPayloadSchema } from "../../src/phone-desktop-contracts.js";
@@ -17,12 +19,13 @@ export type { PhoneTurnContext };
 const identity = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
 export type PhoneDesktopResult = z.infer<typeof phoneResponseSchema>;
 export type PhoneDesktopCommand =
-  | { action: "open" | "renew" | "close" | "stop"; callId: string }
+  | { action: "open" | "renew" | "close" | "stop" | "inspect"; callId: string }
   | {
       action: "chat";
       callId: string;
       requestId: string;
       payload: z.infer<typeof phoneChatPayloadSchema>;
+      sharedTask?: SharedTaskBinding;
     };
 
 /** One exact call operation. No fallback, no retries, and no secrets in its result. */
@@ -34,6 +37,9 @@ export async function callPhoneDesktop(
     exists?: (pid: number) => boolean;
     connectMs?: number;
     answerMs?: number;
+    /** Remote relay enrollment is pinned to this exact desktop lifetime. */
+    expectedInstanceId?: string;
+    signal?: AbortSignal;
   } = {},
 ): Promise<PhoneDesktopResult> {
   try {
@@ -41,13 +47,19 @@ export async function callPhoneDesktop(
     if (command.action === "chat") {
       identity.parse(command.requestId);
       phoneChatPayloadSchema.parse(command.payload);
+      if (command.sharedTask) sharedTaskBindingSchema.parse(command.sharedTask);
     }
   } catch {
     return { ok: false, code: "invalid_request" };
   }
   const folder = desktopStateFolder(system);
   const service = folder ? findDesktopService(folder, options.exists) : null;
-  if (!service) return { ok: false, code: "desktop_unavailable" };
+  if (
+    !service ||
+    (options.expectedInstanceId &&
+      service.instanceId !== options.expectedInstanceId)
+  )
+    return { ok: false, code: "desktop_unavailable" };
   const request = options.request ?? fetch;
   const headers = { authorization: `Bearer ${service.token}` };
   try {
@@ -55,7 +67,10 @@ export async function callPhoneDesktop(
       method: "GET",
       headers,
       redirect: "error",
-      signal: AbortSignal.timeout(options.connectMs ?? desktopConnectMs),
+      signal: AbortSignal.any([
+        ...(options.signal ? [options.signal] : []),
+        AbortSignal.timeout(options.connectMs ?? desktopConnectMs),
+      ]),
     });
     if (
       !state.ok ||
@@ -70,10 +85,16 @@ export async function callPhoneDesktop(
     instanceId: service.instanceId,
     callId: command.callId,
     ...(command.action === "chat"
-      ? { requestId: command.requestId, ...command.payload }
+      ? {
+          requestId: command.requestId,
+          ...command.payload,
+          ...(command.sharedTask ? { sharedTask: command.sharedTask } : {}),
+        }
       : {}),
   };
   try {
+    if (options.signal?.aborted)
+      return { ok: false, code: "phone_request_cancelled" };
     const response = await request(
       `${service.origin}/desktop/phone/${command.action}`,
       {
@@ -81,7 +102,10 @@ export async function callPhoneDesktop(
         headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify(body),
         redirect: "error",
-        signal: AbortSignal.timeout(options.answerMs ?? desktopAnswerMs),
+        signal: AbortSignal.any([
+          ...(options.signal ? [options.signal] : []),
+          AbortSignal.timeout(options.answerMs ?? desktopAnswerMs),
+        ]),
       },
     );
     const parsed = phoneResponseSchema.parse(await response.json());

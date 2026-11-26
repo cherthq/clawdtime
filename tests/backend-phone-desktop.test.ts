@@ -79,6 +79,20 @@ function fixture(
 }
 
 describe("phone desktop execution ownership", () => {
+  it("a close before open permanently rejects the delayed admission", () => {
+    const { adapter, runtime } = fixture();
+    expect(adapter.close("delayed")).toEqual({ ok: true });
+    expect(() => adapter.open("delayed")).toThrow("phone_call_closed");
+    expect(runtime.stop).not.toHaveBeenCalled();
+  });
+  it("inspection does not renew a call lease", () => {
+    const { adapter, advance } = fixture({ leaseMs: 1000 });
+    const opened = adapter.open("call-a");
+    advance(500);
+    expect(adapter.inspect("call-a")).toEqual(opened);
+    advance(500);
+    expect(() => adapter.inspect("call-a")).toThrow("phone_call_expired");
+  });
   it("admits one call, renews its lease, and never reopens a closed identity", () => {
     const { adapter, advance } = fixture();
     expect(adapter.open("call-a")).toEqual({ ok: true, expiresAt: 31_000 });
