@@ -50,8 +50,11 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     let permitted = await beforeInput?() ?? true
     return permitted && !interrupted
   }
-  /// The person moved the mouse or pressed a key since the command began.
-  private(set) var personActed = false
+  /// The person moved the mouse or pressed a key since the command began, or, for a command that sends input,
+  /// since the start of the look that it rests on. `HandsOwnerWatch` holds the rule.
+  var personActed: Bool { owner.acted }
+  private var owner = HandsOwnerWatch()
+  private var now: Double { ProcessInfo.processInfo.systemUptime }
   /// Any meaningful input already submitted may have affected the UI.
   private(set) var submittedInput = false
   /// The person held Escape for a moment.
@@ -74,8 +77,11 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   var pointer: CGPoint { CGEvent(source: nil)?.location ?? .zero }
   /// A password field has the keyboard: macOS guards it, and the hands stay out.
   var secureInput: Bool { IsSecureEventInputEnabled() }
-  /// A command begins: what the person did before it does not count.
-  func beginCommand() { personActed = false; submittedInput = false }
+  /// A command begins at `time`. For a look, what the person did before it does not count. For a command that
+  /// sends input, what the person did since the start of the last look counts: the worker planned it from that look.
+  func beginCommand(at time: Double, input: Bool) { owner.begin(at: time, input: input); submittedInput = false }
+  /// The command that began at `time` gave a look of the screen.
+  func looked(began time: Double) { owner.looked(began: time) }
 
   private func pause(_ seconds: Double) async {
     try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
@@ -383,12 +389,14 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     if let tapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes) }
     CFMachPortInvalidate(tap)
     self.tap = nil; tapSource = nil; escapeDown = nil; watchTried = nil
+    // Nobody listens now: what the tap saw says nothing about later.
+    owner.forget()
   }
   fileprivate func listenAgain() { if let tap { CGEvent.tapEnable(tap: tap, enable: true) } }
   fileprivate func saw(_ type: CGEventType, mark: Int64, keyCode: Int64, repeated: Bool) {
     // An event with the mark is the hands' own.
     guard mark != Self.mark else { return }
-    personActed = true
+    owner.saw(at: now)
     guard keyCode == Int64(KeyCombo.escapeKey) else { return }
     if type == .keyUp { escapeDown = nil; return }
     guard type == .keyDown, !repeated else { return }

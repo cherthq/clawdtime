@@ -299,11 +299,15 @@ import TaskPanelCore
     let accessibility = AXIsProcessTrusted()
     let screenRecording = !command.needsScreenRecording || CGPreflightScreenCaptureAccess()
     if let missing = command.missingRight(accessibility: accessibility, screenRecording: screenRecording) { return .failure(seq, missing) }
-    input.beginCommand()
+    let began = ProcessInfo.processInfo.systemUptime
+    input.beginCommand(at: began, input: mutates)
     inputRefusal = nil
     resolvedApp = nil
     keyboardHeld = false
     if heldDetail != nil { heldDetail = nil; showBar() }
+    // The worker planned this input from its last look, and the person used the mouse or the keys after that look,
+    // between the commands: nothing is sent, and the worker asks, as for input during a command.
+    if mutates, input.watching, input.personActed { presentation.reset(); return .failure(seq, .refused, interrupted: true) }
     // While macOS guards the keyboard the tap sees none of the person's keys, Escape held among them. No input of
     // any kind goes then: the person holds the keyboard, and the worker asks.
     if mutates, keyboardHidden() { return heldForKeyboard(seq) }
@@ -315,6 +319,9 @@ import TaskPanelCore
     if keyboardHeld, input.watching { heldDetail = HandsGate.keyboardHiddenDetail; showBar() }
     switch outcome {
     case .success(let seen):
+      // A look of the whole screen: the next input rests on it, and the person's input before it no longer counts.
+      // A closer picture shows one part only, so it is no such look.
+      if seen != nil, !command.isZoom { input.looked(began: began) }
       let result = HandResult.done(seq, observation: seen, interrupted: interrupted, resolvedBundleId: resolvedApp)
       // Contract failure cannot erase an already-submitted external effect.
       guard (try? result.validate()) != nil else {
@@ -814,4 +821,9 @@ extension OwnWindowState {
   @MainActor init(window: NSWindow) {
     self.init(frame: window.frame, visible: window.isVisible, takesClicks: !window.ignoresMouseEvents)
   }
+}
+
+private extension HandCommand {
+  /// A closer picture of one part of the screen.
+  var isZoom: Bool { if case .zoom = self { return true }; return false }
 }
