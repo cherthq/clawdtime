@@ -48,6 +48,20 @@ const gatewayResult = z.object({
     .enum(["timeout", "connection", "invalid_response", "other"])
     .optional(),
 });
+const presentationResult = z.object({
+  stage: z.enum([
+    "initial_authority",
+    "first_resolve",
+    "second_resolve",
+    "final_authority",
+    "monitor_resolve",
+    "monitor_authority",
+    "monitor_cycle",
+  ]),
+  at: timestamp,
+  durationMs: z.number().int().min(0).max(999999),
+  error: z.enum(["timeout", "cancelled", "refused"]).optional(),
+});
 export const mediaFailureSchema = z.object({
   reason: z.enum([
     "task_failed",
@@ -82,6 +96,33 @@ export const mediaFailureSchema = z.object({
 const lifecycleDiagnosticsSchema = z.object({
   version: z.literal(1),
   speech: speechPipelineSchema.optional(),
+  voiceCommentary: z
+    .object({
+      version: z.literal(1),
+      queued: z.number().int().min(0).max(999999999),
+      acknowledged: z.number().int().min(0).max(999999999),
+      rejected: z.number().int().min(0).max(999999999),
+      unknown: z.number().int().min(0).max(999999999),
+      pending: z.number().int().min(0).max(64),
+      lastAckMs: z.number().int().min(0).max(60000).nullable(),
+    })
+    .optional(),
+  audioQualification: z
+    .object({
+      version: z.literal(1),
+      executionDisabled: z.literal(true),
+      started: z.boolean(),
+      finalized: z.boolean(),
+      outputLatched: z.boolean(),
+      elapsedMs: z.number().int().min(0).max(300000),
+      inputFrames: z.number().int().min(0).max(999999999),
+      outputChunks: z.number().int().min(0).max(999999999),
+      discardedOutputChunks: z.number().int().min(0).max(999999999),
+      discardedDelegations: z.number().int().min(0).max(999999999),
+      discardedTranscriptEvents: z.number().int().min(0).max(999999999),
+      cutoffs: z.number().int().min(0).max(999999999),
+    })
+    .optional(),
   firstFailure: mediaFailureSchema.optional(),
   lastUtterance: z
     .object({
@@ -196,6 +237,8 @@ export const mediaStatusSchema = z.object({
         .optional(),
       lastGatewayResult: gatewayResult.optional(),
       lastGatewayFailure: gatewayResult.optional(),
+      lastPresentationResult: presentationResult.optional(),
+      lastPresentationFailure: presentationResult.optional(),
     })
     .optional(),
 });

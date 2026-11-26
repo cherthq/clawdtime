@@ -51,9 +51,30 @@ function config(): NativeTransportConfig {
     },
   };
 }
-function fixture(readOnly = false, store = new Store()) {
+function fixture(
+  readOnly = false,
+  store = new Store(),
+  textTransport?: NativeTransportConfig["textTransport"],
+) {
   const c = config(),
-    requests: { url: string; method: string }[] = [];
+    requests: { url: string; method: string; body?: unknown }[] = [];
+  if (textTransport !== undefined) c.textTransport = textTransport;
+  const standard = {
+    body: {
+      success: true,
+      guid: "00000000-0000-4000-8000-000000000001",
+      delivery: { isSent: true, isDelivered: false, error: 0 },
+    } as unknown,
+    raw: undefined as string | undefined,
+    status: 200,
+    unavailable: false,
+  };
+  const receipt = {
+    status: 404,
+    body: undefined as unknown,
+    raw: undefined as string | undefined,
+    unavailable: false,
+  };
   const lineRecord: Record<string, any> = {
     id: line,
     phone_number: null,
@@ -99,8 +120,35 @@ function fixture(readOnly = false, store = new Store()) {
     controlAllowed: true,
   };
   const request = async (url: string | URL | Request, init?: RequestInit) => {
-    requests.push({ url: String(url), method: init?.method ?? "GET" });
+    requests.push({
+      url: String(url),
+      method: init?.method ?? "GET",
+      ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
+    });
     const path = new URL(String(url)).pathname;
+    if (path === "/send") {
+      if (standard.unavailable)
+        throw new Error("Fixture timeout after possible submission");
+      return new Response(standard.raw ?? JSON.stringify(standard.body), {
+        status: standard.status,
+      });
+    }
+    if (path.startsWith("/api/v1/text-operations/v1/")) {
+      // Match the native route's accepted operation-origin grammar.
+      if (!/^text_[a-f0-9]{32}$/.test(path.split("/").at(-1)!))
+        return new Response(
+          JSON.stringify({ error: "invalid text operation request" }),
+          { status: 400 },
+        );
+      if (receipt.unavailable) throw new Error("Fixture unavailable");
+      return new Response(
+        receipt.raw ??
+          JSON.stringify(
+            receipt.body ?? { found: false, origin: path.split("/").at(-1) },
+          ),
+        { status: receipt.status },
+      );
+    }
     const body =
       path === "/api/v1/whoami"
         ? {
@@ -126,7 +174,8 @@ function fixture(readOnly = false, store = new Store()) {
               : device;
     return new Response(JSON.stringify(body));
   };
-  store.saveState(`messages:${line}`, c.handoff.baseline);
+  if (!store.state(`messages:${line}`))
+    store.saveState(`messages:${line}`, c.handoff.baseline);
   const transport = new NativeTransport(store, c, request as typeof fetch, {
     readOnly,
   });
@@ -142,8 +191,232 @@ function fixture(readOnly = false, store = new Store()) {
     allowView: true,
     allowControl: true,
   };
-  return { store, c, requests, lineRecord, media, device, transport, pairing };
+  return {
+    store,
+    c,
+    requests,
+    lineRecord,
+    media,
+    device,
+    receipt,
+    standard,
+    transport,
+    pairing,
+  };
 }
+describe("explicit standard text transport", () => {
+  it("keeps strict receipt mode as the default and fingerprints an explicit mode change", async () => {
+    const f = fixture(true);
+    const strict = new NativeTransport(
+      f.store,
+      { ...f.c, textTransport: "strict_receipts" },
+      f.transport.messages.request,
+      { readOnly: true },
+    );
+    const standard = new NativeTransport(
+      f.store,
+      { ...f.c, textTransport: "standard_once" },
+      f.transport.messages.request,
+      { readOnly: true },
+    );
+    expect(strict.bindingFingerprint()).toBe(f.transport.bindingFingerprint());
+    expect(standard.bindingFingerprint()).not.toBe(strict.bindingFingerprint());
+    f.receipt.body = { error: "Not found" };
+    expect((await f.transport.preflight()).liveReady).toBe(false);
+    expect(f.requests.some((r) => new URL(r.url).pathname === "/send")).toBe(
+      false,
+    );
+    f.store.close();
+  });
+  it.each([null, "", "fallback", true])(
+    "rejects invalid explicit transport mode %s",
+    (mode) => {
+      const f = fixture(true);
+      const invalid = { ...f.c, textTransport: mode as never };
+      expect(
+        configurationChecks(invalid).find(
+          (c) => c.id === "service_configuration",
+        )?.status,
+      ).toBe("fail");
+      expect(
+        () =>
+          new NativeTransport(f.store, invalid, f.transport.messages.request, {
+            readOnly: true,
+          }),
+      ).toThrow();
+      expect(f.requests).toHaveLength(0);
+      f.store.close();
+    },
+  );
+  it("does not probe unsupported receipts in explicit standard mode and reports its limitation", async () => {
+    const f = fixture(true, new Store(), "standard_once");
+    f.receipt.unavailable = true;
+    const report = await f.transport.preflight();
+    expect(report.liveReady).toBe(true);
+    expect(
+      report.checks.find((c) => c.id === "native_text_transport"),
+    ).toMatchObject({
+      status: "pass",
+      message: expect.stringContaining("Send capability is untested"),
+    });
+    expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    expect(f.requests.some((r) => r.url.includes("text-operations"))).toBe(
+      false,
+    );
+    f.transport.messages.verify = async () => {
+      throw new Error("Fixture identity mismatch");
+    };
+    expect(
+      (await f.transport.preflight()).checks.find(
+        (c) => c.id === "native_text_transport",
+      )?.status,
+    ).toBe("fail");
+    f.store.close();
+  });
+  it("submits exactly one bound standard request and reports only provider acknowledgement", async () => {
+    const f = fixture(false, new Store(), "standard_once");
+    const result = await f.transport.message(
+      f.pairing,
+      "Synthetic fixture",
+      "fixture-effect",
+    );
+    expect(result).toEqual({
+      accepted: true,
+      receiptId: "00000000-0000-4000-8000-000000000001",
+      status: "acknowledged",
+      operationOrigin: `text_${hash("fixture-effect").slice(0, 32)}`,
+    });
+    expect(result).not.toHaveProperty("delivered");
+    expect(f.requests.filter((r) => r.method === "POST")).toEqual([
+      {
+        url: `${f.c.binding.origin}/send`,
+        method: "POST",
+        body: {
+          to: f.pairing.recipient,
+          message: "Synthetic fixture",
+          idempotency_key: result.operationOrigin,
+          native_sms_disabled: true,
+        },
+      },
+    ]);
+    expect(f.requests.some((r) => r.url.includes("text-operations"))).toBe(
+      false,
+    );
+    f.store.close();
+  });
+  it.each([
+    { guid: undefined },
+    { guid: "synthetic-receipt" },
+    { success: false },
+    { delivery: { isSent: false, error: 0 } },
+    { delivery: { isSent: true, error: 1 } },
+    { queued: true },
+    { duplicate: true },
+    { suppressed: true },
+    { error: "failure" },
+    { status: "pending" },
+    { from: "+15550000003" },
+    { to: "+15550000003" },
+    { phone_line_id: "other" },
+  ])(
+    "refuses uncertain standard acknowledgement %# without an alternate route",
+    async (override) => {
+      const f = fixture(false, new Store(), "standard_once");
+      f.standard.body = { ...(f.standard.body as object), ...override };
+      await expect(
+        f.transport.message(f.pairing, "Synthetic fixture", "fixture-effect"),
+      ).rejects.toThrow("outcome unknown");
+      expect(
+        f.requests
+          .filter((r) => r.method === "POST")
+          .map((r) => new URL(r.url).pathname),
+      ).toEqual(["/send"]);
+      expect(f.requests.some((r) => r.url.includes("text-operations"))).toBe(
+        false,
+      );
+      f.store.close();
+    },
+  );
+  it.each([
+    "accepted",
+    "timeout",
+    "non_json",
+    "malformed",
+    "queued",
+    "http_error",
+    "http_accepted",
+  ] as const)(
+    "retains %s submission through repeated drain and restart without resubmitting",
+    async (outcome) => {
+      const directory = mkdtempSync(join(tmpdir(), "clawdtime-standard-once-"));
+      const path = join(directory, "state.sqlite");
+      let open: Store | undefined;
+      try {
+        const f = fixture(false, (open = new Store(path)), "standard_once");
+        if (outcome === "timeout") f.standard.unavailable = true;
+        if (outcome === "non_json")
+          f.standard.raw = "<html>Fixture interrupted</html>";
+        if (outcome === "malformed") f.standard.body = { success: true };
+        if (outcome === "queued") {
+          f.standard.status = 202;
+          f.standard.body = {
+            success: true,
+            queued: true,
+            message_id: "fixture-queued",
+          };
+        }
+        if (outcome === "http_error") f.standard.status = 503;
+        if (outcome === "http_accepted") f.standard.status = 202;
+        f.store.put("pairing", f.pairing);
+        f.store.put("attention", {
+          id: "fixture-completed-request",
+          pairingId: f.pairing.id,
+          sessionId: "fixture-session",
+          state: "completed",
+          createdAt: Date.now(),
+          deadline: Date.now() + 60_000,
+        });
+        f.store.putEffect({
+          id: "fixture-message",
+          kind: "message",
+          state: "pending",
+          createdAt: Date.now(),
+          payload: {
+            pairingId: f.pairing.id,
+            requestId: "fixture-completed-request",
+            text: "Synthetic fixture",
+          },
+        });
+        const service = new ClawdTime(f.store, f.transport);
+        await service.drain();
+        await service.drain();
+        const retained = f.store.effect("fixture-message")!;
+        expect(retained.state).toBe(
+          outcome === "accepted" ? "done" : "unknown",
+        );
+        expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+        expect(f.store.all("call")).toHaveLength(0);
+        const cursor = f.transport.messages.cursor();
+        f.store.close();
+        open = undefined;
+        const reopened = fixture(
+          false,
+          (open = new Store(path)),
+          "standard_once",
+        );
+        const recovered = new ClawdTime(reopened.store, reopened.transport);
+        await recovered.drain();
+        expect(reopened.store.effect("fixture-message")).toEqual(retained);
+        expect(reopened.transport.messages.cursor()).toEqual(cursor);
+        expect(reopened.requests).toHaveLength(0);
+      } finally {
+        open?.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
 function obsoleteNoticeFixture(store?: Store) {
   const f = fixture(false, store),
     vault = new Vault(f.c.encryptionKey),
@@ -210,6 +483,95 @@ function obsoleteNoticeFixture(store?: Store) {
   };
 }
 describe("read-only live preflight", () => {
+  it("qualifies strict missing-receipt lookup with a fresh origin and the exact sender using GET only", async () => {
+    const f = fixture(true);
+    const cursor = f.transport.messages.cursor();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const report = await f.transport.preflight();
+      expect(report.liveReady).toBe(true);
+      expect(
+        report.checks.find((c) => c.id === "native_text_transport")?.status,
+      ).toBe("pass");
+    }
+    const probes = f.requests.filter((r) =>
+      r.url.includes("/text-operations/"),
+    );
+    expect(probes).toHaveLength(2);
+    expect(new Set(probes.map((r) => new URL(r.url).pathname)).size).toBe(2);
+    for (const probe of probes) {
+      const url = new URL(probe.url);
+      expect(url.origin).toBe(f.c.binding.origin);
+      expect(url.pathname).toMatch(
+        /^\/api\/v1\/text-operations\/v1\/text_[a-f0-9]{32}$/,
+      );
+      expect(url.searchParams.get("from")).toBe(f.c.binding.phone);
+    }
+    expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    expect(f.transport.messages.cursor()).toEqual(cursor);
+    expect(f.store.effects()).toHaveLength(0);
+    f.store.close();
+  });
+  it.each([
+    ["generic 404", 404, { error: "Not found" }, false],
+    ["missing origin", 404, { found: false }, false],
+    ["wrong origin", 404, { found: false, origin: "other" }, false],
+    ["wrong found type", 404, { found: "false" }, false],
+    ["found receipt", 404, { found: true }, false],
+    ["unexpected success", 200, undefined, false],
+    ["unavailable status", 503, undefined, false],
+    ["network unavailable", 404, undefined, true],
+  ])(
+    "blocks %s receipt lookup without changing unknown delivery",
+    async (_name, status, body, unavailable) => {
+      const f = fixture(true);
+      Object.assign(f.receipt, { status, body, unavailable });
+      const notice = {
+        id: "unknown-notice",
+        state: "unknown",
+        sealed: "retained",
+      };
+      f.store.put("notice", notice);
+      const cursor = f.transport.messages.cursor();
+      const report = await f.transport.preflight();
+      expect(report.liveReady).toBe(false);
+      expect(
+        report.checks.find((c) => c.id === "native_identity")?.status,
+      ).toBe("pass");
+      expect(
+        report.checks.find((c) => c.id === "native_text_transport")?.status,
+      ).toBe("fail");
+      expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+      expect(f.store.get("notice", notice.id)).toEqual(notice);
+      expect(f.transport.messages.cursor()).toEqual(cursor);
+      expect(f.store.effects()).toHaveLength(0);
+      f.store.close();
+    },
+  );
+  it.each(["{", "x".repeat(4097)])(
+    "rejects malformed or oversized receipt JSON without dispatch",
+    async (raw) => {
+      const f = fixture(true);
+      f.receipt.raw = raw;
+      const report = await f.transport.preflight();
+      expect(report.liveReady).toBe(false);
+      expect(
+        report.checks.find((c) => c.id === "native_text_transport")?.status,
+      ).toBe("fail");
+      expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+      expect(f.store.effects()).toHaveLength(0);
+      f.store.close();
+    },
+  );
+  it("refuses message dispatch before POST when receipt lookup is unsupported", async () => {
+    const f = fixture();
+    f.receipt.body = { error: "Not found" };
+    await expect(
+      f.transport.message(f.pairing, "Fixture only", "fixture-operation"),
+    ).rejects.toThrow("preflight is blocked");
+    expect(f.requests.every((r) => r.method === "GET")).toBe(true);
+    expect(f.store.effects()).toHaveLength(0);
+    f.store.close();
+  });
   it("treats a malformed null audit as invalid without throwing or clearing unknown delivery", async () => {
     const f = obsoleteNoticeFixture();
     f.store.recordEvent(

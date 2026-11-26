@@ -1,5 +1,48 @@
 # Acceptance evidence and remaining live gate
 
+## Production-bound walkthrough qualification
+
+The narrow native activation integration must pass the isolated production-code
+rehearsal before disabled production staging. Automated tests do not replace
+physical focus, zoom/annotation alignment, edit/save, file-move and Stop evidence.
+See the latest dated [status](STATUS.md) for actual results and release versions.
+
+The subsequent production test requires separate authorization for one call:
+
+1. Verify the recorded backend, media, gateway, companion and connector source
+   versions match. Inspect zero active calls/capture actors and all pending or
+   unknown receipts. Reconcile original identifiers; never clear or replay them.
+2. Use a fresh capability-negotiated original-chat session with the exact paired
+   Mac/display and disposable Finder/TextEdit fixtures. Preserve existing chats.
+   Confirm no other native/fallback actor owns the Mac. Verify both permissions,
+   local policy and the physical Stop control, then explicitly Enable locally.
+3. Only within that authorized test window, enable presentation and activation
+   admission on both backend and media. Place the one authorized call; verify the
+   intended participant, display and handset voice/video before any input.
+4. Prepare the complete plan. For each scene, claim native ownership, freshly
+   qualify the exact target, trigger the single prepared operation through
+   original-chat CUA, verify its terminal receipt, release ownership, and observe
+   the live zoom and annotation. Record stage timings without screen/audio data.
+5. Confirm a handset follow-up reaches the same chat once. Retire the old scene
+   generation and prepare a fresh plan. Bracket the harmless edit/save and file
+   move with exclusive native ownership, and independently observe each result.
+6. Press local Stop during an active scene. Confirm pixels and annotations clear,
+   input stops and all native children exit. End the call and verify provider,
+   backend and media cleanup. Disarm the companion and disable both admission
+   gates again. Retain original cursors and every receipt.
+
+On any uncertain input, stop the sequence and read its original receipt; do not
+retry with a new operation ID. If Stop cannot be confirmed, terminate the exact
+candidate helper/capture actor locally and retain the unresolved fence. For
+rollback, keep admission off and retain compatible binaries until every native
+reservation is reconciled. Never restore older ledgers/cursors or run a
+pre-activation binary over unresolved activation state. Use the recorded release
+and artifact targets in [deployment guidance](DEPLOYMENT.md).
+
+Handset video/voice, real cloud frame timing and same-chat continuation remain
+live acceptance items until observed. This integration does not qualify automatic
+blocker detection, unattended calling or broader application control.
+
 **One Codex desktop native-control task is physically verified; full acceptance
 remains incomplete.** The November 12 v2 call carried spoken instructions into
 the originating chat, used native input, and produced a result the human confirmed
@@ -108,3 +151,52 @@ Record repository commit, exact helper hash/signature, client/OS versions, nativ
 worker build, separate backend/media deployment IDs, line ownership evidence,
 measured timings and every remaining gap in STATUS.md plus private operator records.
 Do not replace the word pending with passed until the actual observation exists.
+
+## Improvements A–F qualification — unrun (November 13, 2026)
+
+The `improvements` branch has isolated source/test authorization only, plus an
+explicit push authorization. Nothing in its automated results qualifies installed
+components or handset behavior. Package G remains deferred. Do not rerun legacy
+calling, messaging, connector spikes or installation commands as part of local
+validation. A future operator must obtain separate scope for each physical run.
+
+For a separately authorized one-call run:
+
+1. Record exact source/helper/client/OS versions and select the intended originating
+   chat, paired Mac and display. Check readiness; permission changes and local
+   Enable are explicit local actions. No recheck grants a lease or resets TCC.
+2. Place only the authorized call. Verify compact/expanded Mac controls, no focus
+   theft, keyboard/VoiceOver access, both display geometries, and phone portrait and
+   landscape readability. Check for duplicate panel/phone overlays.
+3. Account for ten predefined synthetic turns: short instruction; pause within a
+   sentence; continuation after final recognition; correction while working;
+   background noise followed by speech; a Unicode label; delayed agent receipt;
+   native approval request; long spoken reply; observed result. Record counts,
+   stage timings and failures only, never transcript/screens/audio in Git.
+4. Native input needs exclusive ownership and separate explicit authorization,
+   uses a disposable local fixture, and must be followed by observation of the
+   actual result. No real message is a fixture. Submitted input is not success.
+5. Verify local Stop, mute/unmute, cooperative pause and explicit end. Check pending
+   versus acknowledged controls and actual provider cleanup. Test remote hangup in
+   a separately scoped run if the one call has already ended. A later conversation
+   must inherit no task text, command, executor or capture permission.
+
+Separately authorize clean-install, upgrade/rollback, a second Mac, repeated
+sessions, gateway loss/restart and long-call qualification; do not silently add
+these to a single-call authorization. Record every scripted turn, zero duplicate
+or cross-session delivery, zero unauthorized effects, no false success, cleanup,
+median/p95 with denominators and missing/failure counts. Ten turns are a small
+qualification sample, not a reliability claim. Signed/notarized distribution,
+per-device credential isolation, monitoring and broader release gates remain open.
+
+Offline commands added by this branch:
+
+```sh
+npx vitest run tests/backend-improvements.test.ts tests/connectors-improvements.test.ts
+npx tsx scripts/inspect-session.ts
+(cd mac && swift run PanelPreview /tmp/clawdtime-panel-preview)
+media/.venv/bin/python media/preview_activity.py /tmp/clawdtime-visuals
+```
+
+The inspector defaults to a deterministic calculation fixture. Its example
+median/p95 are not measured product latency or a comparison with FaceTimeOS.

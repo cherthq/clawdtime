@@ -1,4 +1,20 @@
 import {
+  activeAudioQualification,
+  assertAudioQualificationIdle,
+  isAudioQualification,
+  audioQualificationSchema,
+} from "./audio-qualification.js";
+import { explainReadiness } from "../../connectors/shared/readiness.js";
+import { cameraSelectionSchema } from "../camera-contracts.js";
+import { presentationFor } from "./presentation.js";
+import { timelineFor } from "../transport/conversation-timeline.js";
+import {
+  messageUpdateAuthorized,
+  MessageDispatchClosed,
+  redactMessageEffect,
+  pruneMessageEffects,
+} from "./messaging.js";
+import {
   recordTerminationIntent,
   type TerminationSource,
 } from "./termination.js";
@@ -22,11 +38,16 @@ import type {
   CallSession,
   ControlLease,
   ActionReceipt,
+  EffectReceipt,
   Transport,
   RequestAttentionInput,
   SessionRegistration,
 } from "../contracts.js";
 import { Store } from "../storage/store.js";
+import {
+  NativeReservationStore,
+  unresolvedNativeReservations,
+} from "../storage/native-reservations.js";
 import { DomainError, hash, id, token } from "../storage/security.js";
 export { DomainError } from "../storage/security.js";
 
@@ -39,6 +60,35 @@ const registration = z
     externalSessionId: nonempty,
     hostId: nonempty,
     protocolVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+    screenCamera: cameraSelectionSchema.optional(),
+    voiceFrontend: z
+      .object({ version: z.literal(1), provider: z.literal("elevenlabs") })
+      .strict()
+      .optional(),
+    interaction: z
+      .object({
+        version: z.literal(1),
+        commandChannel: z.literal("imessage_first"),
+        messageUpdates: z.boolean(),
+      })
+      .strict()
+      .optional(),
+    conversation: z
+      .object({
+        version: z.literal(1),
+        runnerId: nonempty,
+        executionSession: z.literal("api_managed"),
+      })
+      .strict()
+      .optional(),
+    documentAccess: z
+      .object({
+        version: z.literal(1),
+        readOnly: z.literal(true),
+        expiresAt: z.number().finite().int().positive(),
+      })
+      .strict()
+      .optional(),
     capabilities: z
       .object({
         cooperativePause: z.boolean(),
@@ -46,6 +96,10 @@ const registration = z
         nativeControl: z.enum(["none", "browser", "desktop"]).optional(),
         sharedSurface: z.boolean().optional(),
         nativeCancellation: z.boolean().optional(),
+        voiceInteractionVersion: z.literal(1).optional(),
+        screenCameraVersion: z.literal(1).optional(),
+        livePresentationVersion: z.literal(1).optional(),
+        nativeActivationVersion: z.literal(1).optional(),
       })
       .strict(),
   })
@@ -106,6 +160,7 @@ export interface ResponseInput {
 }
 export class ClawdTime {
   readonly clock: () => number;
+  readonly nativeReservations: NativeReservationStore;
   private draining = false;
   constructor(
     readonly store: Store,
@@ -113,6 +168,8 @@ export class ClawdTime {
     options: { clock?: () => number } = {},
   ) {
     this.clock = options.clock ?? Date.now;
+    this.nativeReservations = new NativeReservationStore(store, this.clock);
+    pruneMessageEffects(this);
     for (const e of store.effects("unknown")) {
       const request = store.get<AttentionRequest>(
         "attention",
@@ -152,6 +209,221 @@ export class ClawdTime {
       throw new DomainError(403, "Session is stopped.");
     this.pairing(s.pairingId);
     return s;
+  }
+  /** Deterministic fence shared by domain and HTTP/control callers. */
+  assertExecutionAllowed(session: AgentSession) {
+    const current =
+      this.store.get<AgentSession>("session", session.id) ?? session;
+    if (
+      isAudioQualification(session) ||
+      isAudioQualification(current) ||
+      activeAudioQualification(this.store, this.pairing(current.pairingId))
+    )
+      throw new DomainError(403, "Audio qualification is execution-disabled.");
+  }
+  /** Operator-authenticated route only. No ordinary pairing/session credential can call this route. */
+  requestAudioQualification(input: {
+    pairingId: string;
+    idempotencyKey: string;
+    durationSeconds: number;
+    readyForOneCall: true;
+  }): { session: AgentSession; request: AttentionRequest; token?: string } {
+    const value = z
+      .object({
+        pairingId: nonempty,
+        idempotencyKey: nonempty,
+        durationSeconds: z.number().int().min(30).max(300),
+        readyForOneCall: z.literal(true),
+      })
+      .strict()
+      .parse(input);
+    const key = `audio-qualification:${value.pairingId}:${hash(value.idempotencyKey)}`;
+    const fingerprint = hash(JSON.stringify(value));
+    this.expire();
+    return this.store.transaction(() => {
+      const prior = this.store.event<{ requestId: string }>(key);
+      if (prior) {
+        if (prior.fingerprint !== fingerprint)
+          throw new DomainError(409, "Qualification request identity changed.");
+        const existing = this.audioQualificationStatus(prior.result.requestId);
+        return { session: existing.session, request: existing.request };
+      }
+      const pairing = this.pairing(value.pairingId);
+      assertAudioQualificationIdle(this.store, pairing, this.clock());
+      const now = this.clock(),
+        requestId = id("attention"),
+        sessionId = id("session"),
+        callId = `ct_${hash(requestId).slice(0, 40)}`;
+      const audioQualification = {
+        version: 1 as const,
+        executionDisabled: true as const,
+        expiresAt: now + value.durationSeconds * 1000,
+      };
+      const session: AgentSession = {
+        id: sessionId,
+        pairingId: pairing.id,
+        adapter: "audio-qualification",
+        adapterVersion: "1",
+        projectRoot: "audio-qualification",
+        externalSessionId: `audio-qualification:${requestId}`,
+        hostId: "operator-audio-qualification",
+        createdAt: now,
+        lastSeenAt: now,
+        protocolVersion: 2,
+        state: "active",
+        controlEpoch: 0,
+        audioQualification,
+        capabilities: {
+          cooperativePause: false,
+          polling: false,
+          nativeControl: "none",
+          sharedSurface: false,
+          nativeCancellation: false,
+          voiceInteractionVersion: 1,
+        },
+      };
+      const request: AttentionRequest = {
+        id: requestId,
+        sessionId,
+        pairingId: pairing.id,
+        taskId: "audio-qualification",
+        idempotencyKey: value.idempotencyKey,
+        reason: "review",
+        question:
+          "Audio-only qualification. Execution, screen capture and task instructions are disabled.",
+        createdAt: now,
+        deadline: audioQualification.expiresAt,
+        state: "queued",
+        callId,
+        audioQualification,
+      };
+      this.store.put("session", session);
+      this.store.put("attention", request);
+      this.store.put<CallSession>("call", {
+        id: callId,
+        requestId,
+        pairingId: pairing.id,
+        state: "prepared",
+        remoteParticipantQualified: false,
+        createdAt: now,
+        audioQualification,
+      });
+      this.enqueue(`${requestId}:call`, "call", {
+        requestId,
+        pairingId: pairing.id,
+        localCallId: callId,
+      });
+      this.store.recordEvent(key, fingerprint, { requestId });
+      return { session, request, token: this.issue("session", sessionId) };
+    });
+  }
+  /** Operator read-only projection; never reconstructs a lost session credential. */
+  audioQualificationStatus(requestId: string) {
+    const request = this.store.get<AttentionRequest>(
+      "attention",
+      nonempty.parse(requestId),
+    );
+    const session =
+      request && this.store.get<AgentSession>("session", request.sessionId);
+    const call =
+      request &&
+      this.store
+        .all<CallSession>("call")
+        .find((item) => item.requestId === request.id);
+    const marker =
+      request && audioQualificationSchema.safeParse(request.audioQualification);
+    if (
+      !request ||
+      !session ||
+      !call ||
+      !marker?.success ||
+      !isAudioQualification(session) ||
+      !isAudioQualification(call) ||
+      session.pairingId !== request.pairingId ||
+      call.pairingId !== request.pairingId ||
+      call.requestId !== request.id ||
+      session.protocolVersion !== 2 ||
+      session.adapter !== "audio-qualification" ||
+      session.conversation ||
+      session.interaction ||
+      session.capabilities.nativeControl !== "none" ||
+      session.capabilities.cooperativePause ||
+      session.capabilities.polling ||
+      request.deadline !== marker.data.expiresAt ||
+      JSON.stringify(session.audioQualification) !==
+        JSON.stringify(request.audioQualification) ||
+      JSON.stringify(call.audioQualification) !==
+        JSON.stringify(request.audioQualification)
+    )
+      throw new DomainError(404, "Audio qualification is unavailable.");
+    const media = this.store
+      .all<{ requestId: string; state: string }>("media")
+      .filter((item) => item.requestId === request.id);
+    const callEffect = this.store.effect(`${request.id}:call`),
+      endEffect = this.store.effect(`${request.id}:end`);
+    const cleanupConfirmed =
+      call.state === "ended" &&
+      media.every((item) => item.state === "closed") &&
+      (!call.providerCallId ||
+        (this.transport.mode === "simulation"
+          ? endEffect?.state === "done"
+          : media.length > 0 &&
+            media.every((item) => item.state === "closed") &&
+            endEffect?.state === "done"));
+    return {
+      session,
+      request,
+      call,
+      callEffect,
+      endEffect,
+      cleanupConfirmed,
+      mediaState: media.length
+        ? media.every((item) => item.state === "closed")
+          ? "closed"
+          : "unconfirmed"
+        : "absent",
+    };
+  }
+  stopAudioQualification(requestId: string) {
+    const { request } = this.audioQualificationStatus(requestId);
+    return this.closeAudioQualification(request, "canceled");
+  }
+  private closeAudioQualification(
+    request: AttentionRequest,
+    state: "canceled" | "expired",
+  ) {
+    return this.store.transaction(() => {
+      const { session, call } = this.audioQualificationStatus(request.id);
+      if (session.state !== "stopped")
+        this.store.put("session", {
+          ...session,
+          state: "stopped",
+          controlEpoch: session.controlEpoch + 1,
+        });
+      if (!terminal.has(request.state))
+        this.store.put("attention", { ...request, state });
+      this.store.saveState(`listening-stopped:${request.id}`, true);
+      this.store.saveState(`view-stopped:${request.id}`, true);
+      const effect = this.store.effect(`${request.id}:call`);
+      if (effect?.state === "pending" && !call.providerCallId) {
+        this.store.putEffect({
+          ...effect,
+          state: "failed",
+          result: { reason: "Qualification closed before native dial." },
+        });
+        this.store.put("call", {
+          ...call,
+          state: "ended",
+          remoteParticipantQualified: false,
+          endedAt: this.clock(),
+        });
+      }
+      this.endOwnedCall(
+        request,
+        state === "expired" ? "request_expired" : "request_completed",
+      );
+      return this.audioQualificationStatus(request.id);
+    });
   }
   createPairingInvite(input: InviteInput) {
     const binding = z
@@ -224,10 +496,87 @@ export class ClawdTime {
     const c = this.credential(raw, "pairing"),
       p = this.pairing(c.subjectId),
       value = registration.parse(input);
+    if (activeAudioQualification(this.store, p))
+      throw new DomainError(
+        409,
+        "Audio qualification reserves this pairing and line.",
+      );
     if (value.protocolVersion === 2 && !value.capabilities.polling)
       throw new DomainError(
         409,
         "Agent-owned conversations require bounded polling.",
+      );
+    if (
+      !!value.screenCamera !== (value.capabilities.screenCameraVersion === 1) ||
+      (value.screenCamera &&
+        (value.protocolVersion !== 2 ||
+          value.documentAccess !== undefined ||
+          String(value.screenCamera.surface.displayId) !== p.displayId))
+    )
+      throw new DomainError(
+        409,
+        "Screen camera requires an explicit version 2 surface on the paired display and matching capability.",
+      );
+    if (
+      value.capabilities.livePresentationVersion === 1 &&
+      (value.protocolVersion !== 2 ||
+        value.screenCamera?.version !== 1 ||
+        value.screenCamera.surface.kind !== "display" ||
+        value.capabilities.screenCameraVersion !== 1 ||
+        value.conversation !== undefined ||
+        value.documentAccess !== undefined)
+    )
+      throw new DomainError(
+        409,
+        "Live presentation requires a fresh same-chat version 2 display camera session.",
+      );
+    if (
+      value.capabilities.nativeActivationVersion === 1 &&
+      (value.protocolVersion !== 2 ||
+        value.capabilities.livePresentationVersion !== 1 ||
+        value.screenCamera?.surface.kind !== "display" ||
+        !value.capabilities.sharedSurface ||
+        value.capabilities.nativeControl !== "desktop" ||
+        value.conversation ||
+        value.documentAccess)
+    )
+      throw new DomainError(
+        409,
+        "Native activation requires a fresh original-chat display session with shared desktop control and live presentation.",
+      );
+    if (
+      value.voiceFrontend &&
+      (value.protocolVersion !== 2 ||
+        value.capabilities.voiceInteractionVersion !== 1 ||
+        value.conversation ||
+        value.documentAccess)
+    )
+      throw new DomainError(
+        409,
+        "Streaming voice requires a fresh same-chat v2 session with voice interaction support.",
+      );
+    if (value.interaction && value.protocolVersion !== 2)
+      throw new DomainError(
+        409,
+        "iMessage-first interaction requires protocol version 2.",
+      );
+    if (value.conversation && value.protocolVersion !== 2)
+      throw new DomainError(
+        409,
+        "Asynchronous execution requires protocol version 2.",
+      );
+    if (
+      (value.conversation?.runnerId === "remote-documents") !==
+        !!value.documentAccess ||
+      (value.documentAccess &&
+        (value.protocolVersion !== 2 ||
+          value.conversation?.executionSession !== "api_managed" ||
+          value.documentAccess.expiresAt <= this.clock() ||
+          value.documentAccess.expiresAt > this.clock() + 3600000))
+    )
+      throw new DomainError(
+        409,
+        "Document access requires an explicit bounded read-only managed document session.",
       );
     return this.store.transaction(() => {
       const previous = this.store
@@ -237,6 +586,16 @@ export class ClawdTime {
             s.pairingId === p.id &&
             s.externalSessionId === value.externalSessionId,
         );
+      if (!previous && this.nativeReservations.hasUnresolvedDevice(p.deviceId))
+        throw new DomainError(
+          409,
+          "Unresolved native input prevents a replacement session on this device.",
+        );
+      if (previous && isAudioQualification(previous))
+        throw new DomainError(
+          403,
+          "Qualification sessions cannot register or reconnect as agents.",
+        );
       if (
         previous &&
         ((previous.protocolVersion ?? 1) !== (value.protocolVersion ?? 1) ||
@@ -244,7 +603,17 @@ export class ClawdTime {
           previous.adapter !== value.adapter ||
           previous.hostId !== value.hostId ||
           JSON.stringify(previous.capabilities) !==
-            JSON.stringify(value.capabilities))
+            JSON.stringify(value.capabilities) ||
+          JSON.stringify(previous.interaction) !==
+            JSON.stringify(value.interaction) ||
+          JSON.stringify(previous.voiceFrontend) !==
+            JSON.stringify(value.voiceFrontend) ||
+          JSON.stringify(previous.conversation) !==
+            JSON.stringify(value.conversation) ||
+          JSON.stringify(previous.documentAccess) !==
+            JSON.stringify(value.documentAccess) ||
+          JSON.stringify(previous.screenCamera) !==
+            JSON.stringify(value.screenCamera))
       )
         throw new DomainError(
           409,
@@ -286,6 +655,7 @@ export class ClawdTime {
     const session = this.authenticateSession(raw),
       value = attentionInput.parse(input),
       pairing = this.pairing(session.pairingId);
+    this.assertExecutionAllowed(session);
     return this.store.transaction(() => {
       const key = `attention-key:${session.id}:${hash(value.idempotencyKey)}`;
       const old = this.store.state<{ fingerprint: string; requestId: string }>(
@@ -300,6 +670,11 @@ export class ClawdTime {
           );
         return this.store.get<AttentionRequest>("attention", old.requestId)!;
       }
+      if (this.nativeReservations.hasUnresolvedDevice(pairing.deviceId))
+        throw new DomainError(
+          409,
+          "Unresolved native input prevents a new attention request on this device.",
+        );
       if (
         session.protocolVersion !== 2 &&
         session.capabilities.cooperativePause &&
@@ -411,6 +786,7 @@ export class ClawdTime {
   }
   ack(raw: string, requestId: string, responseId: string) {
     const { session, request } = this.owned(raw, requestId);
+    this.assertExecutionAllowed(session);
     if (session.protocolVersion === 2)
       throw new DomainError(
         409,
@@ -440,14 +816,30 @@ export class ClawdTime {
     });
   }
   heartbeat(raw: string) {
+    this.expire();
     this.expireSessions();
     const session = this.authenticateSession(raw);
     return this.store.transaction(() => {
       const now = this.clock();
+      if (
+        isAudioQualification(session) &&
+        (!session.audioQualification ||
+          session.audioQualification.expiresAt <= now)
+      ) {
+        const request = this.store
+          .all<AttentionRequest>("attention")
+          .find(
+            (item) =>
+              item.sessionId === session.id && isAudioQualification(item),
+          );
+        if (request) this.closeAudioQualification(request, "expired");
+        throw new DomainError(403, "Audio qualification expired.");
+      }
       const current = this.store.put<AgentSession>("session", {
         ...session,
         lastSeenAt: now,
       });
+      if (isAudioQualification(current)) return current;
       if (
         current.protocolVersion !== 2 &&
         (current.state !== "yielded" || !current.capabilities.cooperativePause)
@@ -575,6 +967,7 @@ export class ClawdTime {
   }
   yieldSession(raw: string) {
     const session = this.authenticateSession(raw);
+    this.assertExecutionAllowed(session);
     if (!session.capabilities.cooperativePause)
       throw new DomainError(409, "Adapter cannot establish cooperative pause.");
     return this.store.put<AgentSession>("session", {
@@ -584,6 +977,7 @@ export class ClawdTime {
   }
   resume(raw: string, requestId: string, controlEpoch: number) {
     const { session, request } = this.owned(raw, requestId);
+    this.assertExecutionAllowed(session);
     if (session.protocolVersion === 2)
       throw new DomainError(
         409,
@@ -639,6 +1033,7 @@ export class ClawdTime {
   acknowledgeTerminal(raw: string, requestId: string, controlEpoch: number) {
     return this.store.transaction(() => {
       const { session, request } = this.owned(raw, requestId);
+      this.assertExecutionAllowed(session);
       if (
         ![
           "canceled",
@@ -786,6 +1181,7 @@ export class ClawdTime {
   complete(raw: string, requestId: string, text: string) {
     const { session, request } = this.owned(raw, requestId),
       result = textSchema.parse(text);
+    this.assertExecutionAllowed(session);
     if (session.protocolVersion === 2)
       throw new DomainError(
         409,
@@ -816,6 +1212,8 @@ export class ClawdTime {
         text: result,
       });
       this.endOwnedCall(request, "request_completed");
+      presentationFor(this).clear(request.id);
+      timelineFor(this).record(request.id, "end_requested", request.id);
       this.revokeLeases(request.id);
       return next;
     });
@@ -841,6 +1239,16 @@ export class ClawdTime {
       value.requestId,
     );
     if (!request) throw new DomainError(404, "Unknown attention request.");
+    const responseSession = this.store.get<AgentSession>(
+      "session",
+      request.sessionId,
+    );
+    if (isAudioQualification(request) || !responseSession)
+      throw new DomainError(
+        403,
+        "Audio qualification cannot ingest task responses.",
+      );
+    this.assertExecutionAllowed(responseSession);
     const p = this.pairing(request.pairingId);
     if (
       this.store.get<AgentSession>("session", request.sessionId)
@@ -957,6 +1365,9 @@ export class ClawdTime {
         });
       }
       this.revokeLeases(request.id);
+      presentationFor(this).clear(request.id);
+      if (state === "ended")
+        timelineFor(this).record(requestId, "cleanup_confirmed", requestId);
       if (!request.responseId && !terminal.has(request.state))
         this.store.put("attention", {
           ...request,
@@ -987,6 +1398,8 @@ export class ClawdTime {
   /** Explicit v2 end closes the call, never interprets one delivered turn as completion. */
   endConversation(raw: string, requestId: string) {
     const { session, request } = this.owned(raw, requestId);
+    if (isAudioQualification(session) || isAudioQualification(request))
+      return this.stopAudioQualification(request.id).request;
     if (session.protocolVersion !== 2)
       throw new DomainError(
         409,
@@ -1000,11 +1413,21 @@ export class ClawdTime {
         });
       this.revokeLeases(request.id);
       this.endOwnedCall(request, "request_completed");
+      presentationFor(this).clear(request.id);
+      timelineFor(this).record(request.id, "end_requested", request.id);
       return this.store.get<AttentionRequest>("attention", request.id)!;
     });
   }
   /** The caller must authenticate the exact local panel/device binding first. */
   endConversationFromPanel(
+    requestId: string,
+    sessionId: string,
+    callId: string,
+  ) {
+    return this.endConversationFromBoundCall(requestId, sessionId, callId);
+  }
+  /** Trusted callers authenticate panel or media and qualify the exact call first. */
+  endConversationFromBoundCall(
     requestId: string,
     sessionId: string,
     callId: string,
@@ -1035,6 +1458,8 @@ export class ClawdTime {
       }
       this.revokeLeases(request.id);
       this.endOwnedCall(request, "request_completed");
+      presentationFor(this).clear(request.id);
+      timelineFor(this).record(request.id, "end_requested", request.id);
       return this.store.get<AttentionRequest>("attention", request.id)!;
     });
   }
@@ -1057,7 +1482,26 @@ export class ClawdTime {
     }
   }
   disconnect(raw: string) {
-    const c = this.credential(raw),
+    const credential = this.credential(raw);
+    if (credential.kind === "session") {
+      const session = this.store.get<AgentSession>(
+        "session",
+        credential.subjectId,
+      );
+      if (isAudioQualification(session)) {
+        const request = this.store
+          .all<AttentionRequest>("attention")
+          .find(
+            (item) =>
+              item.sessionId === session!.id && isAudioQualification(item),
+          );
+        if (!request)
+          throw new DomainError(404, "Qualification request unavailable.");
+        this.stopAudioQualification(request.id);
+        return { revoked: false, stopped: true };
+      }
+    }
+    const c = credential,
       pairingId =
         c.kind === "pairing"
           ? c.subjectId
@@ -1083,6 +1527,26 @@ export class ClawdTime {
     });
   }
   expire() {
+    pruneMessageEffects(this);
+    for (const qualification of this.store.all<AttentionRequest>("attention"))
+      if (
+        isAudioQualification(qualification) &&
+        qualification.deadline <= this.clock()
+      ) {
+        try {
+          this.closeAudioQualification(qualification, "expired");
+        } catch {
+          // Malformed marker data cannot stall cleanup for unrelated work.
+          const session = this.store.get<AgentSession>(
+            "session",
+            qualification.sessionId,
+          );
+          if (session?.pairingId === qualification.pairingId)
+            this.store.put("session", { ...session, state: "stopped" });
+          this.store.put("attention", { ...qualification, state: "unknown" });
+          this.endOwnedCall(qualification, "request_expired");
+        }
+      }
     for (const request of this.store.all<AttentionRequest>("attention"))
       if (
         !terminal.has(request.state) &&
@@ -1151,16 +1615,28 @@ export class ClawdTime {
           setupSession.pairingId === setup.pairingId &&
           setupSession.state !== "stopped";
         if (
-          (!request && !setupAuthorized) ||
+          (effect.kind === "message" &&
+            (isAudioQualification(request) ||
+              isAudioQualification(setupSession) ||
+              isAudioQualification(
+                this.store.get<AgentSession>(
+                  "session",
+                  String(effect.payload.sessionId),
+                ),
+              ))) ||
+          (!request && !setupAuthorized && effect.payload.brokerUpdate !== 1) ||
           !pairing ||
           (effect.kind !== "end_call" && pairing.revokedAt !== undefined) ||
+          !messageUpdateAuthorized(this, effect) ||
           (effect.kind === "call" && request?.state !== "queued")
         ) {
-          this.store.putEffect({
-            ...effect,
-            state: "failed",
-            result: { reason: "Authorization closed before dispatch." },
-          });
+          this.store.putEffect(
+            redactMessageEffect({
+              ...effect,
+              state: "failed",
+              result: { reason: "Authorization closed before dispatch." },
+            }),
+          );
           if (effect.kind === "call") {
             const call = this.store.get<CallSession>(
               "call",
@@ -1190,6 +1666,22 @@ export class ClawdTime {
               pairing,
               String(effect.payload.text),
               effect.id,
+              () => {
+                const currentPairing = this.store.get<Pairing>(
+                  "pairing",
+                  pairing.id,
+                );
+                if (
+                  !currentPairing ||
+                  currentPairing.revokedAt !== undefined ||
+                  currentPairing.memberId !== pairing.memberId ||
+                  currentPairing.recipient !== pairing.recipient ||
+                  currentPairing.lineId !== pairing.lineId ||
+                  currentPairing.conversationId !== pairing.conversationId ||
+                  !messageUpdateAuthorized(this, effect)
+                )
+                  throw new MessageDispatchClosed();
+              },
             );
           else
             result = await this.transport.endCall(
@@ -1204,7 +1696,15 @@ export class ClawdTime {
           )
             throw new Error("Message acknowledgement receipt missing.");
           this.store.transaction(() => {
-            this.store.putEffect({ ...effect, state: "done", result });
+            this.store.putEffect(
+              redactMessageEffect({ ...effect, state: "done", result }),
+            );
+            if (effect.payload.conversationUpdate === 1)
+              timelineFor(this).record(
+                String(effect.payload.requestId),
+                "message_acknowledged",
+                effect.id,
+              );
             if (
               effect.kind === "end_call" &&
               this.transport.mode === "simulation"
@@ -1240,6 +1740,19 @@ export class ClawdTime {
             }
           });
         } catch (error) {
+          if (error instanceof MessageDispatchClosed) {
+            this.store.putEffect(
+              redactMessageEffect({
+                ...effect,
+                state: "failed",
+                result: {
+                  reason:
+                    "Authorization closed before dispatch; no external effect attempted.",
+                },
+              }),
+            );
+            continue;
+          }
           if (error instanceof PreflightBlocked) {
             this.store.putEffect({
               ...effect,
@@ -1259,6 +1772,9 @@ export class ClawdTime {
                 result: {
                   reason:
                     "Refused before dispatch; no external effect attempted.",
+                  dialSent: false,
+                  replayAllowed: false,
+                  ...(error.phase ? { phase: error.phase } : {}),
                 },
               });
               const call = this.store.get<CallSession>(
@@ -1276,14 +1792,16 @@ export class ClawdTime {
             });
             continue;
           }
-          this.store.putEffect({
-            ...effect,
-            state: "unknown",
-            result: {
-              reason:
-                "External outcome uncertain; reconcile the existing effect ID.",
-            },
-          });
+          this.store.putEffect(
+            redactMessageEffect({
+              ...effect,
+              state: "unknown",
+              result: {
+                reason:
+                  "External outcome uncertain; reconcile the existing effect ID.",
+              },
+            }),
+          );
           if (effect.kind === "call") {
             this.store.put("attention", {
               ...this.store.get<AttentionRequest>("attention", request!.id)!,
@@ -1301,6 +1819,146 @@ export class ClawdTime {
       this.draining = false;
     }
   }
+  /** Terminal bookkeeping for a call whose native dial was provably never sent. */
+  private closeUndialedCall(
+    effect: EffectReceipt,
+    detail: Record<string, unknown>,
+  ) {
+    const now = this.clock();
+    this.store.putEffect({
+      ...effect,
+      state: "failed",
+      result: { ...detail, dialSent: false, replayAllowed: false },
+    });
+    const request = this.store.get<AttentionRequest>(
+      "attention",
+      String(effect.payload.requestId),
+    );
+    if (
+      request &&
+      (!terminal.has(request.state) || request.state === "unknown")
+    )
+      this.store.put("attention", { ...request, state: "failed" });
+    const call = this.store.get<CallSession>(
+      "call",
+      String(effect.payload.localCallId),
+    );
+    if (call && call.state !== "ended")
+      this.store.put("call", { ...call, state: "ended", endedAt: now });
+  }
+  /**
+   * Lead-only operator reconciliation of a call recorded as unknown before the
+   * NotDispatched distinction existed. The original media record must prove the
+   * native dial was never sent: it never received sealed credentials (which
+   * precede the dial) nor a provider call ID. Insert-only audit; never redials.
+   */
+  reconcileUndialedCall(input: {
+    requestId: string;
+    evidenceReference: string;
+  }) {
+    const refuse = () => {
+      throw new DomainError(
+        409,
+        "Undialed-call proof is incomplete; preserve the unknown outcome and do not replay.",
+      );
+    };
+    const digest = (v: unknown) => hash(JSON.stringify(v));
+    return this.store.transaction(() => {
+      const effectId = `${input.requestId}:call`,
+        key = `undialed-call-reconciliation:${effectId}`;
+      const previous = this.store.event<{
+        evidenceReference: string;
+        effectId: string;
+      }>(key);
+      if (previous) {
+        if (
+          previous.fingerprint !== digest(previous.result) ||
+          previous.result.evidenceReference !== input.evidenceReference
+        )
+          return refuse();
+        return previous.result;
+      }
+      if (!/^sha256:[a-f0-9]{64}$/.test(input.evidenceReference))
+        return refuse();
+      const now = this.clock();
+      const effect = this.store.effect(effectId);
+      const attention = this.store.get<AttentionRequest>(
+        "attention",
+        input.requestId,
+      );
+      if (
+        !effect ||
+        effect.kind !== "call" ||
+        effect.state !== "unknown" ||
+        effect.payload.requestId !== input.requestId ||
+        typeof effect.payload.localCallId !== "string" ||
+        effect.result?.callId !== undefined ||
+        !attention ||
+        attention.state !== "unknown" ||
+        attention.deadline > now
+      )
+        return refuse();
+      const localCallId = effect.payload.localCallId;
+      const call = this.store.get<CallSession>("call", localCallId);
+      const media = this.store.get<{
+        id: string;
+        requestId: string;
+        state: string;
+        credentials?: string;
+        providerCallId?: string;
+      }>("media", localCallId);
+      if (
+        !call ||
+        call.requestId !== attention.id ||
+        call.state !== "unknown" ||
+        call.providerCallId !== undefined ||
+        !media ||
+        media.requestId !== attention.id ||
+        media.state !== "unknown" ||
+        media.credentials !== undefined ||
+        media.providerCallId !== undefined ||
+        this.store
+          .effects()
+          .some(
+            (e) =>
+              e.id !== effectId &&
+              e.payload.requestId === attention.id &&
+              ["pending", "running", "unknown"].includes(e.state),
+          )
+      )
+        return refuse();
+      const audit = {
+        version: 1,
+        reason: "media_prepare_failed_before_native_dial",
+        effectId,
+        requestId: attention.id,
+        pairingId: attention.pairingId,
+        localCallId,
+        originalEffect: effect,
+        effectHash: digest(effect),
+        attentionHash: digest(attention),
+        callHash: digest(call),
+        mediaHash: digest(media),
+        evidenceReference: input.evidenceReference,
+        at: now,
+        dialSent: false,
+        replayAllowed: false,
+      };
+      this.store.recordEvent(key, digest(audit), audit); // insert-only
+      this.store.put("media", {
+        ...media,
+        state: "closed",
+        notDialed: { phase: "media_prepare", at: now },
+      });
+      this.closeUndialedCall(effect, {
+        reason:
+          "Operator reconciled: the media record proves no native dial was sent.",
+        phase: "media_prepare",
+        reconciliation: key,
+      });
+      return audit;
+    });
+  }
   doctor(raw: string) {
     const c = this.credential(raw),
       session =
@@ -1314,7 +1972,22 @@ export class ClawdTime {
     const retiredSetupInvitationCount = unknown.filter((e) =>
       setupInvitationRetirementValid(this.store, e, now),
     ).length;
-    const blockingUnknownEffects = unknownEffects - retiredSetupInvitationCount;
+    const unknownAttachmentCount = this.store
+      .all<{ pairingId: string; state: string }>("attachment_dispatch")
+      .filter(
+        (item) => item.pairingId === pairing.id && item.state === "unknown",
+      ).length;
+    const nativeReservations = unresolvedNativeReservations(
+      this.store,
+      pairing.deviceId,
+      now,
+    );
+    const unresolvedNativeCount = nativeReservations.length;
+    const blockingUnknownEffects =
+      unknownEffects -
+      retiredSetupInvitationCount +
+      unknownAttachmentCount +
+      unresolvedNativeCount;
     const checks: ReadinessCheck[] = [];
     const mode =
       this.store.state<string>("runtime:mode") ?? this.transport.mode;
@@ -1430,10 +2103,18 @@ export class ClawdTime {
       ...(session ? { session } : {}),
       ready: mode === "simulation" ? pairing.allowView : liveReady,
       unknownEffects,
+      unknownAttachmentCount,
+      unresolvedNativeCount,
       retiredSetupInvitationCount,
       blockingUnknownEffects,
       physicalAcceptance: false,
-      readiness: { checkedAt: now, mode, liveReady, checks },
+      capabilities: { presentationVersion: 1 },
+      readiness: {
+        checkedAt: now,
+        mode,
+        liveReady,
+        checks: checks.map((check) => explainReadiness(check, now)),
+      },
     };
   }
 }

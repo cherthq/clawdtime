@@ -152,3 +152,125 @@ operators must configure protected offsite storage before external deployment.
 For local configuration, export variables through your secret manager or use
 `node --env-file=.env dist/src/server.js` after building; `npm run dev` does not
 implicitly load a dotenv file. Never use an Apple Teams environment file.
+
+## Prepared live presentation staging
+
+`CLAWDTIME_LIVE_PRESENTATION_ENABLED` defaults to false independently in backend and
+media. A new original-chat connector must explicitly register
+`--screen-camera true --camera-display ID --live-presentation true` using
+its normal exact surface arguments. Consult connector help for the complete command;
+existing sessions cannot upgrade their capability. The backend requires the
+versioned helper capability from scoped readiness, current view lease, no input
+owner, and exact conversation cursor. These presentation endpoints remain camera-only;
+the separately negotiated activation path below owns its own reservations.
+
+Release matching backend, media, gateway and companion artifacts. Keep new admission
+off until the selected display, lease-bound resolver, original timestamps and remote
+latency budgets are qualified. Existing sessions and snapshot capture continue on
+their prior path. Do not promote the experimental persistent preview stream as a
+capture repair. No call may be placed without the user's separate authorization.
+
+Backend receipts live in the existing durable entities store; media adds a
+`presentation_receipts` table with session-namespaced command IDs. Old binaries can
+ignore this table during rollback; never delete it or restore an older database to
+replay a command. Record current service deployments and preserve the configuration,
+active cursor and all unknown outcomes before changing running components.
+
+## Narrow native activation staging
+
+`CLAWDTIME_NATIVE_ACTIVATION_ENABLED` defaults off independently in backend and
+media. New original-chat v2 sessions explicitly select `--native-activation true`
+alongside the display camera, live presentation and verified desktop native-control
+capabilities. Existing registrations cannot acquire it by reconnecting.
+
+Preparation reserves the exact operation and device in the backend before any
+remote qualification. Its planning expiry is at most the original lease expiry
+and twenty seconds. A fixed CUA trigger initiates dispatch once, creating a
+separate immutable deadline of at most two seconds. Every helper setter and
+settling observation requires the installed parent's current local policy;
+Stop kills the disposable AX child without waiting for the cloud or AX.
+An exact returned receipt proves the host finished, not that its target UI is
+correct. Only fresh independent foreground/focus/on-screen evidence verifies UI.
+
+Backend, media, gateway and helper retain native reservations. Prepared operations
+can expire without input; dispatching/submitted/uncertain operations never expire
+into permission to retry. They fence the entire Mac, including replacement chats
+and other displays. Read original receipts to reconcile; never replace IDs,
+delete ledgers, restore older databases or replay effects.
+
+For an isolated no-call rehearsal, use a private synthetic helper configuration
+with a fresh device ID beginning `synthetic_`, a separate loopback port and one
+explicit display/controller. Launch the candidate companion with that config and
+Enable that candidate locally through native CUA. Keep the installed production
+helper disarmed. Run:
+
+```sh
+npx tsx scripts/production-walkthrough.ts PRIVATE_HELPER_JSON PRIVATE_SCENE_PLAN
+```
+
+This script uses simulation transport only and the production backend routes,
+media controllers, gateway and installed-helper native host. It writes a private
+local-access file and retains all test receipts. Its JSONL `prepare` command does
+not dispatch; click the fixed prepared-operation button using the original chat's
+native CUA. `claim`/`release` bracket original-chat fixture edits and moves. Local
+helper Stop is authoritative; end with the harness `stop` command and inspect
+process cleanup and unresolved counts separately. The harness is excluded from
+the media image and has no deployed bypass route.
+
+Release only after local acceptance and independent review. Freeze the committed
+source in an isolated upload directory; replace each packaged `release-source.json`
+with that exact SHA. Backend and media health expose the baked revision; gateway
+version metadata exposes its revision and runtime digest. Companion Info.plist
+records the source revision and whether implementation files were dirty. Verify
+actual running versions and artifact hashes after rollout, not merely upload or
+Git status. Keep both admission gates off and the installed companion disarmed.
+
+A compatible rollback retains all ledgers and starts disarmed with admission off.
+Never roll back to a pre-activation binary while a native reservation is unresolved:
+older binaries do not enforce this new fence. Stop, join and reconcile first, or
+retain the compatible disabled release. Do not restore a stale cursor or volume.
+
+## November 17 native walkthrough release
+
+Source: `89f78397c63b2e9362e764a0ab6b34ad42aa6623`, pushed on `ArgosClawd`.
+Backend deployment: `f320ce4b-e9db-4fc1-812a-8fc01178e820`.
+Media deployment: `cb364e09-af86-4765-9ec4-6712bcee8fd5`.
+Both services report the baked source SHA. Both presentation/activation admission
+gates remain unset/default-off. Installed companion 0.4.0 build 8 remains disarmed.
+See [STATUS.md](STATUS.md) for artifact hashes, receipt-preservation evidence,
+local acceptance and the current connector HTTP 401 prerequisite.
+
+The gateway LaunchAgent uses its existing Python environment and unchanged private
+configuration. Its source is frozen under
+`~/Library/Application Support/ClawdTimeReleases/89f78397c63b2e9362e764a0ab6b34ad42aa6623/gateway`.
+It is no longer started from a mutable working-tree source directory. The owner-only
+release audit beside that directory records configuration/ledger hashes and the
+previous launch arguments, without copying credentials or runtime records.
+
+The original-chat CLI is `/Users/garygao/clawdtime/dist/cli/main.js`; its compiled
+tree matches the frozen build and `dist/release-source.json` records the source
+SHA. The current connection is invalid, so no fresh session was registered.
+After restoring an authorized connection for the same intended pairing, prepare
+the new session in this original chat with a new stable run ID:
+
+```sh
+node /Users/garygao/clawdtime/dist/cli/main.js setup-session --agent codex --project /Users/garygao/clawdtime --run-id CURRENT_CHAT_NEW_STABLE_RUN_ID --native-control desktop --shared-surface true --native-cancellation false --screen-camera true --camera-display 1 --live-presentation true --native-activation true --message-updates false
+```
+
+Read the returned immutable capabilities before any test. Keep existing runs and
+receipts; never silently patch an old registration. Registration alone does not
+authorize an invitation, call, capture, input or enabling admission.
+
+Preferred recovery is to keep this compatible release installed, disarmed and
+with admission off while reconciling exact receipts. The previous backend
+`3419147a-df04-4166-a4a9-5f32e6681c42` and media
+`4c7de1a8-32b2-4e31-ba3d-c51dad365185` deployments are pre-activation rollback
+targets only after all native reservations are terminal and actors joined. Their
+source is `c7af884`; gateway source and the original companion build 7 bundle are
+retained under
+`~/Library/Application Support/ClawdTimeReleases/rollback-c7af884-build7`.
+Keep current databases/configuration/cursors throughout rollback. Point the
+existing gateway LaunchAgent at that frozen gateway source, and restore the saved
+companion to its existing stable application path only after idle checks. Never
+start a second gateway or helper against the same configuration. Verify actual
+running versions, permissions, disarmed state and receipt preservation afterward.

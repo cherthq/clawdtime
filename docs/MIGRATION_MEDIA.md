@@ -66,3 +66,42 @@ implementation. Installing/restarting the companion requires separate approval a
 must preserve its stable signing identity and existing macOS permissions. Rollback
 stops sharing and reconciles active/unknown inputs before replacing source; retained
 receipts and policy revisions are never deleted. Mixed-version fallback is refused.
+
+## Conversational-control migration preparation
+
+The optional GPT-Live adapter and protocol-3 text grants are source-only additions.
+Keep `MEDIA_GPT_LIVE_ENABLED` and `MEDIA_TEXT_CONTROL_ENABLED` disabled during
+rollout preparation. Build optional voice dependencies with
+`docker build --build-arg ENABLE_GPT_LIVE=true media`; the standard build remains
+legacy-compatible and does not install Agents. Provision a direct OpenAI credential
+only through protected configuration and verify a provider session before enabling
+new-session capability negotiation. AI Gateway credentials are not Live credentials.
+Do not flip audio-isolation qualification to make activation succeed.
+
+Stage matching backend/media/gateway/helper source before enabling text control.
+A freshly built helper advertises textControlVersion; older helpers cannot grant
+text-session control. Existing v1/v2 sessions are not converted. Keep the deployed
+startup greeting and playback-generation fix. Stop/drain known live sessions before
+replacement; do not reuse an old test's call authorization.
+
+The media SQLite migration only adds `text_leases` and `text_actions`. Gateway
+receipts and helper journals gain optional v3 authority/session metadata; existing
+fields and historical reconciliation ledgers are preserved. Text grants themselves
+are intentionally memory-only and disappear on companion restart. Back up all
+receipt ledgers through the existing protected process, without copying runtime
+state into source. Rollback disables new-session negotiation and text input,
+locally stops sharing, drains/reconciles active effects, and restores prior binaries.
+Keep new tables and original receipt data. Old binaries cannot replay or interpret
+v3 input as a call; unresolved v3 actions must be reconciled before downgrading.
+An unknown create remains blocked even after an overtaking DELETE acknowledgement;
+never remove the tombstone or switch adapters to manufacture a clean retry.
+
+No component was deployed, installed or restarted by the implementation tests.
+Provider voice access, actual handset echo/interruption/latency, a current local
+grant and native/custom controlled trials remain separate acceptance requirements.
+
+The source packaging script now labels new companion bundles **0.3.0, build 4**.
+The currently installed pilot remains **0.2.1** until the lead deliberately packages
+and installs the matching release; compilation alone changes neither installation
+nor signing/TCC identity. `swift build --package-path mac -c release` passed without
+running the package/sign/install script.

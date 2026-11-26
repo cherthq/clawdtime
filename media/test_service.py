@@ -1,4 +1,6 @@
 import asyncio
+import time
+from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,9 +21,28 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         self.tmp.cleanup()
 
+    async def test_repeated_stop_waits_for_exact_pending_release_before_acknowledging(self):
+        entered=asyncio.Event();finish=asyncio.Event()
+        screen=SimpleNamespace(selection=None,stopped={'lease'},terminal_tasks={},release_blocked_until=0)
+        async def cleanup():
+            entered.set();await finish.wait();screen.release_blocked_until=time.time()+10
+        screen.transition_task=asyncio.create_task(cleanup())
+        sid='ct_'+'c'*40
+        self.service.sessions[sid]=SimpleNamespace(screen=screen,close=AsyncMock())
+        async def stop():return await self.client.post('/sessions/'+sid+'/screen/stop',json={'leaseId':'lease'},headers={'Authorization':'Bearer '+'m'*32})
+        pending=asyncio.create_task(stop())
+        try:
+            await entered.wait();await asyncio.sleep(.01)
+            self.assertFalse(pending.done())
+            finish.set();response=await pending;self.assertEqual(response.status,409)
+            screen.release_blocked_until=0
+            self.assertEqual((await stop()).status,200)
+        finally:
+            finish.set();await asyncio.gather(pending,screen.transition_task,return_exceptions=True)
+
     async def test_public_health_and_authenticated_standby(self):
         r=await self.client.get('/health')
-        self.assertEqual(await r.json(),{'ok':True,'service':'clawdtime-media','configured':False,'activeSessions':0,'deviceGatewayConnected':False,'devicesConfigured':False})
+        self.assertEqual(await r.json(),{'ok':True,'service':'clawdtime-media','sourceRevision':'development','configured':False,'activeSessions':0,'deviceGatewayConnected':False,'devicesConfigured':False})
         r=await self.client.post('/sessions',json={})
         self.assertEqual(r.status,401)
         r=await self.client.post('/sessions',json={},headers={'Authorization':'Bearer '+'m'*32})

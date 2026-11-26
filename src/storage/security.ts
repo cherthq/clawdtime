@@ -6,6 +6,7 @@ import {
   createCipheriv,
   createDecipheriv,
 } from "node:crypto";
+import type { CameraErrorCode } from "../camera-errors.js";
 export const id = (prefix: string) => `${prefix}_${randomUUID()}`;
 export const token = () => randomBytes(32).toString("base64url");
 export const hash = (value: string) =>
@@ -45,7 +46,13 @@ export class DomainError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly code?: "setup_reserved" | "reply_context_stale" | "reply_exists",
+    readonly code?:
+      | "setup_reserved"
+      | "reply_context_stale"
+      | "reply_exists"
+      | "input_context_stale"
+      | "input_held"
+      | CameraErrorCode,
   ) {
     super(message);
   }

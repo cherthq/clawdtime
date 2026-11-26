@@ -1,5 +1,41 @@
 # ClawdTime pilot guide
 
+## Read-only résumé demo
+
+Select one local folder with a fresh expiring document-session grant and start
+its foreground worker as documented in CONNECTORS.md. The phone and text frontend
+share the same ordered job state. Ask to find your résumé, choose a named candidate,
+and inspect its first-page preview. Then explicitly say “send this document to me.”
+That sends the exact original to the paired iMessage conversation; another
+recipient is not supported. A provider-accepted report does not confirm that the
+handset has displayed or downloaded the attachment.
+
+A different candidate needs a new preview. Preview links expire after two minutes.
+If the original changes, discover and select again. “Stop speaking” interrupts
+speech separately; literal “Stop” revokes document access and pending transfers.
+Ctrl-C in the local worker also revokes its grant. Never repeat an ambiguous send
+through another adapter. Resume requires fresh authority, not an expired call.
+
+
+## New conversational architecture (admission disabled)
+
+Use [the conversational release guide](CONVERSATIONAL_CONTROL_RELEASE.md) for the
+new broker, explicit API-managed runner, local executor worker, optional GPT-Live
+frontend and text-session control grant. New sessions opt in; existing sessions
+are never upgraded. Text remains responsive during asynchronous jobs; status and
+results come from executor state and independent verification. Native desktop CUA,
+GPT-Live access and physical handset qualification are separate gates.
+
+Backend/media 0.3.1 are deployed with ordinary feature gates off; the installed Mac
+helper remains 0.2.1. Direct GPT-Live access is verified. The separate
+[execution-disabled audio test](AUDIO_QUALIFICATION.md) is deployed and ready; physical acceptance remains
+outstanding. This bounded mode latches output after the first interruption and
+does not enable task execution.
+See [rollout and exact next steps](CONVERSATIONAL_CONTROL_RELEASE.md).
+
+The sections below describe the retained legacy foreground-chat pilot. Their rule
+that this original chat produces every reply applies only to that legacy path.
+
 The deployed backend/media/gateway use the agent-owned v2 protocol. Companion
 0.2.1 and the installed skill include the native-control repair. The existing
 coding session receives human turns, uses its normal tools and supplies spoken
@@ -15,6 +51,43 @@ See [STATUS.md](STATUS.md) for exact versions, checks and limits.
 
 ## Set up once
 
+### Deployed follow-up: text first and gated two-way voice
+
+The following behavior originated in `7f1b687` and is retained in 0.3.0; **handset qualification
+is pending and two-way voice remains disabled**. Newly registered v2 connectors opt into iMessage-first
+control. Existing saved runs keep their negotiated behavior. Text `/sessions` to
+list available sessions and `/use SESSION_ID` to select one; selection lasts ten
+minutes. A single available session is selected automatically. The original agent
+must be running and polling `conversation_inbox`; this does not wake idle chats.
+Call-free text requests expire after five minutes and do not grant screen input.
+
+Text commands default to text replies, voice commands to voice replies. Automatic
+accepted/acknowledged/approval/outcome notices are coalesced; `--message-updates false`
+disables those notices while preserving explicit replies and input. Transport
+acknowledgment does not prove the handset displayed a message. File attachments
+are not implemented by this control path.
+
+Two-way voice requires the v1 voice capability plus backend
+`CLAWDTIME_TWO_WAY_VOICE_ENABLED=true`, `CLAWDTIME_REMOTE_AUDIO_ISOLATED=true`, and
+media `MEDIA_TWO_WAY_VOICE_ENABLED=true`. Keep these false until the actual remote
+track is qualified for isolation and speakerphone/headset echo. They are operator
+assertions, not automatic echo cancellation. Without all prerequisites, speech
+retains half-duplex behavior. Mute, local Stop and identity checks still apply.
+
+Qualified speech activity cancels local playback and requests a brief input hold;
+final corrections stay ordered with text and block further ClawdTime input until
+acknowledged. Already-submitted native actions remain host-dependent. Re-read
+execution state after a rejected ownership transition before releasing/retrying.
+
+Use `conversation_timing` for bounded connector round trips and `diagnostics` for
+combined connector/control/media events; the session inspector reports frame,
+ownership, input submission/observation and speech stages where available. Hidden
+model/tool internals and handset rendering are explicitly unmeasured. No latency
+improvement is established yet. See [VOICE_INTERACTION_PLAN.md](VOICE_INTERACTION_PLAN.md)
+for physical acceptance and benchmark steps.
+
+### Previously deployed setup
+
 1. Use [Text it](https://www.clawdtime.com) from the invited handset and paste the
    returned setup prompt into the coding chat you want to keep using.
 2. The agent uses the trusted local build to prepare the companion and project
@@ -27,7 +100,8 @@ See [STATUS.md](STATUS.md) for exact versions, checks and limits.
 
 An existing pairing can be reused; its old call/session must be terminal and its
 receipts preserved. Never reclaim a consumed setup link or reuse a stopped run.
-General work initiated from Messages and inbound FaceTime are future features.
+Arbitrary idle-chat wake and inbound FaceTime remain future features; the local
+source follow-up above adds text input to already-running sessions.
 The skill is invoked cooperatively, not an automatic interceptor for every blocker.
 
 ## Native tools and the Control Panel

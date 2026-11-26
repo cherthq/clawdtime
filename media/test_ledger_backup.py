@@ -93,6 +93,23 @@ class LedgerBackupTests(unittest.TestCase):
         self.assertFalse(any('snapshot' in p.name or 'restor' in p.name
                              for p in self.directory.iterdir()))
 
+    def test_new_presentation_unknowns_survive_full_snapshot_and_reopen(self):
+        self.db.execute('CREATE TABLE presentation_receipts(id TEXT PRIMARY KEY,arguments TEXT,fingerprint TEXT,result TEXT)')
+        result=json.dumps({'commandId':'command','state':'uncertain','receiptId':'receipt','fingerprint':'f'*64})
+        self.db.execute('INSERT INTO presentation_receipts VALUES(?,?,?,?)',('ct_fixture/command','a'*64,'f'*64,result));self.db.commit()
+        envelope,counts=encrypted_snapshot(self.source,KEY,IDENTITY)
+        self.assertEqual(counts['presentation_receipts'],1)
+        plaintext=AESGCM(bytes.fromhex(KEY)).decrypt(envelope[8:20],envelope[20:],MAGIC)
+        offset=4+struct.unpack('>I',plaintext[:4])[0]
+        copy=sqlite3.connect(':memory:')
+        try:
+            copy.deserialize(plaintext[offset:])
+            self.assertEqual(copy.execute('SELECT result FROM presentation_receipts').fetchone()[0],result)
+        finally:copy.close()
+        restarted=Service({'MEDIA_DATABASE_PATH':str(self.source)})
+        try:self.assertEqual(restarted.db.execute('SELECT result FROM presentation_receipts').fetchone()[0],result)
+        finally:restarted.db.close()
+
     def test_existing_output_symlink_and_insecure_directory_are_refused(self):
         self.output.write_bytes(b'keep')
         with self.assertRaises(BackupError):
@@ -175,7 +192,7 @@ class LedgerBackupEndpointTests(unittest.IsolatedAsyncioTestCase):
         output = Path(self.tmp.name) / 'download.enc'
         write_encrypted(output, encrypted)
         self.assertEqual(verify_backup(output, KEY, IDENTITY)['tables'],
-                         {'sessions': 0, 'speech': 0, 'device_actions': 0})
+                         {'sessions': 0, 'speech': 0, 'device_actions': 0, 'presentation_receipts': 0, 'native_activation_receipts': 0})
         self.assertEqual((await self.client.get('/internal/ledger-backup', headers=self.headers)).status, 429)
 
     async def test_busy_snapshot_does_not_block_health_or_start_another_worker(self):

@@ -1,3 +1,7 @@
+import {
+  presentationReferenceSchema,
+  type PresentationReference,
+} from "../camera-contracts.js";
 import { z } from "zod";
 import type { ClawdTime } from "../attention/service.js";
 import { DomainError } from "../attention/service.js";
@@ -17,9 +21,13 @@ export const executionTransition = z
     executor: z.enum(["none", "native", "clawdtime"]),
     previousOutcome: z.enum(["idle", "completed", "uncertain"]),
     backgroundActorsStopped: z.boolean(),
+    expectedCursor: z.number().int().nonnegative().safe().optional(),
   })
   .strict();
 export const localPolicySchema = z.object({
+  cameraVersion: z.literal(1).optional(),
+  livePresentationVersion: z.literal(1).optional(),
+  nativeActivationVersion: z.literal(1).optional(),
   controlPolicy: z.enum([
     "view_only",
     "agent_tools_only",
@@ -61,12 +69,23 @@ export async function readLocalPolicy(
   return localPolicySchema.parse(raw);
 }
 
-/** Cooperative ownership of only the selected shared surface, independent of reasoning/file work. */
+/** Exclusive device input ownership, independent of ordinary reasoning/file work. */
 export class ExecutionCoordinator {
   private busy = new Set<string>();
   constructor(
     readonly service: ClawdTime,
     readonly control: ControlCoordinator,
+    private readonly inputGuard?: (
+      token: string,
+      requestId: string,
+      expectedCursor?: number,
+    ) => void,
+    private readonly cameraGuard?: (
+      token: string,
+      requestId: string,
+      frameId: string,
+      reference?: PresentationReference,
+    ) => Promise<void>,
   ) {
     for (const e of service.store.all<ExecutionOwnership>("execution"))
       if (e.executor !== "none" && e.state !== "uncertain")
@@ -84,8 +103,13 @@ export class ExecutionCoordinator {
         403,
         "Exact version 2 conversation owner required.",
       );
+    this.service.assertExecutionAllowed(s);
+    if (r.audioQualification !== undefined)
+      throw new DomainError(403, "Audio qualification cannot execute.");
     const p = this.service.pairing(r.pairingId);
     const call = this.service.store.get<CallSession>("call", r.callId ?? "");
+    if (call?.audioQualification !== undefined)
+      throw new DomainError(403, "Audio qualification cannot execute.");
     if (
       requireOpen &&
       (s.state === "stopped" ||
@@ -121,7 +145,9 @@ export class ExecutionCoordinator {
       requestId,
     )!;
     const pairing = this.service.pairing(request.pairingId);
-    const sameSurface = (id: string) => {
+    if (this.service.nativeReservations.hasUnresolvedDevice(pairing.deviceId))
+      return true;
+    const sameDevice = (id: string) => {
       const other = this.service.store.get<AttentionRequest>("attention", id);
       const paired =
         other &&
@@ -129,10 +155,7 @@ export class ExecutionCoordinator {
           "pairing",
           other.pairingId,
         );
-      return (
-        paired?.deviceId === pairing.deviceId &&
-        paired.displayId === pairing.displayId
-      );
+      return paired?.deviceId === pairing.deviceId;
     };
     // A new request, new pairing, or expired call cannot make an old native tool idle.
     if (
@@ -140,7 +163,7 @@ export class ExecutionCoordinator {
         .all<ExecutionOwnership>("execution")
         .some(
           (e) =>
-            sameSurface(e.requestId) &&
+            sameDevice(e.requestId) &&
             (e.state === "uncertain" ||
               (e.requestId !== requestId &&
                 e.executor !== "none" &&
@@ -150,10 +173,7 @@ export class ExecutionCoordinator {
       return true;
     const leases = this.service.store
       .all<ControlLease>("lease")
-      .filter(
-        (l) =>
-          l.deviceId === pairing.deviceId && l.displayId === pairing.displayId,
-      );
+      .filter((l) => l.deviceId === pairing.deviceId);
     return (
       leases.some((l) => l.state === "unknown") ||
       this.service.store
@@ -167,11 +187,27 @@ export class ExecutionCoordinator {
   }
   async transition(token: string, requestId: string, raw: unknown) {
     const input = executionTransition.parse(raw);
-    const { s, r, p } = this.context(token, requestId);
+    const { s, r, p } = this.context(
+      token,
+      requestId,
+      input.executor !== "none",
+    );
     if (this.busy.has(p.deviceId))
       throw new DomainError(409, "An ownership operation is in progress.");
     this.busy.add(p.deviceId);
+    const correlation = this.control.timing.attempt(requestId);
+    this.control.timing.record(requestId, "ownership_started", correlation);
     try {
+      if (
+        input.executor === "clawdtime" &&
+        s.screenCamera?.surface.kind === "window"
+      )
+        throw new DomainError(
+          409,
+          "Selected-window fallback input is unavailable until exact hit-target qualification.",
+        );
+      if (input.executor !== "none")
+        this.inputGuard?.(token, requestId, input.expectedCursor);
       const before = this.status(token, requestId);
       if (before.epoch !== input.expectedEpoch)
         throw new DomainError(
@@ -195,8 +231,43 @@ export class ExecutionCoordinator {
           409,
           "Acknowledge completion and stop conflicting actors before handoff.",
         );
+      const call = this.service.store.get<CallSession>("call", r.callId ?? "");
+      if (input.executor === "none" && call?.state === "ended") {
+        const leases = this.service.store
+          .all<ControlLease>("lease")
+          .filter((lease) => lease.requestId === requestId);
+        if (
+          !leases.length ||
+          leases.some(
+            (lease) => lease.state !== "released" || lease.sessionId !== s.id,
+          )
+        )
+          throw new DomainError(
+            409,
+            "Exact sharing cleanup must finish before release.",
+          );
+        // Explicit original-owner acknowledgement after terminal cleanup. This
+        // never grants a lease, clears an uncertain actor, or revives a session.
+        const next: ExecutionOwnership = {
+          ...before,
+          executor: "none",
+          epoch: before.epoch + 1,
+          state: "idle",
+          updatedAt: this.service.clock(),
+        };
+        this.service.store.put("execution", next);
+        this.control.timing.record(
+          requestId,
+          "ownership_completed",
+          correlation,
+        );
+        return next;
+      }
+      this.context(token, requestId);
       const policy = await readLocalPolicy(this.control, r);
       this.context(token, requestId);
+      if (input.executor !== "none")
+        this.inputGuard?.(token, requestId, input.expectedCursor);
       if (
         this.status(token, requestId).epoch !== before.epoch ||
         this.unresolved(requestId)
@@ -309,7 +380,6 @@ export class ExecutionCoordinator {
         )
           throw new Error("Local policy or ownership changed.");
         this.service.store.saveState(`view-device-ready:${lease.id}`, true);
-        return next;
       } catch {
         const currentOwner = this.service.store.get<ExecutionOwnership>(
           "execution",
@@ -335,6 +405,15 @@ export class ExecutionCoordinator {
           "Ownership synchronization is uncertain; do not dispatch or replay input.",
         );
       }
+      // The grant is now known. A newly arrived correction refuses dispatch,
+      // but must not turn confirmed ownership into an unknown input outcome.
+      if (input.executor !== "none")
+        this.inputGuard?.(token, requestId, input.expectedCursor);
+      this.control.timing.record(requestId, "ownership_completed", correlation);
+      return next;
+    } catch (error) {
+      this.control.timing.record(requestId, "ownership_failed", correlation);
+      throw error;
     } finally {
       this.busy.delete(p.deviceId);
     }
@@ -392,18 +471,26 @@ export class ExecutionCoordinator {
     )
       throw new DomainError(403, "Local fallback policy changed.");
     this.check(token, requestId, epoch);
-    const frame = await this.control.frame(lease.id, p.memberId);
     const imageDevice = this.control.device as typeof this.control.device & {
       frameImage?: (
         lease: ControlLease,
-      ) => Promise<{ frame: typeof frame; dataUrl: string }>;
+      ) => Promise<{ frame: import("../contracts.js").Frame; dataUrl: string }>;
     };
     if (imageDevice.frameImage) {
-      const image = await imageDevice.frameImage(lease);
-      this.check(token, requestId, epoch);
-      this.control.store.saveState(`frame:${lease.id}`, image.frame);
-      return image;
+      const correlation = this.control.timing.attempt(requestId);
+      this.control.timing.record(requestId, "frame_started", correlation);
+      try {
+        const image = await imageDevice.frameImage(lease);
+        this.check(token, requestId, epoch);
+        this.control.acceptFrame(lease.id, p.memberId, image.frame);
+        this.control.timing.record(requestId, "frame_completed", correlation);
+        return image;
+      } catch (error) {
+        this.control.timing.record(requestId, "frame_failed", correlation);
+        throw error;
+      }
     }
+    const frame = await this.control.frame(lease.id, p.memberId);
     return { frame };
   }
   async act(token: string, requestId: string, raw: unknown) {
@@ -413,10 +500,17 @@ export class ExecutionCoordinator {
         actionId: z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
         frameId: z.string().min(1).max(160),
         action: actionSchema,
+        presentation: presentationReferenceSchema.optional(),
+        expectedCursor: z.number().int().nonnegative().safe().optional(),
       })
       .strict()
       .parse(raw);
     const { p, r, e, lease } = this.check(token, requestId, input.epoch);
+    if (this.service.nativeReservations.hasUnresolvedDevice(p.deviceId))
+      throw new DomainError(
+        409,
+        "Unresolved native operation prevents fallback input.",
+      );
     const policy = await readLocalPolicy(this.control, r);
     if (
       !policy.armed ||
@@ -431,13 +525,34 @@ export class ExecutionCoordinator {
       policy.policyRevision !== e.policyRevision
     )
       throw new DomainError(403, "Local fallback policy changed.");
-    this.check(token, requestId, input.epoch);
+    const current = this.check(token, requestId, input.epoch);
+    if (input.presentation && input.action.kind === "type")
+      throw new DomainError(
+        400,
+        "Presentation coordinates require a point action.",
+      );
+    if (
+      (input.presentation || current.s.screenCamera) &&
+      !this.service.store.get<ActionReceipt>("action", input.actionId)
+    ) {
+      if (!this.cameraGuard)
+        throw new DomainError(409, "Camera input validation unavailable.");
+      await this.cameraGuard(
+        token,
+        requestId,
+        input.frameId,
+        input.presentation,
+      );
+      this.check(token, requestId, input.epoch);
+    }
     return this.control.act(
       lease.id,
       p.memberId,
       input.actionId,
       input.frameId,
       input.action,
+      () => this.inputGuard?.(token, requestId, input.expectedCursor),
+      input.presentation,
     );
   }
 }

@@ -26,6 +26,12 @@ TABLES = {
     'speech': {'id', 'session', 'fingerprint', 'state', 'updated_at', 'reason'},
     'device_actions': {'id', 'session', 'lease', 'fingerprint', 'state', 'receipt'},
 }
+OPTIONAL_TABLES = {
+    # Old snapshots remain verifiable. If a new capability table exists, verify
+    # its schema/count too; the SQLite online backup always includes ALL tables.
+    'presentation_receipts': {'id', 'arguments', 'fingerprint', 'result'},
+    'native_activation_receipts': {'id', 'device', 'binding', 'base_hash', 'phase', 'result'},
+}
 
 
 class BackupError(Exception):
@@ -59,10 +65,11 @@ def inspect_database(db):
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not TABLES.keys() <= tables:
         raise BackupError('Expected media ledger tables are missing.')
-    for table, required in TABLES.items():
+    selected={**TABLES,**{name:columns for name,columns in OPTIONAL_TABLES.items() if name in tables}}
+    for table, required in selected.items():
         if not required <= {r[1] for r in db.execute(f'PRAGMA table_info({table})')}:
             raise BackupError('Media ledger schema is incompatible.')
-    return {table: db.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in TABLES}
+    return {table: db.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in selected}
 
 
 def snapshot(source, deadline):

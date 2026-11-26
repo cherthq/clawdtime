@@ -69,16 +69,17 @@ struct CapturedFrame {
 
 @MainActor final class LocalSessionGuard {
   var forcedUnavailable = false
-  var available: Bool {
-    guard !forcedUnavailable, let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-      session[kCGSessionOnConsoleKey as String] as? Bool == true,
-      session[kCGSessionLoginDoneKey as String] as? Bool == true
-    else { return false }
+  var refusal: LocalSessionRefusal? {
+    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     // macOS also exposes lock state here on supported builds; distributed lock
     // notifications below disarm immediately. Physical lock acceptance is
     // required for each installed OS; session activity alone is insufficient.
-    return session["CGSSessionScreenIsLocked"] as? Bool != true
+    return LocalSessionRefusal.evaluate(present: session != nil, forcedUnavailable: forcedUnavailable,
+      onConsole: session?[kCGSessionOnConsoleKey as String] as? Bool,
+      loginDone: session?[kCGSessionLoginDoneKey as String] as? Bool,
+      locked: session?["CGSSessionScreenIsLocked"] as? Bool)
   }
+  var available: Bool { refusal == nil }
 }
 
 /// The exact focused AX element is held only in memory. Its opaque digest lets
@@ -152,7 +153,7 @@ struct CapturedFrame {
   }
 }
 
-@MainActor func prepareInput(_ action: InputAction, displayId: UInt32, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws -> NativeInputBatch {
+@MainActor func prepareInput(_ action: InputAction, displayId: UInt32, surfaceBounds: CGRect? = nil, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws -> NativeInputBatch {
   guard ["click", "type", "scroll"].contains(action.type) else { throw HelperError(400, "This native batch does not support window activation.") }
   guard AXIsProcessTrusted(), !IsSecureEventInputEnabled(), CGDisplayIsActive(displayId) != 0 else {
     throw HelperError(403, "Accessibility, active display and non-secure input are required.")
@@ -162,7 +163,7 @@ struct CapturedFrame {
       throw HelperError(409, "Focused target changed; observe again before input.")
     }
   }
-  let bounds = CGDisplayBounds(displayId)
+  let bounds = surfaceBounds ?? CGDisplayBounds(displayId)
   var events = [CGEvent]()
   if action.type == "type" {
     // Keyboard input goes to the focused UI element. Reject elements on a
@@ -253,6 +254,6 @@ struct CapturedFrame {
 }
 
 
-@MainActor func postInput(_ action: InputAction, displayId: UInt32, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws {
-  try prepareInput(action, displayId: displayId, localFocus: localFocus, requireLocalFocus: requireLocalFocus).post()
+@MainActor func postInput(_ action: InputAction, displayId: UInt32, surfaceBounds: CGRect? = nil, localFocus: LocalFocusWitness? = nil, requireLocalFocus: Bool = false) throws {
+  try prepareInput(action, displayId: displayId, surfaceBounds: surfaceBounds, localFocus: localFocus, requireLocalFocus: requireLocalFocus).post()
 }

@@ -1,4 +1,16 @@
+import {
+  isAudioQualification,
+  activeAudioQualification,
+} from "./audio-qualification.js";
+import { timelineFor } from "../transport/conversation-timeline.js";
+import { messagesEnabled, queueMessageUpdate } from "./messaging.js";
+import type { NativeMessage } from "../transport/native-messages.js";
 import { z } from "zod";
+import {
+  presentationFor,
+  type PresentationInput,
+  type PresentationReceipt,
+} from "./presentation.js";
 import type {
   AgentSession,
   AttentionRequest,
@@ -28,6 +40,8 @@ export interface ConversationTurn {
   acknowledgedAt?: number;
   state: ConversationTurnState;
   cancellationRequestedAt?: number;
+  presentation?: PresentationReceipt[];
+  correlationId?: string;
 }
 export interface ConversationReply {
   id: string;
@@ -45,6 +59,9 @@ export interface ConversationReply {
     | "failed"
     | "unknown";
   createdAt: number;
+  channel?: "text" | "voice";
+  effectId?: string;
+  delivery?: "queued" | "transport_acknowledged" | "unconfirmed" | "not_sent";
 }
 const identity = z.string().min(1).max(512);
 const responseSchema = z
@@ -83,6 +100,7 @@ const maxTextAgeMs = 24 * 60 * 60 * 1000;
 export class ConversationService {
   private speaking = new Set<string>();
   constructor(readonly service: ClawdTime) {
+    presentationFor(service).reset();
     // A process restart cannot prove that a client-side action was completed.
     for (const turn of service.store.all<ConversationTurn>("conversation_turn"))
       if (turn.state === "executing") this.saveTurn(turn, "uncertain");
@@ -96,7 +114,13 @@ export class ConversationService {
   private owned(raw: string, requestId: string, requireOpen = false) {
     this.service.expireSessions();
     const session = this.service.authenticateSession(raw);
+    this.service.assertExecutionAllowed(session);
     const request = this.service.status(raw, requestId);
+    if (isAudioQualification(request))
+      throw new DomainError(
+        403,
+        "Audio qualification cannot deliver agent turns.",
+      );
     if (session.protocolVersion !== 2)
       throw new DomainError(
         409,
@@ -106,6 +130,12 @@ export class ConversationService {
     return { session, request };
   }
   private open(session: AgentSession, request: AttentionRequest) {
+    this.service.assertExecutionAllowed(session);
+    if (isAudioQualification(request))
+      throw new DomainError(
+        403,
+        "Audio qualification cannot deliver agent turns.",
+      );
     if (
       session.state === "stopped" ||
       session.pairingId !== request.pairingId ||
@@ -132,6 +162,12 @@ export class ConversationService {
       request && store.get<AgentSession>("session", request.sessionId);
     if (!request || !session || session.protocolVersion !== 2)
       throw new DomainError(404, "Agent-owned conversation is unavailable.");
+    this.service.assertExecutionAllowed(session);
+    if (isAudioQualification(request))
+      throw new DomainError(
+        403,
+        "Audio qualification cannot ingest task responses.",
+      );
     const pairing = this.service.pairing(request.pairingId);
     if (
       pairing.memberId !== value.memberId ||
@@ -200,6 +236,9 @@ export class ConversationService {
           requestId: request.id,
           sessionId: session.id,
           sequence: (turns.at(-1)?.sequence ?? 0) + 1,
+          ...(value.eventId.startsWith("voice:")
+            ? { correlationId: hash(value.eventId.slice(6)).slice(0, 24) }
+            : {}),
           channel: value.channel,
           text: value.text,
           kind: value.kind ?? "answer",
@@ -215,6 +254,13 @@ export class ConversationService {
         hash(JSON.stringify(value)),
         { turnId: turn.id },
       );
+      timelineFor(this.service).record(
+        request.id,
+        "callback_accepted",
+        turn.correlationId ?? turn.id,
+      );
+      presentationFor(this.service).bump(request.id);
+      queueMessageUpdate(this.service, request, turn, "accepted");
       return turn;
     });
   }
@@ -223,6 +269,183 @@ export class ConversationService {
       .all<ConversationTurn>("conversation_turn")
       .filter((t) => t.requestId === requestId)
       .sort((a, b) => a.sequence - b.sequence);
+  }
+  executionRevision(requestId: string) {
+    const turns = this.turns(requestId);
+    const firstPending = turns.find((turn) => turn.delivery !== "acknowledged");
+    return {
+      cursor: turns.at(-1)?.sequence ?? 0,
+      acknowledgedCursor: firstPending
+        ? firstPending.sequence - 1
+        : (turns.at(-1)?.sequence ?? 0),
+      pendingDelivery: !!firstPending,
+    };
+  }
+  assertCurrentInput(raw: string, requestId: string, expectedCursor?: number) {
+    const { session } = this.owned(raw, requestId, true);
+    const revision = this.executionRevision(requestId);
+    if (
+      session.interaction?.version === 1 &&
+      (expectedCursor !== revision.cursor || revision.pendingDelivery)
+    )
+      throw new DomainError(
+        409,
+        "Read and acknowledge current conversation input before acting.",
+        "input_context_stale",
+      );
+    return revision;
+  }
+  /** Discovery for an already-running exact agent, never a background host wake. */
+  inbox(raw: string) {
+    this.service.expireSessions();
+    const session = this.service.authenticateSession(raw);
+    if (!messagesEnabled(session))
+      throw new DomainError(
+        409,
+        "iMessage-first interaction is not enabled for this session.",
+      );
+    return {
+      sessionId: session.id,
+      capabilities: { interactionVersion: 1 },
+      requests: this.service.store
+        .all<AttentionRequest>("attention")
+        .filter(
+          (request) =>
+            request.sessionId === session.id &&
+            request.pairingId === session.pairingId &&
+            !terminal.has(request.state) &&
+            request.deadline > this.service.clock() &&
+            !this.service.store.state(`listening-stopped:${request.id}`),
+        )
+        .slice(0, 100),
+    };
+  }
+  /** Authenticated Messages routing; selection never grants capture or input. */
+  resolveTextTarget(
+    pairingId: string,
+    event: NativeMessage,
+  ): { requestId?: string; reply?: string } {
+    this.service.expireSessions();
+    const pairing = this.service.pairing(pairingId),
+      now = this.service.clock();
+    if (
+      event.sender !== pairing.recipient ||
+      event.lineId !== pairing.lineId ||
+      event.conversationId !== pairing.conversationId
+    )
+      throw new DomainError(
+        403,
+        "Message target does not match paired identity.",
+      );
+    const key = `text-route:${event.id}`,
+      fingerprint = hash(JSON.stringify({ pairingId, event }));
+    return this.service.store.transaction(() => {
+      const previous = this.service.store.event<{
+        requestId?: string;
+        reply?: string;
+      }>(key);
+      if (previous) {
+        if (previous.fingerprint !== fingerprint)
+          throw new DomainError(409, "Message route identity changed.");
+        return previous.result;
+      }
+      const sessions = this.service.store
+        .all<AgentSession>("session")
+        .filter(
+          (session) =>
+            session.pairingId === pairing.id &&
+            !isAudioQualification(session) &&
+            !activeAudioQualification(this.service.store, pairing) &&
+            (messagesEnabled(session) || session.conversation?.version === 1) &&
+            session.state !== "stopped" &&
+            now - (session.lastSeenAt ?? session.createdAt) < 20_000 &&
+            (session.lastSeenAt ?? session.createdAt) <= now + 1000,
+        );
+      const remember = (result: { requestId?: string; reply?: string }) => {
+        this.service.store.recordEvent(key, fingerprint, result);
+        return result;
+      };
+      if (/^\/sessions$/i.test(event.text.trim()))
+        return remember({
+          reply: sessions.length
+            ? "Available running sessions:\n" +
+              sessions
+                .slice(0, 20)
+                .map((session) => `${session.adapter}: ${session.id}`)
+                .join("\n") +
+              "\nSelect with /use SESSION_ID."
+            : "No available running text-enabled session. Open your coding chat and start its ClawdTime inbox loop.",
+        });
+      const select = /^\/use\s+(\S+)$/i.exec(event.text.trim());
+      if (select) {
+        const selected = sessions.find((session) => session.id === select[1]);
+        if (!selected)
+          return remember({
+            reply:
+              "That session is unavailable. Send /sessions to list running sessions.",
+          });
+        this.service.store.saveState(`text-session:${pairing.id}`, {
+          sessionId: selected.id,
+          expiresAt: now + 600_000,
+        });
+        return remember({
+          reply:
+            selected.conversation?.version === 1
+              ? `Selected API-managed execution session ${selected.id}. Send your instruction; desktop input requires a current scoped local grant.`
+              : `Selected ${selected.adapter} session ${selected.id}. Send your instruction; screen control still requires an authorized call.`,
+        });
+      }
+      const selected = this.service.store.state<{
+        sessionId: string;
+        expiresAt: number;
+      }>(`text-session:${pairing.id}`);
+      const session =
+        selected && selected.expiresAt > now
+          ? sessions.find((item) => item.id === selected.sessionId)
+          : sessions.length === 1
+            ? sessions[0]
+            : undefined;
+      if (!session)
+        return remember({
+          reply: sessions.length
+            ? "Choose an available session with /sessions then /use SESSION_ID. No instruction was dispatched."
+            : "No available running text-enabled session. Open your coding chat and start its ClawdTime inbox loop.",
+        });
+      if (session.conversation?.version === 1)
+        return remember({
+          reply:
+            "The selected conversational executor is unavailable here. No instruction was dispatched.",
+        });
+      const pending = this.service.store
+        .all<AttentionRequest>("attention")
+        .filter(
+          (request) =>
+            request.sessionId === session.id &&
+            !terminal.has(request.state) &&
+            request.deadline > now &&
+            !this.service.store.state(`listening-stopped:${request.id}`),
+        );
+      if (pending.length > 1)
+        return remember({
+          reply:
+            "This session has multiple active requests. Resolve them in the original coding chat before sending another instruction.",
+        });
+      const request =
+        pending[0] ??
+        this.service.store.put<AttentionRequest>("attention", {
+          id: id("attention"),
+          sessionId: session.id,
+          pairingId: pairing.id,
+          taskId: "messages-inbox",
+          idempotencyKey: `text:${hash(event.id)}`,
+          reason: "decision",
+          question: "Respond to the paired human's Messages instructions.",
+          createdAt: now,
+          deadline: now + 300_000,
+          state: "awaiting_input",
+        });
+      return remember({ requestId: request.id });
+    });
   }
   private turn(requestId: string, turnId: string) {
     const turn = this.service.store.get<ConversationTurn>(
@@ -235,7 +458,11 @@ export class ConversationService {
   }
   private saveTurn(turn: ConversationTurn, state: ConversationTurnState) {
     const next = { ...turn, state, updatedAt: this.service.clock() };
-    if (terminalTurn.has(state)) delete next.text;
+    if (terminalTurn.has(state)) {
+      delete next.text;
+      presentationFor(this.service).clearTurn(turn.requestId, turn.id);
+    }
+    presentationFor(this.service).bump(turn.requestId);
     return this.service.store.put<ConversationTurn>("conversation_turn", next);
   }
   /**
@@ -259,6 +486,7 @@ export class ConversationService {
   }
   /** Pending content expires after 24h; receipts/fingerprints remain for deduplication. */
   prune() {
+    presentationFor(this.service).prune();
     for (const turn of this.service.store.all<ConversationTurn>(
       "conversation_turn",
     )) {
@@ -286,6 +514,7 @@ export class ConversationService {
     const { request, session } = this.owned(raw, requestId);
     z.number().int().nonnegative().safe().parse(afterSequence);
     this.prune();
+    this.reconcileTextReplies(requestId);
     const all = this.turns(requestId),
       cursor = all.at(-1)?.sequence ?? 0;
     if (afterSequence > cursor)
@@ -297,6 +526,9 @@ export class ConversationService {
     return {
       request,
       session,
+      capabilities: { presentationVersion: 1, interactionVersion: 1 },
+      executionRevision: this.executionRevision(requestId),
+      activity: presentationFor(this.service).projection(requestId),
       turns,
       cursor: turns.at(-1)?.sequence ?? afterSequence,
       replies: this.service.store
@@ -307,6 +539,7 @@ export class ConversationService {
   /** Bounded, read-only reconciliation before a poll; no transcript or speech replay. */
   async reconcileReplies(raw: string, requestId: string) {
     const { request } = this.owned(raw, requestId);
+    this.reconcileTextReplies(requestId);
     const lookup = this.service.transport.speechStatus;
     if (!lookup) return;
     const pairing = this.service.pairing(request.pairingId);
@@ -315,6 +548,7 @@ export class ConversationService {
       .filter(
         (r) =>
           r.requestId === requestId &&
+          r.channel !== "text" &&
           !finalSpeech.has(r.state) &&
           !this.speaking.has(r.id),
       )
@@ -378,12 +612,28 @@ export class ConversationService {
         )
       )
         throw new DomainError(409, "Acknowledge earlier turn delivery first.");
-      return this.service.store.put<ConversationTurn>("conversation_turn", {
-        ...turn,
-        delivery: "acknowledged",
-        acknowledgedAt: this.service.clock(),
-        updatedAt: this.service.clock(),
-      });
+      timelineFor(this.service).record(
+        requestId,
+        "agent_acknowledged",
+        turn.correlationId ?? turn.id,
+      );
+      presentationFor(this.service).bump(requestId);
+      const acknowledged = this.service.store.put<ConversationTurn>(
+        "conversation_turn",
+        {
+          ...turn,
+          delivery: "acknowledged",
+          acknowledgedAt: this.service.clock(),
+          updatedAt: this.service.clock(),
+        },
+      );
+      queueMessageUpdate(
+        this.service,
+        this.service.store.get<AttentionRequest>("attention", requestId)!,
+        acknowledged,
+        "acknowledged",
+      );
+      return acknowledged;
     });
   }
   progress(
@@ -391,8 +641,9 @@ export class ConversationService {
     requestId: string,
     turnId: string,
     state: Exclude<ConversationTurnState, "received">,
+    presentation?: PresentationInput,
   ) {
-    this.owned(raw, requestId, true);
+    const { session, request } = this.owned(raw, requestId);
     z.enum([
       "executing",
       "completed",
@@ -402,7 +653,21 @@ export class ConversationService {
     ]).parse(state);
     return this.service.store.transaction(() => {
       const turn = this.turn(requestId, turnId);
-      if (turn.state === state) return turn;
+      const display = presentationFor(this.service);
+      const prepared = display.prepare(turn, state, presentation);
+      if (turn.state === state) {
+        if (!terminalTurn.has(turn.state)) this.open(session, request);
+        if (terminalTurn.has(turn.state) && prepared.some((p) => !p.previous))
+          throw new DomainError(
+            409,
+            "Terminal presentation cannot be replaced or revived.",
+          );
+        const result = prepared.some((p) => !p.previous)
+          ? display.record(turn, prepared)
+          : turn;
+        return { ...result, activity: display.projection(requestId) };
+      }
+      this.open(session, request);
       if (turn.delivery !== "acknowledged")
         throw new DomainError(
           409,
@@ -431,7 +696,24 @@ export class ConversationService {
           409,
           "Reconcile earlier turns before beginning this turn.",
         );
-      return this.saveTurn(turn, state);
+      const result = display.record(this.saveTurn(turn, state), prepared);
+      if (state === "pending_approval" || terminalTurn.has(state))
+        queueMessageUpdate(
+          this.service,
+          request,
+          result,
+          state === "pending_approval" ? "pending_approval" : "outcome",
+        );
+      timelineFor(this.service).record(
+        requestId,
+        state === "pending_approval"
+          ? "approval_reported"
+          : terminalTurn.has(state)
+            ? "outcome_reported"
+            : "execution_reported",
+        turn.correlationId ?? turn.id,
+      );
+      return { ...result, activity: display.projection(requestId) };
     });
   }
   cancel(raw: string, requestId: string, turnId: string) {
@@ -459,6 +741,7 @@ export class ConversationService {
       replyId: string;
       text: string;
       expectedCursor?: number;
+      channel?: "text" | "voice";
     },
   ) {
     const { request, session } = this.owned(raw, requestId);
@@ -472,6 +755,7 @@ export class ConversationService {
           .regex(/^[A-Za-z0-9_-]+$/),
         text: z.string().trim().min(1).max(900),
         expectedCursor: z.number().int().nonnegative().safe().optional(),
+        channel: z.enum(["text", "voice"]).optional(),
       })
       .strict()
       .parse(input);
@@ -484,8 +768,24 @@ export class ConversationService {
       "conversation_reply",
       replyId,
     );
+    if (value.channel && session.interaction?.version !== 1)
+      throw new DomainError(
+        409,
+        "Explicit reply channels require negotiated interaction support.",
+      );
+    const channel =
+      previous?.channel ??
+      value.channel ??
+      (messagesEnabled(session) && turn.channel === "text" ? "text" : "voice");
     if (previous && previous.fingerprint !== fingerprint)
       throw new DomainError(409, "Reply identity changed.");
+    if (previous?.channel === "text") {
+      this.reconcileTextReplies(requestId);
+      return this.service.store.get<ConversationReply>(
+        "conversation_reply",
+        previous.id,
+      )!;
+    }
     if (
       this.service.store
         .all<ConversationReply>("conversation_reply")
@@ -518,6 +818,38 @@ export class ConversationService {
         );
       if (turn.state === "canceled")
         throw new DomainError(409, "Canceled turns cannot dispatch speech.");
+      if (channel === "text") {
+        if (!messagesEnabled(session))
+          throw new DomainError(
+            409,
+            "Messages replies were not enabled for this session.",
+          );
+        return this.service.store.transaction(() => {
+          const effect = queueMessageUpdate(
+            this.service,
+            request,
+            turn,
+            "reply",
+            value.text,
+            replyId,
+          );
+          if (!effect)
+            throw new DomainError(409, "Messages reply could not be queued.");
+          const record: ConversationReply = {
+            id: replyId,
+            requestId,
+            sessionId: session.id,
+            turnId: turn.id,
+            fingerprint,
+            channel: "text",
+            effectId: effect.id,
+            state: "accepted",
+            delivery: "queued",
+            createdAt: this.service.clock(),
+          };
+          return this.service.store.put("conversation_reply", record);
+        });
+      }
       const call = this.service.store.get<CallSession>(
         "call",
         request.callId ?? "",
@@ -564,6 +896,7 @@ export class ConversationService {
         fingerprint,
         state: "dispatching",
         createdAt: this.service.clock(),
+        channel: "voice",
       };
       if (!retained) this.service.store.put("conversation_reply", record);
       return { record, lookup: !!retained };
@@ -578,6 +911,9 @@ export class ConversationService {
         replyId,
         value.text,
         claim.lookup,
+        session.capabilities.voiceInteractionVersion === 1
+          ? (value.expectedCursor ?? turn.sequence)
+          : undefined,
       );
       const state = z
         .enum([
@@ -589,6 +925,12 @@ export class ConversationService {
           "unknown",
         ])
         .parse(result.state);
+      if (["accepted", "playing", "completed"].includes(state))
+        timelineFor(this.service).record(
+          requestId,
+          "reply_accepted",
+          hash(`${request.callId}:${replyId}`).slice(0, 24),
+        );
       return this.service.store.put<ConversationReply>("conversation_reply", {
         ...record,
         state,
@@ -602,6 +944,35 @@ export class ConversationService {
       this.speaking.delete(replyId);
     }
   }
+  private reconcileTextReplies(requestId: string) {
+    for (const reply of this.service.store.all<ConversationReply>(
+      "conversation_reply",
+    )) {
+      if (reply.requestId !== requestId || reply.channel !== "text") continue;
+      const effect = this.service.store.effect(reply.effectId ?? "");
+      const state =
+        effect?.state === "done"
+          ? "completed"
+          : effect?.state === "failed"
+            ? "failed"
+            : effect?.state === "pending" || effect?.state === "running"
+              ? "accepted"
+              : "unknown";
+      const delivery =
+        state === "completed"
+          ? "transport_acknowledged"
+          : state === "failed"
+            ? "not_sent"
+            : state === "accepted"
+              ? "queued"
+              : "unconfirmed";
+      this.service.store.put<ConversationReply>("conversation_reply", {
+        ...reply,
+        state,
+        delivery,
+      });
+    }
+  }
   end(raw: string, requestId: string) {
     this.owned(raw, requestId);
     const request = this.service.endConversation(raw, requestId);
@@ -612,6 +983,7 @@ export class ConversationService {
           turn,
           turn.state === "executing" ? "uncertain" : "canceled",
         );
+    timelineFor(this.service).record(requestId, "end_requested", requestId);
     this.prune();
     return {
       request,

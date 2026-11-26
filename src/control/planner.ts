@@ -116,6 +116,7 @@ export class VisionPlanner implements SingleActionPlanner {
         comparison: describeFrameChange(observed.dataUrl, fresh.dataUrl),
       });
     const frame: Frame = {
+      ...(fresh.frame.camera ? {camera: fresh.frame.camera} : {}),
       id: fresh.frame.id,
       capturedAt: fresh.frame.capturedAt,
       width: fresh.frame.width,

@@ -7,6 +7,8 @@ A fresh backend policy lease is required for every frame.
 import asyncio
 import contextlib
 import logging
+import json
+import hashlib
 import re
 import time
 import unicodedata
@@ -15,6 +17,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from policy import capture_allowed
+from presentation import activity as validate_activity, label as activity_label, stamp
 
 WIDTH, HEIGHT, FPS = 1280, 720, 5
 POLICY_TTL = 2.0
@@ -43,10 +46,17 @@ class CaptionScene:
         self.feedback = 'listening'
         self.pending_sequence = None
         self.agent_text = ''
+        self.two_way_listening = False
         self.subtitle_at = self.clock()
+        self.presentation = None
+        self.presentation_binding = None
+        self.presentation_sequence = -1
+        self.presentation_floor = 0
+        self.presentation_deadline = 0
+        self.presentation_fingerprint = None
 
     def clear(self, state):
-        if self.state != state or self.segments or self.preview or self.agent_text:
+        if self.state != state or self.segments or self.preview or self.agent_text or self.presentation:
             self.revision += 1
             self.epoch += 1
         self.state = state
@@ -55,6 +65,10 @@ class CaptionScene:
         self.feedback = 'listening'
         self.pending_sequence = None
         self.policy_at = None
+        self.two_way_listening = False
+        self.presentation = None
+        self.presentation_binding = None
+        self.presentation_sequence = max(self.presentation_sequence, self.presentation_floor)
 
     def apply_policy(self, policy, speaking=False):
         call_id = policy.get('callId')
@@ -65,6 +79,12 @@ class CaptionScene:
             self.clear('unavailable')
             return
         self.call_id = call_id
+        floor = policy.get('presentationSequence')
+        if type(floor) is int and 0 <= floor <= 9007199254740991:
+            self.presentation_floor = max(self.presentation_floor, floor)
+            if self.presentation and self.presentation['sequence'] < self.presentation_floor:
+                self.presentation = None
+                self.revision += 1
         title = clean_text(policy.get('title'), 100) or 'ClawdTime attention'
         if self.title != title:
             self.title = title
@@ -76,6 +96,10 @@ class CaptionScene:
         elif policy.get('state') == 'paused' or policy.get('muted') is True:
             self.clear('paused')
         elif capture_allowed(policy):
+            two_way = policy.get('twoWayListening') is True
+            if self.two_way_listening != two_way:
+                self.revision += 1
+            self.two_way_listening = two_way
             target = 'speaking' if speaking else 'listening'
             if self.state not in ('listening', 'speaking'):
                 self.segments.clear()
@@ -86,19 +110,99 @@ class CaptionScene:
                 self.revision += 1
             self.state = target
             self.policy_at = self.clock()
+            binding = policy.get('presentationBinding', policy.get('screenSelection'))
+            self.presentation_binding = binding if isinstance(binding, dict) else None
         else:
             self.clear('reconnecting')
+
+    def apply_presentation(self, payload, device_id, now_utc=None):
+        """Authenticated backend metadata still needs exact fresh call/device binding."""
+        from datetime import datetime, timezone
+        now_utc = datetime.now(timezone.utc).timestamp() if now_utc is None else now_utc
+        if self.snapshot()['state'] not in ('listening', 'speaking'):
+            return False
+        binding = self.presentation_binding
+        if (not isinstance(binding, dict) or type(payload.get('displayId')) is not int or payload.get('callId') != self.call_id
+                or binding.get('deviceId') != device_id
+                or any(payload.get(key) != binding.get(key) for key in ('sessionId', 'memberId', 'displayId'))):
+            self.presentation = None
+            self.revision += 1
+            return False
+        try:
+            if payload.get('presentationVersion') != 1:
+                raise ValueError('Unsupported presentation version')
+            remaining = stamp(payload.get('expiresAt')) - now_utc
+            if not 0 < remaining <= 5.1:
+                raise ValueError('Stale presentation')
+            value = validate_activity(payload.get('activity'))
+            readiness = payload.get('readiness')
+            reason = readiness.get('reason') if isinstance(readiness,dict) else None
+            if reason in ('agent_stale','gateway_unavailable','binding_mismatch','sharing_disabled','screen_permission','control_permission'):
+                self.presentation_sequence = max(self.presentation_sequence, value['sequence'])
+                self.clear('unavailable')
+                return False
+            if reason in ('unresolved_effect','native_approval'):
+                value['_readiness'] = reason
+                if self.presentation:
+                    self.presentation['_readiness'] = reason
+
+            if value['sequence'] < self.presentation_floor:
+                return False
+            fingerprint = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+            if value['sequence'] <= self.presentation_sequence:
+                # A heartbeat refreshes connection freshness only. Text deadlines
+                # are fixed at first acceptance; cleared text cannot be restored.
+                if (self.presentation is not None and value['sequence'] == self.presentation_sequence
+                        and fingerprint == self.presentation_fingerprint):
+                    self.presentation_deadline = self.clock() + remaining
+                return False
+            self.presentation_fingerprint = fingerprint
+            self.presentation_sequence = value['sequence']
+            if payload.get('callState') in ('ended', 'muted'):
+                self.clear('ended' if payload['callState'] == 'ended' else 'paused')
+                return False
+            for entry in value['entries'] + ([value['outcome']] if 'outcome' in value else []):
+                lifetime = 60 if value['work'] in ('completed','canceled','uncertain') or entry is value.get('outcome') or entry.get('kind') == 'outcome' else 600
+                expires_at = entry.get('expiresAt', value.get('expiresAt'))
+                expiry = stamp(expires_at) - now_utc if expires_at else remaining
+                entry['_deadline'] = self.clock() + min(lifetime, max(0, expiry))
+            if 'currentSummary' in value:
+                expiry = stamp(value['expiresAt']) - now_utc if 'expiresAt' in value else remaining
+                value['_summaryDeadline'] = self.clock() + min(60 if value['work'] in ('completed','canceled','uncertain') else 600, max(0, expiry))
+            self.presentation = value
+            self.presentation_deadline = self.clock() + remaining
+            self.revision += 1
+            return True
+        except (ValueError, TypeError, KeyError):
+            self.presentation = None
+            self.revision += 1
+            return False
 
     def snapshot(self):
         if self.state in ('listening', 'speaking') and (self.policy_at is None or self.clock() - self.policy_at >= POLICY_TTL):
             self.clear('reconnecting')
+        if self.presentation and self.clock() >= self.presentation_deadline:
+            self.presentation = None
+            self.revision += 1
+        if self.presentation:
+            if 'currentSummary' in self.presentation and self.clock() >= self.presentation['_summaryDeadline']:
+                del self.presentation['currentSummary']
+                self.revision += 1
+            for entry in self.presentation['entries'] + ([self.presentation['outcome']] if 'outcome' in self.presentation else []):
+                if self.clock() >= entry['_deadline'] and 'summary' in entry:
+                    del entry['summary']
+                    self.revision += 1
         return {'title': self.title, 'state': self.state,
+                'twoWayListening': self.two_way_listening,
+                'activityLabel':activity_label(self.presentation),
+                'activitySummary':((self.presentation.get('outcome', {}).get('summary', '')
+                    if self.presentation['work'] in ('completed','canceled','uncertain') else self.presentation.get('currentSummary', '')) if self.presentation and not self.presentation.get('_readiness') else ''),
                 'segments': list(self.segments), 'revision': self.revision,
                 'preview': self.preview, 'feedback': self.feedback, 'agentText': self.agent_text,
                 'page': max(0, int((self.clock() - self.subtitle_at) / 5))}
 
     def hearing(self, text):
-        if self.snapshot()['state'] != 'listening':
+        if self.snapshot()['state'] != 'listening' and not (self.state == 'speaking' and self.two_way_listening):
             return
         text = clean_text(text, 8000)[-500:]
         if self.preview != text or self.feedback != 'hearing':
@@ -224,13 +328,13 @@ class CaptionRenderer:
             }.get(state, ('Captions unavailable', 'Check this chat to continue.'))
             return label, self.lines([text], limit=line_count)
         if snapshot.get('agentText'):
-            label = 'Agent speaking · mic paused' if state == 'speaking' else 'Listening · your turn'
+            label = ('Speaking · still listening' if snapshot.get('twoWayListening') else 'Agent speaking · mic paused') if state == 'speaking' else 'Listening · your turn'
             lines = self.lines([snapshot['agentText']], limit=None)
             pages = max(1, (len(lines) + line_count - 1) // line_count)
             page = snapshot.get('page', 0) % pages
             return label, lines[page*line_count:(page+1)*line_count]
         labels = {'listening':'Listening · your turn', 'hearing':'You · hearing (partial)',
-                  'sending':'You · sending', 'received':'You · received',
+                  'sending':'You · sending', 'received':'Backend accepted',
                   'unconfirmed':'Delivery unconfirmed', 'incomplete':'Please repeat that'}
         text = snapshot.get('preview')
         if not text and feedback == 'received' and snapshot['segments']:
@@ -254,10 +358,28 @@ class CaptionRenderer:
         draw.text((472,410), label, font=self.label_font, fill='#64dfaa')
         for index, line in enumerate(lines):
             draw.text((472,442+43*index),line,font=self.body_font,fill='white')
-        footer = ('Mic resumes after reply' if snapshot['state'] == 'speaking' else
+        footer = (('You can interrupt' if snapshot.get('twoWayListening') else 'Mic resumes after reply') if snapshot['state'] == 'speaking' else
                   'Say Stop to stop sharing' if snapshot['state'] == 'listening' else 'Check this chat to continue')
         draw.text((472,633),footer,font=self.label_font,fill='#b5c3d7')
+        if snapshot.get('activityLabel') and snapshot['state'] in ('listening', 'speaking'):
+            draw.rounded_rectangle((438, 318, 842, 386), radius=12, fill=(12,16,23,238))
+            draw.text((472,327),snapshot['activityLabel'],font=self.label_font,fill='#f4cb7c')
+            summary = clean_text(snapshot.get('activitySummary', ''), 160)
+            if draw.textlength(summary,font=self.label_font)>336:
+                while summary and draw.textlength(summary+'…',font=self.label_font)>336:
+                    summary=summary[:-1]
+                summary += '…'
+            draw.text((472,353),summary,font=self.label_font,fill='white')
         return Image.alpha_composite(image,layer)
+
+    def camera_overlay(self, image, snapshot):
+        # Reserve the bottom strip, outside the source viewport and context row.
+        image=image.copy();draw=ImageDraw.Draw(image)
+        label,lines=self.subtitle(snapshot,1)
+        text=clean_text(label+' · '+(' '.join(lines)),140)
+        while text and draw.textlength(text,font=self.label_font)>1232:text=text[:-1]
+        draw.text((24,692),text,font=self.label_font,fill='#b5c3d7')
+        return image
 
     def render(self, snapshot):
         # Center-safe for a 9:16 phone crop of the 16:9 transport. All essential
@@ -285,22 +407,24 @@ class CaptionRenderer:
                    'speaking':['Please wait until','listening resumes.'],
                    'paused':['Audio capture and','captions are paused.'],
                    'reconnecting':['Waiting for a fresh','connection.'],
-                   'ended':['Your agent’s result will','arrive in Messages.'],
+                   'ended':['Continue in your','original agent chat.'],
                    'unavailable':['Live captions are','not available.']}.get(state,['Unavailable.'])
         for index,line in enumerate(lines):
             draw.text((472,191+43*index),line,font=self.body_font,fill='#ffffff' if active else '#b5c3d7')
-        centered('FaceTime audio',605,self.label_font,'#9aa7ba')
+        centered(snapshot.get('activityLabel') or 'FaceTime audio',605,self.label_font,'#f4cb7c')
         centered('Say Stop to stop sharing',630,self.label_font,'#9aa7ba')
         return image
 
 
 class CaptionPublisher:
-    def __init__(self, scene, room, sdk=None, screen=None):
+    def __init__(self, scene, room, sdk=None, screen=None, document=None):
         if sdk is None:
             from livekit import rtc
             sdk = rtc
         self.scene, self.room, self.sdk = scene, room, sdk
         self.screen = screen
+        self.fps = 15 if getattr(getattr(screen, "owner", None), "env", {}).get("CLAWDTIME_SCREEN_CAMERA_ENABLED") == "true" else FPS
+        self.document = document
         self.renderer = CaptionRenderer()
         self.source = None
         self.publication = None
@@ -315,12 +439,25 @@ class CaptionPublisher:
         snapshot = self.scene.snapshot()
         if self.screen:
             self.screen.expire()
+        if self.document:
+            self.document.expire()
+        use_document = bool(self.document and self.document.image is not None)
         use_screen = bool(self.screen and (self.screen.screen_call or self.screen.selection or self.screen.starting))
-        revision = (snapshot['revision'], snapshot['page'], self.screen.revision if self.screen else None, use_screen)
-        if revision != self.last_revision:
-            image = self.renderer.overlay(self.screen.render(), snapshot) if use_screen else self.renderer.render(snapshot)
+        revision = (snapshot['revision'], snapshot['page'], self.screen.revision if self.screen else None, use_screen,
+                    self.document.revision if self.document else None, use_document)
+        camera=getattr(self.screen,'camera',None) if use_screen and not use_document else None
+        camera_revision=camera.status()['revision'] if camera else None
+        if revision != self.last_revision or (self.screen and getattr(self.screen,'camera',None)):
+            image = self.document.render() if use_document else (self.renderer.camera_overlay(self.screen.render(), snapshot) if use_screen and getattr(self.screen,'camera',None) else self.renderer.overlay(self.screen.render(), snapshot) if use_screen else self.renderer.render(snapshot))
             self.frame = self.sdk.VideoFrame(WIDTH, HEIGHT, self.sdk.VideoBufferType.RGBA, image.tobytes())
             self.last_revision = revision
+        # Rendering/encoding can itself cross a target witness deadline. Never
+        # publish that expired crop or mark, even on the synchronous renderer.
+        if camera:
+            self.screen.expire()
+            if self.screen.camera is not camera or camera.status()['revision']!=camera_revision:
+                self.frame=None;self.last_revision=None
+                return
         self.source.capture_frame(self.frame)
         if self.screen:
             self.screen.diagnostics.emitted(screen=bool(self.screen.frame))
@@ -332,7 +469,7 @@ class CaptionPublisher:
         try:
             track = self.sdk.LocalVideoTrack.create_video_track('clawdtime-screen', self.source)
             options = self.sdk.TrackPublishOptions(source=self.sdk.TrackSource.SOURCE_CAMERA,
-                simulcast=False, video_encoding=self.sdk.VideoEncoding(max_framerate=FPS, max_bitrate=1500000),
+                simulcast=False, video_encoding=self.sdk.VideoEncoding(max_framerate=self.fps, max_bitrate=1500000),
                 video_codec=self.sdk.VideoCodec.H264)
             self.publication = await self.room.local_participant.publish_track(track, options)
             self.emit()
@@ -344,7 +481,10 @@ class CaptionPublisher:
     async def run(self):
         try:
             while not self.closed:
-                await asyncio.sleep(1 / FPS)
+                # The encoding ceiling supports later negotiated camera motion;
+                # legacy peers retain their original publication cadence.
+                cadence = 15 if self.screen and getattr(self.screen, "camera", None) else FPS
+                await asyncio.sleep(1 / cadence)
                 self.emit()
         except asyncio.CancelledError:
             raise

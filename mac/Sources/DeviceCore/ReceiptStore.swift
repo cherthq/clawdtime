@@ -26,7 +26,11 @@ public struct ActionReceipt: Codable {
   public var leaseId: String
   public var deviceId: String
   public var memberId: String
-  public var callId: String
+  public var callId: String?
+  public var authority: TextLeaseAuthority? = nil
+  public var sessionId: String? = nil
+  public var executorEpoch: Int? = nil
+  public var policyRevision: Int? = nil
   public var fingerprint: String
   public var state: String
   public var updatedAt: Date
@@ -156,7 +160,8 @@ public final class ReceiptStore {
     }
     let receipt = ActionReceipt(
       id: action.id, leaseId: lease.id, deviceId: lease.deviceId, memberId: lease.memberId,
-      callId: lease.callId, fingerprint: try fingerprint(action), state: "dispatching",
+      callId: lease.callId, authority: lease.authority, sessionId: lease.sessionId,
+      executorEpoch: lease.executorEpoch, policyRevision: lease.policyRevision, fingerprint: try fingerprint(action), state: "dispatching",
       updatedAt: now, protocolVersion: lease.protocolVersion)
     receipts[action.id] = receipt
     try persist()

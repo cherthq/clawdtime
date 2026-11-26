@@ -3,13 +3,13 @@ import asyncio
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import Mock, AsyncMock
-from aiohttp import web, ClientSession, WSServerHandshakeError
+from aiohttp import web, ClientSession
 from aiohttp.test_utils import TestServer
 from device_relay import DeviceRelay
 from devices import gateway_request
 
 class DeployedRelayTests(IsolatedAsyncioTestCase):
-    async def test_two_declared_gateways_route_and_reject_duplicate_device(self):
+    async def test_two_declared_gateways_route_after_same_device_reconnect(self):
         relay=DeviceRelay()
         app=web.Application();app.router.add_get('/relay',relay.connect)
         server=TestServer(app);await server.start_server()
@@ -18,9 +18,10 @@ class DeployedRelayTests(IsolatedAsyncioTestCase):
             try:
                 for device in ['fixture_a','fixture_b']:
                     sockets.append(await client.ws_connect(server.make_url('/relay'),headers={'X-ClawdTime-Devices':device}))
-                with self.assertRaises(WSServerHandshakeError) as refused:
-                    await client.ws_connect(server.make_url('/relay'),headers={'X-ClawdTime-Devices':'fixture_a'})
-                self.assertEqual(refused.exception.status,409)
+                replacement = await client.ws_connect(server.make_url('/relay'),headers={'X-ClawdTime-Devices':'fixture_a'})
+                await sockets[0].close()
+                sockets[0] = replacement
+                self.assertEqual(len(relay.live()), 2)
                 for i,device in enumerate(['fixture_a','fixture_b']):
                     task=asyncio.create_task(relay.request('GET',f'/v1/devices/{device}/readiness'))
                     request=await asyncio.wait_for(sockets[i].receive_json(),1)

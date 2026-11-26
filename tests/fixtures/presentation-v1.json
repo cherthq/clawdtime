@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "version": 1,
+      "sequence": 5,
+      "delivery": "acknowledged",
+      "work": "executing",
+      "expiresAt": "2026-11-13T12:01:00Z",
+      "currentSummary": "Review 👨‍👩‍👧‍👦 fixture 🧪",
+      "entries": [
+        {
+          "activityId": "checking",
+          "sequence": 3,
+          "kind": "status",
+          "summary": "Review 👨‍👩‍👧‍👦 fixture 🧪"
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "sequence": 6,
+      "delivery": "acknowledged",
+      "work": "pending_approval",
+      "expiresAt": "2026-11-13T12:01:00Z",
+      "currentSummary": "Approve in the original chat",
+      "entries": [
+        {
+          "activityId": "approval",
+          "sequence": 6,
+          "kind": "approval_needed",
+          "summary": "Approve in the original chat"
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "sequence": 7,
+      "delivery": "acknowledged",
+      "work": "completed",
+      "entries": [
+        {
+          "activityId": "result",
+          "sequence": 7,
+          "kind": "outcome"
+        }
+      ],
+      "outcome": {
+        "outcomeId": "result",
+        "status": "completed",
+        "verification": "not_verified"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "version": 1,
+      "sequence": 5,
+      "delivery": "acknowledged",
+      "work": "executing",
+      "expiresAt": "2026-11-13T12:01:00Z",
+      "currentSummary": "invalidcontrol",
+      "entries": [
+        {
+          "activityId": "checking",
+          "sequence": 3,
+          "kind": "status",
+          "summary": "Review 👨‍👩‍👧‍👦 fixture 🧪"
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "sequence": 5,
+      "delivery": "acknowledged",
+      "work": "executing",
+      "expiresAt": "2026-11-13T12:01:00Z",
+      "currentSummary": "Review 👨‍👩‍👧‍👦 fixture 🧪",
+      "entries": [
+        {
+          "activityId": "checking",
+          "sequence": 3,
+          "kind": "status",
+          "summary": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+        }
+      ]
+    },
+    {
+      "version": 2,
+      "sequence": 5,
+      "delivery": "acknowledged",
+      "work": "executing",
+      "expiresAt": "2026-11-13T12:01:00Z",
+      "currentSummary": "Review 👨‍👩‍👧‍👦 fixture 🧪",
+      "entries": [
+        {
+          "activityId": "checking",
+          "sequence": 3,
+          "kind": "status",
+          "summary": "Review 👨‍👩‍👧‍👦 fixture 🧪"
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "sequence": 2,
+      "delivery": "acknowledged",
+      "work": "executing",
+      "expiresAt": "2026-11-13T12:01:00Z",
+      "currentSummary": "Review 👨‍👩‍👧‍👦 fixture 🧪",
+      "entries": [
+        {
+          "activityId": "checking",
+          "sequence": 3,
+          "kind": "status",
+          "summary": "Review 👨‍👩‍👧‍👦 fixture 🧪"
+        }
+      ]
+    }
+  ]
+}

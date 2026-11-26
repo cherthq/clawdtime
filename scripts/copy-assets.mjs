@@ -9,3 +9,4 @@ for (const name of [
   "background-window-video.mjs",
 ])
   cpSync(`media/${name}`, `dist/media/${name}`);
+cpSync("release-source.json", "dist/release-source.json");

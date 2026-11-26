@@ -86,6 +86,14 @@ export class HumanRouter {
     const store = this.service.store;
     const request = store.get<AttentionRequest>("attention", input.requestId);
     if (!request) throw new Error("Unknown request.");
+    const session = store.get<AgentSession>("session", request.sessionId);
+    const call = store.get<CallSession>("call", request.callId ?? "");
+    if (
+      request.audioQualification !== undefined ||
+      call?.audioQualification !== undefined
+    )
+      throw new Error("Audio qualification cannot deliver instructions.");
+    if (session) this.service.assertExecutionAllowed(session);
     const pairing = this.service.pairing(request.pairingId);
     if (
       input.memberId !== pairing.memberId ||

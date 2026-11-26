@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from captions import CaptionScene, CaptionRenderer, CaptionPublisher
 
@@ -72,6 +72,19 @@ class CaptionSceneTests(unittest.TestCase):
 
 
 class CaptionPublisherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runtime_cadence_stays_legacy_until_camera_negotiated(self):
+        screen = SimpleNamespace(owner=SimpleNamespace(env={'CLAWDTIME_SCREEN_CAMERA_ENABLED':'true'}), camera=None)
+        publisher = CaptionPublisher(CaptionScene('fixture'), None, sdk=SimpleNamespace(), screen=screen)
+        def emit_once(): publisher.closed=True
+        publisher.emit=emit_once
+        with patch('captions.asyncio.sleep',new_callable=AsyncMock) as sleep:
+            await publisher.run()
+            sleep.assert_awaited_once_with(1/5)
+        publisher.closed=False;screen.camera=object()
+        with patch('captions.asyncio.sleep',new_callable=AsyncMock) as sleep:
+            await publisher.run()
+            sleep.assert_awaited_once_with(1/15)
+
     async def test_one_video_publication_repeats_frames_and_cleans_up(self):
         source = Mock()
         source.aclose = AsyncMock()

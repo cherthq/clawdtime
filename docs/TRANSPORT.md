@@ -81,6 +81,27 @@ cross-session isolation, encrypted context, utterance replay/conflicts, transact
 failure, same-run reconciliation, held work, cancellation and restart. These tests
 do not establish microphone quality, provider audio or handset acceptance.
 
+## Local screen camera negotiation — Argos review slice
+
+The optional camera uses the existing authenticated v2 attention session and its
+viewing lease. New registrations must supply both `capabilities.screenCameraVersion:1`
+and `screenCamera:{version:1,surface:{kind,id,displayId,ownerPid?}}`; window selections
+include the owning process identity. The surface display must match the paired
+display. Selection and capability are immutable for that exact session: reconnect
+cannot opt in an old run or switch it to another window. Legacy registrations omit
+both and retain their behavior. Read-only document and audio qualification sessions
+cannot acquire this capability. Registration itself creates no call, capture or
+input authority.
+
+Camera rendering and transient annotations live with the media screen controller,
+where pristine captured pixels already reside. The backend forwards bounded commands
+only through a current authorized viewing/control lease; it does not persist screen
+pixels or annotation prose in a new presentation database. Production capability
+admission is separately default-off. Camera acknowledgements are not handset-display
+receipts, and a mapped input still requires the existing exclusive executor and
+fresh observation/action receipt path. See [Argos review](IMPLEMENTATION_ARGOS_REVIEW.md)
+for local checks and the physical acceptance steps that remain pending.
+
 ClawdTime is a single-node SQLite pilot. Its database is independent from Apple
 Teams, owner-only, WAL-mode and uses synchronous commits. No source runtime state
 is imported. Node 24+ provides the SQLite runtime.
@@ -131,6 +152,60 @@ These checks are session context, not biometric speaker identification.
 
 ## Receipt and recovery semantics
 
+### iMessage-first protocol v2
+
+New clients explicitly register immutable
+`interaction: {version: 1, commandChannel: "imessage_first", messageUpdates: true}`.
+Omitted interaction retains historical delivery behavior; reconnect cannot silently
+change an existing session's policy. Setting `messageUpdates: false` suppresses
+routine notices but retains text commands and explicit agent replies.
+
+Authenticated text and qualified final voice input share one ordered inbox. Replayed
+event IDs return the same turn; identical text under two different message IDs stays
+two separate instructions. Opted-in text turns enqueue recipient-bound accepted,
+acknowledged, pending-approval and terminal notices through the existing effects
+dispatcher. Newer status coalesces only unsent lower-priority notices for that turn.
+A provider-acknowledged message is not handset delivery or proof of task success.
+
+`conversation_reply` defaults to text for text input and speech for voice input in
+these sessions; an explicit negotiated `channel` can override it. Text replies have
+`channel: text`, a durable `effectId` and `delivery` of `queued`,
+`transport_acknowledged`, `unconfirmed` or `not_sent`. They are reconciled against
+message effects, never speech receipts. One reply identity per turn remains required.
+New input invalidates a queued stale text reply before dispatch. Already dispatched
+sends retain their actual/unknown outcome and are never recalled or blindly repeated.
+
+Message dispatch rechecks exact request/session/turn/pairing, freshness, expiry,
+policy and current reply cursor. Pending text expires after ten minutes; terminal
+or unknown effects retain identifiers/fingerprints but redact the new message body.
+Scope changes, Stop and revocation suppress pending sends. Existing historical
+message effects retain their previous recovery semantics.
+
+An already-running agent can discover text requests with `conversation_inbox`.
+The authenticated paired person can send `/sessions` and `/use SESSION_ID` to select
+an available exact session. Selection lasts ten minutes and does not wake a desktop
+chat. If exactly one opted-in live session is available, ordinary text can bind to
+it automatically; ambiguous, stale or unavailable sessions produce an explanation.
+Event-to-request binding is durable, so a duplicate message cannot move to a newly
+selected agent. A text-only request expires after five minutes and creates no call,
+capture or control lease. Shared-screen input remains call-bound. Arbitrary idle
+host resumption and attachment sending are not supplied by this routing feature.
+
+`executionRevision` reports current and acknowledged inbox cursors. New opted-in
+input requires the current cursor and all delivered turns acknowledged; this is
+checked together with the separate execution hold and existing control authority.
+This cannot revoke a native tool the host has already dispatched. Spoken replies
+for the negotiated voice capability carry their validated expected revision to
+media so an obsolete queued response can be refused there as well.
+
+The conversation timeline includes `message_queued` and `message_acknowledged` in
+the same bounded process-clock scope. Speech diagnostics accept playback-generation,
+queue-depth and first/last audio publication measurements. Publication is server
+evidence, not a handset timestamp. All timings remain synthetic/unclassified until
+the physical qualification in `VOICE_INTERACTION_PLAN.md` is performed.
+
+### Existing effect guarantees
+
 Request keys are scoped to the exact session and fingerprinted. Reusing a key with
 changed arguments fails. A call reservation and pending effect commit in the same
 transaction as the request. Dispatch changes pending to running before a network
@@ -172,6 +247,43 @@ No live number or secret belongs in this repository. Default execution uses
 `SimulationTransport`; simulation receipts explicitly report simulated status and
 are not FaceTime delivery evidence. No ClawdTime live call has been qualified by
 the transport unit tests.
+
+## Explicit standard text compatibility
+
+`NativeTransportConfig.textTransport` accepts `strict_receipts` (the default when
+omitted) or the explicitly selected `standard_once`. The normalized mode is part
+of the binding fingerprint; unknown values fail configuration validation. A failed
+receipt probe never switches modes automatically. Existing line assignments,
+databases, pairings, event boundaries and unknown outcomes remain unchanged.
+
+Strict mode requires the signed, sender-bound GET receipt lookup to return HTTP 404
+with exactly `{found:false,origin:<requested unused origin>}`. A generic 404 does
+not qualify. The `native_text_transport` readiness check in `standard_once` instead
+requires the explicitly configured mode and healthy exact native identity. Its
+message states that send capability is untested and durable operation lookup is
+unavailable; this is not physical message acceptance.
+
+Standard mode sends one authenticated native `POST /send` containing the exact
+paired `to`, `message`, stable effect-derived `idempotency_key`, and
+`native_sms_disabled:true`. Fresh `/api/v1/whoami` evidence binds the configured
+provider line, E.164 sender and instance before dispatch; the request is restricted
+to the exact paired direct conversation. It does not use the public queued-send
+endpoint, alternate routes, or an automatic fallback after an error.
+
+Only HTTP 200 with `success:true`, a UUID `guid`, `delivery.isSent:true`, and
+`delivery.error:0` qualifies as provider-reported acknowledgement. Queued,
+duplicate, suppressed, contradictory identity, error, missing-GUID, malformed JSON
+and timeout responses cannot supply that acknowledgement. A GUID is not proof of
+handset delivery; no delivered state is inferred from this compatibility path.
+
+The existing dispatcher commits a running intent before the single submission.
+An ambiguous outcome remains unknown through repeated draining and restart, with
+the original effect identity and cursor retained. ClawdTime never resubmits an
+unknown operation or invents a receipt. The provider may manage its own internal
+queue and retries; this mode guarantees no automatic ClawdTime resubmission, not
+provider-wide exactly-once delivery. Text-only setup does not authorize a FaceTime
+call. All compatibility validation is synthetic until a separately authorized
+message is observed by the intended person.
 
 ## Validation
 
@@ -919,3 +1031,248 @@ are never silently requeued. The full lifecycle simulation exercises the
 structured supervisor, actual task/desktop services, Codex protocol worker,
 independent verification, preparation adapter, durable delivery pump, revision and
 acceptance; its clock advances 181 seconds before worker completion.
+
+## Conversational broker, explicit opt-in — November 13, 2026
+
+New v2 registrations may additionally negotiate immutable
+`conversation:{version:1,runnerId,executionSession:"api_managed"}`. This identifies
+a separately selected programmatic executor; it does not grant control of an idle
+desktop chat. Existing registrations, attention/call IDs, transport receipts and
+legacy polling remain unchanged. `/sessions` and `/use` include these new sessions.
+Selecting one creates no call or attention request and grants no desktop access.
+
+`JobBroker` (`src/attention/jobs.ts`) uses the existing transactional SQLite store.
+Submission commits a job, revision, source event fingerprint and pending dispatch
+intent together. Text and voice share one session sequence. Deduplication uses the
+actual channel/event identity, so separately sent identical instructions remain
+separate events. Caller identity must match the paired member and the exact fresh
+execution session. Jobs are bounded to 16 unresolved queued/running items per
+session, 128 revisions per job and 10,000 retained job receipts per session; status
+exports at most 100 jobs. These are single-process pilot limits.
+
+Instruction text, verification contents and model history remain transient. The
+job ledger keeps fixed progress labels, source IDs, result/verification metadata,
+opaque unresolved receipt IDs and a fixed summary, not executor prose or files.
+A restart makes undispatched queued work `waiting_clarification`; an in-flight
+job and its original dispatch become `unknown`. Unknown outcomes block further
+execution in that session, including adapter changes. No generic replay or
+operator reconciliation shortcut is added. Preserve the database and dispatch IDs.
+
+Dispatch is nonblocking and serializes each session. Available task kinds are checked
+at submit, revise and dispatch: a standalone desktop adapter does not imply a
+working file/coding host. Only actual runner acceptance
+sets the accepted progress label. Success requires independently observed
+verification with no unresolved effects. Cancellation stops a queued job before
+submission; running cancellation requests cooperative stop and retains
+`cancel_requested` until the executor establishes an outcome. A correction to a
+running job advances its revision and requests stop; after confirmed quiescence it
+requires explicit clarification/confirmation instead of automatically replaying
+the changed instruction. Late old-revision success cannot complete the new revision.
+A missing or malformed executor result is unknown, not permission to try another host.
+
+Conversation interpretation places a session action hold. Only final interpretation
+of the current sequence clears that hold; expiry or reconnect cannot authorize
+input. The broker rechecks that hold, session authorization and runner readiness
+immediately before invoking the runner, including the microtask after a durable
+claim. Completion reporting also waits for finalized intent. Admission and local
+Stop inspect all retained jobs; the 100-item status window never hides an older
+unknown outcome or active task. Ordinary status/quiet replies leave job execution intact. Local Stop uses
+`cancelAll`; stopping speech alone never calls it. Session expiry/revocation also
+requests cooperative stop when the dispatch loop next observes it. All desktop
+adapters still enforce their separate local-grant, freshness and exclusive-control
+checks before every input.
+
+The conversational frontend is the sole result publisher. Broker text replies use
+the existing outbox and original provider receipt rules, without a fake attention
+or FaceTime call. Dispatch rechecks pairing/member/session liveness, current
+conversation sequence, job revision/state, expiry and text fingerprint immediately
+before the provider request. A superseded unsent reply is closed without delivery;
+a running/unknown reply is never retried. Terminal message text is redacted under
+the existing outbox retention behavior. Worker completion does not send its own
+message or TTS. Voice output stays with the qualified voice frontend.
+
+Backend timing uses a bounded process-local monotonic `JobTiming` generation for
+job acceptance, dispatch, actual executor acceptance, observation/input stages,
+verification and completion. These are application-boundary observations, not
+handset delivery, audible latency or physical UI acceptance.
+
+Tests `backend-jobs.test.ts` and `backend-job-conversation.test.ts` cover durable
+acceptance, event replay/conflict, unavailable hosts, wrong/expired sessions,
+independent verification, pending/running cancellation, cross-channel revision,
+unknown/restart, stale outbox suppression and a responsive frontend during a slow
+synthetic executor. Connector real-spike evidence is documented separately in
+CONNECTORS.md. These tests do not qualify physical messaging or speakerphone use.
+
+Migration is additive: enable the frontend only for newly registered opt-in
+sessions with explicitly configured runners. Rollback disables new frontend and
+runner admission, requests cooperative stop, preserves the SQLite database and
+unknown receipts, and leaves old sessions on their original semantics. Do not
+remove broker metadata, restore an old cursor, or replay pending work to roll back.
+
+### Scoped remote execution worker
+
+The `remote-codex-app-server` route supports an explicitly started local worker for
+an already selected API-managed session. Worker readiness is checked for that
+exact session; another connected worker never makes an unrelated session ready.
+The authenticated ready/next/event/command/result protocol carries the same job
+and dispatch ID as the broker, with transient instruction payloads and durable
+claim/result fingerprints. Retrying an identical poll identity returns only its
+original still-pending dispatch; a different poll does not steal claimed work.
+A result retry must have the same identity and fingerprint. A claimed timeout is
+unknown, and no result retry, restart or new poll authorizes re-execution. The
+worker's own once-only dispatch ledger remains necessary across local crashes.
+
+`backend-remote-executor.test.ts` exercises session isolation, delivery/result
+idempotency, timeout preservation and cancellation before/after worker claim.
+These tests use an in-memory transport and do not establish local worker
+installation, provider access, live iMessage delivery or physical acceptance.
+
+### Execution-disabled audio qualification
+
+The operator-only audio qualification route admits one fresh, explicitly authorized
+30–300 second call, with an immutable matching marker on its session, attention
+request and call. Its protocol-v2 session has no conversation, execution, polling,
+control or screen authority. Ordinary registration cannot request or reconnect this
+identity. A scoped session credential is returned only on first admission, for
+heartbeat, status and disconnect; a lost response is reconciled through operator
+status/Stop rather than minting another credential or redialing. Reusing the same
+idempotency key returns the original request even after completion or restart.
+
+Admission requires an idle pairing, line and device, with no active agent sessions,
+setup reservations, calls, media, tasks, grants or unresolved effects. Pending and
+unknown work blocks admission. Heartbeats cannot extend the absolute deadline.
+Local Stop ends only the qualification session and retains the pairing. Unknown
+dial or cleanup outcomes remain unknown and cannot be retried. Domain and API
+fences reject task responses, conversation polling/replies, control, execution and
+setup invitations. Messages during qualification cannot enqueue instructions or
+send an agent notice; the runtime accepts only its exact Stop handling.
+
+Native preparation requires provider/line/worker/media readiness and a fresh exact
+qualification binding before and after media preparation. The paired-device gateway
+and helper are not used in this mode. Media receives `audioQualification: true`,
+`captions: false`, and `screen: false`, and publishes inert video. A Stop during
+preparation closes allocated media before any native dial; an unacknowledged media
+close preserves unknown cleanup. Status reports `cleanupConfirmed` only when the
+call and media cleanup are established, separately from call-end submission.
+The GET-only readiness projection and bounded lifecycle counters carry no raw
+transcripts, instructions, audio or credentials.
+
+`backend-audio-qualification.test.ts` and the qualification cases in
+`backend-native.test.ts` exercise admission, API/domain fences, immutable expiry,
+replay/restart, conflicts, malformed markers, Stop races and uncertain cleanup with
+synthetic providers. These tests neither place a call nor establish handset audio,
+echo suppression, interruption quality or physical acceptance.
+
+### Read-only documents and selected-file attachment sending
+
+Document sessions negotiate `documentAccess:{version:1,readOnly:true,expiresAt}`
+with protocol 2 and the explicit `remote-documents` managed host. Access lasts at
+most one hour, cannot be extended by reconnect/heartbeat, and binds the exact
+project root, host, member and session through `document_root_grant`. Discovery,
+first-page preview and selected-file transfer are asynchronous document jobs.
+Validated structured results must match the submitted operation, candidate, grant
+and transfer ID. A model's prose cannot substitute for a verified result.
+
+The native call path may skip the desktop helper/gateway only for that exact live
+read-only document grant. It checks the binding again immediately before dialing.
+Media preparation carries immutable `documentOnly:true` and `documentSessionId`,
+with `screen:false` and captions enabled. It creates a real attention/call; this
+mode provides no desktop input authority. Grant revocation during preparation
+closes media before dial. An uncertain media close remains unknown.
+
+`AttachmentService` owns a separate `attachment_dispatch` ledger, not the legacy
+text outbox. Human approval binds the current verified preview selection, candidate
+ID, original name, SHA-256, MIME, size and paired iMessage recipient. Only PDF,
+DOCX and modern Pages files within 10 MiB are accepted. The original file bytes
+are checked again and held transiently; contents are never stored in the ledger.
+The native provider canonicalizes names to ASCII. The sender preserves a normalized
+title (`Résumé 2026.pdf` becomes `Resume_2026.pdf`); the selection retains the
+original name, and the send receipt reports the actual outbound filename.
+
+The inspected native provider contract uses a single base64 JSON staging POST to
+`/api/v1/attachments`, then a metadata GET and a one-attachment POST to
+`/api/v1/send`. Its attachment path bypasses the native text outbox. ClawdTime
+therefore persists each stage/send claim before the POST, makes one attempt, and
+never relies on the provider's accepted `idempotency_key` field as attachment retry
+protection. No companion text is bundled with the file. A timeout or lost send
+acknowledgment retains unknown; another event, adapter, session restart or selection
+cannot silently resend it. A known staging acknowledgment followed by revoked
+selection prevents sending and records a pre-send failure. Stop after a send claim
+retains unknown even if a late response subsequently supplies evidence.
+
+A validated native response establishes `delivery:provider_accepted`, not handset
+delivery. An unknown send can be reconciled with a read-only, bounded event scan
+from its original pre-send anchor. Exactly one matching attachment ID, metadata,
+recipient, provider line and message GUID is required. Gaps, missing events or
+multiple GUIDs leave the outcome unresolved. Reconciliation never changes the
+shared Messages cursor or repeats a POST. A staged upload without an acknowledged
+attachment ID cannot be reconciled by inventing an ID or uploading again.
+
+Software validation covers authority changes across awaits, exact bytes and
+recipient, event replay, upload/send Stop races, unknown restart, bounded shutdown,
+long/native-normalized filenames and provider-event reconciliation using synthetic
+providers. The local upstream source establishes an API contract, not the deployed
+binary's capability or handset receipt. Production capability and real document
+receipt need separate authorized evidence. No attachment or call is sent by these
+tests.
+
+Migration is additive (`document_root_grant`, `document_selection`, and
+`attachment_dispatch` entities). Keep document/attachment admission gated, stop
+local document hosts and await `AttachmentService.stop()` before closing storage.
+Preserve all metadata, original anchors and unknown outcomes on rollback. Retain
+the newer code in standby while any stage/send outcome remains uncertain; older
+code cannot enforce these ledgers. Never restore a database or discard a dispatch
+claim to make a demo retry possible.
+
+### Prepared native activation reservations — November 17, 2026
+
+New original-chat sessions may separately negotiate `nativeActivationVersion:1`.
+This requires protocol v2, the display camera and live-presentation capabilities,
+`nativeControl:"desktop"` and `sharedSurface:true`; reconnect cannot upgrade an
+existing session. This negotiation alone never enables production admission or
+arms the helper. Finder/TextEdit activation remains separate from fallback input.
+
+The backend retains `native-activation` records in its existing FULL-synchronous
+SQLite entities store. Preparation binds the operation fingerprint, original
+expiry, exact agent/request/media/pairing/member/device/display, lease, native
+ownership epoch, policy, cursor and scene generation. The prepared process/window
+observation is write-once. Dispatch commits its once-only claim and at-most-two-
+second deadline before invoking the helper. Neither a duplicate ID nor a retry
+extends the original authority. Other operations cannot replace a reserved device,
+including through another display, pairing, request or freshly registered session.
+Exact session reconnect remains possible for read-only reconciliation.
+
+Undispatched preparation can expire or be canceled safely. Dispatching/submitted
+records become uncertain after backend restart and never expire into permission to
+retry. Terminal results require matching operation/fingerprint evidence; `returned`
+proves the actor returned without proving the UI outcome. A validated `verified`
+result additionally carries the exact independently observed window. Lost receipt
+persistence leaves the original reservation in place. Reconciliation reads the
+same helper receipt and never submits the native effect again.
+
+Preflight rejection stores only an allowlisted cause; arbitrary peer exception
+text is never retained. Cancellation defaults to `preparation_canceled`, and a
+later cancellation cannot replace an existing terminal reason.
+
+After a call ends, its original active session may explicitly release execution
+with the current epoch, `executor:"none"`, `previousOutcome:"completed"` and
+`backgroundActorsStopped:true`. Every exact request lease must already be released,
+and all device input must be resolved. This acknowledgement grants no lease and
+does not require the helper to remain armed. Terminal native receipts remain
+unchanged. Call termination or a rejected preparation alone does not prove that
+external native actors have stopped. Restarted uncertain ownership, stopped
+sessions and uncertain actions or reservations remain fenced; this path is not
+operator recovery and does not erase an unknown result.
+
+Admission, audio qualification and doctor inspect these device-wide reservations.
+Preserve the ledger, original deadlines and unknown results during deployment and
+rollback. Older binaries do not enforce this new ledger: keep a compatible binary
+in standby whenever unresolved native work remains; do not restore an old database
+or delete records to make a preflight pass.
+
+`backend-native-activation-storage.test.ts` and `backend-native-activation.test.ts`
+exercise synthetic production protocols, restart/persistence failure, exact
+receipt binding, duplicate/conflicting identities, multi-client/device fences,
+wrong authority, Stop at awaited boundaries, late replies, target replacement and
+authenticated routes. They produce no real call or native input and do not prove
+physical acceptance, handset delivery or production frame timing.

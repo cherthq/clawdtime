@@ -27,6 +27,7 @@ export class SetupService {
   }
   private current(raw: string) {
     const session = this.service.authenticateSession(raw);
+    this.service.assertExecutionAllowed(session);
     this.expire();
     const test =
       this.store
@@ -72,6 +73,7 @@ export class SetupService {
     return this.create(session, previousTestId, raw);
   }
   private create(session: AgentSession, previousTestId?: string, raw?: string) {
+    this.service.assertExecutionAllowed(session);
     const pairing = this.service.pairing(session.pairingId);
     if (!pairing.allowView || !session.capabilities.cooperativePause)
       throw new DomainError(

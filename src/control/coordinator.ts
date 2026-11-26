@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { cameraFrameSchema, presentationReferenceSchema, type PresentationReference } from "../camera-contracts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -14,6 +16,7 @@ import type {
 } from "../contracts.js";
 import type { Store } from "../storage/store.js";
 import { ControlPreflightError } from "./errors.js";
+import { ControlTiming } from "./timing.js";
 
 export const actionSchema = z.discriminatedUnion("kind", [
   z
@@ -53,11 +56,17 @@ const liveStates = ["connected", "awaiting_input"];
 /** Exclusivity is persisted before awaiting any helper call. One process per DB. */
 export class ControlCoordinator {
   private busy = new Set<string>();
+  readonly timing: ControlTiming;
   constructor(
     readonly store: Store,
     readonly device: DevicePort,
     readonly now = Date.now,
   ) {
+    this.timing = new ControlTiming(
+      store.state("runtime:mode") === "simulation"
+        ? "synthetic"
+        : "unclassified",
+    );
     for (const lease of store.all<ControlLease>("lease")) {
       if (lease.state === "active")
         store.put("lease", { ...lease, state: "unknown" });
@@ -79,6 +88,9 @@ export class ControlCoordinator {
       request?.callId && this.store.get<CallSession>("call", request.callId);
     if (
       !request ||
+      request.audioQualification !== undefined ||
+      session?.audioQualification !== undefined ||
+      (call && call.audioQualification !== undefined) ||
       !pairing ||
       !session ||
       !call ||
@@ -267,23 +279,43 @@ export class ControlCoordinator {
   }
   async frame(leaseId: string, memberId: string) {
     const lease = this.check(leaseId, memberId);
+    const correlation = this.timing.attempt(lease.requestId);
+    this.timing.record(lease.requestId, "frame_started", correlation);
     let raw: Frame;
     try {
       raw = await this.device.frame(lease);
     } catch {
+      this.timing.record(lease.requestId, "frame_failed", correlation);
       this.check(leaseId, memberId);
       throw new ControlPreflightError("frame_unavailable");
     }
     const frame: Frame = {
+      ...(raw.camera ? { camera: cameraFrameSchema.parse(raw.camera) } : {}),
       id: raw.id,
       capturedAt: raw.capturedAt,
       width: raw.width,
       height: raw.height,
     };
-    this.check(leaseId, memberId);
-    this.fresh(frame);
-    this.store.saveState(`frame:${leaseId}`, frame);
+    try {
+      this.acceptFrame(leaseId, memberId, frame);
+    } catch (error) {
+      this.timing.record(lease.requestId, "frame_failed", correlation);
+      throw error;
+    }
+    this.timing.record(lease.requestId, "frame_completed", correlation);
     return frame;
+  }
+  /** Validate an image-bearing device observation without capturing a second frame. */
+  acceptFrame(leaseId: string, memberId: string, frame: Frame) {
+    const lease = this.check(leaseId, memberId);
+    this.fresh(frame);
+    if (lease.cameraVersion === 1 ? (!frame.camera || !isDeepStrictEqual(frame.camera.surface, lease.surface) || frame.width !== frame.camera.source.width || frame.height !== frame.camera.source.height) : !!frame.camera)
+      throw new ControlPreflightError("frame_unavailable");
+    if (frame.camera) cameraFrameSchema.parse(frame.camera);
+    // Store bounded metadata only, even when a port returns an image-bearing frame.
+    frame = { id: frame.id, capturedAt: frame.capturedAt, width: frame.width, height: frame.height,
+      ...(frame.camera ? {camera: cameraFrameSchema.parse(frame.camera)} : {}) };
+    this.store.saveState(`frame:${leaseId}`, frame);
   }
   private fresh(frame: Frame) {
     if (
@@ -291,6 +323,8 @@ export class ControlCoordinator {
       !Number.isFinite(frame.capturedAt) ||
       frame.capturedAt > this.now() + 250 ||
       this.now() - frame.capturedAt > 2000 ||
+      !Number.isFinite(frame.width) ||
+      !Number.isFinite(frame.height) ||
       frame.width <= 0 ||
       frame.height <= 0
     )
@@ -302,13 +336,19 @@ export class ControlCoordinator {
     actionId: string,
     frameId: string,
     input: InputAction,
+    beforeDispatch?: () => void,
+    presentation?: PresentationReference,
   ): Promise<ActionReceipt> {
     const lease = this.check(leaseId, memberId);
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(actionId))
       throw new Error("Invalid action ID.");
     const action = actionSchema.parse(input);
+    if (presentation) {
+      presentation = presentationReferenceSchema.parse(presentation);
+      if (action.kind === "type") throw new Error("Presentation requires a point action.");
+    }
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify({ leaseId, frameId, action }))
+      .update(JSON.stringify({ leaseId, frameId, action, ...(presentation ? {presentation} : {}) }))
       .digest("hex");
     const previous = this.store.get<ActionReceipt>("action", actionId);
     if (previous) {
@@ -319,6 +359,7 @@ export class ControlCoordinator {
         throw new Error("Action ID conflicts.");
       return previous;
     }
+    beforeDispatch?.();
     if (
       this.store
         .all<ActionReceipt>("action")
@@ -337,6 +378,8 @@ export class ControlCoordinator {
     if (!frame || frame.id !== frameId)
       throw new Error("Observe the current frame before acting.");
     this.fresh(frame);
+    if (presentation && (presentation.sourceFrameId !== frame.id || presentation.geometryGeneration !== frame.camera?.geometryGeneration))
+      throw new Error("Presentation and pristine observation must identify the same source frame.");
     const receipt: ActionReceipt = {
       id: actionId,
       leaseId,
@@ -350,23 +393,30 @@ export class ControlCoordinator {
       this.store.saveState(`frame:${leaseId}`, null);
     });
     this.busy.add(leaseId);
+    const correlation = this.timing.attempt(lease.requestId);
+    this.timing.record(lease.requestId, "input_started", correlation);
     try {
       this.check(leaseId, memberId);
-      const result = await this.device.action(lease, frame, action, actionId);
+      beforeDispatch?.();
+      const result = await this.device.action(lease, frame, action, actionId, presentation);
       if (!result.submitted) throw new Error("Input outcome is unknown.");
       this.store.put("action", { ...receipt, state: "submitted" });
+      this.timing.record(lease.requestId, "input_submitted", correlation);
       const afterFrame = await this.frame(leaseId, memberId);
       if (
         afterFrame.id === frame.id ||
         afterFrame.capturedAt < frame.capturedAt
       )
         throw new Error("Post-action frame was not fresh.");
-      return this.store.put<ActionReceipt>("action", {
+      const observed = this.store.put<ActionReceipt>("action", {
         ...receipt,
         state: "observed",
         afterFrame,
       });
+      this.timing.record(lease.requestId, "input_observed", correlation);
+      return observed;
     } catch (error) {
+      this.timing.record(lease.requestId, "input_failed", correlation);
       const current = this.store.get<ActionReceipt>("action", actionId)!;
       if (current.state === "pending")
         this.store.put("action", { ...receipt, state: "unknown" });

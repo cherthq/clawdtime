@@ -33,6 +33,7 @@ class RemoteTrackTests(unittest.IsolatedAsyncioTestCase):
         self.session = Session(owner, {'id': 'ct_'+'a'*40, 'meetingId': 'fixture'})
         self.session.room = FakeRoom()
         self.session.publish = AsyncMock()
+        self.session.monitor_loop_lag = AsyncMock()
         self.session.deliver = AsyncMock()
         self.session.watch_policy = AsyncMock()
         self.session.capture_loop = AsyncMock()

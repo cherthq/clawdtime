@@ -41,7 +41,13 @@ export class SimulationTransport implements Transport {
       this.calls.push({ requestId: request.id, effectId, callId });
     return { callId, accepted: true };
   }
-  async message(pairing: Pairing, text: string, effectId: string) {
+  async message(
+    pairing: Pairing,
+    text: string,
+    effectId: string,
+    beforeDispatch?: () => void,
+  ) {
+    beforeDispatch?.();
     if (!this.messages.some((m) => m.effectId === effectId))
       this.messages.push({ pairingId: pairing.id, text, effectId });
     return { simulated: true, accepted: true, receiptId: effectId };

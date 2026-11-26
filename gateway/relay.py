@@ -10,10 +10,18 @@ import time
 import certifi
 from urllib.parse import urlsplit
 from aiohttp import ClientSession,ClientTimeout,TCPConnector,WSMsgType,web
-from service import Gateway,MAX_FRAME
+from service import Gateway,MAX_FRAME,camera_refusal_headers
 from relay_diagnostics import milliseconds, stamp
 
-PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel))$')
+# Ping every 20 s; a peer gets 10 s to answer before the socket is declared dead.
+HEARTBEAT=20
+PATH=re.compile(r'^/v1/(?:leases(?:/[A-Za-z0-9_-]{1,160}(?:/(?:renew|frame|presentation/resolve|native/[A-Za-z0-9_-]{1,160}|actions(?:/[A-Za-z0-9_-]{1,160})?))?)?|devices/[A-Za-z0-9_-]{1,160}/(?:version|readiness(?:/[A-Za-z0-9_-]{1,160}/[0-9]{1,10})?|panel|text-grants(?:/[A-Za-z0-9_-]{1,160})?))$')
+
+def response_headers(headers, status, method, path):
+    result={k:v for k,v in headers.items() if k.lower() in ('content-type','x-frame-id','x-captured-at','x-frame-width','x-frame-height','x-camera-frame')}
+    if status==410 and method=='GET' and path.endswith('/frame'):
+        result.update(camera_refusal_headers(headers))
+    return result
 
 def trusted_tls_context():
     # Isolated trust roots: macOS framework Python may have no default CA file.
@@ -52,12 +60,17 @@ async def relay(gateway,url):
     site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     local=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     diagnostics=ReconnectLog()
+    # The WSS handshake crosses the internet (DNS, TLS, proxy) and a 2 s total
+    # budget fails on ordinary slow networks. Liveness after the upgrade is the
+    # heartbeat's job, so the socket session has no total timeout.
+    socket_timeout=ClientTimeout(total=None,connect=20,sock_connect=15)
     try:
-        async with ClientSession(timeout=ClientTimeout(total=2),connector=TCPConnector(ssl=trusted_tls_context())) as http:
+        async with ClientSession(timeout=ClientTimeout(total=2),connector=TCPConnector(ssl=trusted_tls_context())) as http, \
+                ClientSession(timeout=socket_timeout,connector=TCPConnector(ssl=trusted_tls_context())) as wss:
             while True:
                 pending=set()
                 try:
-                    async with http.ws_connect(url,headers={'Authorization':'Bearer '+key},max_msg_size=32768,heartbeat=10) as socket:
+                    async with wss.ws_connect(url,headers={'Authorization':'Bearer '+key,'X-ClawdTime-Devices':','.join(sorted(gateway.devices))},max_msg_size=65536,heartbeat=HEARTBEAT) as socket:
                         async def perform(item):
                             started=time.monotonic()
                             # Idle readiness traffic must not evict the failed call's hop history.
@@ -68,7 +81,7 @@ async def relay(gateway,url):
                             result={'id':item['id'],'status':503,'headers':{},'body':''}
                             try:
                                 method,path=item['method'],item['path']
-                                if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not PATH.fullmatch(path) or ('/devices/' in path and method!=('POST' if path.endswith('/panel') else 'GET')):raise ValueError()
+                                if method not in ('GET','POST','DELETE') or not isinstance(path,str) or not PATH.fullmatch(path) or (path.endswith('/presentation/resolve') and method!='POST') or ('/native/' in path and method!=('POST' if path.endswith(('/native/prepare','/native/dispatch')) else 'GET')) or ('/devices/' in path and method not in (('POST',) if path.endswith(('/panel','/text-grants')) else ('GET','DELETE') if '/text-grants/' in path else ('GET',))):raise ValueError()
                                 record('forwarded')
                                 async with http.request(method,local+path,headers={'Authorization':'Bearer '+key,'X-ClawdTime-Relay-Request':identity or ''},**({'json':item['body']} if item.get('body') is not None else {}),allow_redirects=False) as response:
                                     chunks=[];size=0
@@ -76,7 +89,7 @@ async def relay(gateway,url):
                                         size+=len(chunk)
                                         if size>MAX_FRAME:raise ValueError()
                                         chunks.append(chunk)
-                                    result.update(status=response.status,body=base64.b64encode(b''.join(chunks)).decode(),headers={k:v for k,v in response.headers.items() if k.lower() in ('content-type','x-frame-id','x-captured-at','x-frame-width','x-frame-height')})
+                                    result.update(status=response.status,body=base64.b64encode(b''.join(chunks)).decode(),headers=response_headers(response.headers,response.status,method,path))
                             except asyncio.CancelledError:
                                 record('cancelled');raise
                             except Exception as error:

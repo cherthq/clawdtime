@@ -15,7 +15,7 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
             self.paths.append(request.path)
             self.assertEqual(request.method,'GET')
             self.assertEqual(request.headers['Authorization'],'Bearer '+'h'*32)
-            if request.path=='/v1/status':return web.json_response({'deviceId':'foreign' if self.wrong else 'device_fixture','armed':False,'available':True,'screenPermission':False,'controlPermission':False,'secret':'MUST_NOT_FORWARD'})
+            if request.path=='/v1/status':return web.json_response({'deviceId':'foreign' if self.wrong else 'device_fixture','armed':False,'available':True,'screenPermission':False,'controlPermission':False,'livePresentationVersion':1,'secret':'MUST_NOT_FORWARD'})
             if request.path=='/v1/displays':return web.json_response([{'id':1,'width':100,'height':100}])
             if request.path=='/v1/permissions':return web.json_response([{'displayId':1,'viewers':['member_fixture'],'controllers':[]}])
             raise AssertionError('Readiness touched an effect route')
@@ -39,6 +39,12 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.gateway.db.execute('SELECT COUNT(*) FROM leases').fetchone()[0],0)
         other=await self.client.get('/v1/devices/device_fixture/readiness/other_member/1',headers=self.headers)
         self.assertFalse((await other.json())['viewAllowed'])
+
+    async def test_live_presentation_capability_requires_exact_viewer_display_scope(self):
+        async def get(path):return await (await self.client.get(path,headers=self.headers)).json()
+        self.assertEqual((await get('/v1/devices/device_fixture/readiness/member_fixture/1'))['livePresentationVersion'],1)
+        for suffix in ('','/other_member/1','/member_fixture/2'):
+            self.assertNotIn('livePresentationVersion',await get('/v1/devices/device_fixture/readiness'+suffix))
 
     async def test_wrong_device_and_malformed_scope_fail_closed(self):
         self.wrong=True

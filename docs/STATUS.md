@@ -1,3 +1,895 @@
+## November 17, 2026 — final authorized call; camera conflict remains unclassified
+
+The additional explicitly authorized call ran for approximately seven minutes
+(422 seconds from creation to ended). Three finalized spoken turns reached this
+same chat. It ended intentionally with `request_completed`; media failure was
+null. The former 180-second provider disconnect did not recur. This is evidence
+of sustained connection and incoming voice, not complete duplex or handset
+acceptance: the one outgoing report retains an unknown playback receipt.
+
+The prepared walkthrough stopped during its initial camera overview, before
+native ownership or app input. The preceding clear returned, but the overview
+returned HTTP 409; its original command remains unknown and was not replayed.
+A later camera status was live and at overview, which cannot establish the
+original write's outcome. Consequently this call did not exercise the corrected
+exact-window raise sequence or complete the Finder/TextEdit walkthrough.
+
+The investigation found an observability defect: media camera reasons were
+replaced by a generic transport exception, and the backend mapped that exception
+to HTTP 409. The original rejection cannot now be attributed to freshness,
+revision, authority or transport. The repair carries only allowlisted camera
+reason codes from media through the backend to the connector's retained failure.
+Unknown bodies remain redacted; failed writes remain blocked without replay.
+No freshness, authorization, expiry or native execution checks are relaxed.
+
+The controller was joined, its temporary trigger closed, and local Stop visibly
+confirmed. The exact lease is released, executor is none/idle at epoch zero,
+there are no input actions, and the original foreground bridge is closed.
+Both presentation and native-activation admission gates are false. Gate-off
+backend deployment `060afd06-fdaf-4183-acfe-3443886a726f` and media deployment
+`7006906c-8107-4216-a65d-3456bb6c02e6` succeeded; readiness reports zero active
+calls, pending or unknown transport effects, and media reports zero sessions
+with its gateway connected. No further call was placed under this approval.
+
+Validation: `npm run check` passes 1,281 tests in 72 files, typecheck and build.
+The affected Python camera suite passes 43 tests. Independent review of the
+media-to-connector diagnostic path found no blocker; this is not physical
+acceptance of the previously blocked walkthrough.
+
+Diagnostic release `4268918b67efa1c437f756fb6539d67511f5c174` is pushed and
+deployed: backend `a97b3f6b-8ebb-456d-a881-66f7f289e6b2`, media
+`ed23c369-6b40-43ba-8ac7-429c119db217`. Both report healthy at that exact
+revision with the two test admission gates disabled. Media has no active sessions
+and its gateway is connected; backend has no active calls or pending/unknown
+transport effects. The Mac companion and gateway were not changed.
+
+## November 17, 2026 — second production call; exact-window follow-up verified locally
+
+Release `1361a2a8cd0c8b0d926ff856fcdedaaf5ea3f511` was pushed and deployed to
+backend and media. The original-chat CLI used that build; installed companion
+build 8 and frozen gateway remain at `89f78397c63b2e9362e764a0ab6b34ad42aa6623`.
+Their complete source directories are unchanged between those revisions.
+
+The one newly authorized call connected and delivered one spoken instruction to
+this chat. The provider was still `in-progress` at 207 seconds, beyond its former
+180-second limit. The call was then ended intentionally; the media failure field
+remained null. Screen capture ran for approximately 258 seconds. This establishes
+survival past the former cutoff, not ten-minute or complete handset acceptance.
+
+Activation passed preflight this time and reached the host once. It returned
+terminal evidence without verifying the intended Finder window; a different
+Finder window was foreground. No activation was replayed. This exposed a missing
+connector sequence for multi-window apps: one app activation may require a
+separately qualified `raise_window` of the original target. The connector now
+supports that explicit follow-up only after an unchanged exact terminal returned
+activation, retaining the same scene/window/generation, lease, native epoch,
+policy and cursor. It preserves the first receipt and creates a distinct
+reservation; another fixed CUA click is required. Unknown outcomes never use it.
+
+The isolated no-call production-code harness reproduced the returned activation.
+A separately prepared and CUA-triggered raise then returned `verified`, and native
+UI observation showed the exact disposable Finder window in front. Ownership
+released to none/idle; the presentation command was accepted. A later preview
+showed the desktop overview, so this run does not establish visible zoom/label
+acceptance. Local Stop cleared sharing; harness cleanup joined actors with zero
+unresolved leases/native operations. The candidate helper exited. No screens or
+audio were saved.
+
+Final connector validation: `npm run check` passes 1,233 tests in 72 files,
+typecheck and build. The production call itself did **not** complete the
+walkthrough; the exact-window follow-up was verified locally afterward. Its one
+spoken report still has an unknown playback receipt and was not repeated.
+Before ending, the original controller was joined and native ownership explicitly
+released; terminal state is none/paused with its lease released and no actions.
+The foreground bridge and temporary trigger tabs are closed. Production helper
+Stop is visibly confirmed, both presentation/activation gates are false, and
+backend/media report zero active calls/sessions and no pending effects. No second
+redial was made under this authorization.
+
+## November 17, 2026 — voice lifetime and activation recovery repair
+
+The dedicated voice provider agent had a 180-second conversation limit. Its exact
+prior conversation lasted 181 seconds and ended at the media failure timestamp.
+The provider setting is now 600 seconds, with silence termination disabled.
+The agent template and readiness validation enforce an explicit 600–7200-second
+limit and disabled silence termination. WebSocket failure diagnostics retain only
+bounded close metadata, elapsed time and configured limit; no reconnect or replay
+was added.
+
+The historical activation cancellation happened with 7.7 seconds of preparation
+authority remaining, ruling out ordinary planning expiry. Its generic receipt
+did not retain the failed precondition, so its exact cause cannot be reconstructed.
+New undispatched rejections preserve an allowlisted cause (including incoming
+speech, stale frame, changed ownership or local policy). The trigger displays the
+original expiry; claim/release acknowledgements now bind the exact owner epoch.
+Neither freshness nor permission checks were relaxed.
+
+Fixed a separate confirmed recovery bug: the original active session can now
+explicitly release native ownership after its call ends and every lease is
+released, with completed actors acknowledged and no unresolved input. Restart
+uncertainty and stopped sessions remain fenced. The prior restarted owner was
+reconciled separately through a guarded operator transaction after inspecting
+the exact rejected-before-dispatch operation, released lease, absent action
+records, joined controller, closed trigger and visibly stopped local helper.
+The immutable audit preserves the original owner record/hash and evidence;
+unknown speech playback remains unchanged. No effect was replayed.
+
+Validation: `npm run check` passes 1,213 tests in 72 files, typecheck and build.
+The full media suite passes 482 tests with 13 skips. Independent specialist review
+found no blocker in the new rejection and release paths. These are automated
+results, not a passing production walkthrough. One new call is authorized by the
+user, pending deployment and fresh readiness checks.
+
+## November 17, 2026 — receipt reconciled; production call connected
+
+The connector credential repair remains valid. The earlier setup notice's exact
+provider outbox row and terminal failure event establish a failed submission:
+five provider attempts ended with error 4001, “no iMessage account/service found,”
+without a message GUID or sent-key acknowledgement. A guarded reconciliation
+preserved the original unknown receipt in an immutable audit record and marked
+the effect failed with replay prohibited. No notice was resent. The upstream
+Messages account issue itself is not repaired; the established session's normal
+call path does not require a new setup notice, and message updates were disabled.
+
+One authorized production call connected through a fresh original-chat v2
+session. The human's spoken confirmation that the folders were visible arrived
+in this same coding chat and was acknowledged. This verifies initial handset
+screen visibility and one spoken turn, not the complete walkthrough.
+
+The first prepared Finder activation was rejected as `preparation_canceled`
+before native dispatch. No input, edit, move or scene transition was submitted.
+The generic rejection does not identify which dispatch precondition failed.
+The media service subsequently ended the call after
+`voice_frontend_failed stage=read code=provider_disconnected`; its outer
+`task_failed/capture_loop` classification does not establish a screen capture
+fault. The single spoken report retains an unknown playback receipt and was not
+replayed. No automatic redial occurred.
+
+Cleanup verified: local Stop visibly disabled sharing/control; the viewing lease
+is released, with no action receipts outstanding. Historical executor metadata
+still records native/working after the call ended; normal release requires an
+active lease, so that record was preserved rather than forcing a false release.
+The foreground bridge, walkthrough controller and trigger tab are closed.
+Backend readiness reports zero active calls, pending effects and unknown effects;
+the media service reports zero active sessions. Both services are healthy on
+implementation `89f78397c63b2e9362e764a0ab6b34ad42aa6623`, with presentation and
+native activation explicitly disabled. Gate-off deployments are backend
+`5327b17a-a451-4230-b947-d528fe7a98f6` and media
+`ea8e6129-1f6d-4d70-939a-cac41a49cfbd`. The full production walkthrough remains
+unaccepted pending diagnosis of the activation rejection and voice disconnect.
+
+## November 17, 2026 — earlier authorized attempt blocked before dialing
+
+The connector now uses the existing valid current-line pairing; the prior
+connection files and run receipts remain intact. Authentication and fresh
+same-chat v2 registration passed with native desktop, display camera, live
+presentation, native activation and ElevenLabs capabilities.
+
+The user authorized one production test call. Presentation/activation admission
+was enabled on backend and media using the same staged source image. The backend
+restart stopped the idle prepared session; it had no test or external effect.
+After reconciling that state, a new original-chat session registered and all live
+readiness checks passed. The installed companion was explicitly enabled locally.
+
+The setup notice was submitted once and retained an **unknown delivery outcome**.
+The call-start readiness guard refused before creating an attention request or
+call. The provider's exact operation lookup returned generic HTTP 404, which is
+not evidence that the message was absent or delivered. No resend, duplicate
+registration to evade the fence, manual receipt rewrite or FaceTime call occurred.
+The underlying provider submission failure remains undiagnosed; the standard-once
+transport cannot automatically reconcile this outcome.
+
+The approved setup test was canceled, the foreground bridge closed and local Stop
+was visibly confirmed. Both admission gates were set explicitly false again.
+The unknown notice receipt remains preserved and blocks subsequent live readiness.
+The credential repair remains valid. Handset acceptance was not exercised.
+
+## November 17, 2026 — native walkthrough staged with admission off
+
+Implementation source `89f78397c63b2e9362e764a0ab6b34ad42aa6623` is committed and
+pushed on `ArgosClawd`. Matching artifacts were deployed from a frozen Git archive:
+
+| Component           | Verified artifact                                                                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend             | Deployment `f320ce4b-e9db-4fc1-812a-8fc01178e820`; health reports the exact source SHA                                                                   |
+| Media               | Deployment `cb364e09-af86-4765-9ec4-6712bcee8fd5`; health reports the exact source SHA                                                                   |
+| Gateway             | Frozen source directory; authenticated version reports the exact SHA and runtime hash `e7fa4859b4ff26b3d692c498e1b84e235d5f8931a30e64c860c983f5e2713462` |
+| Installed companion | 0.4.0 build 8; exact source SHA, `ClawdTimeSourceDirty=false`; executable SHA-256 `949460aa9de727fe97da0f07db4904a8828189c24930878870ea8050c065a71b`     |
+| Original-chat CLI   | 129 compiled files match a fresh frozen-source build; tree SHA-256 `85796f67871d415aebe73cf795eb280b36bac522a76cbeecfba8a3a1f51bc7a1`                    |
+
+The companion was repackaged after commit with clean source metadata and a fresh
+ad-hoc signature; that changes its signed executable hash from the physically
+tested candidate below. The release build reused the same compiled executable
+without recompiling source. Signature verification passed. This remains an
+internal pilot artifact, not a notarized distribution release.
+
+Post-deployment checks: backend active calls, pending effects and unknown effects
+were all zero; media had zero active sessions and the gateway connected. Both
+`CLAWDTIME_LIVE_PRESENTATION_ENABLED` and `CLAWDTIME_NATIVE_ACTIVATION_ENABLED`
+remain unset/default-off on backend and media. The installed helper is disarmed,
+without an active lease or unresolved action; both macOS permissions remain
+granted. No rehearsal capture/input actor survives.
+
+Helper/gateway/device-map configuration hashes and the helper action receipt file
+are unchanged. All 26 gateway lease records and 37 action records are unchanged.
+This includes one historical `creating_unknown` lease whose grant expired on
+November 14; it was retained, not erased to make preflight green. No volumes,
+pairings, cursors, active chats or unknown receipts were restored or replaced.
+
+**Deployed, but a production test is blocked by the original-chat credential's
+HTTP 401.** Restore a valid authorized connection for this exact project before
+registering a fresh immutable capability-negotiated session. The old connection
+and run state remain intact. No call, outbound message, live admission or line
+handoff occurred. Handset video/voice, actual cloud frame timing and same-chat
+continuation remain unverified until a separately authorized test.
+
+See [release/rollback targets](DEPLOYMENT.md#november-17-native-walkthrough-release)
+and the [one-call checklist](DEMO_ACCEPTANCE.md#production-bound-walkthrough-qualification).
+The three planning drafts remain uncommitted. Later documentation-only commits do
+not change the deployed implementation SHA above.
+
+## November 17, 2026 — production-bound walkthrough local acceptance
+
+The prepared Finder/TextEdit workflow now uses the production backend, media,
+gateway and installed-helper authority path. Activation has a separately negotiated,
+default-off capability. Exact operation reservations survive restart and fence
+device-wide input and replacement sessions. The helper checks local policy before
+input and during settling; slow native activation and read-only AX resolution run
+in disposable children that local Stop can kill and join independently of cloud
+callbacks. Returned host execution remains distinct from verified UI success.
+
+**One complete isolated no-call physical run passed on an idle Mac.** Five native
+operations returned terminal `verified` receipts and five visual scenes were
+accepted. Original-chat CUA triggered each fixed prepared operation. Finder and
+TextEdit activated automatically; the actual preview showed zoom transitions and
+aligned labels. A fresh follow-up plan preceded a harmless TextEdit heading edit
+and save. Native UI and a read-only fixture check confirmed the saved heading
+exactly once. Finder returned automatically, and original-chat CUA moved the one
+disposable sample from Approved to Research. UI and filesystem checks confirmed
+one destination file and no remaining source copy. Input ownership was claimed
+and released around every activation, edit and move.
+
+Local Stop cleared the actual preview. The harness joined its actors and reported
+zero unresolved leases and native operations; helper status was disarmed, without
+an active lease or unresolved action. No screen/audio content was retained. The
+qualified candidate was 0.4.0 build 8, executable SHA-256
+`8b1b110391b54a80e0385c519cf51d067b24d56cb8c3c726348ed0d5b9c3fb05`.
+
+The user canceled the optional second pass. Before cancellation, its native
+activation verified but visual qualification was rejected; this is not a second
+passing walkthrough. It also stopped and joined cleanly, with zero unresolved
+lease/native outcomes. Earlier diagnostic runs and their unknown cleanup receipts
+remain retained, without replay or deletion. The first complete run establishes
+the tested fixtures, not uninterrupted operation in every Space/display layout
+or under concurrent desktop use. Stop during a deliberately hung AX child is
+covered by automated tests; that stress case was not physically repeated.
+
+Physical testing exposed and repaired capture pacing across an ownership change,
+resolver-child idle retirement during a fresh-frame bracket, and exact lease
+cleanup after local Stop. Original observation timestamps, the 200 ms monitor,
+250 ms witness, 600 ms native settle and immutable native deadlines remain intact.
+Independent specialists reviewed reservation recovery, binding, no replay,
+ownership transitions, child lifecycle and cleanup acknowledgments.
+
+The existing original-chat connection and CLI doctor both returned HTTP 401.
+Their saved state was preserved; no replacement pairing, session, invitation or
+call was created. A valid authorized connection for this exact project is required
+before a fresh capability-negotiated production test session can register. The
+connector build includes the new capability and prepared CUA trigger.
+
+Final validation: `npm run check` passed 1,185 tests across 72 files, typecheck and
+build; Swift passed 110 tests; gateway passed 55 tests; Mac packaging scripts
+passed 21 tests. The full media suite ran 477 tests successfully with 13 optional
+SDK skips. Changed-file formatting and whitespace checks passed. Exact production
+release versions are recorded separately in the deployment entry.
+No call or outbound message was placed. Handset video/voice, real cloud frame
+timing and same-chat continuation remain live acceptance items. See the exact
+[one-call checklist and Stop/rollback procedure](DEMO_ACCEPTANCE.md#production-bound-walkthrough-qualification).
+
+## November 17, 2026 — native foreground activation repair
+
+**Local physical acceptance passed:** Finder → TextEdit → Finder completed with
+three distinct terminal `verified` receipts. Each receipt independently observed
+the exact app active, exact window focused and window on-screen. The first two
+targets were inactive and off-screen when prepared; the final Finder target was
+inactive but on-screen. No manual window arrangement or repeated activation was
+needed during this run. This establishes the prepared native executor on these
+fixtures; it is not a guarantee for every Space/fullscreen/multi-display layout or
+the upstream CUA provider's window actions.
+
+The lead triggered each single prepared operation through the original chat's
+browser CUA. Native ownership was claimed and released per step. After the last
+verified operation, ownership was `none`/`idle` at epoch 6. Local Stop cleared the
+preview and released the lease, leaving `none`/`paused` at epoch 7. All preview and
+native executor processes exited; receipts remain retained and no screen/audio
+was saved. Zooms, annotations, document edits and file moves were not repeated in
+this activation-only acceptance run.
+
+The prepared native executor is distinct from upstream CUA Window-menu and Raise
+actions. A controlled baseline of its old `NSRunningApplication.activate` path
+returned an uncertain `post_observation_unavailable` receipt. The original receipt
+was retained, the local capture stopped, and the executor/controller processes
+were joined before a separate changed-mechanism test.
+
+The candidate replaces that call with one public Accessibility `AXFrontmost=true`
+write to the retained target application. It checks attribute support and exact
+PID, then rechecks original authority, process lifetime and AX window identity
+immediately before dispatch. There is no fallback, launch or repeated effect.
+Connector preparation and pre-dispatch qualification now reject `raise_window`
+when the app is already known to be inactive.
+
+The first candidate brought Finder to the foreground: a later independent
+observation reported all three foreground/focus/on-screen flags true for the same
+window, process and original bounds. Its original receipt nevertheless remains
+uncertain: verification encountered `window_outside_display` during the transition.
+This isolated an additional settling problem; the later observation does not
+retroactively turn that original receipt into success. The repair permits a
+pending read-only observation only for a classified post-effect CG geometry
+transition, while proving the original window/process/AX identity, title and
+display authority remain intact. Pending observations discard earlier samples;
+the next normal resolver must restore original bounds and all three foreground
+checks within the unchanged 600 ms settle and original two-second authority
+deadlines. Missing identity, Stop and permission loss still fail closed. There is
+no repeated native effect.
+
+Validation: `npm run check` passed 1,138 tests across 69 files, typecheck and build;
+Swift build and 98 tests passed. Independent review covered the one-write
+activation guard, transition identity, late/expired observations, early raise
+prerequisites, preserved uncertain receipts and clean test isolation.
+
+Production admission remains off. No call, installed companion update or production
+deployment is part of this local repair. Production's remote resolver remains
+read-only; this repair does not silently add a production native-input endpoint.
+
+## November 17, 2026 — idle-Mac foreground rehearsal
+
+After the user confirmed they would minimize Codex and leave the Mac idle, the
+lead repeated native Finder Raise, exact TextEdit Window-menu selection, a direct
+TextEdit title-bar click, and exact Finder Window-menu selection. The direct click
+returned successfully this time. A 55-second read-only observation run collected
+156 samples for each exact test window: every sample reported windowFocused and
+windowOnScreen true, but appActive false. There were no observation errors.
+A separate AppKit metadata check found both `isActive` and frontmost PID equality
+false, confirming this was not merely object-comparison failure in the observer.
+
+This distinguishes the earlier off-screen/direct-click failure from the remaining
+foreground activation failure. It does not identify why the native-control path
+leaves another app active. Automatic switching and cross-Space acceptance remain
+unpassed; do not remove the foreground guard or count per-window accessibility
+responses as visible presentation success. No document content, permissions,
+production settings or installed software changed; no call was placed. The
+metadata sampler exited and no capture or input actor remains running.
+
+## November 17, 2026 — no-call switching and cloud timing checks
+
+Agent teams reproduced a monitor latency problem and fixed it locally. The old
+monitor required two backend authority callbacks plus a remote window resolution
+inside 200 ms. It now uses the previous exact, unexpired authority only to start
+the read-only observation, then requires a fresh backend callback before renewing
+the presentation. It retains the original authority expiry, 250 ms native witness
+limit, 200 ms monitor deadline, Stop checks, and no-replay receipts. A simulated
+90 ms backend / 30 ms resolver path now sustains presentation; slower paths and
+stale witnesses still clear it. Stage timings contain only fixed categories,
+timestamps, durations and bounded error categories.
+
+Eight authenticated, read-only production readiness probes returned HTTP 200.
+The first took 352.9 ms; subsequent requests took 174.9–218.0 ms. This includes
+the local client-to-media leg and gateway/helper readiness work, not actual
+presentation resolution or the media-to-backend authority callback. It does not
+qualify the cloud frame bracket or sustained zoom. The helper remained disarmed,
+without an active lease; production presentation admission remained off.
+
+The physical switching check did **not** pass. Original-chat native CUA selected
+the exact Finder and TextEdit test windows through their Window menus, entered
+and exited temporary TextEdit fullscreen, and invoked the exposed Raise action.
+Independent read-only target observations returned per-app window focus but never
+global app activation or on-screen visibility: 116 samples over 25 seconds in
+fullscreen and 84 samples over 18 seconds after restoration. A direct title-bar
+click then failed with `noWindowsAvailable`. The optional application-launch API
+was unavailable and Dock inspection timed out. Accessibility responses and
+per-window screenshots therefore do not establish a visible Space transition.
+The precise cause of the foreground-control failure remains unproven.
+
+Added a bounded `--native-observe --target JSON` diagnostic to distinguish these
+states without capturing pixels, sending input, creating a lease or loading
+installed credentials. See [DEVICE.md](DEVICE.md) for its exact contract.
+
+Validation: `npm run check` passed 1,135 tests across 69 files, typecheck and build;
+Swift passed 90 tests and build; the full media suite ran 469 tests successfully
+with 13 optional SDK skips; six focused gateway regressions passed. Independent
+review covered the monitor authorization ordering, original witness expiry,
+diagnostic privacy and the read-only native observation boundary.
+
+These fixes are local; no new deployment, gate change, call, message, permission
+change or installed companion replacement occurred during this check. Production
+walkthrough acceptance remains open until native foreground control and the real
+authorized remote presentation path pass. A phone rehearsal remains separately
+unauthorized.
+
+## November 17, 2026 — prepared presentation deployed with new admission off
+
+Production source `c7af884` is committed and pushed on `ArgosClawd`. Backend
+`3419147a-df04-4166-a4a9-5f32e6681c42` and media
+`4c7de1a8-32b2-4e31-ba3d-c51dad365185` both deployed successfully. The installed
+companion is 0.4.0 build 7 and the existing gateway was restarted against the
+matching source. Exact helper/gateway configuration hashes and gateway lease/action
+ledger hashes were unchanged; helper receipt counts and existing Screen Recording/
+Accessibility permissions were preserved. The companion remains disarmed with no
+active lease. No new permission, call or message was sent.
+
+Backend readiness reported zero active calls, pending effects and unknown effects.
+Media is healthy with zero active sessions and the gateway connected. The new
+backend route rejects an unauthenticated request. Initial scoped readiness probes
+returned HTTP 503 around rollout; a later probe returned HTTP 200 with the correct
+device/display permissions. That recovery does not prove the earlier failure's
+cause. SSH verification was unavailable; release evidence uses the frozen committed
+upload, deployment success, HTTP route checks, and installed artifact checks.
+
+**The new walkthrough capability is NOT enabled.** Both new admission gates remain
+unset/default-off. Production already uses snapshot capture, so the experimental
+persistent preview stream is not promoted. The original agent retains all native
+CUA; the new helper endpoint resolves metadata only. Before enabling admission,
+qualify the real remote resolver/frame-bracket freshness budgets and automatic
+cross-Space behavior. The local snapshot demo and same-session follow-up passed;
+handset performance and production walkthrough acceptance remain unverified.
+
+Release checks passed: 1,129 backend/connector tests across 68 files plus build;
+88 Swift tests; 49 gateway tests; 460 media tests run with 13 optional SDK skips.
+Independent reviews covered capability negotiation, expired qualification replies,
+agent/media session identity, Stop, durable receipts and no replay.
+
+## November 17, 2026 — prepared walkthroughs and live target resolution implemented
+
+Agent teams added prepared window-relative scenes, per-step read-only target/frame
+verification, atomic focus/annotation and same-session complete/replan for subsequent
+requests. Durable receipts preserve uncertain outcomes and block replay. Target
+movement, focus loss, stale observations and Stop clear geometric presentation.
+Native input still requires exclusive ownership and independent outcome verification.
+
+`npm run check` passed 1,090 tests/65 files plus typecheck/build. New media checks
+and independent review passed; latest component totals and physical results are in
+[the implementation review](IMPLEMENTATION_ARGOS_REVIEW.md). The synthetic two-scene
+integration also passed. No call, installation or deployment occurred.
+
+Physical rehearsal recovered off-Space Finder qualification via bounded public AX
+main/focused-window references. The later snapshot diagnostic completed three verified native activations
+and live zoom/annotations: Finder, TextEdit, then a same-session follow-up Finder
+plan. Stop released the lease with execution `none`/`paused`. The user initially
+placed the windows on the current Space; automatic cross-Space alignment is still
+unverified. Snapshot rendering averaged 22.7 fps; this is not motion-quality
+acceptance. Final Swift: 86 tests/build; media: 448 tests run, 13 optional skips.
+Persistent capture interrupted twice with SCK `-3805`;
+its cause remains unproven. An explicit snapshot-only diagnostic keeps the same
+selected display and guards, without automatic fallback or replay. Original receipts
+and metadata-only stop audits remain private; screens/audio are not retained.
+
+## November 17, 2026 — native switching, edit/save and file move verified locally
+
+Implemented the first native-control work wave with agent teams. On the current
+display, prepared native operations activated Finder, TextEdit and Finder again;
+exact-window receipts and outgoing preview observations passed. Original-chat
+native CUA clicked, edited/saved the disposable heading, and moved the sample file
+from Research to Approved. Native UI and read-only filesystem checks confirmed
+the results with no duplicate edit or move. Stop released the view lease and left
+no native actor in flight. No call, installation or deployment occurred.
+
+Fixed Finder's missing launch-date qualification using supported process-start
+identity metadata, and fixed camera rejection of benign lease expiry renewals.
+Added separate native host credentials, persistent receipts and fixed refusal
+diagnostics. `npm run check`: 1,061 tests/64 files plus typecheck/build passed;
+Swift: 77 tests/build passed; media: 432 tests run, 13 optional SDK skips.
+
+The full polished walkthrough remains incomplete: framing rejected changing source
+content, and a later same-runtime focus attempt returned HTTP 409. Its unknown
+receipt was preserved without replay; capture was stopped cleanly. Current-display
+native actions are verified, while zoom/annotation reliability, other Spaces and
+display configurations, repeated complete runs and dynamic-motion quality remain
+open. See [the implementation review](IMPLEMENTATION_ARGOS_REVIEW.md) for evidence
+and limits. Historical Finder409 and SCK `-3805` are not declared fixed.
+
+## November 17, 2026 — local presentation prototype implemented; native acceptance open
+
+Planning follow-up: the detailed implementation sequence for automatic window
+alignment, native CUA, cleanup recovery, interactive scenes and motion quality is
+at the top of [ARGOS_CLAWD_INTEGRATION_PLAN.md](ARGOS_CLAWD_INTEGRATION_PLAN.md).
+It requires capability qualification first and complete local acceptance without
+manual window setup before rollout. This follow-up changes documentation only;
+no new capture, input, installation, deployment or call was performed.
+
+Latest rehearsal identified native SCK failure code `-3805` (application connection
+interrupted) with no screenshot request active at the recorded failure. Exact
+Finder menu selection completed under native ownership but did not establish
+visible foreground activation. Capture stopped, the view lease released, and the
+backend retained native ownership uncertainty; a stale-epoch release was refused
+and not retried. A local metadata-only audit was retained before shutdown. No
+document edit, file move, call or deployment occurred. Foreground activation,
+capture interruption and audited post-Stop recovery remain engineering gaps.
+
+Follow-up: fixed a content-change race for target-independent clear/overview with
+bounded accepted-frame references; targeted camera/input checks remain strict.
+Independent review, synthetic scene integration and 411 media tests (13 optional
+skips) pass. A fresh actual display run successfully began the prepared scene, but
+the viewer showed another app instead of the test Finder window. Capture was
+stopped and execution/lease release verified before edits or moves. The physical
+walkthrough still needs the test window frontmost after leaving the chat; no new
+call, installation or deployment occurred.
+
+Agent teams implemented selected-display streaming, bounded prepared scenes,
+zoom/annotations, interruption and backend Stop propagation in the local preview.
+Native actions remain with the original chat under exclusive ownership. No new
+call, installation or deployment occurred.
+
+Checks pass: 1,007 TypeScript tests plus typecheck/build; 67 Swift tests/build;
+406 media tests run with 13 optional skips;
+synthetic scene, voice/camera and browser checks. Synthetic Retina benchmark:
+14.5 source / 27.7 rendered fps. Actual static-display probe: 45 seconds,
+1,257 images / 27.93 rendered fps, zero image rejections, clean Stop/process exit.
+Its 3.13 distinct-source fps is not dynamic-motion acceptance. A subsequent complete
+backend-to-preview run also passed 45.02 seconds with 1,275 images / 28.07 fps,
+zero image rejections and backend execution idle/released after Stop.
+
+The disposable Finder/TextEdit windows are prepared and Accessibility observation
+recovered, but native coordinate input returned `noWindowsAvailable`; visible
+activation on the shared desktop is unverified. An earlier integrated run stopped
+on SCK `stream_interrupted` before input. Later capture passed, but the interruption
+cause and complete two-app edit/move presentation remain open. Bounded first-failure
+diagnostics were added without automatic restart. The prototype Retina guard bug
+was fixed; historical Finder409 remains
+unresolved. See [implementation review](IMPLEMENTATION_ARGOS_REVIEW.md) for scope,
+measurements and remaining acceptance. Screen Studio-equivalent polish is not claimed.
+
+## November 17, 2026 — selected-display presentation direction approved
+
+User selected option 2: native window switching/CUA plus video zooms/annotations,
+with scenes prepared by the original coding agent. See the approved direction at
+the top of [ARGOS_CLAWD_INTEGRATION_PLAN.md](ARGOS_CLAWD_INTEGRATION_PLAN.md).
+Next milestone: a local two-app presentation prototype, sustained capture profiling,
+and verified native scene transitions. Existing Finder 409 remains undiagnosed;
+no claim of repair or Screen Studio-equivalent smoothness. Documentation only in
+this follow-up; no deployment, new call or permission change.
+
+## November 17, 2026 — diagnosis-first plan awaiting review
+
+At the user's request, repair/deployment paused after diagnosis. Fresh read-only
+checks confirm the recorded backend/media deployments are successful and idle;
+Companion build 6 uses its retained explicit configuration, both permissions pass,
+sharing is stopped, and no active lease or unresolved input is reported. Two old
+chat bridges remain running and were not reused or changed.
+
+A local diagnostic-only probe extension now permits bounded 1–120-second runs.
+Two requested 90-second exact-Finder probes instead stopped at geometry races:
+43 frames / 18,025 ms and 56 frames / 22,211 ms, both CLI exit 75 / native HTTP 425.
+They did not reproduce the historical native 409 or complete sustained acceptance.
+No controlled Space transition or UI input was performed; pixels were discarded.
+The off-Space AX collector's all-or-nothing witness behavior is a code-review
+hypothesis, not an established cause. No production safeguard was changed.
+
+The concrete investigation, conditional repair, validation, rollout and fresh-call
+plan is in [IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md).
+63 Swift tests/build, 42 gateway tests, 23 media wire tests and 51 connector tests
+passed; independent review found no probe blocker. Diagnostic edits are uncommitted.
+No install/deploy, new session, permission change, message or call occurred.
+
+## November 17, 2026 — diagnosis and consolidated receipt
+
+### Diagnosis
+
+The two reproduced audio defects are corrected in deployed ClawdTime media:
+valid ElevenLabs PCM bursts exceeded the former event/queue limits, and the
+producer's 300 ms output timeout conflicted with legitimate publisher playout
+pauses. Both have bounded regression coverage and real-provider synthetic tests.
+The latest playback repair is deployed but has not had another handset test.
+
+The separate screen failure remains intermittent and its exact native guard is
+unproven. The incident was a native frame HTTP 409 after 51 Finder frames/~35s;
+the gateway normalized it to 410/helper_stopped and closed the lease. Its 69 ms
+native request duration rules out the two-second stale-frame deadline for that
+request. Permissions remained granted, local Enable remained on, and session
+heartbeats were fresh. A transient window-lifecycle/identity/geometry refusal is
+plausible; neither an expired lease nor a user Stop is established.
+
+Three bounded, exact-Finder local probes completed: installed helper 76 frames /
+30,167 ms and 78 frames / 30,354 ms; newly built diagnostic helper 77 frames /
+30,109 ms. No pixels were persisted or transmitted. These did not reproduce the
+failure or prove reliability across Space transitions. A keyboard attempt expanded
+the disposable Drafts row instead of establishing a desktop switch; its collapsed
+state was restored. The new metadata-only target check also passed.
+
+Added allowlisted native refusal codes for lifecycle, identity, placement,
+dimensions, authority and freshness. The gateway logs/forwards only these fixed
+codes, while still stopping the lease, clearing stale frames and refusing retries.
+The new build is local only: the installed companion and production gateway were
+not replaced. Existing diagnostics cannot retroactively identify the old guard.
+
+### Cumulative delivery and acceptance
+
+- Dedicated Clawdtime project and line ending 9741 connected; existing pairing,
+  records and other shared lines preserved.
+- ElevenLabs realtime duplex voice deployed with bounded tools; this original
+  coding chat remains the executor and received three spoken requests.
+- General selected-window/display camera, smooth zoom, realtime annotations and
+  prepared target catalog implemented; IDE support remains optional.
+- Existing native CUA approvals and exclusive execution retained; optional fallback
+  remains off. No native input was performed in the latest handset demo.
+- Human confirmed initial Finder visibility and subjectively faster voice. Sustained
+  screen sharing, handset zooms/annotations, latest playback repair and handset CUA
+  still require acceptance; no new call was placed during this diagnosis.
+
+### Validation and operational receipt
+
+Fresh npm check: 978 tests across 59 files, TypeScript checking and build passed.
+Diagnostic change: 61 Swift tests, release build, 42 gateway tests and 12 affected
+media relay tests passed; independent review found no blockers. Prior deployed
+playback repair: 379 media tests passed, 13 optional SDK tests skipped, plus a
+real-provider audio-only probe. Worktree was clean before this diagnostic change.
+
+Current backend deployment: `ae254fac-7cb2-4af3-b160-5d074f91ce32`.
+Current media deployment: `4db02d42-291d-477e-a6f3-d7e4ad5762e3`, from `f0426b4`.
+Post-deployment checks verified matching running-source hash, voice readiness,
+unchanged environment and all seven media ledger tables preserved. Fresh diagnosis
+checks confirmed idle services, no active call/view lease/unresolved input, and
+local sharing stopped. Diagnostic code is committed separately from these deployed
+components. Next: use the new refusal reason to isolate the intermittent capture
+failure locally, then arrange one separately authorized end-to-end handset test.
+
+## November 17, 2026 — second streaming-voice demo
+
+One newly authorized call connected after deployment of the bounded audio-burst
+fix. The human confirmed audible voice; three spoken requests reached and were
+acknowledged by this same coding chat. The Research/Drafts target catalog was
+accepted, but no zoom or annotation result was established on the handset.
+
+Screen capture delivered 51 fresh Finder frames, then stopped after about 35
+seconds. Native helper frame HTTP 409 was normalized to `helper_stopped`/410 by
+the gateway (native request 69 ms, media round trip 161 ms). The Mac remained
+armed; there was no lead native input or executor claim during the call. Later
+metadata showed the exact window off-Space with a valid nonminimized AX witness.
+That does not identify the earlier refusal: a transient lifecycle check is plausible,
+while a permission loss, lease timeout and user Stop are not established.
+The current diagnostic hides which native 409 guard failed; no capture safeguard
+was relaxed and no automatic lease reacquisition occurred.
+
+The call subsequently ended with a distinct voice fault: `stage=output`,
+`code=task_timeout`, at 167,918 ms elapsed. This is separate from the screen stop.
+The audio producer's 300 ms queue-write deadline conflicts with the publisher's
+legitimate up-to-two-second playout barrier. The original larger-audio-chunk
+failure did not recur. The streaming reply receipt remains `unknown` intentionally:
+provider context submission cannot prove handset narration, and it was not replayed.
+The final attempted reply/progress commands were rejected before dispatch after
+the call became terminal. Existing receipts remain intact.
+
+Cleanup confirmed both services idle, no active or unknown call effects, no view
+lease or unresolved input, and local sharing stopped. No further call is authorized.
+Follow-up handset feedback: the human answered yes to the combined question about
+Finder visibility before the stop and improved voice response speed. This is recorded
+as confirmation of initial screen visibility and subjectively faster voice, not a
+measured latency result. Sustained sharing, zooms/annotations, and the subsequently
+deployed playback correction still require physical acceptance.
+
+The playback correction uses a three-second continuously-full queue bound with
+atomic authorization/epoch checks before enqueue and interruptible 20 ms waits.
+The provider reader remains independent; Stop cancels blocked output without late
+enqueues. A real-publisher regression reproduced the exact former timeout signature
+with a legitimate 550 ms playout pause; the actual production pause remains unproven.
+Independent review and 48 focused tests passed. A real-provider synthetic audio-only
+probe passed in 25,667 ms with 579 paced frames, a 157,344-byte valid chunk, peak
+queued PCM 338,896 bytes, no tool effects, and empty queues after Stop.
+The full media suite passed 379 tests (13 optional SDK tests skipped) in 55.948s.
+
+Deployment `4db02d42-291d-477e-a6f3-d7e4ad5762e3` is SUCCESS from pushed
+commit `f0426b4`. Running frontend SHA-256
+`528141fbefadd9a6acb1697a012005b1b24e25af164e93c5c7a30a8c9bf25cf3`
+matches tested source. Voice readiness passes; all seven media ledger tables match
+the post-call/pre-deploy snapshot and environment values are unchanged. Services
+are idle. No native Mac, line/provider, backend, or pairing changes were made.
+Next: identify the native frame-refusal guard locally before another handset demo;
+no broader capture, automatic recovery, or new call was enabled.
+
+## November 17, 2026 — first streaming-voice call and audio correction
+
+One newly authorized demo call reached the phone; the user reported that it hung
+up. Backend diagnostics record a media `capture_loop` task failure shortly after
+the first ElevenLabs response audio began. This category covers voice ingress and
+frontend tasks; it is not evidence that Finder capture failed. Seven fresh Finder
+frames reached media and 212 video frames were emitted before cleanup. Handset
+screen visibility was not confirmed. Call ended, view lease released, services
+idle with no pending/unknown effects; local sharing was stopped. No redial occurred.
+
+A provider-only synthetic probe reproduced a concrete defect: a valid 79,882-byte
+PCM chunk (106,512 base64 characters, about 2.5 seconds) exceeded the old per-event
+limit. The old two-second total queue was also too small for normal faster-than-
+playback synthesis. Updated handling accepts bounded ten-second events with a
+512 KiB WebSocket envelope and a twenty-second queued PCM budget, includes the
+in-flight chunk in accounting, and keeps interruption/Stop independent of the
+queue. Oversized/invalid data still fails closed. New fault diagnostics expose
+only allowlisted stage/code/count metadata, never exception text or audio.
+
+The corrected real-provider synthetic probe completed in 26,511 ms with 216 paced
+frames, a valid 82,304-byte audio chunk, no failure and empty queues after Stop.
+No phone call, microphone, speaker playback or backend tool effect was used.
+Independent review and 45 focused frontend tests passed. The complete media suite
+passed 376 tests (13 optional SDK tests skipped) in 52.206 seconds. The original production
+exception was generic, so this reproduction identifies a real compatibility bug,
+not forensic proof that it was the only cause of the hang-up. Physical acceptance
+and the prepared zoom/annotation walkthrough remain incomplete.
+
+The correction is committed/pushed as `0a1424a` and deployed to media as
+`9106feea-eb70-4058-b5cf-58ba56bbaf59` (SUCCESS). Running frontend SHA-256
+`0c3049b639ad7ff3df8fad3a74e2a55a836b81a83d97102bf14dd6f4fff61b37`
+exactly matches tested source. Voice readiness reports configured, agent validated,
+and ready. All seven existing media ledger tables match the same-volume pre-deploy
+snapshot; environment values are unchanged. Both services are idle. Backend,
+Mac installation, line assignment and provider software remain unchanged.
+
+An initial deployment upload incorrectly selected the root backend Dockerfile.
+Deployment `5faa0936-73d3-4745-91d9-3d733255a27b` was canceled and confirmed
+REMOVED while the previous media deployment remained SUCCESS and healthy. The
+successful deployment used the frozen commit's `media/` directory as its root.
+No additional call was placed; a newly authorized handset test remains next.
+
+## November 17, 2026 — demo prerequisites verified and duplex enabled
+
+Continued at the user's request to reach the supervised demo. A scoped read-only
+control-plane query confirmed current customer assignment to Clawdtime, no Shared
+pool membership, and no recipient-verification policy. Therefore no verification
+code is required for this dedicated project's reviewed admission path. No policy,
+proof, exemption or database record was changed to obtain this result.
+
+The remaining binary provenance gap was closed through read-only inspection of the
+worker host: clean-source release manifest `5d70b571687f59419ce5b81845a3cfdc335ce498`
+records engine hash `97823a1da14c605b8f78c2f9330192b0c0014e1d0ab0cedd262ac8f4e245e6de`,
+matching the installed engine and exact line-session heartbeat. Independent source
+review confirmed the qualified FaceTime/avconferenced ownership, worker exclusion,
+inclusive tap and identity-revalidation paths are unchanged. Current line-session
+protocol 1 selects that same isolated branch. This establishes digital process
+isolation, not handset playback, acoustic echo cancellation or physical duplex.
+
+Backend deployment `ae254fac-7cb2-4af3-b160-5d074f91ce32` succeeded with duplex and
+remote-audio-isolation flags enabled. Same reviewed image, database, project/binding
+and media deployment preserved. Resumed only 9741; inbound routing remains reject.
+Registered a fresh explicit ElevenLabs v2 session in this chat with the exact Finder
+window and native desktop capability. Prior installed MCP uses a rejected old pairing;
+its three unknown registration intents are retained untouched. Current backend had
+only two prior sessions, both stopped, and no active call/pending/unknown effects.
+
+The running companion had opened without the explicit paired configuration, using
+an older view-only display grant. The saved paired configuration already contained
+the correct controller membership. Stopped local capture, validated that file and
+restarted the existing binary with its explicit path; no configuration, pairing,
+permission or ledger change. The panel now shows one viewer and one controller,
+Accessibility/Screen Recording granted and Agent tools only. All live readiness
+checks pass except local Enable, which was requested from the user after desktop
+interaction interrupted automation. No new call has been placed at this checkpoint.
+
+## November 17, 2026 — new project connected without resetting records
+
+Continued the user-authorized Clawdtime project move. Created a replacement
+project-scoped Calls credential for the existing service, then changed only
+`projectId` and `projectKey` in the deployed backend's live configuration.
+Backend deployment `5248f2f4-a38a-48d7-85a1-179902292d29` is SUCCESS, reusing
+its existing reviewed image. Media deployment and variables are unchanged.
+This supersedes the prior pending project-credential handoff below.
+
+Verified on the deployed backend: original database retained; entities/events/effects
+identical to the new same-volume pre-change snapshot; cursor/receipt/unknown metadata
+unchanged. Native messaging identity and retained event anchor pass with the new
+Calls project. Native binding credentials, pairing, encryption material, handoff
+baseline and tester allowlist were preserved. The Mac remains connected, both
+permissions granted, locally disarmed, agent-tools-only, no lease/unresolved inputs.
+
+Fresh checks resolve the exact original logical line in the new project. Assignment
+and runtime acknowledgement generations both equal 8; the confirmed line session
+has a recent accepting heartbeat. All 15 preflight checks except `calls_worker`
+pass: worker declares media readiness, but the line remains deliberately paused.
+Backend/media are healthy and idle with no pending or unknown effects. Dedicated
+ElevenLabs configuration is ready; no voice conversation was started.
+
+Remaining before a new call: validate recipient eligibility under the new project
+(old HackPton proof is project/assignment-bound), qualify the current worker binary's
+remote-audio isolation, and activate the paused line for a separately authorized
+call. Current worker build `97823a1da14c605b8f78c2f9330192b0c0014e1d0ab0cedd262ac8f4e245e6de`
+differs from the previously qualified binary. The team found unchanged isolation
+source, but no exact current binary-to-source build receipt. Backend duplex and
+remote-isolation assertions remain false. No call admission POST was used as a
+probe. The current Lines UI exposes no recipient-verification card; this absence
+is not proof of either recipient eligibility or rejection.
+
+No new FaceTime call, message, provider software update, runtime reinstall, line reassignment,
+shared-line change, or record reset occurred in this continuation. Private receipts
+and snapshots remain outside Git. Full physical voice/screen acceptance is still pending.
+
+## November 17, 2026 — user-authorized new project and line assignment
+
+At the user's explicit request, created a new Chert project named **Clawdtime**
+under the existing operator account and moved line ending 9741 from its currently
+shown provisioning customer project to it. The older similarly named ClawdTime
+project remains intact. Current authenticated admin UI confirmed the move;
+the new project's detail page shows the full expected phone number and original
+logical line ID. New project has one line and zero active calls; former provisioning
+customer has zero assigned lines. Calls remain **paused**, routing unassigned/reject.
+No call, runtime reinstall, provider code change or other line mutation was performed.
+
+The earlier dashboard admin-access blocker was transient: current authenticated
+administration works. Phone-number search in the assignment UI omitted this row
+because it displays a masked identity; searching the screenshot's Liam Su account
+resolved the exact row, then project detail confirmed 9741 after assignment.
+
+Existing ClawdTime backend credentials/configuration still target the prior HackPton
+project and were not silently replaced. Next step is a preserving credential/config
+handoff to the newly created project, current route/worker validation and deliberate
+call activation. Existing records/cursors and unknown outcomes must remain intact.
+The user has not authorized another FaceTime call.
+
+## November 17, 2026 — dedicated voice configured and components deployed
+
+User authorized configuring a dedicated ElevenLabs agent and deploying ClawdTime
+for the existing 9741 binding, preserving records and assignment, with **no new
+FaceTime call**. The lead performed provider/deployment operations; the agent team
+reviewed provider compatibility, native installation and route evidence.
+
+- Dedicated seven-client-tool agent created and GET-validated. Gemini 2.5 Flash,
+  Eleven Flash v2, 16 kHz PCM, authenticated connections, no provider queueing,
+  voice recording disabled and zero-day retention. The prior lab agent was untouched.
+- Backend `79f6575c-0676-45a4-9c61-4be251d860a8` and media
+  `c3ad1969-28f7-4376-bba5-48db57296512` both SUCCESS. Deployed media's authenticated
+  ElevenLabs readiness returns configured/agentValidated/ready all true, using only
+  agent/tool GETs. No provider conversation or audio session was started.
+- Installed Companion 0.4.0/build 6 and restarted the existing gateway. Effective
+  Screen Recording and Accessibility both true after refreshing only ClawdTime's
+  stale permissions. Existing helper/gateway/pairing configuration byte-identical.
+  Sharing stopped, no lease, zero unresolved inputs; historical outcomes preserved.
+- Same-volume database snapshots retained. Backend entities/events/effects and
+  cursor/receipt/unknown metadata match the pre-rollout snapshot; all seven prior
+  media tables match. Live line configuration is byte-identical. No reassignment,
+  re-pairing, cursor initialization, provider worker update or shared-line change.
+
+**Not yet call-ready:** a fresh project-scoped Chert Calls inventory returns HTTP
+200 with zero visible lines for the saved HackPton project. The existing dashboard
+sign-in also no longer exposes platform-admin access. This is current evidence,
+not proof that the line was reassigned. Current 9741 worker/session/build isolation
+cannot be established, so backend duplex and remote-isolation gates remain false.
+Resolve visibility of the existing binding before enabling those gates; do not
+reassign a line to make the check pass. A new explicit same-chat ElevenLabs session
+and separately authorized physical acceptance call remain next steps.
+
+Final media validation: 371 run, 358 passed and 13 optional SDK skips; all 40
+focused ElevenLabs tests passed. See IMPLEMENTATION_ARGOS_REVIEW.md for exact
+deployment and validation evidence.
+
+## November 17, 2026 — Argos same-chat integration locally validated
+
+The prior checkpoint was pushed to origin/ArgosClawd at user request. The next
+local implementation adds explicit ElevenLabs streaming voice independent of a
+managed runner, exact-transcript same-chat handoff, prepared camera zoom/annotations,
+one speech owner, report-only narration, pre-dial provider configuration validation,
+and the native capture start/stop lifecycle fix. Native CUA ownership and IDE-optional
+cross-app sharing remain intact.
+
+Actual Finder capture: 76 consecutive frames over 30.128 seconds. Browser review
+showed the real selected Finder window and confirmed Stop removed the image.
+Local prepared voice→camera integration passed with roughly 0.5-second focus settling
+including the designed 450 ms animation. 59 Swift and 40 gateway tests passed. 366 media tests
+ran, including 13 optional SDK skips; all 35 ElevenLabs tests passed. Final
+`npm run check`: 978 tests in 59 files, typecheck and build passed. See
+IMPLEMENTATION_ARGOS_REVIEW.md for evidence and limits.
+
+No new call, provider-agent configuration, deployment or installed-helper replacement
+occurred in this wave. Build 6 is available locally. The next phone demonstration needs
+a dedicated seven-tool ElevenLabs agent, reviewed deployment/install, fresh session
+selection and explicit one-call permission; physical voice latency remains unmeasured.
+
+## November 17, 2026 — committed checkpoint and experience audit
+
+All pending code was committed as `1e5e140` on ArgosClawd, with no push. Fresh
+`npm run check`: 950 tests / 58 files, typecheck and build passed. Specialist
+validation: 55 Swift tests plus build and 4 gateway camera tests passed.
+The agent-team audit confirms the demonstrated path is not Argos-equivalent:
+ElevenLabs integration and voice-driven prepared camera tools are missing, and
+existing realtime GPT routing requires a separate managed executor. The failed
+phone capture remains unresolved. See the newest section of
+`IMPLEMENTATION_ARGOS_REVIEW.md` for source evidence and the correction sequence.
+This audit made no additional call, deployment or runtime flag change.
+
 # ClawdTime implementation status
 
 ## November 20, 2026 — app-owned CUA runtime (PR candidate)
@@ -32,6 +924,925 @@ original active chat. Automatic wake did not pass: CLI resumption was uncertain.
 This is not unattended CUA readiness or phone/capture acceptance. See
 [the executor report](DESKTOP_EXECUTOR.md) for boundaries and the recommendation
 to bundle a persistent runtime for the independent product.
+
+## First authorized 9741 camera call — November 17, 2026
+
+The user authorized live activation and one Finder FaceTime demo, then explicitly
+requested restoring their existing HackPton admin membership **persistently**.
+The audited membership routine restored that exact account/project role; the
+existing recipient verification became valid again. The line, assignment
+generation, provider binary and other projects/lines were unchanged.
+
+Backend live activation: `cc7e5656-802c-4d7e-90a9-c237db5e57f4` (SUCCESS).
+The fresh database was initialized through the adapter's verified retained event
+anchor before activation, without replaying earlier messages. The earlier no-camera
+foreground bridge was closed cleanly; a fresh same-chat v2 bridge registered the
+exact harmless Finder window and native desktop capability. Local Enable was
+confirmed and every transport/device readiness check passed before requesting
+one call with a stable idempotency key.
+
+**Physical result: audio connected, screen sharing failed.** The human confirmed
+they could hear the agent. Spoken turns arrived in this same coding chat; a spoken
+reply completed playback according to its receipt. The camera emitted its first
+frame, then the helper returned HTTP 503 and media correctly cleared the screen
+and released the lease. The human reported no visible screen share. No zoom,
+annotation or CUA handset acceptance was achieved. The attempt was explicitly
+ended; provider reports ended, backend call ended and media closed. No redial.
+
+A bounded local reproduction against the installed helper captured four frames,
+then returned `Selected camera stream did not stop cleanly; frame discarded.` in
+107 ms. The temporary view-only diagnostic lease was released; no OS input or
+screenshots were saved. This is a native stream-stop failure, not a permission or
+line-assignment problem. New diagnostic source changes preserve the primary error
+and expose bounded categories; they are not yet a proven capture fix or installed
+release. The gateway's separate 1.5-second timeout mismatch also needs review.
+
+**Experience gap acknowledged:** the deployed demo used the older half-duplex
+voice path. Realtime GPT voice and two-way voice flags remained disabled. The user
+expects the Argos experience: a fast duplex voice model calling tools, prepared
+camera movement/zoom/annotations, combined with ClawdTime's general cross-app
+capture and CUA. This parity is not implemented/physically verified by the above
+call. Agent-team source comparison and corrective implementation follow the
+requested commit checkpoint; do not describe readiness as experience parity.
+
+The user requested committing all current changes before that audit. Private
+credentials, runtime databases, captured media and operational receipts stay out
+of Git. No push was requested. Backend remains live on the same selected line;
+no active call/capture remains. Additional calls require specific permission.
+
+## Authorized deployment and fresh pairing — November 17, 2026
+
+The user explicitly approved deploying ClawdTime and finishing Mac pairing.
+The backend and media release is now deployed; **runtime remains standby** with
+live traffic disabled. No setup-test notice, message, FaceTime call, capture lease
+or OS input was submitted. The native provider upgrade remains withdrawn.
+9741 remains in HackPton with assignment generation 4 and no competing connector;
+no Chert provider software, line assignment or other shared line was changed.
+
+- Backend: `41f8ee37-ab4b-4ded-b852-dae6f33c57e4`, SUCCESS, version 0.4.0.
+- Media: `b8f97d2c-3871-42e4-afb5-d415745949ec`, SUCCESS, healthy,
+  gateway connected, zero active sessions.
+- Companion: 0.4.0/build 5 installed at the existing stable app path. Existing
+  helper/gateway configuration, keys, receipt histories and control policy were
+  preserved byte-for-byte; only the ClawdTime gateway was restarted.
+- Fresh exact-line pairing claimed once with viewing/control permission. A new
+  v2 foreground bridge in this same chat is registered and heartbeating;
+  `connectionReady:true`, `liveReady:false` correctly reflects standby. Existing
+  MCP configuration/runs were preserved and are not claimed to have hot-reloaded.
+
+The fresh line uses a separate database and encryption key with explicit
+`standard_once`. Old database/config pairs remain on the existing volume, with
+an additional same-volume archive of the prior active database/configuration.
+Old business entities, events and effects match the pre-rollout archive. Old
+cursors and receipt metadata also match; only heartbeat/readiness cache entries
+changed while the previous runtime finished shutting down. The fresh database contains one pairing and one session, zero calls, setup tests,
+leases, actions or effects. No native event cursor was seeded or advanced.
+
+Two rollout problems were resolved without replaying effects: native transport
+construction requires truthful ownership evidence even in standby; and the
+private source archive's 0600 file modes prevented the container's unprivileged
+runtime from reading package/assets. The reviewed source-only deployment context
+was normalized to files 0644/directories 0755 under its protected parent; all
+347 source hashes remain unchanged. The original archive and failed deployment
+records are retained. Do not normalize permissions on runtime/configuration files.
+
+macOS showed saved permission switches enabled while the new ad-hoc signed build
+reported denial. Re-adding only the exact installed ClawdTime app in Accessibility
+and Screen Recording repaired both. Authenticated running-helper checks now report
+`screenPermission:true`, `controlPermission:true`, `cameraVersion:1`, `armed:false`
+and zero unresolved input. macOS Quit & Reopen selected the default view-only
+configuration; the lead relaunched with the retained control-capable configuration
+and verified both viewer and controller ACLs. No global TCC reset was used.
+
+The current foreground session has native desktop capability but no camera surface
+selection. The previously reviewed Finder window was no longer a verifiable visible
+surface; no full-desktop substitute was selected. Before the production demo:
+select a visible harmless window in a fresh camera-configured session, refresh and
+seed a verified retained event boundary in the new database, enable live dispatch,
+then obtain permission for the specific FaceTime call. Pairing/deployment alone do
+not establish physical acceptance or authorize a call. Local Enable remains off.
+
+Validation reused the reviewed 950-test/58-file source release, typecheck/build,
+12 preview tests, 3 gateway camera tests and 53 Swift tests. Deployment health,
+exact-line claim, session heartbeat, matching loaded ACLs and permission checks
+were verified after rollout. Changes remain uncommitted and unpushed.
+
+## Native provider upgrade withdrawn — November 17, 2026
+
+Implemented and locally validated: explicit `textTransport: "standard_once"`
+uses the existing native send API; strict remains the default. HTTP 200 plus a
+real GUID and positive send evidence is required. Unknown/queued/malformed
+outcomes are retained without resubmission across repeated drains and restart.
+No receipt lookup or native provider installation is required by this mode.
+`npm run check` passed 950 tests/58 files, typecheck and build. Component checks:
+12 preview, 3 gateway camera, 53 Swift. Companion 0.4.0/build 5 is built and locally
+signature-verified, not installed. A source-only release archive and private
+disabled 9741 configuration are staged; GET-only preflight passes identity,
+cursor, project line, worker and media checks. Activation and fresh Mac pairing
+are still pending. No deployment, message or call occurred.
+
+The user dropped the proposed 9741 native messaging upgrade and authorized
+continuing toward the production demo. Its locally built candidate is withdrawn
+and must not be installed. Keep 9741 in HackPton with its existing provider
+software, credentials, callback and records. Adapt ClawdTime explicitly to the
+existing standard send API; unknown submissions remain blocked, never requeued
+or automatically resubmitted. The earlier strict-receipt-only diagnostic below
+is historical and is not a universal camera/CUA requirement. No FaceTime call is
+authorized by this preparation step.
+
+## HackPton binding and receipt compatibility — November 17, 2026
+
+The user confirmed the existing line ending 9741 within HackPton is the target;
+do not reassign any line. The prior Argos chat and operational README confirm
+successful recipient verification and a physical audio/synthetic-camera test.
+This does not establish a ClawdTime pairing or strict text receipt compatibility.
+
+Current authenticated GETs confirm exact native identity and healthy service,
+plus project-scoped Calls access to the available, unoccupied selected line.
+The native service lacks ClawdTime's required receipt lookup: generic 404 instead
+of the structured missing-receipt response; status also reports no trusted bridge.
+The existing Mac recovery credential belongs to an older line, not 9741.
+
+Local preflight now requires `native_text_receipts`; unsupported services cannot
+advance inbound polling or create a welcome effect. Checks use authenticated GET
+only and preserve cursors and unknown outcomes. `npm run check`: 923 tests across
+58 files, typecheck and build pass. The actual selected service diagnostic used
+two GETs: exact identity passed, receipt compatibility blocked, no cursor/effect
+created. No provider software, live configuration, assignment, message, call, or
+old runtime record changed. Mac reconnection remains incomplete pending receipt
+compatibility and a fresh exact-line pairing. Changes remain uncommitted.
+
+## Connection recovery prerequisite — November 17, 2026
+
+User-authorized recovery inspection found matching saved connection/setup/companion
+credentials, but a fresh live doctor still returns 401. Both configured canonical
+and documented backend public health endpoints return HTTP 200; reachability is
+not the blocker. The supported existing-setup path reuses the rejected credential
+and has no refresh operation. A fresh operator-issued recovery authorization and
+reconciliation of preserved unknown registration intents are required before a
+new claim. Requested that missing authorization/access route; no local state was
+removed, no pairing or live service changed, and no call was placed.
+
+## Native CUA with real window sharing — November 16, 2026
+
+Local integration passed through the existing connector/backend ownership path:
+claim native → select **02 Drafts** in the disposable Finder window with this
+chat's native CUA tool → independently observe the selection and transmitted
+pixels → release to idle. Stop removed pixels and refused subsequent camera access
+and native claim. `npm run preview:camera:cua` reproduces this isolated setup;
+it uses simulation transport with actual window pixels, no phone call or live config.
+Window fallback remains disabled, with gateway rejection before receipt creation.
+
+Checks: 910 Node tests/typecheck/build; 72 focused backend/control tests;
+38 gateway tests; 12 preview tests; synthetic end-to-end smoke and browser
+regression passed.
+Changes after `440919b` remain uncommitted. See
+[IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md) for scope and evidence.
+
+FaceTime preflight is blocked: both configured MCP connection status and CLI live
+doctor returned **401 invalid/revoked credential**. Next: restore an authorized
+project connection without discarding prior receipts, verify installed stack and
+exclusive line readiness, then perform the supervised handset test. No pairing,
+installed service, deployment, push or FaceTime call was changed in this follow-up.
+
+## Real Finder sharing accepted locally — November 16, 2026
+
+Local view-only sharing now captures the exact disposable Finder window through
+ScreenCaptureKit, the gateway and camera compositor. A 20-second check received
+39 distinct frames and reflected a file added after sharing began. The browser
+rendered Finder content and annotations; Freeze/Resume and Stop were verified.
+Use `npm run preview:camera:window` with `/tmp/ClawdTime Sharing Review` open in
+Finder, then open the full printed URL and press Start sharing. No IDE is required.
+
+The new native path uses bounded first-frame capture and acknowledged stream stop.
+Exact ID/PID/lifecycle checks remain; initial selection fits one display, later
+window translation does not broaden capture, and cross-display changes are refused.
+This is still a local review build, with selected-window input disabled and no
+FaceTime, installed-service changes, deployment or push. The user confirmed
+“real sharing looks good” and authorized a local commit and log. This milestone
+is recorded as `feat: enable real local window sharing` after `f8a5a2a` on
+`ArgosClawd`. Longer lifecycle/other-app qualification and actual CUA targeting
+are next, before any separately authorized handset trial.
+
+Checks: Node 904 tests/typecheck/build; media 314 passed + 13 optional skips;
+gateway 37 passed; Swift 53 passed. See
+[IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md) for exact evidence,
+remaining gaps and final presentation checks. Final translation/UI fixes passed 21 targeted
+camera/preview tests and a fresh browser regression run; real focused Finder rows
+and retained Freeze crop were visually verified. The earlier checkpoint below is history.
+
+## Argos local review checkpoint — November 16, 2026
+
+The user reviewed **zoom and annotations in the synthetic developer preview** and
+requested a local commit of all pending work. This checkpoints the camera slice,
+reload-authentication fix and earlier conversation/document/CUA/media/website work
+on `ArgosClawd`. It does not push, deploy, change installed services or place a call.
+
+The preview displays generated fixtures, not live screen sharing. Its mapped fake
+click is an inverse-coordinate diagnostic, not OS input; existing ClawdTime CUA
+remains the execution path. Real selected-window streaming is still unresolved:
+one Finder snapshot succeeded, but sustained capture hit geometry/visibility
+checks. Selected-window fallback input remains disabled pending target validation.
+
+The next milestone is a usable explicit-window local share on disposable Finder
+content, followed by IDE/paused-editor capture and existing-CUA transform acceptance.
+Keep the synthetic diagnostics clearly separate from that review flow. No IDE
+extension is required. FaceTime/handset acceptance follows a later reviewed result
+and separate authorization.
+
+Validation and preservation inventory:
+[IMPLEMENTATION_ARGOS_REVIEW.md](IMPLEMENTATION_ARGOS_REVIEW.md). Prior local checks:
+901 Node tests; 306 media passes with 13 optional skips; 37 gateway tests; 47 Swift
+tests; 21 Mac script tests. The follow-up reload fix passed browser regressions for
+refresh, missing/rejected/expired access, Stop/reload and camera controls, with no
+page errors. These results do not establish physical acceptance.
+
+## 0.4.0 implemented; hosting promotion blocked — November 13, 2026, 23:25 UTC
+
+**The résumé recording demo is not ready in production.** Voice completion reporting
+and the scoped document discovery/preview/send flow are implemented and validated
+as source 0.4.0. Railway failed all three submitted release uploads before a build
+could start: `Failed to snapshot repository. Please try again in a few minutes.`
+Each failed deployment has `snapshotId:null`; no new application image ran.
+
+Restored and verified production **0.3.2** using its prior image and custom
+variables. Backend `51db1940-dcbd-46ca-836b-d3d484a1ca4e` is SUCCESS; media
+`7c884f0c-02af-4f0a-92bd-43a33acb084e` remains SUCCESS. All 74 JavaScript,
+18 Python and 10 public asset hashes match prior manifest
+`c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
+Running configuration, database entities/events/effects/Messages cursors and media
+ledgers are unchanged. No database restore occurred. Normal conversation/document/
+voice/desktop admission remains disabled; the previous execution-disabled audio
+test remains available. Both services' separately staged new feature flags were reset to false after
+verifying that rollback restored running configuration but retained staged edits.
+No additional service restart was needed. No pending rollout remains.
+
+The validated 0.4.0 source archive is retained with manifest
+`913b60d7f52a249335bebe536135041ae2044c55acf6ad1f73b4da208d889140`, archive SHA-256
+`6ef5ec3603beb1589e6db96c03f58a378e171243ab051b30279a1fd37b9ad8c6`.
+Checkout `npm run check`: **872 tests / 55 files**, typecheck and build pass.
+Exact isolated archive: **851 tests / 53 files**, typecheck/build pass. Media:
+**294 passed, 13 optional skips**; qualified SDK suite **63 passed**. This release
+also fixes actual-provider document prompt compatibility, Stop/grant expiry cleanup,
+document-only presentation policy and confirmed GPT-Live speech ownership.
+
+Two real GPT-Live → text model → HTTP broker → Codex trials independently verified
+file results, acknowledged their completion context and closed the provider. One
+trial deliberately delayed execution by fifteen seconds; a concurrent spoken
+status turn returned current backend state in **3 ms**. Completion context ACKs
+were **721 ms** and **645 ms** after observation/queueing respectively. Total trials
+were 25.534 s and 43.391 s including synthetic speech and deliberate waiting.
+These are individual fixtures, not handset playback latency or controlled p95.
+The real text-model document flow verified all three jobs: discovery **1,417 ms**,
+preview **1,959 ms**, transfer preparation **1,694 ms**, total **7,140 ms** with a
+simulated attachment provider. Private Chrome preview loaded in **66 ms**.
+The first two real-model document probes failed before any job due to a second
+system-role message; consolidation into the provider instructions fixed it.
+
+Local authorized read-only preflight rendered **4/4 supported documents** (one
+Word, three Pages), 116–248 ms each. No real document was uploaded, sent or changed.
+The user explicitly **skipped the synthetic attachment delivery test**. Real
+provider attachment acceptance/handset delivery, FaceTime preview readability,
+resumed duplex and audible completion remain unaccepted. The earlier physical
+speakerphone result remains one execution-disabled cutoff/no-noticeable-echo trial.
+
+Installed digital audio-route provenance is now established independently of
+physical echo acceptance: running build `262acc83…` maps to `cd19dc255…`; its
+inclusive UID/path/generation-validated FaceTime/avconferenced taps exclude the
+worker and fail closed. Fresh exact-line session health proves the line-session
+branch is enabled even though the customer API omits its protocol capability.
+This supports the process-isolation assertion when 0.4.0 is successfully deployed.
+No upstream files or runtime state were copied or modified.
+
+Final health: zero active calls/media, pending/unknown effects and unresolved
+execution ownership; gateway connected. No new managed production session, call,
+sample message or résumé send occurred. Exact current pairing credentials and the
+local folder were checked read-only. A bounded foreground document-worker launcher
+is prepared locally, but was not started against the restored older backend.
+A fresh user readiness statement is still required before any call.
+
+Fresh encrypted backups `/data/backup-before-documents-040-20261113.enc` on both
+volumes passed offline integrity checks. Private metadata-only rollout, failure,
+source, test, route and restoration evidence is in `.data/document-demo-20261113/`.
+The exact remaining gap is Railway source snapshot creation for this project;
+retry the retained archive after that facility recovers, keeping one backend
+SQLite writer and rechecking idle ownership first. Reapply only the documented
+0.4.0 flags after successful source deployment; verify hashes before starting a
+fresh local root grant. No fresh account, GPT-Live key or helper upgrade is needed.
+
+Both conversational planning/handoff files and the unrelated phone-control plan
+remain untracked and unstaged. No files were committed or staged; unrelated website
+work is preserved and excluded from the deployment archive. See
+[release details](CONVERSATIONAL_CONTROL_RELEASE.md) and
+[document host setup](CONNECTORS.md).
+
+## Tool correctness patch deployed — November 13, 2026, 22:43 UTC
+
+**0.3.2 code is deployed; normal conversational execution and the résumé demo are
+not enabled or accepted.** Backend `2e5a67d8-cf69-4370-944d-6349d2b024bf` and media
+`7c884f0c-02af-4f0a-92bd-43a33acb084e` are SUCCESS. Exact isolated source manifest:
+`c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
+All 74 JavaScript, 18 Python and 10 public asset hashes match. Configuration,
+backend entities/events/effects/Messages cursors and media ledgers are preserved.
+Zero active calls/media, pending/unknown effects or execution ownership remain;
+gateway connected. The installed helper and gateway were not replaced/restarted.
+
+The patch hardens broker launch/interpretation ordering, stale completion reports,
+older unresolved-job checks, speech-item/delegation ordering, playback generations,
+provider commentary context receipts and executor environment separation. No
+frontend/control-plane credentials are inherited by the Codex subprocess. Installed
+Codex login or explicit executor-host CODEX_API_KEY remains the authentication path.
+
+Real local file-worker lifecycle proof: executor acceptance **480 ms**, concurrent
+status **3.375 ms**, independently verified result **13.555 s**, cancellation with
+confirmed quiescence **109 ms**. Revision stopped prior work, required renewed
+confirmation and verified the revised result. These are individual observations.
+
+A separate real GPT-Live → actual text model → local HTTP broker → real Codex test
+used synthetic speech and a disposable project, with no handset or outbound
+Messages. The short request created the exact expected file and independently
+verified it. Provider startup **2,020.1 ms**; text interpretation **2,381 ms**;
+executor acceptance **261.13 ms after dispatch**; verification completed **7,393.08
+ms after durable job acceptance**; Python observed verified state **22,644.1 ms
+from probe start**, which includes synthesized instruction playback. Two provider
+context updates were acknowledged, but the check did **not** observe the verified
+completion commentary acknowledgment. No audible completion acceptance is claimed.
+A deterministic replay of the frozen source identifies a possible cause: a trailing,
+nondelegated SDK speech item leaves the interpretation hold active, retaining the
+verified job but suppressing completion commentary. A control replay without that
+item produces the commentary. This explains a reproducible liveness limitation;
+the actual provider trial did not retain enough broker metadata to attribute its
+failure conclusively. The private probe now captures bounded hold/item/job counts
+for diagnosis. The ACK matcher itself showed no defect in review or SDK tests.
+
+The longer synthetic request reached the backend once and got one context ACK but
+created no job; it timed out. An earlier harness startup race failed before any
+voice request. Another provider attempt observed an executing job, but its final
+result was lost when the collector reread a deleted temporary handshake; that
+collection defect was fixed and the outcome remains unqualified. Retain all four
+attempt records under `.data/tool-hardening-20261113/`. These varying probes are
+not the controlled 30-trial matrix or a reliability/success-rate estimate.
+
+Validation: checkout `npm run check` **811 tests/51 files**, exact archive **790
+/49**, both typecheck/build pass. Media **275 passed, 13 optional skipped**;
+qualified SDK suite **44 passed**. The proof harness subsequently gained only
+metadata interpretation diagnostics and a private synthetic prompt input; deployed
+production source is unchanged. These checks do not substitute for physical tests.
+
+The user selected a real résumé folder. Only bounded file metadata was inspected;
+no document was uploaded or sent. The current file_contains verifier cannot safely
+represent résumé candidate discovery, exact selection, preview or attachment
+transfer. Those application contracts and delivery reconciliation remain to be
+implemented; upstream attachment retry safety must not be assumed. Normal voice
+also needs reliable utterance finality, completion reporting, route isolation and
+supervised interruption/resumption acceptance. A further call requires fresh
+readiness; no call was placed during this promotion.
+
+Only the existing execution-disabled audio test remains admitted; its read-only
+controller check is ready. Both new planning/handoff files and the unrelated phone
+plan remain untracked/unstaged. No files were committed or staged. Fresh encrypted
+backups `/data/backup-before-tools-032-20261113.enc` passed offline integrity checks
+on both services. Exact prior 0.3.1 source and new 0.3.2 archives are retained for
+rollback; preserve newer state and stop/reconcile before any code rollback.
+
+## First speakerphone qualification — November 13, 2026, 22:26 UTC
+
+One fresh user-authorized speakerphone call ran on deployed 0.3.1. The listener
+reported that output went quiet **after deliberately interrupting**, with **no
+noticeable echo**. This is one qualitative physical trial, not a latency percentile,
+repeatability result, headphone comparison or ordinary conversational acceptance.
+
+The dedicated GPT-Live session started, received audio and published audio. One
+speech-onset interruption was detected; output latched off and remained muted as
+designed. Stop ended the exact call. Native and media cleanup are confirmed;
+zero active calls/media sessions and zero pending/unknown effects remain. No redial
+was attempted. The visible foreground controller also confirmed cleanup.
+
+Same-process metadata: connection-notice TTS request to first publication **265 ms**;
+last notice publication to first model-audio publication **5,191 ms**; detected onset
+to local queue clear **0 ms at millisecond resolution**, with 10 queued frames at
+onset. These are server publication/queue timings, not handset audibility or cutoff.
+The user did not supply a measured audible tail; the <=300 ms handset target remains
+unproven. The first-model publication interval also needs further investigation;
+it is not an end-of-user-utterance measurement.
+
+The final `cutoffs:3` counter includes cleanup clears, not three human interruptions.
+All 77 transcript events were discarded; no transcript/audio/screen content was
+retained. Private metadata-only evidence:
+`.data/audio-speaker-test-20261113-222414/result.json` and observations. Physical
+findings do not enable any normal conversation, desktop-control or isolation gate.
+A further call requires fresh readiness/authorization.
+
+## Audio-only qualification deployed — November 13, 2026, 22:05 UTC
+
+**Source 0.3.1 is ready for a supervised handset test. No call was placed.** This is
+an execution-disabled acoustic test, not acceptance of ordinary full-duplex work.
+The user must still explicitly state readiness for each new call.
+
+- Backend: `2dc6293e-81c1-49a2-b97d-21c8249f8b36`, SUCCESS, Node 24.22.3.
+- Media: `b683019a-6bae-4ac2-be65-ec540cf1d22a`, SUCCESS, Python 3.12.16.
+- Isolated uncommitted source manifest:
+  `9e50e96d4db5aa9746ca2e7d4679dcbd3eef073fa41628a8a0e151030cfa4768`,
+  atop `a5af1f3` on preserved `improvements`; unrelated website work excluded.
+- Verified 74 deployed JS, 18 Python and 10 public-asset hashes. The only protected
+  configuration changes are the two dedicated audio-qualification admission flags.
+  Normal broker/runner/desktop/GPT-Live/duplex/isolation gates remain off. The
+  existing helper 0.2.1 and local gateway were not replaced or restarted.
+- Backend entity/event/effect/cursor hashes and all existing media ledger tables
+  are preserved. Final health: zero active calls/media sessions, pending/unknown
+  effects or unresolved execution ownership; gateway connected. No new managed
+  session, invitation, message, screen lease or desktop grant was created.
+
+The mode has a fresh immutable session identity, no executor/broker/approval path,
+no screen capture/captions, a three-minute foreground controller (five-minute hard
+ceiling), and independent local Stop. It discards all model delegation/transcript
+events. Ordinary Messages instructions are suppressed during the test. The native
+call path retains exact line/member preflight and once-only effect receipts while
+skipping unnecessary desktop permissions. Stop during preparation closes media
+before dial; unconfirmed cleanup remains unknown. Heartbeats cannot renew expiry.
+
+The readonly deployed controller check reports `ready:true` and
+`executionDisabled:true`. Actual identical GPT-Live test configuration started in
+**1,202.0 ms locally** and **832.4 ms on the cloud host**; both received confirmed
+provider closure (cloud total 2,285 ms). No input audio, handset or FaceTime call
+was used. These are two access checks, not speech latency or a reliability cohort.
+
+Validation: checkout `npm run check` **801 tests / 50 files**, typecheck and build
+passed. Exact isolated deployment archive: **780 tests / 48 files**, typecheck and
+build passed. New coverage includes 41 backend/native qualification regressions
+and five controller tests. Media: **271 passed + 12 optional skips** (283 total);
+qualified SDK/RTC/probe suite: **27 passed**. Tests initially exposed two real
+edge cases (Stop during media preparation and malformed heartbeat); both were fixed
+before the final passing runs. Mac helper/gateway code did not change in this phase;
+prior component validation remains separate evidence.
+
+**One interruption measurement per call:** local output clears and remains latched
+off until the call ends. No automatic resume is claimed. The upstream output has
+no verified handset playback-flush acknowledgment. Audible startup, echo, false
+interruptions and the actual cutoff/tail must be measured on the handset. Physical
+acceptance and latency/success targets remain unproven.
+
+[AUDIO_QUALIFICATION.md](AUDIO_QUALIFICATION.md) gives exact controller commands,
+foreground Stop, fresh-call readiness and headphone/speakerphone procedure. The
+owner-only operator configuration is prepared locally; it contains no new account
+credential and is ignored by Git. API access remains qualified, with key expiry
+December 13, 2026. Both protected planning files and the unrelated phone-control
+plan remain untracked/unstaged; no implementation files were staged or committed.
+
+Rollback artifacts and metadata are in `.data/audio-qualification-20261113/`.
+Encrypted consistent backups on each service volume are
+`/data/backup-before-audio-031-20261113.enc`; both decrypted and passed offline
+integrity checks without touching the live databases. Previous backend `f8932374`
+and media `c197bb86` exact source archives were verified against their running
+hashes before replacement. Disable qualification, Stop and reconcile ownership
+before any rollback. Retain newer code disabled while outcomes are unknown;
+never restore an older database/cursor or redial as recovery.
+
+## GPT-Live credential and SDK qualified — November 13, 2026, 21:47 UTC
+
+The user authorized creation of the ClawdTime OpenAI project service-account key.
+It is securely configured in production media and expires December 13, 2026.
+No additional key setup is needed. Media `c197bb86-a198-4f72-906a-7f6ab1d97f83`
+is SUCCESS, source 0.3.0 manifest
+`1d658394b7349003083d7d1c1bd99cfd1e94d3c0b0006dd607432076eb5746aa`.
+Backend `f8932374-b6a1-4039-9a43-d15697633713` is unchanged. Optional pinned
+Agents/plugin 1.8.12 and OpenAI 3.50.0 are installed; runtime gates remain off.
+Real silent client-delegation session startup: local 1,317.7 ms, deployed 1,234.7 ms,
+both provider-confirmed clean closure. The initial local TLS failure was resolved
+using certifi with verification enabled and retained as evidence. Media base tests:
+266 passed, 10 optional skipped; qualified SDK/probe tests: 10 passed. All 17
+deployed Python hashes match; backend/configuration/durable ledgers and cursors
+are preserved. Zero active calls/media sessions or pending/unknown effects.
+
+**API access is ready; handset testing is not yet ready.** An execution-disabled
+acoustic qualification mode is still required; echo, remote-only routing and
+handset interruption are unqualified. No calls or audio were used. No files staged
+or committed; both protected planning documents remain untracked. See
+[rollout and user steps](CONVERSATIONAL_CONTROL_RELEASE.md). The records below are
+historical where they describe credentials or optional dependencies as absent.
+
+## Gated 0.3.0 rollout — November 13, 2026, 21:32 UTC
+
+Authorized backend/media deployment completed without a call or test message.
+Backend `f8932374-b6a1-4039-9a43-d15697633713` and media
+`720d1ffa-fd1c-4d8b-bf79-996074e3d4e5` are SUCCESS. The isolated uncommitted source
+snapshot is `3302d324035ddf69be3ee78a4ce4a59b274d250f54dac7354b2e475b36081a56`;
+it excludes the unrelated website sprint. Deployed JS/Python/public asset hashes
+match. The current audited configuration and binding were preserved.
+
+All new conversation/GPT-Live/desktop/duplex admission remains disabled. Legacy
+pilot behavior remains. Zero active calls, media sessions, pending/unknown transport
+effects or unresolved execution ownership; gateway connected. Durable backend and
+media records match pre-rollout hashes. Encrypted backups passed offline integrity
+verification, and exact previous code archives are retained. No live database was
+restored. No planning files or implementation files were staged/committed.
+
+Exact release: 734 tests/46 files plus typecheck/build pass. Mixed checkout:
+755/48 plus typecheck/build pass after a synthetic screenshot timeout and successful
+focused/full reruns. Media 257 (one optional skip), actual SDK loopback 1, gateway35,
+Swift44 and Mac scripts21 pass. Companion 0.3.0 build4 is packaged/ad hoc signed;
+installed helper0.2.1 and gateway process were not replaced/restarted.
+
+GPT-Live direct key and optional deployed dependencies are absent. Account-session,
+remote audio isolation, execution-disabled echo testing, handset interruption and
+new control acceptance remain unqualified. Native managed-host CUA is unavailable.
+The user must supply the key securely and state fresh call readiness; no previous
+call approval will be reused. See [deployment/rollback and exact user steps](CONVERSATIONAL_CONTROL_RELEASE.md).
+The sections below retain historical implementation and test evidence.
+
+## Conversational control source release — November 13, 2026
+
+Implemented source package **0.3.0** on the preserved `improvements` branch atop
+`a5af1f3`; implementation is uncommitted. Both new planning/handoff documents and
+the unrelated phone-control plan remain untracked and unstaged. See
+[release evidence, commands and rollback](CONVERSATIONAL_CONTROL_RELEASE.md).
+
+The new opt-in architecture shares durable submit/status/revise/cancel jobs across
+text and voice. Conversation is independent of execution. It records actual
+executor acceptance and independent verification, preserves unknown outcomes and
+uses one reply owner. A running correction requests stop and waits for renewed
+clarification after quiescence. Restart cannot replay a lost transient request.
+
+A separately identified Codex App Server session is the tested managed executor;
+no desktop-chat takeover or native CUA export is claimed. The authenticated local
+worker connects the broker to the exact local project using a durable intent/result
+ledger and single-worker lock. File verification is a bounded independent read.
+Native approvals are not converted to voice/text permissions. Custom text-only
+control has an actual locally approved grant and helper/gateway protocol 3; it
+never manufactures a call. Automatic desktop adapter selection remains disabled.
+
+Real evidence from disposable fixtures:
+
+- Actual Codex runner: acceptance **309 ms**, independently verified result **8.362 s**.
+- Real text model + actual slow runner: clarification → queued → verified result →
+  report, **18.146 s** total; concurrent status **0.889 ms**. Messages simulated.
+- Actual authenticated HTTP broker + local worker + Codex: acceptance **415 ms**,
+  independent verification **11.975 s**, **12.002 s** total; concurrent HTTP status
+  **2.155 ms**. Scripted frontend and Messages simulated; zero calls.
+- Two real Gateway text-model candidates chose expected clarification/submission
+  intent **10/10** times in synthetic probes. Five Luna samples: **1.988–3.337 s**;
+  five Terra samples: **2.402–2.870 s**. An additional final-schema Luna clarification
+  succeeded at **1.573 s**. No p95 ≤2 s claim or Messages delivery measurement.
+
+Validation: `npm run check` passed **731 TypeScript tests across 46 files**, typecheck
+and build. Media ran **257 tests (one optional skip)**; the optional actual SDK
+loopback test passed separately. Gateway **35**, Swift **44**, and Mac setup scripts
+**21** passed. Swift release build passed. Optional Agents/plugin **1.8.12**, OpenAI
+SDK **3.50.0**, RTC **1.2.1** and API **1.2.2** compatibility was exercised through
+client-delegation startup and synthetic PCM transmission, without a provider call.
+
+Earlier source-qualification evidence recorded backend
+`c6d304b4-d42b-4deb-8130-0fd5f8bf1063` (source `7f1b687`) and media
+`cb123fed-509f-499b-93b5-a30b88a2d3cc` (source `f7611d2`) SUCCESS. Zero active
+calls/media sessions, pending effects or unknown transport effects; gateway
+connected. That source-qualification phase made no live deployment, line change,
+service restart, message or call; the authorized rollout above followed later. Installed companion remains **0.2.1**; source packaging is **0.3.0 build 4**.
+Historical native execution uncertainty is retained separately from transport health.
+
+Not physically accepted: authenticated GPT-Live (no direct OpenAI credential in
+protected configuration), speakerphone/headset echo, handset interruption cutoff,
+new worker Messages delivery, installed text-grant control or native/custom CUA
+comparison. There are **zero new physical control trials**, so the required
+30-trial cohorts and ≤3 s typing target are unproven. A native managed-host desktop
+adapter remains unavailable. Matching component installation, a fresh local grant,
+provider access and explicit new-call readiness precede supervised acceptance.
+The upstream worker/handset flush acknowledgment is not available as a measured
+contract here. This is an implemented, tested source release, not production-ready.
+
+## Live interaction test — November 13, 2026
+
+The post-fix call stayed active for approximately 134 seconds until the user
+intentionally hung up; the provider recorded `remote_ended` and confirmed cleanup.
+Three real spoken turns reached this chat, two agent replies completed playback,
+and the user verbally confirmed hearing the first reply. One queued reply was
+canceled when newer speech arrived, without replay. This establishes basic
+half-duplex speech in both directions, not usable conversational latency or
+speakerphone interruption acceptance. No shared-screen input was submitted: the
+requested text field was ambiguous and the user ended the call during clarification.
+All calls/media sessions are now inactive, with zero pending or unknown effects.
+
+The user explicitly reported 30-second-scale response latency as unusable and
+requested a new architecture with a full-duplex conversational layer delegating
+work asynchronously. Current metrics support that change:
+
+| Measured boundary                                             | Actual observation                                     |
+| ------------------------------------------------------------- | ------------------------------------------------------ |
+| Final turn accepted → host agent acknowledgment               | 8.635, 10.368, 15.030 seconds                          |
+| Connector poll HTTP round trip                                | 99 ms median; 167 ms p95, 25 retained samples          |
+| TTS request → first audio publication                         | 353 ms, one retained correlated reply                  |
+| Local native action + accessibility observation, outside call | 473–532 ms                                             |
+| Fresh screen capture cadence during second call               | 184 frames across 123.7 seconds, approximately 1.5 fps |
+
+These boundaries do not add up to a complete handset latency measurement.
+Host scheduling/model/tool round trips are a large demonstrated contributor.
+The offline inspector was corrected to correlate TTS by explicit playback
+generation across capture restarts; unrelated processes/correlations remain
+separate. Its 23 focused tests, typecheck and build pass. This diagnostic-only
+change does not require redeploying the call services.
+
+The user enabled sharing locally and used speakerphone. The real iMessage
+instruction reached this same foreground Codex session; its `BLUE` response had
+a transport acknowledgment, and the user confirmed receiving it. The text-only
+request completed without a call or shared-screen input. Session selection through
+`/sessions` and `/use` was not exercised in this test.
+
+One authorized FaceTime attempt connected and emitted screen video, then the
+remote media participant disconnected after approximately nine seconds of capture
+(the provider recorded approximately sixteen seconds from active to ended). The user
+reported an unexpected drop. The provider's terminal detail was
+`bridge_remote_audio_timeout`: the worker requires non-silent outgoing audio
+within ten seconds of structural readiness, while v2 deliberately omitted the
+startup greeting. No TTS audio was published during this attempt. This is a
+confirmed startup incompatibility, independent of speech recognition results.
+Cleanup reconciled: call ended, media stopped and
+screen lease cleared. No redial was performed. During the connected interval,
+861 audio frames reached STT; it produced two empty finals and no recognized
+words. No agent speech was submitted, so neither intelligible two-direction audio
+nor interruption behavior passed. Duplex flags remain disabled. Screen visibility
+on the handset was not confirmed.
+
+A separate local native-tool trial, after call cleanup, visibly computed
+`2 + 3 = 5` in macOS Calculator. Two clicks took 45 and 26 ms; typing `3` and
+Return together took 66 ms. The corresponding accessibility observations took
+431, 447 and 466 ms; action plus observation took 473–532 ms. One transient
+screenshot took 73 ms. These are small samples measured within tool invocations,
+not model inference, active-call contention, scrolling or handset latency.
+The browser rejected the local-file fixture URL; it was not bypassed.
+
+Live connector poll HTTP requests were mostly around 85–130 ms. The text turn
+was acknowledged about 11 seconds after backend receipt and its reply queued
+about 15.6 seconds after receipt; this includes the coordinating agent's manual
+polling and tool sequence, rather than measuring transport alone. Initial evidence
+points to orchestration/observation overhead as a contributor, but does not yet
+identify the dominant end-to-end CUA bottleneck. Private metadata-only evidence is
+under `.data/interaction-live-20261113/`; no screens or audio were retained.
+
+The call's screen diagnostics recorded nine fresh source frames across roughly
+eight seconds. The compositor targets five video frames per second, but can repeat
+the same captured image: source capture and video output cadence are different.
+The source loop serially renews the lease, requests/decodes a screenshot, then waits
+200 ms. First screen-video publication was approximately 737 ms after selection
+within the media component. This is evidence of a potentially visible screen-update
+delay, not a measurement of handset display latency. Optimize this path only while
+preserving policy freshness, lease expiry and local Stop enforcement.
+
+The call also recorded media event-loop delays up to 338 ms. Their cause is not
+attributed yet. The next measurement should correlate those delays with frame
+decode/composition, TTS publication and actual native actions during a stable call,
+instead of changing Python or the CUA framework based on the local trial alone.
+
+The startup fix adds one policy-authorized connection greeting for unmuted v2
+recording calls, with a six-second bound, once-only activation, cancellation and
+queue clearing. It creates no synthetic human turn or agent reply. All **238 media
+tests** passed, including nine focused activation/cancellation regressions.
+Actual post-fix call survival and audible greeting still require a new handset test.
+
+Media-only fix source `f7611d2799eada34026fdd71556e38d781d0b808` was deployed as
+`cb123fed-509f-499b-93b5-a30b88a2d3cc` (SUCCESS); the previous media deployment
+was removed. All fourteen deployed Python files matched the clean source archive.
+Protected configuration and media ledger hashes were unchanged. Backend, Mac
+companion and gateway source were not redeployed. The gateway reconnected after
+replacement; readiness then reported only local sharing disabled. The first test
+was canceled after known cleanup; another call awaits user readiness and local
+Enable. No automatic redial or two-way voice flag change occurred.
+
+## Interaction rollout — November 13, 2026 (deployment baseline)
+
+The user authorized deployment, an iMessage/two-way voice end-to-end test and CUA
+timing diagnosis. When asked about the physical test, the user answered **not ready
+yet**. Deployment and read-only validation proceeded; no call, test message,
+screen capture or computer input was performed. Physical testing remains pending.
+
+Release source: `7f1b687da4d32ea1e9f1fa5d79f37139f30c8f3e` on `improvements`.
+The implementation is `52eb2c5`; production reconciliation added `4d980f5` and
+`f93d027`, preserving already-deployed pre-dial failure handling and gateway
+reconnect behavior. `7f1b687` aligns the retained routing test with reconnection.
+The previous live code matched `88e2cd5` exactly, rather than the older documented
+release. No sibling project, line assignment or unrelated branch was modified.
+
+| Component       | Verified release                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Backend         | `c6d304b4-d42b-4deb-8130-0fd5f8bf1063`, SUCCESS; all 62 deployed JavaScript files matched                          |
+| Media           | `9175e3e9-3565-4c3c-926e-8eec2f7a236e`, SUCCESS; all 14 deployed Python files matched                              |
+| Companion       | Current source installed with the original signing requirement; Screen Recording and Accessibility preserved       |
+| Gateway         | Existing independent LaunchAgent restarted with current source and unchanged private configuration                 |
+| Codex connector | Rebuilt and installed skill updated; MCP configuration preserved; fresh foreground registration/inbox smoke passed |
+
+The backend was stopped while media changed; both preceding deployments are
+removed. Encrypted consistent backups were retained on the existing service
+volumes. Configuration hashes, transport effects/events/cursor and all existing
+media table hashes were unchanged. The only original entity change was expiry of
+an idle connector session; normalizing that transition reproduces the pre-rollout
+entity hash. A separate new smoke session negotiated interaction version 1 and
+voice interaction version 1, had no attention request, and then expired. Historical
+uncertain execution remains retained, not cleared or replayed. Final readiness
+reported zero active calls, pending effects, unknown transport effects and active
+media sessions; the Mac gateway was connected.
+
+Local sharing remains **disabled**. Two-way voice is deployed but **not enabled**:
+backend voice/isolation flags are false, and no protected service variables were
+changed. Existing client runs retain their original capabilities; this chat's old
+loaded MCP catalog is not claimed to have hot-reloaded. Use a new foreground run
+in this same chat for the eventual test, after confirming user readiness.
+
+Validation after integrating the production fixes: typecheck, **645 TypeScript
+tests**, build, **229 media tests**, **31 gateway tests**, and signed release
+companion packaging passed. Prior Swift tests and browser onboarding remain valid
+for their unchanged source. The isolated runtime smoke does not establish handset
+message delivery, intelligible speech, interruption quality or CUA success.
+
+### Initial real timing baseline
+
+Ten sequential idle read-only samples, November 13 at 19:25 UTC. Durations use each
+measuring process's own clock; these are not synthetic fixtures or full CUA trials.
+
+| Read-only boundary                                     | Median | p95 (10 samples) |
+| ------------------------------------------------------ | ------ | ---------------- |
+| Backend → media → gateway → exact Mac helper readiness | 137 ms | 386 ms           |
+| Local client → loopback Mac helper status              | 3 ms   | 25 ms            |
+| Local client → deployed backend health                 | 125 ms | 183 ms           |
+
+The remote readiness round trip is a measurable contribution: ownership and
+fallback paths perform these checks sequentially. These samples do not identify
+the dominant CUA bottleneck. No screenshot, model, native tool, input observation
+or handset-render latency was measured. The duplicate fallback screenshot was
+removed in source, but no before/after speedup is asserted. A disposable local
+click/type/scroll fixture is ready at `artifacts/cua-timing/index.html`.
+
+### Remaining live steps
+
+1. User enables the intended display locally and is ready at the paired phone.
+2. Fresh same-chat connector; real `/sessions` and `/use` selection, instruction,
+   text result and handset receipt observation. No simulated provider events.
+3. Qualify the actual worker audio route and a headset canary before enabling the
+   voice flags. Owned-line metadata confirms a recent, identity-confirmed line
+   session, but does not prove acoustic isolation or that the inclusive process
+   tap started. Source supports FaceTime/avconferenced-only return audio in
+   line-session mode; no AEC is claimed. Speakerphone needs separate qualification.
+4. Measure interruption and input holds, then visible CUA trials with connector,
+   backend, media and native-wrapper timings. The external worker has an audio
+   output ring with five seconds of **capacity**, not established latency; media
+   queue clearing does not prove that its downstream queue or the handset is
+   silent. Measure the audible tail separately.
+5. End/reconcile the owned test, retain unknown receipts, and report observed
+   outcomes. No automatic redial or concurrent line owner.
+
+Private operational evidence is under `.data/interaction-rollout-20261113/`; it
+contains sanitized timings, hashes and deployment receipts. Source was deployed
+from a tracked archive; private runtime/configuration files were not uploaded.
+
+## iMessage-first controls and two-way voice — November 13, 2026
+
+Implemented in the working tree after the user's explicit follow-up request, with
+the existing TypeScript/Python/Swift stack. This is **local source verification**;
+no deployment, installed-component change, real message, physical call or native
+input was performed for this update. Existing A–F and deployment history below
+remain historical records.
+
+- New v2 sessions negotiate iMessage-first input and text replies. `/sessions` and
+  `/use SESSION_ID` select an available exact session; `conversation_inbox` lets its
+  already-running agent discover call-free text requests. No arbitrary host wake
+  or call-independent screen permission is implied. Legacy sessions retain their
+  behavior; automatic notices can be disabled independently of explicit replies.
+- Text notices/results use durable paired-recipient effects, coalescing and
+  once-only receipts. Unknown sends remain unknown. New final text/voice input
+  advances the cursor and blocks stale queued replies and future ClawdTime input.
+- Negotiated two-way media keeps capture/STT active while playing streamed speech.
+  Sustained PCM activity cancels TTS, clears local queues and invalidates late audio
+  chunks without resetting capture. Authenticated activity callbacks briefly hold
+  further input; final turns remain ordered and require acknowledgment. The exact
+  reply revision is checked at the media boundary. Native tool cancellation is
+  cooperative and host-dependent; published audio cannot be recalled.
+- Two-way voice defaults off. Both backend flags, the media flag, connector
+  capability and operator-qualified remote-audio isolation are required. This is
+  not automatic echo cancellation; threshold/provider tuning and actual handset
+  echo/interruption performance remain unqualified.
+- Bounded process-local timing now covers connector round trips, ownership, frame
+  capture, input submission/observation, speech publication, interruption and event
+  loop lag. Inspector reports missing stages and hidden native/model/handset work
+  honestly. A duplicate fallback screenshot capture was removed; no measured
+  speedup or comparative native/fallback performance is claimed.
+
+Integration review also fixed legacy routing being diverted by stopped opted-in
+sessions and false unknown ownership when a correction arrives during successful
+grant synchronization. A confirmed grant remains safely releasable after refusal.
+
+Final transport review added a dispatch guard after every asynchronous readiness
+and identity check: correction, pairing revocation or deadline expiry prevents the
+provider POST and creates a redacted not-sent receipt. Media review fixed a speech
+task canceled before its first execution leaving subsequent replies permanently
+busy, plus revision rechecking after the VAD grace interval.
+
+| Isolated validation                                                     | Result                                                        |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `npm run check`                                                         | Typecheck, 637 tests across 40 files, build passed            |
+| `npm run test:onboarding:browser`                                       | Browser/compiled-CLI journey and config preservation passed   |
+| `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`   | 223 tests passed                                              |
+| `media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'` | 31 tests passed                                               |
+| `swift test` and `swift build` in `mac/`                                | 38 tests and build passed                                     |
+| Prettier across source/connectors/tests/docs and `git diff --check`     | Passed                                                        |
+| `npx tsx scripts/inspect-session.ts`                                    | Sanitized synthetic report; missing stages remain unavailable |
+
+Tests include cross-stack MCP→backend→text receipt reconciliation without a call,
+legacy routing, stale input during grant synchronization, single fallback image
+capture, clock/retention bounds, interruption authorization, and a shared TS/Python
+policy fixture. Media tests exercise a local WebSocket STT stream while speech is
+active. Provider boundaries are synthetic; no result above proves handset behavior.
+
+See [GUIDE.md](GUIDE.md) for configuration and
+[VOICE_INTERACTION_PLAN.md](VOICE_INTERACTION_PLAN.md) for remaining physical
+acceptance. Attachment delivery, idle-chat wake and separate call-free screen
+authority remain unimplemented.
+
+## Improvements A–F — November 13, 2026 (local verification only)
+
+Implementation source: `783be9523faa2c861cc82dc89e0b01d3c16e6d6a`, branch
+`improvements`, based on `bf8f18e`. Local/remote history and worktrees were
+inspected first; no existing `improvements` branch existed. The original two
+uncommitted planning files were preserved and are included with this record.
+Separate `multi-device-relay` work was inspected read-only and not merged.
+
+The user explicitly authorized `git push -u origin improvements`; both planning
+documents now reflect that override. This is source implementation and isolated
+validation, not a deployment or physical acceptance record. Package G remains
+deferred. Main and the previously recorded hosted release below are unchanged.
+
+### Implemented
+
+- **A:** Optional version-1 activity on existing v2 progress/poll/panel paths;
+  exact session binding, stable IDs, server ordering, replay/conflict handling and
+  capability negotiation. Text is transient, limited to 20 summaries per request,
+  100 cached requests, ten minutes; Unicode is bounded by scalars and bytes.
+- **B:** Compact/expanded nonactivating AppKit activity panel with exact labels,
+  persistent local Stop, pending command status, safe stale/ended states, keyboard
+  navigation and fixed readiness guidance. The existing setup window remains.
+- **C:** Phone status separates backend acceptance from agent acknowledgment,
+  execution and native approval. Current summaries cannot be replaced by prior
+  outcomes. Original-agent speech remains one reply per turn and half-duplex.
+- **D:** Stable terminal outcome receipts report agent-observed, unverified or
+  unknown results without ending the call, sending a message or capturing a
+  screenshot. Outcome text lasts at most 60 seconds, clears on authority loss,
+  and is absent after restart; durable metadata remains reconcilable.
+- **E:** Bounded process/correlation timing with monotonic clock-scope resets and
+  a fixture-first inspector. Explicit allowlisted export contains opaque labels,
+  sample/failure/missing counts and median/p95. Cross-process UTC observations
+  are not represented as precise latency or handset evidence.
+- **F:** Deterministic readiness reasons/next actions, shared TS/Python/Swift
+  fixtures, isolated route/journey/fault tests, and a separate ten-turn physical
+  qualification checklist in [DEMO_ACCEPTANCE.md](DEMO_ACCEPTANCE.md).
+
+Independent integration review caught and corrected historical outcomes hiding new
+work, corrections hiding pending approval, Unicode disagreement, retained text in
+a media comparison field, false reply-accepted diagnostics, clock saturation after
+24 hours, and stale connection success headlines. Worst-case escaped Unicode
+metadata uses a bounded 64 KiB envelope; native non-panel bodies retain their
+16 KiB limit. No authority or native-input freshness limit was loosened.
+
+### Checks actually performed
+
+Environment: Node `v24.22.1`, isolated media Python `3.14.0`, Apple Swift `6.2.4`.
+
+| Command/check                                                                 | Result                                                                                 |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Baseline `npm run check`                                                      | Typecheck, 571 tests, build passed before edits                                        |
+| Final `npm run check`                                                         | Typecheck, 599 tests across 37 files, build passed                                     |
+| `npm run test:onboarding:browser`                                             | Passed isolated browser/compiled-CLI onboarding checks and config preservation         |
+| `media/.venv/bin/python -m unittest discover -s media -p 'test_*.py'`         | 204 tests passed                                                                       |
+| `media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'`       | 31 tests passed                                                                        |
+| `python3 -m unittest discover -s mac/scripts -p 'test_*.py'`                  | 21 tests passed                                                                        |
+| `swift test` and `swift build` in `mac/`                                      | 38 tests and build passed                                                              |
+| `swift run --package-path mac PanelPreview /tmp/clawdtime-panel-final`        | 40 synthetic production-view renderings; control-bounds assertions passed              |
+| `media/.venv/bin/python media/preview_activity.py /tmp/clawdtime-phone-final` | Synthetic portrait/landscape, light/dark-background renderings generated and inspected |
+| `npx tsx scripts/inspect-session.ts`                                          | Deterministic sanitized report; no live reads                                          |
+| Focused backend/execution/connector regressions and `git diff --check`        | Passed                                                                                 |
+
+Visual review included compact/expanded panels, long Unicode, larger text,
+light/dark contrast, approval, pending controls, uncertain/unverified results and
+stale/ended clearing; phone portrait contact sheets and full landscape frames.
+Generated PNGs/reports remain outside Git. The inspector's five known calculation
+samples yield median 300 ms and p95 500 ms; these are fixture arithmetic, **not**
+measured ClawdTime latency, a before/after performance improvement, or a comparison
+with FaceTimeOS. Missing stages remain unavailable and counted. Deliberately
+injected media/gateway failures log fixed warnings during passing tests.
+
+No remaining isolated check failures. No merge, deployment, installed-component
+replacement/restart, real connector spike, physical call, outbound message, real
+native input, or production configuration/database read was performed. No sibling
+Apple Teams/chert-facetime files were modified. Native approvals, exclusive
+ownership, Stop, cursors, unknown outcomes and existing receipt behavior remain
+required; tests do not grant permission.
+
+### Still physically unverified
+
+New panel focus/VoiceOver behavior on actual multiple displays; handset readability
+and ten-turn speech accounting; real input plus observed result; actual Stop/mute/
+end/remote-hangup cleanup; repeated sessions; clean installation/upgrade/rollback;
+second-Mac isolation; signed/notarized distribution. Each requires the separately
+authorized scope and prerequisites in the acceptance document. Full-duplex,
+Messages task initiation, screenshots/messages, new agents/adapters, credential
+migration and the other package-G features remain deferred.
+
+## Previously recorded hosted state
 
 November 12, 2026 — America/New_York.
 

@@ -1,0 +1,138 @@
+import { readFileSync } from "node:fs";
+import { publicPage } from "./public-page.js";
+
+export const websiteOrigin = "https://www.clawdtime.com";
+export const websitePages = {
+  "/": {
+    file: "index.html",
+    title: "ClawdTime | FaceTime calls from your coding agent",
+    description:
+      "Review your coding agent’s screen and respond over FaceTime. Explore ClawdTime’s invited Mac pilot, tested agents, setup and current limitations.",
+  },
+  "/pricing": {
+    file: "pricing.html",
+    title: "Pilot availability and planned pricing | ClawdTime",
+    description:
+      "ClawdTime is invitation-only. See pilot requirements and proposed pricing. Public subscriptions, free-call allowances and dedicated plans are not yet available.",
+  },
+  "/integrations/codex": {
+    file: "codex.html",
+    title: "FaceTime calls from Codex | ClawdTime pilot",
+    description:
+      "Learn how ClawdTime connects a running Codex session to FaceTime and iMessage, with tested surfaces, Mac requirements and current limitations.",
+  },
+  "/integrations/claude-code": {
+    file: "claude-code.html",
+    title: "Claude Code calling integration | ClawdTime pilot",
+    description:
+      "Explore ClawdTime’s cooperative Claude Code connector: tested client version, invitation-only setup and what still needs live handset validation.",
+  },
+  "/guides/getting-started": {
+    file: "getting-started.html",
+    title: "Get started with the ClawdTime Mac pilot",
+    description:
+      "Check ClawdTime’s invitation, Mac, agent and permission requirements. Follow the supervised setup process for the current internal pilot.",
+  },
+  "/privacy": {
+    file: "privacy.html",
+    title: "Screen sharing, permissions and data | ClawdTime",
+    description:
+      "Understand ClawdTime’s screen and control permissions, local Stop, transient media, operational receipts and optional aggregate website measurement.",
+  },
+} as const;
+export type WebsitePath = keyof typeof websitePages;
+
+const escape = (value: string) =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+
+export function websitePage(
+  path: WebsitePath,
+  phone?: string,
+  analytics = false,
+) {
+  const page = websitePages[path];
+  const canonical = websiteOrigin + path;
+  const schema: Record<string, unknown>[] = [
+    {
+      "@type": "WebSite",
+      "@id": `${websiteOrigin}/#website`,
+      name: "ClawdTime",
+      url: websiteOrigin + "/",
+    },
+    {
+      "@type": "WebPage",
+      "@id": canonical,
+      url: canonical,
+      name: page.title,
+      description: page.description,
+      isPartOf: { "@id": `${websiteOrigin}/#website` },
+    },
+  ];
+  if (path !== "/")
+    schema.push({
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        {
+          "@type": "ListItem",
+          position: 1,
+          name: "ClawdTime",
+          item: websiteOrigin + "/",
+        },
+        {
+          "@type": "ListItem",
+          position: 2,
+          name: page.title.split(" | ")[0],
+          item: canonical,
+        },
+      ],
+    });
+  const metadata = `<title>${escape(page.title)}</title>
+    <meta name="description" content="${escape(page.description)}" />
+    <link rel="canonical" href="${canonical}" />
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ClawdTime" />
+    <meta property="og:title" content="${escape(page.title)}" />
+    <meta property="og:description" content="${escape(page.description)}" />
+    <meta property="og:url" content="${canonical}" />
+    <meta property="og:image" content="${websiteOrigin}/assets/social-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ClawdTime. Your coding agent can FaceTime you. Invited Mac pilot." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${escape(page.title)}" />
+    <meta name="twitter:description" content="${escape(page.description)}" />
+    <meta name="twitter:image" content="${websiteOrigin}/assets/social-card.png" />
+    <script type="application/ld+json">${JSON.stringify({ "@context": "https://schema.org", "@graph": schema }).replaceAll("<", "\\u003c")}</script>`;
+  return publicPage(
+    readFileSync(
+      new URL(`../public/${page.file}`, import.meta.url),
+      "utf8",
+    ).replace("<!-- WEBSITE_METADATA -->", metadata),
+    phone,
+    analytics,
+  );
+}
+
+export function websiteSitemap() {
+  return (
+    '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+    Object.keys(websitePages)
+      .map((path) => `  <url><loc>${websiteOrigin}${path}</loc></url>`)
+      .join("\n") +
+    "\n</urlset>\n"
+  );
+}
+
+export const websiteRobots = `User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /health
+
+# Operational HTML uses noindex. Crawlers must fetch it to see that directive.
+Sitemap: ${websiteOrigin}/sitemap.xml
+`;

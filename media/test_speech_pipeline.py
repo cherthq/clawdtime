@@ -41,6 +41,63 @@ class SpeechPipelineTests(IsolatedAsyncioTestCase):
                 await asyncio.sleep(.01)
         await asyncio.wait_for(wait(),3)
 
+    async def test_duplex_keeps_one_stt_socket_through_playback_and_delivers_final_correction_once(self):
+        from unittest.mock import Mock
+        self.service.env.update(MEDIA_TWO_WAY_VOICE_ENABLED='true', DEEPGRAM_API_KEY='synthetic')
+        s = self.session
+        s.protocol_version = 2
+        s.apply_voice_policy({'protocolVersion': 2, 'voiceInteractionVersion': 1,
+                              'voiceMode': 'two_way', 'remoteAudioIsolated': True})
+        s.utterances = UtteranceAssembler(settle_seconds=.02)
+        s.track = object()
+        s.source = SimpleNamespace(clear_queue=Mock())
+        self.service.sessions[s.id] = s
+        s.speaking = True
+        generation = s.generation
+        connected = asyncio.Event()
+        sockets = []
+        binary = []
+        async def listen(request):
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            sockets.append(socket)
+            connected.set()
+            async for message in socket:
+                if message.type == WSMsgType.BINARY:
+                    binary.append(len(message.data))
+            return socket
+        app = web.Application()
+        app.router.add_get('/listen', listen)
+        provider = TestServer(app)
+        await provider.start_server()
+        original = self.http.ws_connect
+        capture = None
+        try:
+            with patch.object(self.http, 'ws_connect', side_effect=lambda url, **kwargs: original(provider.make_url('/listen'))), patch('server.rtc.AudioStream', SyntheticAudio):
+                capture = asyncio.create_task(s.capture_loop())
+                await asyncio.wait_for(connected.wait(), 1)
+                await sockets[0].send_json(result('Synthetic interim correction', final=False))
+                await self.until(lambda: s.utterances.unfinalized)
+                self.assertEqual(self.effects, [])
+                await sockets[0].send_json(result('Synthetic final correction', boundary=True))
+                await self.until(lambda: self.effects == ['1'])
+                self.assertTrue(s.speech_cancelled)
+                self.assertEqual(s.generation, generation)
+                self.assertTrue(s.allowed)
+                self.assertEqual(len(sockets), 1)
+                self.assertTrue(binary)
+                await sockets[0].send_json(result('Synthetic next request', start=10, duration=1, boundary=True))
+                await self.until(lambda: self.effects == ['1', '2'])
+                self.assertEqual(len(sockets), 1)
+                s.fail.assert_not_awaited()
+        finally:
+            if capture:
+                capture.cancel()
+                await asyncio.gather(capture, return_exceptions=True)
+            for socket in sockets:
+                await socket.close()
+            await provider.close()
+
     async def test_repeated_requests_survive_noise_shrinking_windows_and_bad_json(self):
         self.session.protocol_version=2
         self.session.utterances=UtteranceAssembler(settle_seconds=.02,vad_grace_seconds=.05)
