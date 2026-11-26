@@ -541,8 +541,9 @@ gets only the one line of a fact (see An app that does not answer).
 
 Each look only reads. It runs fixed programs (`ps`, `lsof`, `log`,
 `launchctl list`, `sysctl`, `memory_pressure`, `df`, `lsappinfo`) with
-`execFile`, never a shell, each with a timeout of 2 to 20 seconds and a cap
-on its output. The child gets a fixed path and the C locale as its only
+`execFile` (a log with `spawn`), never a shell, each with a timeout of 2 to 20 seconds and a cap
+on its output. A log that is longer than its cap keeps its newest lines, and
+the answer says so. The child gets a fixed path and the C locale as its only
 environment. A name, a pid, a port and a label must parse before anything
 runs: a name has letters, digits, spaces and a few marks only, and goes into
 the log predicate between double quotes.

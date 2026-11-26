@@ -163,7 +163,9 @@ function logsText(look: LogLook) {
     ...look.lines.map(
       (line) => `${line.time} ${level(line.level)}${line.text}`,
     ),
-    look.cut ? "The log was longer than its cap: ask for fewer minutes." : "",
+    look.cut
+      ? "The log was longer than its cap, so only its newest lines were read, and the counts are of those. Ask for fewer minutes to see them all."
+      : "",
   ]
     .filter(Boolean)
     .join("\n");

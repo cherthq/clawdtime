@@ -393,6 +393,45 @@ describe("logs", () => {
     ]);
   });
 
+  it("keeps the newest lines of a log that is longer than its cap", async () => {
+    const host = fakeHost();
+    const log = [
+      "Timestamp               Ty Process[PID:TID]",
+      ...Array.from(
+        { length: 4000 },
+        (_, index) =>
+          `2026-11-26 09:${String(55 + Math.floor(index / 1000)).padStart(2, "0")}:00.${String(index % 1000).padStart(3, "0")} Df Stonepad[4242:5fe3ad5] note ${index}`,
+      ),
+      "",
+    ].join("\n");
+    const exec = host.exec;
+    host.exec = async (file, args, limits) => {
+      if (file !== "/usr/bin/log") return exec(file, args, limits);
+      host.limits.push(limits);
+      // As a real program over a cap of 4 KB: the rest is cut, at the end that it keeps.
+      const cap = Math.min(limits.maxBytes, 4096);
+      const bytes = Buffer.from(log);
+      const kept =
+        limits.keep === "tail"
+          ? bytes.subarray(bytes.length - cap).toString()
+          : bytes.subarray(0, cap).toString();
+      return {
+        code: null,
+        stdout: kept,
+        timedOut: false,
+        cut: true,
+        missing: false,
+      };
+    };
+    const probes = new SystemProbes(host);
+    const found = await probes.logs("Stonepad", 5);
+    expect(found.cut).toBe(true);
+    expect(found.lines.at(-1)!.text).toBe("note 3999");
+    const { text } = await look({ what: "logs", name: "Stonepad" }, host);
+    expect(text).toMatch(/note 3999/);
+    expect(text).toMatch(/only its newest lines were read/);
+  });
+
   it("reads the log of a pid by its executable's name", async () => {
     const { host } = await look({ what: "logs", pid: 4242 });
     expect(host.calls.at(-1)).toContain('process == "Stonepad"');
