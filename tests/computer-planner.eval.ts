@@ -69,6 +69,7 @@ import {
   OpenAIPlanner,
   plannerFor,
   type PlannerOptions,
+  type PlannerUsage,
 } from "../connectors/computer/planner.js";
 import type {
   Action,
@@ -1339,6 +1340,10 @@ interface Row {
   ms: number;
   right: boolean;
   action: string;
+  /** The tokens of the calls of this task: in all, from the cache, and of the answer. */
+  inputTokens?: number;
+  cachedTokens?: number;
+  outputTokens?: number;
   error?: string;
 }
 
@@ -1354,11 +1359,19 @@ async function measure(
       effort: config.effort,
       detail: config.detail,
     });
+    // The tasks of one model run one after the other: the tokens are those of the task that runs.
+    let used = { inputTokens: 0, cachedTokens: 0, outputTokens: 0 };
+    const onUsage = (usage: PlannerUsage) => {
+      used.inputTokens += usage.inputTokens ?? 0;
+      used.cachedTokens += usage.cachedTokens ?? 0;
+      used.outputTokens += usage.outputTokens ?? 0;
+    };
     const planners = {
-      screen: new ModelPlanner({ ...config.planner!, request }),
+      screen: new ModelPlanner({ ...config.planner!, request, onUsage }),
       browser: new ModelPlanner({
         ...config.planner!,
         request,
+        onUsage,
         browser: true,
         browserMethods: browserMethodNames,
       }),
@@ -1367,6 +1380,7 @@ async function measure(
     for (let run = 1; run <= repeats; run++)
       for (const task of chosen) {
         const view = seen[task.screen]!;
+        used = { inputTokens: 0, cachedTokens: 0, outputTokens: 0 };
         const from = performance.now();
         try {
           const planner = offersBrowser(task)
@@ -1381,6 +1395,7 @@ async function measure(
             ms: Math.round(performance.now() - from),
             right: task.right(action, view),
             action: `${kind} ${JSON.stringify(rest).slice(0, 160)}`,
+            ...used,
           });
         } catch (error) {
           rows.push({
@@ -1437,10 +1452,16 @@ async function measure(
     `${chosen.length} tasks (${splitText}), ${repeats} runs of each.`,
   );
   for (const config of configs) {
-    const failed = rows.find((row) => row.config === config.label && row.error);
+    const mine = rows.filter((row) => row.config === config.label);
+    const total = (pick: (row: Row) => number | undefined) =>
+      mine.reduce((sum, row) => sum + (pick(row) ?? 0), 0);
+    console.log(
+      `${config.label}: tokens ${total((row) => row.inputTokens)} in, ${total((row) => row.cachedTokens)} of them from the cache, ${total((row) => row.outputTokens)} out`,
+    );
+    const failed = mine.find((row) => row.error);
     if (failed)
       console.log(
-        `${config.label}: ${rows.filter((row) => row.config === config.label && row.error).length} runs with no answer (${failed.error})`,
+        `${config.label}: ${mine.filter((row) => row.error).length} runs with no answer (${failed.error})`,
       );
   }
   printResults(out, { word: "right", cases: true });
