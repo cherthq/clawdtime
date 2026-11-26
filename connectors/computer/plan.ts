@@ -364,6 +364,102 @@ export class TaskPlan {
   }
 }
 
+/*
+ * The apps that a goal names, for the order of the outline and the first
+ * turn. The outline runs beside the first turn, so the first turns have no
+ * plan, and no plan_update can keep a fact for them. With one app that costs
+ * nothing. With two, the first turns went from one app to the other and back
+ * 3 to 5 times before the plan came: they could keep nothing that they read.
+ * A goal that names two apps or more waits for its outline once (worker.ts).
+ * This reading only orders the work: a goal that it reads wrong waits a few
+ * seconds for nothing, or does not wait, as before. It allows nothing.
+ */
+
+/** Apps of a Mac that a goal often names with no "in" or "open" before them. */
+const commonApps = new Set([
+  "Calculator",
+  "Calendar",
+  "Chrome",
+  "Contacts",
+  "Excel",
+  "Finder",
+  "Firefox",
+  "Keynote",
+  "Mail",
+  "Maps",
+  "Messages",
+  "Music",
+  "Notes",
+  "Numbers",
+  "Photos",
+  "Preview",
+  "Reminders",
+  "Safari",
+  "Slack",
+  "Terminal",
+  "TextEdit",
+]);
+/** Words with a capital after "in" that name a time, not an app. */
+const notApps = new Set([
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "i",
+]);
+const appName = "([A-Z][A-Za-z0-9&+.-]*)";
+const appPatterns = [
+  // "the Receipts app", "my Lists app"
+  new RegExp(`\\b(?:the|my)\\s+${appName}\\s+app\\b`, "g"),
+  // "In Market", "into Sheets", "open the Directory", "using Stonepad"
+  new RegExp(
+    `\\b(?:[Ii]n|[Ii]nto|[Oo]pen|[Uu]sing)\\s+(?:the\\s+|my\\s+)?${appName}`,
+    "g",
+  ),
+  // "from the Receipts list": a bare "from Ada" names a person more often than an app.
+  new RegExp(`\\b[Ff]rom\\s+the\\s+${appName}`, "g"),
+];
+const wordIn = (text: string, word: string) =>
+  new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^\\p{L}\\p{N}])`,
+    "iu",
+  ).test(text);
+
+/**
+ * True when the goal names two apps or more: the app in front when the goal
+ * names it, a common app of a Mac, a name before "app", and a name with a
+ * capital after "in", "into", "open", "using" or "from the".
+ */
+export function namesTwoApps(goal: string, front?: string): boolean {
+  const named = new Set<string>();
+  const text = goal.slice(0, 2000);
+  const frontName = front?.trim();
+  if (frontName && wordIn(text, frontName)) named.add(frontName.toLowerCase());
+  for (const word of text.match(/\b[A-Z][A-Za-z]+\b/g) ?? [])
+    if (commonApps.has(word)) named.add(word.toLowerCase());
+  for (const pattern of appPatterns)
+    for (const match of text.matchAll(pattern)) {
+      const word = match[1]!.replace(/[.-]+$/, "").toLowerCase();
+      if (word && !notApps.has(word)) named.add(word);
+    }
+  return named.size >= 2;
+}
+
 /** The plan in lines for the brief of one turn. Facts are data from the screen, in quotes. */
 export function planLines(plan: PlanView): string[] {
   const lines = [

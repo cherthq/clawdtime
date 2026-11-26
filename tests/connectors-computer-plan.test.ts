@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import {
+  namesTwoApps,
   planLimits,
   planLines,
   TaskPlan,
@@ -349,6 +350,62 @@ const userText = (body: { messages: { role: string; content: unknown }[] }) => {
   }[];
   return content.find((part) => part.type === "text")!.text!;
 };
+
+describe("the apps that a goal names", () => {
+  it("finds two apps or more by the app in front, a common app, a name before app, and a name after in, into, open, using or from the", () => {
+    for (const [goal, front] of [
+      [
+        "Copy the ten receipts of November from the Receipts app into the sheet Expenses November in Sheets.",
+        "Receipts",
+      ],
+      [
+        "In Directory, find the seven people of the Design team. Then in Notes, make one new note for each of them.",
+        "Directory",
+      ],
+      [
+        "In Market, compare the price with delivery of four kettles. Add the cheapest to my Kitchen list in the Lists app.",
+        "Market",
+      ],
+      [
+        "Read the five messages about the offsite in Mailbox, and flag each of them. Then make a new note in Notes.",
+        "Mailbox",
+      ],
+      ["Copy the address of the last message in Mail into Notes.", "Finder"],
+      [
+        "Find the train times on Riverchat and add them to Calendar.",
+        "Riverchat",
+      ],
+      ["Open Stonepad and copy its total into Numbers.", "Finder"],
+    ] as const)
+      expect(namesTwoApps(goal, front), goal).toBe(true);
+  });
+
+  it("finds one app or none in a goal for one app: a month, a place or a name with no app is no app", () => {
+    for (const [goal, front] of [
+      [
+        "In Homes, fill in the lease application. Page 2: street 12 Harbor Road, city Lisbon, move-in date 1 March 2027. Then type its reference into the confirm field.",
+        "Homes",
+      ],
+      [
+        "In Ledger, change the category of every invoice of Fjord Logistics to Freight, and save each one.",
+        "Ledger",
+      ],
+      [
+        "In Rota, give Ada Brook and Ivy Laurent the Weekend shift, and save each one.",
+        "Rota",
+      ],
+      [
+        "Fill in the trip request: the name Ada Brook, the date 12 March, a window seat. Send it in March.",
+        "Trips",
+      ],
+      ["Make a new note in Notes that says 'Buy stamps'.", "Notes"],
+      ["Save the note", "Notes"],
+      ["Reply to the message from Ada with a thank you.", "Riverchat"],
+      ["", undefined],
+    ] as const)
+      expect(namesTwoApps(goal, front), goal).toBe(false);
+  });
+});
 
 describe("the outline of the planner", () => {
   it("is asked with its own rules, its own function and the first look", async () => {
@@ -750,6 +807,7 @@ function setup(
     screens?: Observation[];
     maxSteps?: number;
     plannedMaxSteps?: number;
+    outlineWaitMs?: number;
   } = {},
 ) {
   const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-plan-"));
@@ -771,6 +829,9 @@ function setup(
     ...(options.maxSteps ? { maxSteps: options.maxSteps } : {}),
     ...(options.plannedMaxSteps
       ? { plannedMaxSteps: options.plannedMaxSteps }
+      : {}),
+    ...(options.outlineWaitMs !== undefined
+      ? { outlineWaitMs: options.outlineWaitMs }
       : {}),
   });
   return { home, hands, planner, said, journal, worker };
@@ -885,6 +946,73 @@ describe("the worker with a plan", () => {
     expect(record.steps.map((step) => step.outcome)).not.toContain("plan_open");
     // The names of the subgoals are not in the journal.
     expect(JSON.stringify(record)).not.toMatch(/Workshop/);
+  });
+
+  it("waits for the outline before the first turn when the goal names two apps, and sends nothing before it", async () => {
+    let release: (value: Subgoal[]) => void = () => {};
+    const { worker, hands, planner, said } = setup(
+      [{ update: { op: "done", evidence: "Read" }, with: click }, done],
+      () =>
+        new Promise<Subgoal[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await worker.submit(
+      "plan_two_apps",
+      "In Stonepad, copy the total into a new note in Notes",
+    );
+    await until(() => planner.outlines.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // The first turn has not begun: no turn, no input.
+    expect(planner.inputs).toHaveLength(0);
+    expect(hands.sent).toEqual([]);
+    release(three.slice(0, 2));
+    await worker.idle();
+    // The first turn reads the plan, and its update is taken with its action.
+    expect(planner.inputs[0]!.plan?.subgoals).toHaveLength(2);
+    expect(planner.inputs[1]!.plan?.subgoals[0]?.state).toBe("done");
+    expect(hands.sent).toHaveLength(1);
+    expect(said.at(-1)).toBe("Done. The note is saved.");
+  });
+
+  it("goes on with no plan after the wait when the outline is late, and does not wait for a goal of one app", async () => {
+    const late = setup([click, done], () => new Promise<Subgoal[]>(() => {}), {
+      outlineWaitMs: 20,
+    });
+    await late.worker.submit(
+      "plan_two_apps_late",
+      "In Stonepad, copy the total into a new note in Notes",
+    );
+    await late.worker.idle();
+    expect(late.planner.inputs).toHaveLength(2);
+    expect(late.planner.inputs[0]!.plan).toBeUndefined();
+    expect(late.said.at(-1)).toBe("Done. The note is saved.");
+    // One app: the first turn runs beside the outline, which never comes.
+    const one = setup([click, done], () => new Promise<Subgoal[]>(() => {}));
+    await one.worker.submit("plan_one_app", "Save the note in Notes");
+    await one.worker.idle();
+    expect(one.planner.inputs[0]!.plan).toBeUndefined();
+    expect(one.hands.sent).toHaveLength(1);
+  });
+
+  it("ends at once at Stop while the first turn waits for the outline", async () => {
+    const { worker, hands, planner, journal } = setup(
+      [click, done],
+      () => new Promise<Subgoal[]>(() => {}),
+    );
+    await worker.submit(
+      "plan_two_apps_stop",
+      "In Stonepad, copy the total into a new note in Notes",
+    );
+    await until(() => planner.outlines.length === 1);
+    worker.stop();
+    await worker.idle();
+    expect(planner.inputs).toHaveLength(0);
+    expect(hands.sent).toEqual([]);
+    expect(journal.get("plan_two_apps_stop")).toMatchObject({
+      state: "canceled",
+      reason: "stopped",
+    });
   });
 
   it("goes on with no plan when the outline fails, is empty or is no list", async () => {

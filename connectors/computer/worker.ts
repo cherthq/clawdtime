@@ -154,7 +154,7 @@ import {
   type ProgressContext,
   type ProgressStep,
 } from "./progress.js";
-import { planUpdateSchema, TaskPlan } from "./plan.js";
+import { namesTwoApps, planUpdateSchema, TaskPlan } from "./plan.js";
 import { Opening } from "./opening.js";
 import type { ComputerMemory } from "./remembered.js";
 import type {
@@ -592,6 +592,12 @@ export interface ComputerWorkerOptions {
   /** The most actions for a request whose plan had 3 subgoals or more (`plan.ts`). */
   plannedMaxSteps?: number;
   /**
+   * How long the first turn of a goal that names two apps or more waits for
+   * its outline (`namesTwoApps` in `plan.ts`). 15 seconds unless set. After
+   * it the first turn goes on with no plan, as before.
+   */
+  outlineWaitMs?: number;
+  /**
    * A done right after a click, a key or typed text that left the screen as
    * it was goes back to the planner once. The service turns it on; made-up
    * hands of tests show one screen, so it is off unless asked for.
@@ -887,6 +893,8 @@ interface Run {
   plan?: TaskPlan;
   /** The outline was asked for once. It is not asked again, whatever came of it. */
   outlined?: boolean;
+  /** Settles when the outline came or failed. Read once, before the first turn. */
+  outlining?: Promise<void>;
   /** The first words of the request to the person, and its one line on a revision (`opening.ts`). */
   opening: Opening;
   question: Question | null;
@@ -1234,6 +1242,7 @@ export class ComputerWorker implements DesktopExecutorPort {
   private readonly now: () => number;
   private readonly maxSteps: number;
   private readonly plannedMaxSteps: number;
+  private readonly outlineWaitMs: number;
   private readonly maxMs: number;
   private readonly browserMs: number;
   private readonly settleMs: number;
@@ -1255,6 +1264,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.now = options.now ?? Date.now;
     this.maxSteps = options.maxSteps ?? 40;
     this.plannedMaxSteps = options.plannedMaxSteps ?? 80;
+    this.outlineWaitMs = Math.max(0, options.outlineWaitMs ?? 15_000);
     this.maxMs = options.maxMs ?? 15 * 60_000;
     this.browserMs = options.browserMs ?? 30_000;
     this.settleMs = options.settleMs ?? settlePauseMs;
@@ -2758,7 +2768,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         if (run.hold) continue;
         // Plan: one outline, asked for after the first look. It runs beside
         // the first turn, so it adds no wait: the plan comes with a later turn.
-        if (!run.outlined) this.outline(run);
+        if (!run.outlined) run.outlining = this.outline(run);
         if (run.focusClicks) {
           if (focusMovedToField(run.observation, run.focusClicks)) {
             if (run.stuck && run.stuck.clicked > 0) delete run.stuck;
@@ -2782,6 +2792,21 @@ export class ComputerWorker implements DesktopExecutorPort {
         this.notLoaded(run);
         this.remind(run);
         const planFrom = this.now();
+        // Plan: a goal that names two apps or more waits for its outline once,
+        // before its first turn. With no plan, the first turns kept nothing
+        // that they read, and went from one app to the other and back 3 to 5
+        // times until the plan came. Stop and a hold do not wait for it.
+        const outlining = run.outlining;
+        delete run.outlining;
+        if (
+          outlining &&
+          !run.plan &&
+          namesTwoApps(run.goal, run.observation?.app.name)
+        ) {
+          const waited = await this.rest(run, this.outlineWaitMs, outlining);
+          if (waited === "over") return;
+          if (waited === "held") continue;
+        }
         // How many times the person had added words when the planner began.
         // A yes that was kept for an action that was not sent does not
         // outlive words that came after it: the same action asks again.
@@ -3699,9 +3724,14 @@ export class ComputerWorker implements DesktopExecutorPort {
   }
   /**
    * A pause with no command and no input. Stop and the end of the request
-   * end it at once, and a hold wakes it.
+   * end it at once, and a hold wakes it. With `until`, it ends as well when
+   * that settles, whatever it settles with.
    */
-  private async rest(run: Run, ms: number): Promise<"over" | "held" | "done"> {
+  private async rest(
+    run: Run,
+    ms: number,
+    until?: Promise<unknown>,
+  ): Promise<"over" | "held" | "done"> {
     if (this.halted(run)) return "over";
     let timer: NodeJS.Timeout | undefined;
     let wake = () => {};
@@ -3720,6 +3750,14 @@ export class ComputerWorker implements DesktopExecutorPort {
           );
           timer.unref();
         }),
+        ...(until
+          ? [
+              until.then(
+                () => "done" as const,
+                () => "done" as const,
+              ),
+            ]
+          : []),
       ]);
       if (this.halted(run)) return "over";
       return came === "done" && !run.hold ? "done" : "held";
@@ -4752,9 +4790,11 @@ export class ComputerWorker implements DesktopExecutorPort {
    * the first turn after it arrived. It never ends the request: a failure,
    * an answer that cannot be used or no time leaves it with no plan, and it
    * is not asked again. Stop, the end of the request and its time limit
-   * abort its call. Not for a request that only opens an address.
+   * abort its call. Not for a request that only opens an address. What it
+   * gives back settles once the plan is kept or the call failed. It is
+   * undefined when no outline was asked for.
    */
-  private outline(run: Run) {
+  private outline(run: Run): Promise<void> | undefined {
     run.outlined = true;
     const planner = this.options.planner;
     if (!planner.outline || directAddress(run.goal)) {
@@ -4793,7 +4833,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       return;
     }
     run.opening.asked();
-    made.then(
+    return made.then(
       (outline) => {
         over();
         // A request that ended or changed takes no plan from an old call.

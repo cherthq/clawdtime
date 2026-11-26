@@ -627,6 +627,17 @@ confirm it, report it. The code is in `connectors/computer/plan.ts`.
    abort as every other call to the model. It gets a small picture: the
    elements carry the names. The outline also holds `say`, the first line for
    the person (see [What you hear first, and on the way](#what-you-hear-first-and-on-the-way)).
+   A goal that names two apps or more waits for its outline before its first
+   turn, for at most 15 seconds (`namesTwoApps` in `plan.ts`). The outline
+   came after the second to fourth turn of the planner. A turn with no plan
+   can keep no fact, so on a goal that reads one app and writes in another,
+   the first turns went from one app to the other and back 3 to 5 times
+   until the plan came. An app counts when the goal names the app in front,
+   names a common app of a Mac (Notes, Mail, Calendar), puts a name before
+   "app", or puts a name with a capital after "in", "into", "open", "using" or
+   "from the". A month or a day of the week is no app. The reading only
+   orders the work: a goal that it reads wrong waits a few seconds for nothing,
+   or does not wait, as before. Stop and a hold do not wait for the outline.
 2. With every turn after that, the planner gets the plan: each subgoal as
    open, done with what the screen showed, or skipped with why, and the one to
    work on now.
@@ -681,6 +692,7 @@ the same rules.
 | Bound                                                  | Value                     |
 | ------------------------------------------------------ | ------------------------- |
 | Subgoals of an outline, or of a new rest               | 8                         |
+| Wait of the first turn for the outline, two apps       | 15 seconds                |
 | Subgoals of one request in all                         | 12                        |
 | Revisions of the rest of the plan                      | 3                         |
 | `plan_update` calls in one request                     | 16                        |
