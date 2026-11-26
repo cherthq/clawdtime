@@ -2039,7 +2039,8 @@ The journal is `computer/journal.json` in the state folder. The folder and the
 file are for their owner only. It keeps the last 30 requests:
 
 - The request in your words, cut to 300 characters. A request that holds a
-  credential is replaced by a marker.
+  credential is replaced by a marker. A sign-in shorthand counts as one: "log
+  in to shop.example as sam with hunter22", "login: sam pass: hunter22".
 - What you said for the request while it ran, each cut to 300 characters, with
   the time. These are in `computer/guidance.json`, beside the journal, for as
   long as the journal keeps their request (pruned when old requests drop from
@@ -2050,7 +2051,8 @@ file are for their owner only. It keeps the last 30 requests:
   as before.
 - Its state and one word for how it got there: `done`, `stopped`, `restart`.
 - Each step as the kind of action, the name of the element and one word for
-  the outcome. For a link it keeps the site, not the path.
+  the outcome. For a link it keeps the site, not the path. A name that looks
+  like a secret ("token ghp_...") is not kept: the step keeps an empty name.
 
 The journal never holds an image, typed text, the text of a page, a question,
 an answer or the planner's words. With memory on, memory keeps the notes of

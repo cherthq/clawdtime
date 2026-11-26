@@ -180,6 +180,16 @@ const strictSecretShapes = [
     String.raw`\b(?:type|enter|input|put|paste|write|key|fill|use)(?:\s+in)?\s+(?:(?:the|my)\s+)?(?!${notAValue})(?:"[^"\n]+"|'[^'\n]+'|\S+)\s+(?:in|into|inside|on|for|as|at|to)\s+(?:(?:the|my|your|a|an|this|that)\s+)?(?:[A-Za-z0-9'_-]+\s+){0,2}?${secretNoun}s?\b`,
     "i",
   ),
+  // A sign-in shorthand: "log in to shop.example as sam with hunter22". The
+  // value is quoted, a number of 4 digits or more, or a word with a letter
+  // and a digit or a symbol, and no email address: "as sam with Google" and
+  // "with the email ada@example.com" are plain sign-ins.
+  new RegExp(
+    String.raw`\b(?:log|sign)\s*(?:in|into|on)\b(?:\s+(?:to|at|on)\b)?(?:\s+(?!as\b)\S+){0,3}\s+as\s+\S+\s+(?:with|using|and)\s+(?:"[^"\n]+"|'[^'\n]+'|\d{4,}(?![A-Za-z0-9])|(?![^\s@]+@[^\s@]+\.)(?=[^\s]*[A-Za-z])(?=[^\s]*[\d!@#$%^&*_+=~/-])[^\s]{4,64})`,
+    "i",
+  ),
+  // A name and a password in a pair: "login: sam pass: hunter22".
+  /\b(?:user(?:name)?|login|account|email)\s*[:=]?\s*\S+[\s,;/]+pass\s*[:=]\s*\S+/i,
   // A secret field filled with a value: "fill the password field with hunter22".
   new RegExp(
     String.raw`\bfill\s+(?:in\s+|out\s+)?(?:(?:the|my|your|a|an)\s+)?(?:[A-Za-z0-9'_-]+\s+){0,2}?${secretNoun}s?(?:\s+(?:field|box|input|slot|entry))?\s+with\s+(?:(?:the|my)\s+)?(?!${notAValue})\S+`,
@@ -620,7 +630,13 @@ export class ComputerJournal {
         {
           n: (request.steps.at(-1)?.n ?? 0) + 1,
           kind: clean(step.kind, 40),
-          target: clean(step.target, 80),
+          // A name that looks like a secret is not kept: the step says only
+          // what kind of action it was.
+          target:
+            looksSecretStrict(step.target) ||
+            looksSecretStrict(clean(step.target, 80))
+              ? ""
+              : clean(step.target, 80),
           outcome: clean(step.outcome, 40),
           at: this.now(),
         },

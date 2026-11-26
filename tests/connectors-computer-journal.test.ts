@@ -341,6 +341,49 @@ describe("the journal of computer requests", () => {
       expect(looksSecretStrict(sample), sample).toBe(false);
   });
 
+  it("catches a sign-in shorthand that carries a password, and lets plain sign-ins through", () => {
+    for (const sample of [
+      "log in to shop.example as sam with hunter22",
+      "Log into shop.example as sam with hunter22!",
+      "sign in to the shop as sam using hunter22",
+      "login as sam@example.com with Stonepad99",
+      "sign in as sam with 482913",
+      'log in to shop.example as sam with "blue whale"',
+      "login: sam pass: hunter22",
+      "user sam, pass: hunter22",
+    ])
+      expect(looksSecretStrict(sample), sample).toBe(true);
+    for (const sample of [
+      "Sign in to Ledger with the email ada@example.com, I type the password myself",
+      "Log in to shop.example as sam with my password",
+      "Sign in to shop.example as sam with Google",
+      "log in as sam with the code from my phone",
+      "Sign in as sam with sam@example.com",
+      "Log in as the admin with the passkey",
+      "sign in as guest with Face ID",
+      "log in as sam and check the cart",
+      "open the login page and pass the cookie banner",
+    ])
+      expect(looksSecretStrict(sample), sample).toBe(false);
+  });
+
+  it("drops the name of a step when it looks like a secret", () => {
+    const journal = new ComputerJournal(root(), () => 1);
+    journal.open("r1", "Copy the token");
+    for (const target of [
+      "token ghp_abcdef0123456789abcdef",
+      "password is hunter22",
+      "Save",
+    ])
+      journal.step("r1", { kind: "click_element", target, outcome: "ok" });
+    expect(journal.get("r1")!.steps.map((step) => step.target)).toEqual([
+      "",
+      "",
+      "Save",
+    ]);
+    expect(readFileSync(journal.file, "utf8")).not.toMatch(/ghp_|hunter22/);
+  });
+
   it("cuts a long request, a long name and control characters", () => {
     const journal = new ComputerJournal(root(), () => 1);
     journal.open("r1", `Open\n${"x".repeat(600)}`);

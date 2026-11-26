@@ -5895,6 +5895,26 @@ describe("the browser", () => {
   });
 });
 
+describe("the journal of a step", () => {
+  it("keeps no element name that looks like a secret", async () => {
+    const secret = observation([
+      element(1, { title: "token ghp_abcdef0123456789abcdef" }),
+    ]);
+    const { worker, journal, planner } = setup([click, done], {
+      screens: [secret],
+    });
+    await worker.submit("r1", "Copy it");
+    await worker.idle();
+    expect(journal.get("r1")!.steps[0]).toMatchObject({
+      kind: "click_element",
+      target: "",
+      outcome: "ok",
+    });
+    expect(JSON.stringify(journal.get("r1"))).not.toContain("ghp_");
+    expect(JSON.stringify(planner.inputs[1]!.history)).not.toContain("ghp_");
+  });
+});
+
 describe("a request that the owner put off to a time", () => {
   it("reads a routine's request as put off: every action of the table asks", async () => {
     const reply = observation([element(1, { title: "Reply" })]);
