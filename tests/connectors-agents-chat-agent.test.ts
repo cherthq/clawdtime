@@ -293,6 +293,7 @@ describe("the chat agent acts first", () => {
         id: "t",
         owner: "",
         ownerAt: now,
+        withheld: false,
         answered: false,
         offered: "",
         said: [],
@@ -335,6 +336,7 @@ describe("the chat agent acts first", () => {
         id: "t",
         owner: "",
         ownerAt: now,
+        withheld: false,
         answered: false,
         offered: "",
         said: [],
@@ -1202,6 +1204,38 @@ describe("holes that a review found", () => {
     expect(two.text).toMatch(
       /^The call ended before this action could be completed/,
     );
+  });
+
+  it("keeps a code that answers ClawdTime's own question out of the model, the graph and the engine", async () => {
+    const computer = new FakeComputer()
+      .run("log me into shop.example")
+      .ask("question", "What's the code they texted you?");
+    const model = scriptedModel([
+      { calls: [call("answer_question", { answer: "" })] },
+      { text: "Type the code on the Mac yourself." },
+    ]);
+    const { agent } = setup({ computer, model });
+    await agent.answer(
+      [
+        {
+          role: "user",
+          text: "log me into shop.example",
+          at: now - 3000,
+          via: "chat",
+        },
+        {
+          role: "assistant",
+          text: "What's the code they texted you?",
+          at: now - 2000,
+          via: "chat",
+        },
+      ],
+      "482913",
+      "chat",
+    );
+    expect(sentText(model.requests)).not.toContain("482913");
+    expect(computer.answers).toEqual([]);
+    expect(readFileSync(agent.graph.file, "utf8")).not.toContain("482913");
   });
 
   it("keeps a secret out of the model when the owner splits it over two messages", async () => {

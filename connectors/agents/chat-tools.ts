@@ -82,6 +82,8 @@ export interface ChatTurn {
   owner: string;
   /** When those words came. A question asked after them is not theirs to answer. */
   ownerAt: number;
+  /** Those words held a secret: they go to no model, no job and no engine. */
+  withheld: boolean;
   /** Those words answered a question already: one message answers one question. */
   answered: boolean;
   /** The words of ClawdTime's own offer of a next step, when the owner's newest words said yes to it. */
@@ -655,6 +657,12 @@ export function chatGate(
         };
     }
     if (call.name === "answer_question") {
+      if (turn.withheld)
+        return {
+          allow: false,
+          reason:
+            "The owner's newest message held a password, a key or a code. It is never passed on, also not as an answer: the owner types it on the Mac themselves.",
+        };
       if (turn.answered)
         return {
           allow: false,

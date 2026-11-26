@@ -1753,7 +1753,11 @@ model changes:
   offer.
 - No argument, tool result or message that holds a password, a key or a code
   goes to the model or to memory, also when it is split over two messages ("my
-  bank password is", then the value).
+  bank password is", then the value). A short value that you type right after
+  ClawdTime's own question for a password, a code or a PIN ("What's the code
+  they texted you?", then "482913") is held back too, unless that question
+  offered the value as a choice. Such a message answers no question of a task
+  or an agent: you type the value on the Mac yourself.
 - After a call ends, nothing more starts from it. A message of a call never
   joins the turn of another message: it waits and takes its own.
 - Words for a task that runs are your own words, and the task goes on with
