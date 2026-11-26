@@ -472,6 +472,45 @@ describe("one definition of arrived", () => {
     },
   );
 
+  it("accepts an app in front that shows only a sheet or no window yet, and never another app with its sheet", async () => {
+    // The hands verified the process in front. A sheet or a window that is
+    // still opening has no title: a request that names no window needs none.
+    const open: Action = { kind: "open_app", name: "Stonepad" };
+    const sheetOnly = (name: string, bundleId: string) =>
+      observation([element(1, { role: "AXSheet", title: "Syncing notes" })], {
+        surfaceEpoch: 4,
+        app: { name, bundleId, window: "" },
+      });
+    const accepted = setup(
+      [open, done],
+      [observation([], { surfaceEpoch: 1 })],
+    );
+    accepted.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? {
+            observation: sheetOnly("Stonepad", "com.example.stonepad"),
+            resolvedBundleId: "com.example.stonepad",
+          }
+        : undefined;
+    await accepted.worker.submit("sheet", "Open Stonepad");
+    await accepted.worker.idle();
+    expect(accepted.worker.status().state).toBe("completed");
+    expect(accepted.journal.unresolved()).toBeNull();
+    const wrong = setup([open, done], [observation([], { surfaceEpoch: 1 })]);
+    wrong.hands.answer = (c) =>
+      c.kind === "open_app"
+        ? {
+            observation: sheetOnly("Riverchat", "com.example.riverchat"),
+            resolvedBundleId: "com.example.stonepad",
+          }
+        : undefined;
+    await wrong.worker.submit("wrong", "Open Stonepad");
+    await wrong.worker.idle();
+    expect(wrong.worker.status().state).toBe("uncertain");
+    expect(wrong.journal.unresolved()?.reason).toBe("transition_unknown");
+    expect(wrong.hands.sent).toEqual([open]);
+  });
+
   it("compares the app in front with the app that was found, not with the name", () => {
     const open = { kind: "open_app", name: "iTerm" } as const;
     const seen = front("iTerm2", "com.googlecode.iterm2");

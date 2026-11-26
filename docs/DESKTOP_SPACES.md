@@ -129,12 +129,25 @@ A request has one of two meanings, and "arrived" follows it.
 **Only an app is named** ("open Chrome", "go to Slack"). The panel sends one
 open request to macOS, as a click on the app's icon in the Dock does. A running
 app comes forward with the window that it chooses, and an app that does not run
-starts. Arrived means: that app is in front. The panel reads which app is in
-front for up to 6 seconds, then takes the picture and the tree with the same
-app in front before and after. The number of displays, the number of windows of
-the app and a window that lies partly off the screen do not matter. An app that
-restored two windows is in front all the same. Only an app that is not in front
-when the wait is over leaves the result unknown.
+starts. Arrived means: a process of that app is in front, with the bundle
+identifier that the name stood for (`DesktopArrival.appArrival`). The panel
+reads this for up to 6 seconds. An app in front with a window or a sheet on the
+screen has arrived at once: a sync sheet or a welcome sheet with no standard
+window counts. An app in front with no window yet gets 1.5 seconds for its
+window to open, so that the picture shows it. After that it has arrived
+without one, because its window may be on another desktop. macOS may still
+list the app before it in front. Then the named app is in front only when it
+answers that it is the active app, the listed app answers that it is not, and
+the top window on the screen is the named app's own window or sheet. A window
+alone never counts, and an app of another bundle identifier never does. The
+panel takes the picture and the tree with that process in front, and reads it
+again after them. The number of displays, the number of windows of the app and
+a window that lies partly off the screen do not matter. An app that restored
+two windows is in front all the same. Only an app that is not in front when
+the wait is over leaves the result unknown. Each such wait writes one line to
+the panel's log (category `desktop-transition`) with counts only: the reads
+with another app in front, with the app in front with or without a window, and
+how the wait ended.
 
 **A window title is named.** The panel selects the one standard AX window with
 that title, restores it if minimized, and requests supported activation/raise

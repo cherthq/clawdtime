@@ -323,6 +323,11 @@ const menuBarPointPad = 4;
 /** What the planner reads in the line of the last held step, after the screen settled. */
 const settledNote =
   "Then the worker waited with no input until the screen was still. Choose again from the new look: the target may be in another place now.";
+/** What the planner reads after a wait for an app that came forward just before (`waitForContent`). */
+const loadedNote =
+  "The app came forward just before and its screen was still changing, so the worker waited with no input until it was still. Choose again from the new look: what was missing may show now.";
+const loadHeldNote =
+  "The app came forward just before, and the worker's wait for its screen was held. Choose again from the new look.";
 /** Waits after a planner call that failed for a short time, in one request. */
 const transientLimit = 3;
 /** The pause after such a failure, and the most that the planner may ask for. */
@@ -355,6 +360,18 @@ const progressRefusal = "Canceled. The task is not finished.";
 /** The digest that a wait for the screen to settle compares: the surface, the app, the window and the elements, with no picture. */
 const settlePrint = (seen: Observation | null) =>
   seen && `${seen.surfaceEpoch ?? "-"}|${screenPrint(seen, null, false)}`;
+/**
+ * The newest look of a wait shows another screen than the look before it:
+ * another surface, a picture that changed in more than a few cells, or other
+ * elements when there is no picture to compare. No newest look: no change.
+ */
+const changedLook = (before: Observation | null, after: Observation | null) => {
+  if (!after) return false;
+  if (!before || !sameSurface(before, after)) return true;
+  return (
+    visuallyChanged(before, after) ?? settlePrint(before) !== settlePrint(after)
+  );
+};
 /** The digest that the progress guard compares: the surface and the screen with its picture. */
 const progressPrint = (seen: Observation | null) =>
   seen && `${seen.surfaceEpoch ?? "-"}|${screenPrint(seen, null, true)}`;
@@ -770,6 +787,12 @@ interface Run {
   quitNoted?: boolean;
   /** The bundle identifier that open_app found, by the name as it was said (`quit-done.ts`). */
   opened?: Record<string, string>;
+  /**
+   * An app that open_app brought forward in this request, with no input
+   * since: what it shows may still load (`waitForContent`). Any input, and
+   * the one wait for it, end this.
+   */
+  loading?: boolean;
   /** Finds steps that go in circles. One for each request. */
   progress: ProgressGuard;
   /** How many of the person's additions the progress guard knows of. */
@@ -783,6 +806,13 @@ interface Run {
     /** The row was of mixed reasons, with this many held steps. */
     mixed: boolean;
     total: number;
+    /**
+     * A wait for an app that just came forward (`waitForContent`), not the
+     * end of a held row: a screen that never settles ends nothing.
+     */
+    content?: boolean;
+    /** The newest look of the wait. */
+    seen?: Observation;
   };
   /** Waits for the screen to settle in this request. */
   recoveries: number;
@@ -3085,6 +3115,23 @@ export class ComputerWorker implements DesktopExecutorPort {
       }
       case "give_up": {
         const reason = clean(checked.reason, 900);
+        // A give_up right after open_app, before any input in the app, may
+        // read a screen that still loads. The worker waits for it to settle
+        // first, once. A give_up that only the person can change still ends
+        // at once.
+        if (!forThePerson.test(reason)) {
+          const waited = await this.waitForContent(run);
+          if (waited === "over") return;
+          if (waited === "changed" || waited === "held")
+            return this.note(
+              run,
+              action,
+              why,
+              "",
+              `not ended: ${waited === "held" ? loadHeldNote : loadedNote}`,
+              "waited",
+            );
+        }
         // The first give_up goes back to the planner with the ways that it
         // did not try, unless only the person can change what stands in
         // the way. Nothing is sent for it.
@@ -3374,6 +3421,8 @@ export class ComputerWorker implements DesktopExecutorPort {
   private wentOut(run: Run) {
     run.sentInput = true;
     run.stepInput = true;
+    // What the app shows now may come of the input, not of its start.
+    delete run.loading;
   }
   /** What is in front, for the other ways that a note names. */
   private context(run: Run): ProgressContext {
@@ -3579,7 +3628,9 @@ export class ComputerWorker implements DesktopExecutorPort {
    * pauses repeat here, never an input. A screen that never settles ends the
    * request, as the row would have.
    */
-  private async settle(run: Run): Promise<"over" | "held" | "settled"> {
+  private async settle(
+    run: Run,
+  ): Promise<"over" | "held" | "settled" | "unsettled"> {
     const due = run.settle!;
     delete run.settle;
     run.recoveries++;
@@ -3612,6 +3663,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       const obs = handed.result?.ok
         ? (handed.result.observation ?? null)
         : null;
+      if (obs) due.seen = obs;
       if (visual) {
         const diff =
           obs !== null && lastObs !== null && sameSurface(lastObs, obs)
@@ -3656,6 +3708,9 @@ export class ComputerWorker implements DesktopExecutorPort {
     this.mark(run, settled ? "settled" : "unsettled", this.now() - from);
     run.fresh = false;
     run.page = null;
+    // A wait for an app that just came forward ends nothing, and says nothing
+    // in the line of a held step: its caller reads what the wait saw.
+    if (due.content) return settled ? "settled" : "unsettled";
     if (!settled) {
       this.finish(
         run,
@@ -3673,6 +3728,34 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (run.stuck && run.stuck.sent === 0 && run.stuck.clicked === 0)
       delete run.stuck;
     return "settled";
+  }
+  /**
+   * An app that open_app brought forward can take seconds to show what it
+   * holds: a news feed, the page of a store. When the planner, before any
+   * input in that app, waits or gives up, the worker waits once more with no
+   * input, until the screen settles (the wait of a held row, within its
+   * bounds and its number in one request). "changed": the newest look shows
+   * another screen than the one that the planner chose from, so the planner
+   * chooses again. "still": the screen did not change in the wait. "none":
+   * no such wait was due.
+   */
+  private async waitForContent(
+    run: Run,
+  ): Promise<"over" | "held" | "changed" | "still" | "none"> {
+    if (!run.loading || run.recoveries >= this.settleLimit) return "none";
+    delete run.loading;
+    const before = run.observation;
+    const due: NonNullable<Run["settle"]> = {
+      reason: "",
+      surface: "window",
+      mixed: false,
+      total: 0,
+      content: true,
+    };
+    run.settle = due;
+    const waited = await this.settle(run);
+    if (waited === "over" || waited === "held") return waited;
+    return changedLook(before, due.seen ?? null) ? "changed" : "still";
   }
   /** A reading of the page that changes nothing, for a wait. Null when it failed. */
   private async readQuietly(run: Run): Promise<BrowserPage | null | "over"> {
@@ -4091,6 +4174,8 @@ export class ComputerWorker implements DesktopExecutorPort {
     // change is seen. For open_app, compare the front without raw picture bytes.
     if (handed.result?.ok && !sendsNoInput(send)) {
       this.wentOut(run);
+      // The app came forward: what it shows may still load (`waitForContent`).
+      if (send.command.kind === "open_app") run.loading = true;
       delete run.grace;
       if (ready.signature !== null) delete run.focusClicks;
       if (
@@ -4208,6 +4293,23 @@ export class ComputerWorker implements DesktopExecutorPort {
       );
     }
     if (handed.result?.ok) run.tried = "sent";
+    // The planner waits for an app that came forward just before: after its
+    // wait the worker goes on looking, with no input, until two looks agree,
+    // so the next look shows what the app loaded.
+    if (send.command.kind === "wait" && handed.result?.ok && run.loading) {
+      const waited = await this.waitForContent(run);
+      if (waited === "over") return;
+      return this.note(
+        run,
+        action,
+        why,
+        ready.target,
+        waited === "changed" || waited === "still"
+          ? "ok. Then the worker waited with no input until the screen was still: the next look shows what the app loaded."
+          : "ok",
+        "ok",
+      );
+    }
     this.note(run, action, why, ready.target, ...outcome(handed));
   }
 

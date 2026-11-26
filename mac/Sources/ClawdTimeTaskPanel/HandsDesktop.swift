@@ -540,11 +540,16 @@ import TaskPanelCore
     let wait = DesktopAppWait(at: now)
     let options = NSWorkspace.OpenConfiguration()
     options.activates = true
+    let usesOverlay = DesktopArrival.usesScreenshotOverlay(bundleID: bundleID)
+    let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter { !$0.isTerminated }.isEmpty
     // What macOS answers is not the evidence. The app in front (or, for Screenshot,
     // the visible screencaptureui overlay toolbar window) is.
     NSWorkspace.shared.openApplication(at: url, configuration: options) { _, _ in }
     phase(.waiting)
-    let usesOverlay = DesktopArrival.usesScreenshotOverlay(bundleID: bundleID)
+    if !usesOverlay {
+      return await appArrival(bundleID: bundleID, wasRunning: wasRunning, allowed: allowed, observer: observer, pointer: pointer,
+                              ready: { ready = true }, unknown: unknown)
+    }
     while true {
       if await allowed() != nil { return unknown }
       let snapshot = usesOverlay
@@ -589,6 +594,63 @@ import TaskPanelCore
         case .notArrived: break
         }
         if wait.over(at: now) { return unknown }
+      }
+      try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+  }
+
+  /// The wait of `bringForward` for an app named alone, after its one open request went out. Each read names the
+  /// process in front (`DesktopArrival.appArrival`): the process and the bundle identifier decide, and a window or a
+  /// sheet of it on the screen is taken into the picture when it comes within `DesktopAppArrivalWait.windowGrace`.
+  /// The picture and the tree are taken with that process in front, and it is read again after them. Every
+  /// failure here is unknown: the request is out. One log line with bounded machine facts says how it ended.
+  private func appArrival(bundleID: String, wasRunning: Bool, allowed: () async -> HandError?, observer: HandsObserver,
+                          pointer: () -> CGPoint, ready: () -> Void, unknown: Result<Arrival, HandError>) async -> Result<Arrival, HandError> {
+    let began = now
+    var wait = DesktopAppArrivalWait(at: began)
+    var samples = 0, otherFront = 0, noFront = 0, inFront = 0, shown = 0, claimed = 0, looks = 0
+    func log(_ outcome: String) {
+      // Only counts and fixed words: no app, window, title, frame or request text.
+      let summary = "open_app arrival running=\(wasRunning) samples=\(samples) otherFront=\(otherFront) noFront=\(noFront) inFront=\(inFront) shown=\(shown) claimed=\(claimed) looks=\(looks) outcome=\(outcome) elapsedMs=\(Int(max(0, now - began) * 1000))"
+      Self.transitionLog.notice("\(summary, privacy: .public)")
+    }
+    func ended(_ outcome: String) -> Result<Arrival, HandError> { log(outcome); return unknown }
+    while true {
+      if let refusal = await allowed() { return ended("refused_\(refusal.rawValue)") }
+      let sighting = await DesktopAX.appSighting(bundleID: bundleID)
+      let arrival = DesktopArrival.appArrival(resolved: bundleID, sighting: sighting.evidence)
+      samples += 1
+      switch arrival {
+      case .absent: if sighting.evidence.front == nil { noFront += 1 } else { otherFront += 1 }
+      case .inFront: inFront += 1
+      case .shown(let pid): shown += 1; if sighting.evidence.front?.pid != pid { claimed += 1 }
+      }
+      switch wait.sample(arrival, at: now) {
+      case .expired: return ended("expired")
+      case .waiting: break
+      case .arrived(let pid, _):
+        looks += 1
+        // macOS lists this process in front: the look reads the app in front, as every look does. Otherwise the
+        // process itself said that it is active, and its window is the top one: the look reads that process.
+        let listed = sighting.evidence.front?.pid == pid
+        let read = await observer.observe(image: true, elements: true, accessibility: true, pointer: pointer(),
+                                          appOverride: listed ? nil : sighting.apps[pid])
+        if let refusal = await allowed() { return ended("refused_\(refusal.rawValue)") }
+        let confirm = await DesktopAX.appSighting(bundleID: bundleID)
+        if case .success(let seen) = read, DesktopArrival.sameApp(resolved: bundleID, front: seen.app.bundleId),
+          DesktopArrival.appArrival(resolved: bundleID, sighting: confirm.evidence).pid == pid {
+          // This result permits no input. The worker looks again before it acts.
+          invalidate()
+          ready(); phase(.ready)
+          log(listed ? "verified_listed" : "verified_claimed")
+          let arrived = Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app, elements: seen.elements,
+            image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: surfaceEpoch)
+          return .success(Arrival(observation: arrived, bundleID: DesktopArrival.identity(bundleID)))
+        }
+        if wait.over(at: now) {
+          if case .success = read { return ended("front_changed") }
+          return ended("look_failed")
+        }
       }
       try? await Task.sleep(nanoseconds: 150_000_000)
     }
@@ -967,6 +1029,52 @@ import TaskPanelCore
         overlayWindows: overlayWindows,
         display: display)
       return (evidence, appsByPID)
+    }
+    /// One read for the wait of an app named alone (`DesktopArrival.appArrival`): the app that macOS lists in front,
+    /// by the rule of every look; the processes of the named app; the windows on the screen. Only when macOS does
+    /// not list the named app in front are the processes asked whether they are the active app: the named app's
+    /// processes and the app that macOS lists. Those answers wait on the apps, so they are read off the main thread.
+    @MainActor static func appSighting(bundleID: String) async -> (evidence: DesktopArrival.AppSighting, apps: [Int: NSRunningApplication]) {
+      let own = Int(getpid())
+      let workspace = NSWorkspace.shared
+      let frontmost = workspace.frontmostApplication, menuBar = workspace.menuBarOwningApplication
+      let subject = OwnWindows.subject(front: frontmost.map { Int($0.processIdentifier) },
+                                       menuBar: menuBar.map { Int($0.processIdentifier) }, own: own)
+      let listed = [frontmost, menuBar].compactMap { $0 }.first { Int($0.processIdentifier) == subject }
+      let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter { !$0.isTerminated }.prefix(8)
+      let apps = Dictionary(running.map { (Int($0.processIdentifier), $0) }, uniquingKeysWith: { first, _ in first })
+      let front = listed.map { DesktopArrival.RunningApp(pid: Int($0.processIdentifier), bundleID: $0.bundleIdentifier) }
+      let instances = running.map { DesktopArrival.RunningApp(pid: Int($0.processIdentifier), bundleID: $0.bundleIdentifier) }
+      let listedIsNamed = front.map { apps[$0.pid] != nil && DesktopArrival.sameApp(resolved: bundleID, front: $0.bundleID) } ?? false
+      let asked = listedIsNamed ? [] : Array(apps.keys)
+      let frontPID = listedIsNamed ? nil : front?.pid
+      let read = await Task.detached(priority: .userInitiated) { () -> (claims: [Int: Bool], front: Bool?, windows: [DesktopArrival.OverlayWindow], display: CGRect) in
+        var claims: [Int: Bool] = [:]
+        for pid in asked { if let claim = DesktopAX.claimsFront(pid_t(pid)) { claims[pid] = claim } }
+        return (claims, frontPID.flatMap { DesktopAX.claimsFront(pid_t($0)) }, DesktopAX.screenWindows(own: own), DesktopAX.activeDisplayBounds())
+      }.value
+      return (DesktopArrival.AppSighting(front: front, frontClaims: read.front, apps: Array(instances), claims: read.claims,
+                                         windows: read.windows, display: read.display), apps)
+    }
+    /// The process answers itself whether it is the active app (Accessibility `AXFrontmost`). Nil with no answer.
+    static func claimsFront(_ pid: pid_t) -> Bool? {
+      guard pid > 0, pid != getpid() else { return nil }
+      return value(app(pid), kAXFrontmostAttribute) as? Bool
+    }
+    /// The windows on the screen, front to back, without ClawdTime's own, in the points of the window list. A row
+    /// that names no owner, level or frame empties the list: a window that cannot be placed could be the top one.
+    static func screenWindows(own: Int) -> [DesktopArrival.OverlayWindow] {
+      guard let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return [] }
+      var windows: [DesktopArrival.OverlayWindow] = []
+      for row in rows {
+        guard let owner = row[kCGWindowOwnerPID as String] as? Int, let layer = row[kCGWindowLayer as String] as? Int,
+          let raw = row[kCGWindowBounds as String] as? NSDictionary, let bounds = CGRect(dictionaryRepresentation: raw) else { return [] }
+        if owner == own { continue }
+        windows.append(DesktopArrival.OverlayWindow(pid: owner, layer: layer, frame: bounds, alpha: row[kCGWindowAlpha as String] as? Double,
+                                                    onScreen: (row[kCGWindowIsOnscreen as String] as? Bool) ?? true))
+      }
+      return windows
     }
     private static func activeDisplayBounds() -> CGRect {
       var count: UInt32 = 0
