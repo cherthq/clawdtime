@@ -81,10 +81,22 @@ Each file is for you only (mode 600), in a folder for you only (mode 700).
 `line/.env.local` is mode 600 in the `line/` folder. A file that other users
 can read, a link, or a file with a second name is never changed: the step says
 so and what to run. `CLAWDTIME_CONFIG_HOME` and `CLAWDTIME_DESKTOP_STATE` move
-these folders, as they move the rest of ClawdTime's state. The text channel
-reads your number and the key from these files when its environment does not
-have them. A variable of the environment wins. When the computer worker needs
-you, it texts only the number that you allowed in step 7.
+these folders, as they move the rest of ClawdTime's state.
+
+The text channel reads the key from `chert-key.json` when its environment does
+not have one. A key in the environment wins. Your number works the other way:
+the number in `owner.json` wins over `CLAWDTIME_OWNER_PHONE`.
+
+- A call through the Chert Calls API needs `owner.json` with your yes from
+  step 7.
+- A text from the computer worker goes only to the number in `owner.json`, and
+  only with your yes. Without `owner.json`, it goes to `CLAWDTIME_OWNER_PHONE`.
+- `clawdtime texts run` uses the same number as the computer worker.
+- When `owner.json` cannot be read (a wrong mode, a link or bad JSON), no text
+  goes out and no call goes through the Chert Calls API. Nothing falls back to
+  `CLAWDTIME_OWNER_PHONE`. `clawdtime texts check` and
+  `clawdtime computer doctor` say why. Look at the file, then run
+  `clawdtime connect`.
 
 Run it again at any time. It goes on where it stopped:
 
@@ -372,8 +384,10 @@ A link that a job made arrives as text, so you can open it on your phone.
    once. `chert whoami --json` prints the project id as `project_id`.
 2. On the messages page of your project, https://app.trychert.com/imessage,
    turn off joining by code, so no other phone can join your line.
-3. Start the channel with the three values in its environment. Keep the key out
-   of files that you share and out of your shell history:
+3. Start the channel. After `clawdtime connect`, it takes the key and your
+   number from `chert-key.json` and `owner.json`. Without them, give it the
+   three values in its environment. Keep the key out of files that you share
+   and out of your shell history:
 
 ```sh
 export CHERT_API_KEY=...            # the project API key
@@ -388,11 +402,14 @@ Run it in the folder that new coding sessions must work in.
 
 What to know:
 
+- Your number is the one in `owner.json`. Only without `owner.json` is it
+  `CLAWDTIME_OWNER_PHONE`. When `owner.json` cannot be read, the channel does
+  not start and says why. It never falls back to `CLAWDTIME_OWNER_PHONE`.
 - A text counts when it comes from a phone that is joined to your project and
-  whose number ends with the last four digits of `CLAWDTIME_OWNER_PHONE`.
-  Answers go only to that number. The service gives no more of a sender than
-  those four digits, so the phone list of your project is the real guard: keep
-  it to your own phone.
+  whose number ends with the last four digits of your number. Answers go only
+  to your number. The service gives no more of a sender than those four
+  digits, so the phone list of your project is the real guard: keep it to your
+  own phone.
 - For a second check that ClawdTime holds itself, set `CLAWDTIME_TEXT_WORD` to
   a private word of four letters or more. A text then counts only when it
   starts with that word, and a text without it gets no answer.
@@ -543,6 +560,7 @@ Say it plainly to yourself before you start:
 | `line_in_use` from `chert dev`                                 | Another session holds the line. Stop it there, or wait                              |
 | A job starts but no answer comes                               | Look at its terminal window. `clawdtime jobs` lists every job                       |
 | `clawdtime texts check` is refused                             | Make a new key with read and write access. Check the project id                     |
+| A message says that `owner.json` cannot be used                | Look at the file, then run `clawdtime connect`                                      |
 | "Computer use is off"                                          | `clawdtime computer on`, then start the desktop service again                       |
 | "You moved the mouse or pressed a key, so I paused"            | Say "continue" or "stop". It asks before it sends input while you use the Mac       |
 | A desktop switch is refused                                    | Turn on the two Mission Control shortcuts and give them to the panel (step 7)       |
