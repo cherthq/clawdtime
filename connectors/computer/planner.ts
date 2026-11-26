@@ -1669,6 +1669,7 @@ const planRules: readonly string[] = [
   "plan_update changes only the plan and sends nothing to the Mac. Call it in place of an action: op done when the screen shows the check of the current subgoal, with what on the screen shows it; op skip when it is not needed, with why; op revise, with the new rest of the plan, when the screen shows that the plan was wrong.",
   "Call plan_update together with the next action in the same answer: mark the subgoal done and take the first step of the next one at once. Never two actions in one answer.",
   "When the screen shows something that the person will want (an order number, a name, a link), keep it in facts of plan_update. Never a password, a PIN, a code that the person receives or another secret.",
+  'Before you leave an app, a window or a page, keep in facts what you read there and still need: the next screen will not show it. One fact may hold several short values, such as "Oat milk 2.40; Bread 3.10".',
   ...proactiveRules,
 ];
 

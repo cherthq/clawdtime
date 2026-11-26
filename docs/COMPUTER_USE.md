@@ -680,6 +680,11 @@ The planner's rules for the outline and for each turn with a plan say:
   either: the planner reads it, keeps it and types it itself. The rule that
   said only "a code" made `gpt-6.2-sol` ask the person to type the reference
   of the lease form.
+- Before the planner leaves an app, a window or a page, it keeps in facts
+  what it read there and still needs: the next screen does not show it. One
+  fact may hold several short values. Without this rule, a subgoal "identify
+  the ten receipts" was marked done with no fact, and the planner went back
+  to the first app for every one or two values.
 
 The outline alone also reads two lines on `say`: one line in the language of
 the goal, in the first person and the present tense, about what the planner
