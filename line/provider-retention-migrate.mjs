@@ -132,51 +132,7 @@ class Inspector {
     this.ws.close();
   }
 }
-export async function migrateRetention(configFile, expectedFile) {
-  const expected = privateJSON(expectedFile);
-  const before = describeRetentionTarget(configFile, expected.pid);
-  if (JSON.stringify(before) !== JSON.stringify(expected))
-    throw Error("retention_migration_identity_changed");
-  // SIGUSR1's documented default debugger port only. Never connect to a pre-existing listener.
-  const port = 9229;
-  await assertUnusedPort(port);
-  if (
-    JSON.stringify(describeRetentionTarget(configFile, expected.pid)) !==
-    JSON.stringify(expected)
-  )
-    throw Error("retention_migration_identity_changed");
-  process.kill(expected.pid, "SIGUSR1");
-  let target;
-  for (let i = 0; i < 30; i++) {
-    try {
-      const listeners = listenerPids(port);
-      if (listeners.length !== 1 || listeners[0] !== expected.pid) {
-        await pause(100);
-        continue;
-      }
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
-        signal: AbortSignal.timeout(200),
-      });
-      const list = await response.json();
-      if (Array.isArray(list) && list.length === 1) {
-        target = list[0];
-        break;
-      }
-    } catch {}
-    await pause(100);
-  }
-  if (!target) throw Error("retention_inspector_not_ready");
-  const url = new URL(target.webSocketDebuggerUrl);
-  if (
-    url.protocol !== "ws:" ||
-    url.hostname !== "127.0.0.1" ||
-    url.port !== String(port) ||
-    !/^\/[a-f0-9-]+$/.test(url.pathname)
-  )
-    throw Error("retention_inspector_target_mismatch");
-  const listeners = listenerPids(port);
-  if (listeners.length !== 1 || listeners[0] !== expected.pid)
-    throw Error("retention_inspector_listener_changed");
+async function openInspector(url) {
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -200,30 +156,64 @@ export async function migrateRetention(configFile, expectedFile) {
       { once: true },
     );
   });
-  const inspector = new Inspector(ws);
-  let verified = false;
-  let failure;
+  return new Inspector(ws);
+}
+/** What the migration does to the system. A test replaces parts of it. */
+const system = {
+  describe: describeRetentionTarget,
+  signal: (pid) => process.kill(pid, "SIGUSR1"),
+  listeners: listenerPids,
+  unusedPort: assertUnusedPort,
+  targets: async (port) =>
+    (
+      await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: AbortSignal.timeout(200),
+      })
+    ).json(),
+  connect: openInspector,
+  identity: processIdentity,
+  config: readRetentionConfig,
+  evidence: readRetentionEvidence,
+  realpath: (path) => fs.realpathSync(path),
+  pause,
+};
+export async function migrateRetention(configFile, expectedFile, parts = {}) {
+  const s = { ...system, ...parts };
+  const expected = privateJSON(expectedFile);
+  const before = s.describe(configFile, expected.pid);
+  if (JSON.stringify(before) !== JSON.stringify(expected))
+    throw Error("retention_migration_identity_changed");
+  // SIGUSR1's documented default debugger port only. Never connect to a pre-existing listener.
+  const port = 9229;
+  await s.unusedPort(port);
+  if (
+    JSON.stringify(s.describe(configFile, expected.pid)) !==
+    JSON.stringify(expected)
+  )
+    throw Error("retention_migration_identity_changed");
+  s.signal(expected.pid);
+  // From the signal on, the debugger of the target may be open: it is closed
+  // again on every path, also when a step below fails.
+  let inspector, failure;
   try {
+    const url = await debuggerAddress(s, expected.pid, port);
+    inspector = await s.connect(url);
     const actual = await inspector.evaluate(
       "({pid:process.pid,execPath:process.execPath,version:process.version,argv:process.argv.slice(0,3),debugPort:process.debugPort})",
     );
-    const config = readRetentionConfig(configFile);
-    verified =
-      actual.pid === expected.pid &&
-      processIdentity(expected.pid).startedAt === expected.startedAt;
+    const config = s.config(configFile);
     if (
       actual.pid !== expected.pid ||
       actual.execPath !== expected.execPath ||
       actual.version !== RETENTION_PIN.nodeVersion ||
       actual.argv?.[2] !== "dev" ||
-      fs.realpathSync(actual.argv[1]) !==
+      s.realpath(actual.argv[1]) !==
         join(config.providerRoot, "dist/src/cli/main.js") ||
       actual.debugPort !== port
     )
       throw Error("retention_inspector_process_mismatch");
-    verified = true;
     if (
-      JSON.stringify(describeRetentionTarget(configFile, expected.pid)) !==
+      JSON.stringify(s.describe(configFile, expected.pid)) !==
       JSON.stringify(expected)
     )
       throw Error("retention_migration_identity_changed");
@@ -238,31 +228,100 @@ export async function migrateRetention(configFile, expectedFile) {
       result.capability !== "clawdtime-retention-v1"
     )
       throw Error("retention_guard_not_acknowledged");
-    readRetentionEvidence(configFile, expected.pid);
+    s.evidence(configFile, expected.pid);
   } catch (error) {
     failure = error;
-  } finally {
-    // Close only the inspector we opened and verified. Defer close so the acknowledgement can return.
+  }
+  if (!(await closeDebugger(s, expected, port, inspector)))
+    throw Error("retention_inspector_close_unconfirmed");
+  if (failure) throw failure;
+  return { installed: true, inspectorClosed: true, pid: expected.pid };
+}
+/** The address of the one debugger target of the process, once it listens on the port. */
+async function debuggerAddress(s, pid, port) {
+  let target;
+  for (let i = 0; i < 30; i++) {
     try {
-      if (verified)
-        await inspector.evaluate(
-          "(()=>{const m=process.getBuiltinModule('inspector');setTimeout(()=>m.close(),100);return {closing:true}})()",
-        );
+      const listeners = s.listeners(port);
+      if (listeners.length !== 1 || listeners[0] !== pid) {
+        await s.pause(100);
+        continue;
+      }
+      const list = await s.targets(port);
+      if (Array.isArray(list) && list.length === 1) {
+        target = list[0];
+        break;
+      }
+    } catch {}
+    await s.pause(100);
+  }
+  if (!target) throw Error("retention_inspector_not_ready");
+  const url = new URL(target.webSocketDebuggerUrl);
+  if (
+    url.protocol !== "ws:" ||
+    url.hostname !== "127.0.0.1" ||
+    url.port !== String(port) ||
+    !/^\/[a-f0-9-]+$/.test(url.pathname)
+  )
+    throw Error("retention_inspector_target_mismatch");
+  const listeners = s.listeners(port);
+  if (listeners.length !== 1 || listeners[0] !== pid)
+    throw Error("retention_inspector_listener_changed");
+  return url;
+}
+/**
+ * Closes the debugger that the signal opened, and says whether the port is
+ * free again. Only that debugger: the one process that listens on the port is
+ * the target, with the start time of the description, and the close runs only
+ * in a process with that pid. The close is deferred, so that its answer can
+ * return. A connection that fails is made again, a few times.
+ */
+async function closeDebugger(s, expected, port, opened) {
+  const close = `(()=>{if(process.pid!==${expected.pid})return {closing:false};const m=process.getBuiltinModule('inspector');setTimeout(()=>m.close(),100);return {closing:true}})()`;
+  const ours = () => {
+    try {
+      const listeners = s.listeners(port);
+      return (
+        listeners.length === 1 &&
+        listeners[0] === expected.pid &&
+        s.identity(expected.pid).startedAt === expected.startedAt
+      );
+    } catch {
+      return false;
+    }
+  };
+  let inspector = opened;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!ours()) break;
+    try {
+      inspector ??= await s.connect(
+        await debuggerAddress(s, expected.pid, port),
+      );
+      await inspector.evaluate(close);
+    } catch {
+      // Not closed: the port shows it below.
     } finally {
-      inspector.close();
+      try {
+        inspector?.close();
+      } catch {}
+      inspector = undefined;
+    }
+    for (let i = 0; i < 30; i++) {
+      try {
+        await s.unusedPort(port);
+        return true;
+      } catch {}
+      await s.pause(100);
     }
   }
   for (let i = 0; i < 30; i++) {
     try {
-      await assertUnusedPort(port);
-      if (failure) throw failure;
-      return { installed: true, inspectorClosed: true, pid: expected.pid };
-    } catch (error) {
-      if (error === failure) throw error;
-    }
-    await pause(100);
+      await s.unusedPort(port);
+      return true;
+    } catch {}
+    await s.pause(100);
   }
-  throw Error("retention_inspector_close_unconfirmed");
+  return false;
 }
 if (
   process.argv[1] &&
