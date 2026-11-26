@@ -236,6 +236,30 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.owner.backend.call_args.args[0].endswith('/voice/end'))
         self.assertEqual(set(self.owner.backend.call_args.args[1]), {'eventId', 'callId', 'qualifiedRemoteAudio'})
 
+    async def test_refused_hangup_resets_ending_so_failures_still_end_the_call(self):
+        self.owner.backend.return_value = {'accepted': False}
+        await self.frontend.handle(transcript(1, 'Please hang up now.'))
+        await self.invoke('end_call', identity='end')
+        self.owner.backend.assert_awaited_once()
+        self.assertFalse(self.frontend.ending)
+        # A later background failure ends the call again, as before the hangup.
+        async def broken():
+            raise FrontendFault('provider_disconnected')
+        await asyncio.gather(self.frontend.spawn(broken(), 'read'), return_exceptions=True)
+        self.parent.request_failure.assert_called_once()
+        # A new explicit hangup request reaches the backend.
+        self.owner.backend.return_value = {'accepted': True}
+        await self.frontend.handle(transcript(2, 'Hang up please.'))
+        await self.invoke('end_call', identity='end_again')
+        self.assertEqual(self.owner.backend.await_count, 2)
+        self.assertTrue(self.frontend.ending)
+
+    async def test_unconfirmed_hangup_keeps_ending(self):
+        self.owner.backend.side_effect = TimeoutError()
+        await self.frontend.handle(transcript(1, 'Please hang up now.'))
+        await self.invoke('end_call', identity='end')
+        self.assertTrue(self.frontend.ending)
+
     async def test_stop_and_policy_loss_block_new_tools_audio_and_context(self):
         await self.frontend.handle(transcript())
         self.parent.pause_latched = True

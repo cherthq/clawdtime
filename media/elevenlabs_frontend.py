@@ -816,6 +816,7 @@ class ElevenLabsFrontend:
                 body['targetId'] = params['target_id']
         started = time.monotonic()
         self.diagnostic('callback_started', event_id)
+        response_refused = False
         try:
             response = await asyncio.wait_for(self.parent.owner.backend(f'/media/{self.parent.id}/voice/{route}', body), 5)
             if not isinstance(response, dict) or type(response.get('accepted')) is not bool:
@@ -824,12 +825,18 @@ class ElevenLabsFrontend:
             result = (reply if isinstance(reply, str) and 0 < len(reply) <= 1600 else
                       ('Accepted; completion or handset visibility is not established.' if response['accepted'] else 'Request refused.'))
             outcome = (result, not response['accepted'])
+            response_refused = not response['accepted']
             self.diagnostic('callback_accepted' if response['accepted'] else 'callback_refused', event_id, (time.monotonic() - started) * 1000)
         except Exception:
             outcome = ('Outcome unconfirmed. Do not repeat this request automatically.', True)
             self.diagnostic('callback_failed', event_id, (time.monotonic() - started) * 1000)
         if name == 'send_to_agent':
             self.intent_receipts[utterance['id']] = outcome
+        if name == 'end_call' and response_refused:
+            # The backend kept the call up. Failures and provider loss must end it
+            # again, and a new explicit hangup request may ask once more. An
+            # unconfirmed outcome keeps ending: cleanup may be under way.
+            self.ending = False
         return outcome
 
     async def close(self):
