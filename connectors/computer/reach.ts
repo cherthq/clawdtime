@@ -62,7 +62,7 @@ import {
   type TextSettings,
 } from "../agents/texts.js";
 import { secureRead, secureWrite } from "../shared/state.js";
-import { storedTextValues } from "../shared/owner.js";
+import { ownerContact } from "../shared/owner.js";
 import {
   computerDirectory,
   looksSecretStrict,
@@ -1018,18 +1018,20 @@ export function ownerTextPort(
 ): ReachTextPort {
   const settled = ():
     { settings: TextSettings; line: string } | { reason: string } => {
+    // Once `clawdtime connect` keeps the owner's number, the owner's answer to
+    // "May ClawdTime call and text this number?" decides, and a text goes only
+    // to that number. An owner.json that cannot be read stops the text: it
+    // never falls back to the number of the environment. Without owner.json,
+    // the number of the environment is used as before.
+    const contact = ownerContact(env, root);
+    if ("problem" in contact) return { reason: "owner_unreadable" };
     const found = textSettings(env, root);
     if ("missing" in found)
       return { reason: `missing:${found.missing.join(",")}` };
-    // Once `clawdtime connect` keeps the owner's number, the owner's answer to
-    // "May ClawdTime call and text this number?" decides, and a text goes only
-    // to that number. Without it, the number of the environment is used as before.
-    const stored = storedTextValues(root);
-    if (stored.phone && stored.consent !== "yes")
+    if (contact.stored && contact.consent !== "yes")
       return { reason: "no_consent" };
-    const settings = stored.phone
-      ? { ...found.settings, owner: stored.phone }
-      : found.settings;
+    // The text channel takes its number from the same source.
+    const settings = { ...found.settings, owner: contact.phone };
     const line = ownerTextLine(root, settings);
     if (!line) return { reason: "no_line" };
     return { settings, line };

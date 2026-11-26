@@ -8,9 +8,10 @@
  * - `chert-key.json`: the project API key of Chert and the project it is for.
  *
  * Both are owner-only files (see private-file.ts). The text channel and the
- * reach read them when the environment does not have the value: a variable of
- * the environment wins. Nothing here prints a key, and a number is shown only
- * by its last two digits.
+ * reach read the key when the environment does not have it: a variable of the
+ * environment wins. The owner's number of owner.json wins over the one of the
+ * environment, for both (see ownerContact). Nothing here prints a key, and a
+ * number is shown only by its last two digits.
  */
 import { join } from "node:path";
 import { z } from "zod";
@@ -102,17 +103,38 @@ export function writeChertKey(root: string, key: ChertKeyRecord) {
   writePrivateJSON(chertKeyFile(root), keySchema.parse(key));
 }
 
-/** What `clawdtime connect` stored for the text channel. A file that cannot be used gives nothing. */
-export function storedTextValues(root: string): {
-  phone?: string;
-  key?: ChertKeyRecord;
-  consent?: "yes" | "no";
-} {
-  const { owner } = readOwner(root);
+/** The project API key that `clawdtime connect` stored for the text channel. A file that cannot be used gives nothing. */
+export function storedTextValues(root: string): { key?: ChertKeyRecord } {
   const { key } = readChertKey(root);
+  return key ? { key } : {};
+}
+
+/**
+ * The owner's number for a text or a call: one source for the text channel
+ * and the reach. With the state folder, owner.json decides when it is there:
+ * its number, with the owner's answer. Without owner.json, the number of the
+ * environment is used, with no answer. An owner.json that is there but cannot
+ * be used gives no number and its problem: nothing falls back to the number
+ * of the environment then, so no text goes out without the stored answer.
+ */
+export function ownerContact(
+  env: Record<string, string | undefined>,
+  root?: string,
+):
+  | { phone: string; stored: boolean; consent?: "yes" | "no" }
+  | { problem: string } {
+  if (root) {
+    const { owner, problem } = readOwner(root);
+    if (problem) return { problem };
+    if (owner)
+      return {
+        phone: owner.phone,
+        stored: true,
+        ...(owner.consent ? { consent: owner.consent.answer } : {}),
+      };
+  }
   return {
-    ...(owner ? { phone: owner.phone } : {}),
-    ...(owner?.consent ? { consent: owner.consent.answer } : {}),
-    ...(key ? { key } : {}),
+    phone: (env.CLAWDTIME_OWNER_PHONE ?? "").replace(/[\s().-]/g, ""),
+    stored: false,
   };
 }

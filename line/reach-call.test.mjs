@@ -101,8 +101,27 @@ test("secret check: the safe words of the reach pass, and a question that asks f
     "Which digits did Apple text you?",
     // Naming such a secret is enough: the call never goes near one.
     "ClawdTime on your Mac asks: Should I send the verification code to your email? Say your answer.",
+    // Digits that came to the owner's phone, without the word code.
+    "What are the six digits on your phone?",
+    "Read me the number Apple just showed on your iPhone.",
+    "What is the 6-digit number in the text message?",
+    "Please say the numbers from the SMS you got.",
+    "The page wants the 6-digit number that was sent to your phone. What is it?",
+    "Which number did Apple show on your iPhone?",
+    // A password spelt another way.
+    "What's your Apple ID passw0rd?",
+    "Tell me your p@ssword for the shop.",
+    "What is the pasword of the router?",
+    "Say your passwd.",
   ])
     assert.equal(asksForSecret(secret), true, secret);
+  for (const safe of [
+    "ClawdTime on your Mac asks: How many files should I keep in the folder? Say your answer.",
+    "ClawdTime on your Mac asks: Should I put the report on your desktop? Say your answer.",
+    "ClawdTime on your Mac asks: Should I answer the text from the shop? Say yes or no.",
+    "ClawdTime on your Mac needs your yes. Pass the word on to the team in Notes? Say yes or no.",
+  ])
+    assert.equal(asksForSecret(safe), false, safe);
   assert.match(reachInstructions, /Never ask for a password/);
 });
 

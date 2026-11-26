@@ -101,6 +101,32 @@ const pinWord = /\bPINs?\b/;
 // Digits that came to the owner: "Which digits did Apple text you?"
 const digitsWords =
   /\b(?:which|what)\s+(?:digits|numbers?|codes?)\b|\bdigits\b[^.?!]{0,40}\b(?:text(?:ed)?|sent|send|got|receive[ds]?)\b/i;
+// A count of digits names a code by itself: "the six digits", "the 6-digit number".
+const countedDigits =
+  /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)[- ]?digits?\b/i;
+// A number that is on the owner's phone or in a message to them: "the number Apple showed on your iPhone", "the
+// numbers from the SMS you got", "the number that was sent to your phone". "The number of files" is no such number.
+const deliveredNumber =
+  /\b(?:numbers?(?!\s+of\b)|digits|codes?)\b[^.?!]{0,50}?\b(?:(?:on|from|in)\s+(?:your|the|my)\s+(?:phones?|iphones?|ipads?|watch|(?:other\s+)?devices?|texts?|text\s+messages?|messages?|sms)\b|sms\b|imessage\b|texted\b|sent\s+(?:to\s+)?(?:you|your|me|my)\b|(?:you|i)\s+(?:just\s+)?(?:got|received)\b|(?:showed|shown|gave)\s+(?:to\s+)?(?:you|me)\b)/i;
+// A password spelt another way: "pasword", "passwd", "pass word".
+const passwordSpelt = /\bpa?s{1,2} ?w(?:or|ro|r|o)?ds?\b/i;
+// Digits and signs that stand for letters in a word: "passw0rd", "p@ssword".
+const lookalike = {
+  0: "o",
+  1: "i",
+  3: "e",
+  4: "a",
+  5: "s",
+  7: "t",
+  "@": "a",
+  $: "s",
+};
+const plainLetters = (text) =>
+  text.replace(/[a-z0-9@$]+/gi, (word) =>
+    /[a-z]/i.test(word) && /[0-9@$]/.test(word)
+      ? word.replace(/[013457@$]/g, (sign) => lookalike[sign])
+      : word,
+  );
 
 /**
  * True when the words ask somebody to say, give or send a password, a code, a card or another private number, or
@@ -109,12 +135,15 @@ const digitsWords =
 export function asksForSecret(question) {
   if (typeof question !== "string") return true;
   const rest = question.replace(/\s+/g, " ").trim().replace(forbidding, " ");
-  return (
-    asking.test(rest) ||
-    strongWords.test(rest) ||
-    pinWord.test(rest) ||
-    digitsWords.test(rest)
-  );
+  const named = (text) =>
+    asking.test(text) ||
+    strongWords.test(text) ||
+    passwordSpelt.test(text) ||
+    pinWord.test(text) ||
+    digitsWords.test(text) ||
+    countedDigits.test(text) ||
+    deliveredNumber.test(text);
+  return named(rest) || named(plainLetters(rest));
 }
 
 /** The file of the capability of one call, in the state folder of ClawdTime. */

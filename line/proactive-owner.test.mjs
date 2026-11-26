@@ -3,6 +3,7 @@ const { test } = process.env.VITEST
   : await import("node:test");
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -253,8 +254,9 @@ async function fixture() {
     initialJournal,
     stateFile: join(root, "owner.json"),
   };
-  const make = () =>
+  const make = (extra = {}) =>
     new RetainedProactiveLineOwner(config, {
+      ...extra,
       request,
       clock: () => time,
       sleep: async (ms) => {
@@ -411,6 +413,47 @@ for (const failure of [
       const reopened = f.make();
       assert.equal(reopened.diagnostics().phase, "unknown");
       assert.equal((await reopened.readiness()).ready, false);
+    } finally {
+      await f.close();
+    }
+  });
+
+for (const failure of ["authorization", "configuration"])
+  test(`a release that fails at its ${failure} before any effect frees the lock and records it as not sent`, async () => {
+    const f = await fixture();
+    try {
+      const hold = join(f.config.hostStateDirectory, "outbound-hold");
+      const failing = f.make(
+        failure === "authorization"
+          ? {
+              authorizeBinding: async () => {
+                throw Error("synthetic_authorization_failure");
+              },
+            }
+          : {},
+      );
+      if (failure === "configuration")
+        // The check right before the stop, once the hold is written.
+        f.config.assertConfiguration = () => {
+          if (existsSync(hold)) throw Error("synthetic_configuration_changed");
+        };
+      await assert.rejects(failing.acquire("attempt-one"), /synthetic_/);
+      delete f.config.assertConfiguration;
+      assert.equal(f.stops(), 0);
+      assert.equal(failing.diagnostics().phase, "incoming");
+      const receipt = JSON.parse(readFileSync(f.config.stateFile, "utf8"));
+      assert.equal(receipt.phase, "incoming");
+      assert.equal(receipt.history.at(-1).reason, "release_not_sent");
+      assert.equal(receipt.attemptId, undefined);
+      assert.throws(() => statSync(`${f.config.stateFile}.lock`));
+      assert.throws(() => statSync(hold));
+      // Nothing was released, so the next attempt may release the line.
+      const owner = f.make();
+      assert.equal((await owner.readiness()).ready, true);
+      assert.deepEqual(await owner.acquire("attempt-two"), {
+        exclusive: true,
+      });
+      assert.equal(f.stops(), 1);
     } finally {
       await f.close();
     }

@@ -23,6 +23,7 @@ import {
   type CallsSettings,
 } from "../connectors/computer/calls-api.js";
 import {
+  LiveKitError,
   LiveKitRooms,
   liveKitToken,
   type LiveKitPort,
@@ -786,6 +787,104 @@ describe("the Calls API call of the reach", () => {
       ready: true,
       reason: "ready_chert_calls_api",
     });
+  });
+
+  it("a call that was being placed when the service stopped has its room deleted at the next start, again until that is done", async () => {
+    const f = setup();
+    f.chert.hang = true;
+    const id = await f.place();
+    await f.outgoing();
+    expect(f.calls.phase(id)).toEqual({ phase: "live", connected: false });
+    const deleted: string[] = [];
+    let roomAnswer: number | null = 503;
+    const start = async () => {
+      const after = new ChertReachCalls({
+        root: f.root,
+        env: {},
+        origin,
+        answer: async () => ({ message: "", done: true }),
+        stop: () => "",
+        request: f.chert.fetch,
+        liveKit: () =>
+          ({
+            ...f.rooms,
+            deleteRoom: async (room: string) => {
+              deleted.push(room);
+              if (roomAnswer !== null) throw new LiveKitError(roomAnswer);
+            },
+          }) as unknown as LiveKitPort,
+        settings: () => ({ settings: settings() }),
+      });
+      await after.restored;
+      return after;
+    };
+    // LiveKit fails at the first start: the room stays marked.
+    const first = await start();
+    expect(first.phase(id)).toEqual({
+      phase: "over",
+      result: "unknown",
+      reason: "service_restarted",
+    });
+    expect(deleted).toEqual([`clawdtime-reach-${id}`]);
+    // The next start deletes it. A room that is gone already counts as deleted.
+    roomAnswer = 404;
+    await start();
+    expect(deleted).toEqual([`clawdtime-reach-${id}`, `clawdtime-reach-${id}`]);
+    // Once it is done, a start does nothing more, and the call is never placed again.
+    roomAnswer = null;
+    const last = await start();
+    expect(deleted).toHaveLength(2);
+    expect(f.chert.calls()).toHaveLength(1);
+    expect(f.chert.ends()).toHaveLength(0);
+    expect(
+      last.place({
+        key: id,
+        requestId: "req_1",
+        kind: "approval",
+        spoken: "x",
+      }),
+    ).toEqual({ refused: "call_already_placed" });
+  });
+
+  it("an allocated call whose end got no answer at a start is ended at the next start, with the same key", async () => {
+    const f = setup();
+    f.chert.hangEvents = true;
+    const id = await f.place();
+    for (let i = 0; i < 200 && f.calls.phase(id).phase !== "live"; i++)
+      await new Promise((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 50; i++)
+      await new Promise((resolve) => setImmediate(resolve));
+    let down = true;
+    const request = (async (url: string | URL, init?: RequestInit) => {
+      if (down && String(url).endsWith("/end"))
+        throw new TypeError("fetch failed");
+      return f.chert.fetch(url, init);
+    }) as typeof fetch;
+    const start = async () => {
+      const after = new ChertReachCalls({
+        root: f.root,
+        env: {},
+        origin,
+        answer: async () => ({ message: "", done: true }),
+        stop: () => "",
+        request,
+        sleep: async () => {},
+        liveKit: () => f.rooms as unknown as LiveKitPort,
+        settings: () => ({ settings: settings() }),
+      });
+      await after.restored;
+    };
+    await start();
+    expect(f.chert.ends()).toHaveLength(0);
+    down = false;
+    await start();
+    expect(f.chert.ends()).toHaveLength(1);
+    expect(f.chert.ends()[0]!.headers["Idempotency-Key"]).toBe(
+      `clawdtime-reach-end-${id}`,
+    );
+    await start();
+    expect(f.chert.ends()).toHaveLength(1);
+    expect(f.chert.calls()).toHaveLength(1);
   });
 
   it("ends a call that Chert had allocated when the service stopped, once, with its own key", async () => {

@@ -504,7 +504,7 @@ export async function main(args = process.argv.slice(2)) {
       pairing: { ...connection.pairing, revokedAt: Date.now() },
     });
     uninstallConfiguration(connection);
-    rmSync(dirname(connectionFile), { recursive: true });
+    removeConnection(connectionFile, project, adapter);
     console.log(
       "Pairing revoked; ClawdTime configuration and local credentials removed. Other client settings preserved.",
     );
@@ -516,7 +516,7 @@ export async function main(args = process.argv.slice(2)) {
         "Run disconnect while the backend is available to revoke remote access before uninstalling.",
       );
     uninstallConfiguration(connection);
-    rmSync(dirname(connectionFile), { recursive: true });
+    removeConnection(connectionFile, project, adapter);
     return;
   }
   if (command === "run") {
@@ -545,6 +545,17 @@ export async function main(args = process.argv.slice(2)) {
     return;
   }
   throw new Error("Unknown command. Run help.");
+}
+/**
+ * Removes the connection file. Its folder goes too only when it is ClawdTime's
+ * own folder of this project and agent in the state folder: a --connection
+ * path may sit in a folder of the person's own, with their other files.
+ */
+function removeConnection(file: string, project: string, adapter: Adapter) {
+  const own = connectionPath(project, adapter);
+  if (resolve(file) === resolve(own))
+    rmSync(dirname(own), { recursive: true, force: true });
+  else rmSync(file, { force: true });
 }
 // npm link invokes this file through its bin symlink. Compare real files so
 // the linked command runs, while importing this module still starts nothing.

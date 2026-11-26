@@ -21,6 +21,9 @@ const script = resolve(
   "host.sh",
 );
 
+/** A stand-in for node passes the reads of the env file (node --env-file=FILE -e ...) on to node itself. */
+const readsSettings = `case "$1 $2" in "--env-file="*" -e") exec '${process.execPath}' "$@" ;; esac\n`;
+
 /**
  * A checkout of a small repository with the host script in it, its origin, and
  * stand-ins for npm, tmux, chert, crontab and sleep that only write down what
@@ -298,7 +301,7 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     unlinkSync(node);
     writeFileSync(
       node,
-      `#!/bin/sh\nif [ "$1" = --input-type=module ]; then echo /synthetic/provider; exit 0; fi\nprintf '%s\\n' "node $*" >> '${f.base}/calls.log'\nexit 1\n`,
+      `#!/bin/sh\n${readsSettings}if [ "$1" = --input-type=module ]; then echo /synthetic/provider; exit 0; fi\nprintf '%s\\n' "node $*" >> '${f.base}/calls.log'\nexit 1\n`,
     );
     chmodSync(node, 0o755);
     expect(f.run("keep", "dev").status).toBe(0);
@@ -318,7 +321,7 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     unlinkSync(join(bin, "node"));
     writeFileSync(
       join(bin, "node"),
-      `#!/bin/sh\necho "node $* in $(basename "$PWD")" >> '${calls}'\n[ "$(grep -c '^node' '${calls}')" -lt 2 ] || : > '${state}/stopping'\nexit 1\n`,
+      `#!/bin/sh\n${readsSettings}echo "node $* in $(basename "$PWD")" >> '${calls}'\n[ "$(grep -c '^node' '${calls}')" -lt 2 ] || : > '${state}/stopping'\nexit 1\n`,
     );
     chmodSync(join(bin, "node"), 0o755);
     expect(f.run("keep", "agent").status).toBe(0);
@@ -342,7 +345,7 @@ describe("the host script of the line agent", { timeout: 60_000 }, () => {
     unlinkSync(join(bin, "node"));
     writeFileSync(
       join(bin, "node"),
-      `#!/bin/sh\necho "node $* in $(basename "$PWD")" >> '${calls}'\n: > '${state}/stopping'\nexit 1\n`,
+      `#!/bin/sh\n${readsSettings}echo "node $* in $(basename "$PWD")" >> '${calls}'\n: > '${state}/stopping'\nexit 1\n`,
     );
     chmodSync(join(bin, "node"), 0o755);
     // A release with no dependencies is not whole: no session starts, and no agent runs.

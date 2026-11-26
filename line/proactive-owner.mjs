@@ -625,6 +625,10 @@ export class RetainedProactiveLineOwner {
     id(attemptId);
     if (!(await this.readiness()).ready) throw Error("owner_not_ready");
     this.lockMutation();
+    // Until the host is asked to stop, nothing reached the line: a failure before then frees the lock, takes back
+    // the hold that this attempt wrote, and records the release as not sent. From the stop on it is unknown.
+    let stopping = false,
+      holdWritten = false;
     try {
       const current = journal(this.state.currentJournal, this.config),
         host = await this.guardedHost(current.scope.binding_id);
@@ -635,6 +639,7 @@ export class RetainedProactiveLineOwner {
       await this.authorizeBinding(host.pid, current.scope);
       const boundary = hostLogBoundary(this.log);
       const holdFd = openSync(this.hold, "wx", 0o600);
+      holdWritten = true;
       try {
         writeFileSync(
           holdFd,
@@ -652,6 +657,7 @@ export class RetainedProactiveLineOwner {
         releasePid: host.pid,
       });
       this.config.assertConfiguration?.();
+      stopping = true;
       await this.host.stop();
       const receipt = hostStopReceipt(this.log, boundary);
       if (receipt.state !== "released" || receipt.retained !== 0)
@@ -684,6 +690,26 @@ export class RetainedProactiveLineOwner {
       this.unlock();
       return { exclusive: true };
     } catch (error) {
+      if (!stopping) {
+        let notSent = false;
+        try {
+          if (holdWritten) unlinkSync(this.hold);
+          this.save("incoming", "release_not_sent", {
+            attemptId: undefined,
+            incomingBindingId: undefined,
+            incomingScope: undefined,
+            releaseBoundary: undefined,
+            releasePid: undefined,
+          });
+          notSent = true;
+        } catch {
+          // The hold or the record could not be put back: the lock stays, as for any unknown outcome.
+        }
+        if (notSent) {
+          this.unlock();
+          throw error;
+        }
+      }
       this.save("unknown", "release_outcome_unknown");
       throw error;
     }

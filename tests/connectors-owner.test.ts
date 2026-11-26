@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -17,6 +18,7 @@ import {
 } from "../connectors/shared/owner.js";
 import { textSettings } from "../connectors/agents/texts.js";
 import { ownerTextPort } from "../connectors/computer/reach.js";
+import { callsSettings } from "../connectors/computer/calls-api.js";
 import { fakeSystem } from "./connectors-agents-fixture.js";
 
 const project = "abcdefab-cdef-4abc-8def-abcdefabcdef";
@@ -54,7 +56,8 @@ describe("what clawdtime connect stores, in the text channel and the reach", () 
         word: null,
       },
     });
-    // A variable of the environment wins.
+    // A variable of the environment wins, except for the owner's number: the
+    // number of owner.json is the one that the reach texts too.
     const other = "11111111-2222-4333-8444-555555555555";
     expect(
       textSettings(
@@ -69,7 +72,7 @@ describe("what clawdtime connect stores, in the text channel and the reach", () 
       settings: {
         key: "ftk_from_environment",
         project: other,
-        owner: "+15550100999",
+        owner: phone,
       },
     });
     // The stored key never goes with another project.
@@ -160,6 +163,99 @@ describe("what clawdtime connect stores, in the text channel and the reach", () 
         bare,
       ).readiness(),
     ).toEqual({ ready: true, reason: "ready" });
+  });
+
+  it("an owner.json that cannot be read stops texts, and never falls back to the number of the environment", async () => {
+    const env = {
+      CHERT_API_KEY: key,
+      CHERT_PROJECT_ID: project,
+      CHERT_LINE_ID: lineId,
+      CLAWDTIME_OWNER_PHONE: "+15550100999",
+    };
+    for (const spoil of ["mode", "json", "shape"] as const) {
+      const root = stateFolder();
+      const file = join(root, "owner.json");
+      if (spoil === "mode") {
+        writeOwner(root, {
+          version: 1,
+          phone,
+          consent: { answer: "no", at: 1 },
+        });
+        chmodSync(file, 0o644);
+      }
+      if (spoil === "json") writeFileSync(file, "{not json", { mode: 0o600 });
+      if (spoil === "shape")
+        writeFileSync(file, JSON.stringify({ version: 2, phone }), {
+          mode: 0o600,
+        });
+      const sent: unknown[] = [];
+      const port = ownerTextPort(env, root, (async (
+        _url: string | URL,
+        init: RequestInit = {},
+      ) => {
+        sent.push(init.body);
+        return new Response(JSON.stringify({ data: { state: "queued" } }), {
+          status: 200,
+        });
+      }) as typeof fetch);
+      expect(port.readiness(), spoil).toEqual({
+        ready: false,
+        reason: "owner_unreadable",
+      });
+      expect(await port.send("clawdtime-reach:fixture", "Hello"), spoil).toBe(
+        "refused:owner_unreadable",
+      );
+      expect(sent, spoil).toEqual([]);
+      // No call either.
+      expect(callsSettings(env, root), spoil).toEqual({
+        missing: "owner_unreadable",
+      });
+      // The text channel takes no number either, and says why.
+      expect(textSettings(env, root), spoil).toEqual({
+        missing: ["CLAWDTIME_OWNER_PHONE"],
+        problem: expect.stringContaining(file),
+      });
+      await expect(
+        agentsCli(["--supervisor", "texts", "check"], {
+          system: fakeSystem({
+            now: Date.UTC(2026, 10, 26),
+            home: root,
+            env: { ...env, CLAWDTIME_CONFIG_HOME: root },
+          }),
+          runner: async () => ({ status: 0, stdout: "" }),
+          print: () => {},
+          model: null,
+          request: (async () => {
+            throw new Error("no request is made");
+          }) as typeof fetch,
+        }),
+        spoil,
+      ).rejects.toThrow(file);
+    }
+  });
+
+  it("clawdtime texts run answers the number that the reach texts", async () => {
+    const root = stateFolder();
+    writeChertKey(root, { version: 1, projectId: project, apiKey: key });
+    writeOwner(root, { version: 1, phone, consent: { answer: "yes", at: 1 } });
+    const env = {
+      CLAWDTIME_OWNER_PHONE: "+15550100999",
+      CHERT_LINE_ID: lineId,
+    };
+    const sent: { recipient: string }[] = [];
+    await ownerTextPort(env, root, (async (
+      _url: string | URL,
+      init: RequestInit = {},
+    ) => {
+      sent.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ data: { state: "queued" } }), {
+        status: 200,
+      });
+    }) as typeof fetch).send("clawdtime-reach:fixture", "Hello");
+    expect(sent[0]!.recipient).toBe(phone);
+    expect(textSettings(env, root)).toMatchObject({
+      settings: { owner: sent[0]!.recipient },
+    });
   });
 
   it("clawdtime texts check uses the stored number and key", async () => {

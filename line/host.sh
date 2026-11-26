@@ -23,10 +23,11 @@ MARK="# clawdtime-line update"
 PAUSE=${CLAWDTIME_LINE_RETRY_SECONDS:-10}
 mkdir -p "$STATE"
 
-# One value of .env.local, as node reads it: the last line of that name, without quotes.
+# One value of .env.local, read by node itself as node --env-file reads it for the agent: quotes, inline comments and
+# the last line of a name. Only the file counts, not this environment. Empty when the file has no such value.
 setting() {
   [ -f "$ENV_FILE" ] || return 0
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$ENV_FILE" | tail -n 1 | tr -d "\"'" | sed 's/[[:space:]]*$//'
+  env -i PATH="$PATH" node --env-file="$ENV_FILE" -e 'process.stdout.write(process.env[process.argv[1]] ?? "")' "$1" 2>/dev/null || true
 }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 # Agent code: explicit environment override, then env-file setting, then this folder.
@@ -158,13 +159,38 @@ update() {
   [ -z "$(git status --porcelain --untracked-files=no)" ] || { say "the checkout has changes of its own: nothing done"; return 0; }
   git fetch --quiet origin main || { say "the fetch failed: nothing done"; return 0; }
   old=$(git rev-parse HEAD); new=$(git rev-parse origin/main)
-  [ "$old" != "$new" ] || { say "up to date at $(git rev-parse --short HEAD)"; return 0; }
+  # The last commit whose build passed, while the build of a newer main is still to pass. It is written before main
+  # moves, and removed only when the build passed: a build that failed is built again on the next run.
+  pending="$STATE/update-pending"
+  built=""
+  [ ! -f "$pending" ] || built=$(head -n 1 "$pending")
+  [ "$old" != "$new" ] || [ -n "$built" ] || { say "up to date at $(git rev-parse --short HEAD)"; return 0; }
   if in_call; then say "a call runs: the update waits"; return 0; fi
-  git merge --quiet --ff-only origin/main || { say "main cannot be fast-forwarded: nothing done"; return 0; }
-  say "main moved $(git rev-parse --short "$old") to $(git rev-parse --short "$new")"
-  git diff --quiet "$old" "$new" -- package-lock.json || npm ci --silent
-  npm run --silent build
-  git diff --quiet "$old" "$new" -- line/package-lock.json line/package.json || (cd "$DIR" && npm install --silent)
+  if [ "$old" != "$new" ]; then
+    marked=""
+    if [ ! -f "$pending" ]; then
+      printf '%s\n' "$old" > "$pending.tmp" && mv "$pending.tmp" "$pending"
+      built=$old; marked=1
+    fi
+    git merge --quiet --ff-only origin/main || {
+      [ -z "$marked" ] || rm -f "$pending"
+      say "main cannot be fast-forwarded: nothing done"; return 0
+    }
+    say "main moved $(git rev-parse --short "$old") to $(git rev-parse --short "$new")"
+  else
+    say "the build of $(git rev-parse --short HEAD) did not pass before: it is built again"
+  fi
+  # What changed since the last build that passed. A mark that names no commit builds everything.
+  base=""
+  case "$built" in *[!0-9a-f]*|'') ;; *) git cat-file -e "$built^{commit}" 2>/dev/null && base=$built ;; esac
+  changed() { [ -z "$base" ] || ! git diff --quiet "$base" HEAD -- "$@"; }
+  if ! { { ! changed package-lock.json || npm ci --silent; } &&
+    npm run --silent build &&
+    { ! changed line/package-lock.json line/package.json || (cd "$DIR" && npm install --silent); }; }; then
+    say "the build of $(git rev-parse --short HEAD) failed: nothing was restarted, and the next run builds it again"
+    return 1
+  fi
+  rm -f "$pending"
   if running; then
     if in_call; then say "built; a call started meanwhile: restart with ./host.sh restart after it"; return 0; fi
     stop >/dev/null; start >/dev/null
