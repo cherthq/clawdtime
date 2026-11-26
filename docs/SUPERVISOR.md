@@ -1705,7 +1705,10 @@ How it works:
 - Stop comes first, in code. A message that is a stop (read by the same stop
   reader as the chat above) stops the computer task before the model reads it,
   ends the turn that runs, and nothing new starts in that turn. The Stop button
-  of the panel ends the turn that runs too.
+  of the panel ends the turn that runs too. A tool that only reads is not
+  waited for. A tool that changes something gets the stop and ends first, and
+  a computer task that started just as you stopped is stopped. A message that
+  you send while the stopped turn winds down gets a turn of its own.
 - An answer never says the opposite of a result that is in the chat. The
   computer task that a turn started can end, and say its result in the chat,
   before the model has its answer. Then code drops each sentence of the answer

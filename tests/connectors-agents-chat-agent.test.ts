@@ -692,6 +692,62 @@ describe("turns that overlap", () => {
   });
 });
 
+describe("the panel Stop", () => {
+  const tick = () => new Promise((done) => setTimeout(done, 5));
+  /** A computer whose start waits until the test lets it go. */
+  const heldComputer = () => {
+    const computer = new FakeComputer();
+    let release!: () => void;
+    const held = new Promise<void>((done) => (release = done));
+    const submit = computer.submit.bind(computer);
+    computer.submit = async (id: string, text: string) => {
+      await held;
+      return submit(id, text);
+    };
+    return { computer, release: () => release() };
+  };
+
+  it("gives a message that comes while the stopped turn winds down a turn of its own", async () => {
+    const { computer, release } = heldComputer();
+    const model = scriptedModel([
+      { calls: [call("computer_do", { goal: "search Aero 7 headphones" })] },
+      { text: "Nothing listens on port 3000." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const first = agent.answer([], "search Aero 7 headphones", "chat");
+    await tick();
+    agent.abort();
+    const second = agent.answer([], "what is on port 3000?", "chat");
+    await tick();
+    release();
+    const [one, two] = await Promise.all([first, second]);
+    expect(one).toEqual({ text: "Stopped.", choices: [] });
+    expect(two).toEqual({
+      text: "Nothing listens on port 3000.",
+      choices: [],
+    });
+    expect(sentText(model.requests)).toContain("what is on port 3000?");
+    // The task that the stopped turn started as the Stop came does not go on.
+    expect(computer.state).toBe("canceled");
+  });
+
+  it("stops a task that started after a stop message, while its start was on the way", async () => {
+    const { computer, release } = heldComputer();
+    const model = scriptedModel([
+      { calls: [call("computer_do", { goal: "search Aero 7 headphones" })] },
+      { text: "Stopped." },
+    ]);
+    const { agent } = setup({ computer, model });
+    const first = agent.answer([], "search Aero 7 headphones", "chat");
+    await tick();
+    const stop = agent.answer([], "stop", "chat");
+    await tick();
+    release();
+    await Promise.all([first, stop]);
+    expect(computer.state).toBe("canceled");
+  });
+});
+
 describe("without a model, and the next step", () => {
   it("still stops in code and tells the state", async () => {
     const computer = new FakeComputer().run("check my Instagram DMs");

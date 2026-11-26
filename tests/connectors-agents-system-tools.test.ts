@@ -265,6 +265,24 @@ describe("the process level in the chat", () => {
     expect(results[2]).toMatch(/^Not done yet: this needs the owner's yes/);
   });
 
+  it("ends the turn at the panel Stop while a look still runs", async () => {
+    const model = scriptedModel([
+      { calls: [call("system_look", { what: "processes" })] },
+      { text: "Stonepad is at full CPU." },
+    ]);
+    const { agent, host } = setup({ model });
+    // A look that never answers.
+    host.exec = () => new Promise(() => {});
+    const answer = agent.answer([], "why is my Mac so slow?", "chat");
+    await new Promise((done) => setTimeout(done, 5));
+    agent.abort();
+    const hung = new Promise((done) => setTimeout(() => done("hung"), 500));
+    expect(await Promise.race([answer, hung])).toEqual({
+      text: "Stopped.",
+      choices: [],
+    });
+  });
+
   it("starts nothing in a turn where the owner said stop", async () => {
     const model = scriptedModel([
       { calls: [call("process_act", { action: "quit", name: "Stonepad" })] },

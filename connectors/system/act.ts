@@ -240,12 +240,12 @@ export class ProcessDesk {
     return parseStart(result.stdout);
   }
 
-  /** Waits until the process ends or the time is over. True when it ended. */
-  private async ended(pid: number, ms: number) {
+  /** Waits until the process ends, the time is over or the owner stops. True when it ended. */
+  private async ended(pid: number, ms: number, signal?: AbortSignal) {
     const host = this.probes.host;
     for (let waited = 0; ; waited += pollMs) {
       if (!host.alive(pid)) return true;
-      if (waited >= ms) return false;
+      if (waited >= ms || signal?.aborted) return false;
       await host.sleep(pollMs);
     }
   }
@@ -280,7 +280,7 @@ export class ProcessDesk {
   async act(
     input: { action: unknown; pid?: unknown; name?: unknown },
     owner: OwnerWords,
-    options: { background: boolean },
+    options: { background: boolean; signal?: AbortSignal | undefined },
   ): Promise<string> {
     const action = processActions.find((item) => item === input.action);
     if (!action)
@@ -308,7 +308,7 @@ export class ProcessDesk {
     action: ProcessAction,
     target: { pid: number | null; name: string | null },
     owner: OwnerWords,
-    options: { background: boolean },
+    options: { background: boolean; signal?: AbortSignal | undefined },
   ): Promise<string> {
     const host = this.probes.host;
     const found = await this.probes.find(target);
@@ -374,9 +374,17 @@ export class ProcessDesk {
       this.asks.delete(key);
       owner.used?.();
     }
+    // The owner stopped while this was looked up: nothing is done.
+    if (options.signal?.aborted)
+      return "Not done: the owner stopped this. Nothing was changed.";
     // The owner's words skipped this question: they skip no other one.
     if (verdict.kind === "act" && verdict.waived) owner.used?.();
-    const done = await this.perform(action, row, options.background);
+    const done = await this.perform(
+      action,
+      row,
+      options.background,
+      options.signal,
+    );
     return verdict.kind === "act" && verdict.trusted
       ? `${done} The owner's trust is on, so no question was asked.`
       : done;
@@ -386,20 +394,22 @@ export class ProcessDesk {
     action: ProcessAction,
     row: ProcessView,
     background: boolean,
+    stop?: AbortSignal,
   ): Promise<string> {
     const host = this.probes.host;
     const name = row.isApp ? row.app! : row.name;
     if (action === "force_quit" || !row.isApp) {
-      const signal = action === "force_quit" ? "SIGKILL" : "SIGTERM";
-      const sent = host.signal(row.pid, signal);
+      const kind = action === "force_quit" ? "SIGKILL" : "SIGTERM";
+      const sent = host.signal(row.pid, kind);
       if (sent === "gone") return `${name} (pid ${row.pid}) had already ended.`;
       if (sent === "denied")
         return `macOS did not allow ClawdTime to end ${name} (pid ${row.pid}).`;
       const gone = await this.ended(
         row.pid,
-        signal === "SIGKILL" ? killWaitMs : termWaitMs,
+        kind === "SIGKILL" ? killWaitMs : termWaitMs,
+        stop,
       );
-      if (signal === "SIGKILL")
+      if (kind === "SIGKILL")
         return gone
           ? `Force quit ${name} (pid ${row.pid}). It no longer runs.`
           : `Force quit ${name} (pid ${row.pid}), and it still runs after ${killWaitMs / 1000} s: it may wait on the system.`;
@@ -413,7 +423,9 @@ export class ProcessDesk {
         ? `${name} had already ended, or macOS does not know it as an app.`
         : `macOS did not let ClawdTime ask ${name} to quit. Quit it on the screen, or ask for a force quit.`;
     const wait = action === "restart" ? restartWaitMs : quitWaitMs;
-    const gone = await this.ended(row.pid, wait);
+    const gone = await this.ended(row.pid, wait, stop);
+    if (action === "restart" && stop?.aborted)
+      return `Asked ${name} to quit${gone ? ", and it quit" : ""}. It was not opened again: the owner stopped this.`;
     if (action === "quit")
       return gone
         ? `${name} quit.`

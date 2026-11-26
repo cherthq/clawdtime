@@ -400,7 +400,11 @@ export class ChatAgent implements ChatBrain {
     this.offer = null;
   }
 
-  /** Ends the turn that runs, as Stop does. What already ran stays. */
+  /**
+   * Ends the turn that runs, as Stop does. What already ran stays; a tool
+   * that runs gets the stop, and a computer task that its start began just
+   * then is stopped. A message that comes meanwhile gets a turn of its own.
+   */
   abort() {
     this.active?.abort.abort(new Error("stopped"));
   }
@@ -470,9 +474,14 @@ export class ChatAgent implements ChatBrain {
       const at = this.options.world.now();
       const call = !!context?.isLive;
       // A message of a call never joins another turn, and none joins the
-      // turn of a call: each one's end must stop only its own work. Such a
-      // message waits for the turn that runs.
-      while (this.active && !stopTurn && (call || this.active.live))
+      // turn of a call: each one's end must stop only its own work. Nor does
+      // one join a turn that the Stop ended: it would get only "Stopped.".
+      // Such a message waits for the turn that runs, then takes its own.
+      while (
+        this.active &&
+        !stopTurn &&
+        (call || this.active.live || this.active.abort.signal.aborted)
+      )
         await this.active.done.catch(() => undefined);
       if (!phoneIsLive()) return { text: phoneEnded, choices: [] };
       const running = this.active;

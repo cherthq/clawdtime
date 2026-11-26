@@ -73,7 +73,7 @@ export function systemTools(
         additionalProperties: false,
       },
       effect: true,
-      run: (args) =>
+      run: (args, signal) =>
         desk.act(
           { action: args.action, pid: args.pid, name: args.name },
           {
@@ -85,7 +85,7 @@ export function systemTools(
               turn.answered = true;
             },
           },
-          { background: options.computerBusy() },
+          { background: options.computerBusy(), signal },
         ),
     },
   ];

@@ -770,6 +770,19 @@ export function chatTools(
             );
           world.refresh();
           const after = execution.snapshot();
+          if (signal.aborted) {
+            // The owner stopped while the task started: it does not go on.
+            const began =
+              after.requestId && after.requestId !== before.requestId;
+            const stopped = began && after.canStop ? execution.stop() : null;
+            world.refresh();
+            const node = began ? computerNode(world, after.requestId) : null;
+            if (node) world.graph.link(node.id, "spawnedBy", request.id);
+            world.graph.settle(request.id, "canceled", "stopped by the owner");
+            return stopped
+              ? `Stopped: the owner stopped while the task started. ${stopped.message}`
+              : "Not started: the owner stopped this.";
+          }
           const node =
             after.requestId && after.requestId !== before.requestId
               ? computerNode(world, after.requestId)
