@@ -379,16 +379,29 @@ export class ProductionWalkthroughController {
     this.activationReceipt = receipt;
     return this.reserve(operation);
   }
+  /** The server proved that the operation made no native input. */
+  private rejected(record?: ProductionNativeRecord) {
+    return record?.phase === "rejected" && record.result?.state === "rejected";
+  }
+  /** A rejected operation holds nothing: give native ownership back and clear it. */
+  private async releaseRejected() {
+    const pending = this.pending!;
+    await this.transfer("none", "completed", pending.operation.expected);
+    this.pending = undefined;
+    this.dispatchAttempted = false;
+  }
   private async reserve(operation: NativePresentationOperation) {
     this.pending = { operation, fingerprint: fingerprint(operation) };
     this.last = undefined;
     this.dispatchAttempted = false;
     this.last = await this.native.prepare(operation);
     this.valid();
-    if (this.last.phase !== "prepared")
+    if (this.last.phase !== "prepared") {
+      if (this.rejected(this.last)) await this.releaseRejected();
       throw new Error(
         "Native operation did not prepare; inspect its original receipt.",
       );
+    }
     return this.status();
   }
   /** No native effect: reset scene, claim native, resolve and reserve exactly one operation. */
@@ -398,6 +411,8 @@ export class ProductionWalkthroughController {
     action: NativePresentationOperation["action"] = "activate_app",
   ) {
     return this.exclusive(async () => {
+      if (this.pending && this.rejected(this.last))
+        await this.releaseRejected();
       if (this.pending) return this.prepareRaise(sceneId, operationId, action);
       await this.scenes.begin(sceneId);
       this.valid();
@@ -473,6 +488,12 @@ export class ProductionWalkthroughController {
       this.dispatchAttempted = true;
       this.last = await this.native.dispatch(reference);
       this.valid();
+      if (this.rejected(this.last)) {
+        await this.releaseRejected();
+        throw new Error(
+          "The server refused the native operation before any input; native ownership is released.",
+        );
+      }
       const result = this.last.result;
       const observed = result?.observation;
       const now = (this.options.clock ?? Date.now)();
@@ -503,6 +524,9 @@ export class ProductionWalkthroughController {
     return this.exclusive(async () => {
       if (this.scenes.status().generation !== expectedGeneration)
         throw new Error("Follow-up generation changed.");
+      if (this.pending && this.rejected(this.last))
+        // A release that could not run after the rejection runs again here.
+        await this.releaseRejected();
       if (this.dispatchAttempted && this.pending)
         throw new Error(
           "Reconcile the attempted operation before replacing the plan.",
