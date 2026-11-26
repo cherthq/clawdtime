@@ -85,6 +85,41 @@ need a check on a real Mac and phone before you rely on them.
 - **Text sessions.** A paired person can control a scoped session by iMessage.
   You approve each grant on the Mac.
 
+## Benchmarks
+
+Measured on 26 November 2026. The harness is the same for every row; only the
+model changes. The evals open no window and touch nothing on your screen.
+
+| Model                  | Planner eval: right first action (38 screens, 2 runs) | Median answer | Request eval: tasks done (23 tasks of many steps) | Time for all 23 |
+| ---------------------- | ----------------------------------------------------- | ------------- | ------------------------------------------------- | --------------- |
+| gpt-6.2-astra          | 76/76                                                 | 2.6 s         | 23/23                                             | 393 s           |
+| gpt-6.2-sol            | 75/76                                                 | 1.8 s         | 23/23                                             | 222 s           |
+| gpt-5.4                | 76/76                                                 | 1.5 s         | 21/23                                             | 170 s           |
+| claude-fable-5-2       | 74/76                                                 | 1.6 s         | 23/23                                             | 198 s           |
+| claude-opus-5-5        | 74/76                                                 | 1.6 s         | 23/23                                             | 239 s           |
+| claude-sonnet-5-5      | 74/76                                                 | 1.9 s         | 23/23                                             | 262 s           |
+| gemini-3.1-pro-preview | 63/76                                                 | 4.2 s         | 23/23                                             | 734 s           |
+| gemini-3.8-flash       | 63/76                                                 | 4.0 s         | 21/23                                             | 913 s           |
+
+On a real Mac, on the real screen:
+
+- 44 apps, one read-only task each (Calculator, Maps, System Settings, Safari,
+  LibreOffice and more): 37 of 44 right on a full run of the newest build. 2
+  of the misses were correct stops (a sign-in page, Mail with no account).
+- 14 tasks of real work (reading the news, YouTube and a social feed,
+  comparing prices on a shop, writing and saving an essay and a blog draft,
+  a research note across two apps, Terminal, Finder): 11 of 14 right; 2 of
+  the misses were apps that this Mac does not have.
+
+Run the evals yourself, with a key for the provider:
+
+```sh
+npm run eval:computer:planner -- gpt-6.2-sol anthropic/claude-opus-5-5 --repeat 2
+npm run eval:computer:request -- gpt-6.2-sol
+```
+
+Add `--check` to prove the checks with no model and no key.
+
 ## Read more
 
 | Page                                                                             | What it covers                                                  |
