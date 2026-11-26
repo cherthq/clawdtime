@@ -486,15 +486,94 @@ const riskyWords = [
 ].flatMap((item) => terms(item));
 const riskyTerms = new Set(riskyWords);
 
-/** The first word of a risky step in the goal that the owner did not say, or null. */
+/**
+ * Send words that are also plain nouns ("my email", "the text on the
+ * page"). The computer engine reads one as a send only where a part of the
+ * goal starts with it ("text Sam hello", "read it and email Dana"), and not
+ * when it turns to the owner ("tell me", "text me"). So the chat reads them
+ * the same way.
+ */
+const sendVerbs =
+  /^(message|text|e mail|email|mail|dm|tell|invite|rsvp|answer|announce|write back|write to)\b\s*(.*)$/;
+const toSelf = /^(?:to )?(?:me|us|myself|ourselves)\b/;
+const ownQuestion =
+  /^(?:to )?(?:the|my|this|that|these|those|your|our|a) questions?\b/;
+/** Words in front of a request that ask nothing: "please", "can you", "go ahead and". */
+const fillers =
+  /^(?:(?:please|pls|kindly|just|now|also|then|and|so|ok|okay|hey|clawdtime|can you|could you|would you|will you|you can|you may|go ahead and|i want you to|i need you to|i'd like you to|i would like you to|help me|try to|remember to|make sure to|make sure you|feel free to|be sure to)\s+)*/;
+/** Text as the engine reads a request: lower case, plain letters, a hyphen as a space. */
+const plainText = (text: string) =>
+  clean(text, 2000)
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/[-_\u2010-\u2015]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+/** The parts of a request, each one with no filler in front. */
+const requestParts = (text: string) =>
+  plainText(text)
+    .replace(/["\u201c\u201d\u201e()[\]]|(?<![a-z0-9])'|'(?![a-z0-9])/g, " ")
+    .split(/[.;:!?,\n]|\b(?:and|then|also|but|after that|afterwards|or)\b/)
+    .map((part) => part.trim().replace(fillers, ""));
+/** The one name of a send verb, as `terms` reads the owner's words. */
+const verbKey = (verb: string) =>
+  /mail$/.test(verb)
+    ? "mail"
+    : verb.startsWith("write")
+      ? "write"
+      : (terms(verb)[0] ?? verb);
+/** A word that denies what follows it: "don't send it", "never reply", "no need to post". */
+const denial =
+  /^(?:not|never|no|without|don't|dont|doesn't|didn't|won't|can't|cannot|shouldn't|mustn't)$/;
+/**
+ * The words of a text that it does not deny, in their base form. A word
+ * after a denial in the same part, with at most three words between them,
+ * is left out: "do not send it" says no send. "email" and "e-mail" read as
+ * "mail".
+ */
+function undenied(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const part of requestParts(text)) {
+    const words = part.match(/[\p{L}\p{N}']+/gu) ?? [];
+    words.forEach((word, index) => {
+      const before = words.slice(Math.max(0, index - 4), index);
+      if (before.some((item) => denial.test(item))) return;
+      const base = /^e?mails?$|^emailed$/.test(word)
+        ? "mail"
+        : terms(word.replace(/'/g, ""))[0];
+      if (base) out.add(base);
+    });
+  }
+  return out;
+}
+
+/** The risky steps of a goal, in its order: each risky word it does not deny, and each send verb that starts a part. */
+function goalSteps(goal: string): { word: string; key: string }[] {
+  const steps: { word: string; key: string }[] = [];
+  const own = undenied(goal);
+  for (const item of terms(goal))
+    if (riskyTerms.has(item) && own.has(item))
+      steps.push({ word: item, key: item });
+  for (const part of requestParts(goal)) {
+    const found = sendVerbs.exec(part);
+    if (!found) continue;
+    const [, verb = "", rest = ""] = found;
+    if (toSelf.test(rest)) continue;
+    if (verb === "answer" && ownQuestion.test(rest)) continue;
+    steps.push({ word: verb, key: verbKey(verb) });
+  }
+  return steps;
+}
+
+/** The first word of a risky step in the goal that the owner did not say, or null. A step they denied ("don't send it") is not said. */
 export function unsaidStep(
   goal: string,
   said: readonly string[],
 ): string | null {
-  const own = new Set(terms(said.join(" ")));
-  return (
-    terms(goal).find((item) => riskyTerms.has(item) && !own.has(item)) ?? null
-  );
+  const own = new Set(said.flatMap((text) => [...undenied(text)]));
+  return goalSteps(goal).find((step) => !own.has(step.key))?.word ?? null;
 }
 
 /**

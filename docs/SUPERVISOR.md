@@ -1743,9 +1743,14 @@ model changes:
   answer ("yes, send it"). While two questions came at the same moment, a
   plain yes answers neither, and ClawdTime asks which one you mean.
 - The computer engine takes the words of a goal as your yes, ahead of time, to
-  steps such as send, post, buy and delete. So a goal holds such a step only
-  where you said it; a plain yes to ClawdTime's own offer of a next step
-  carries the words of that offer.
+  steps such as send, post, reply, message, text, email, tell, invite, buy and
+  delete. So a goal holds such a step only where you said it. A step that you
+  said no to ("draft a reply but don't send it") is not said. A word such as
+  message, text or email counts as a step where the engine reads it as one:
+  at the start of a part of the goal ("text Sam hello"), not as a thing
+  ("read my newest email") and not when it turns to you ("tell me"). A plain
+  yes to ClawdTime's own offer of a next step carries the words of that
+  offer.
 - No argument, tool result or message that holds a password, a key or a code
   goes to the model or to memory, also when it is split over two messages ("my
   bank password is", then the value).

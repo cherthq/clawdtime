@@ -12,7 +12,11 @@ import {
   chatMode,
   trueAfterTheEnd,
 } from "../connectors/agents/chat-agent.js";
-import { chatTools, effectTools } from "../connectors/agents/chat-tools.js";
+import {
+  chatTools,
+  effectTools,
+  unsaidStep,
+} from "../connectors/agents/chat-tools.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { TaskGraph } from "../connectors/agents/task-graph.js";
 import { Routines } from "../connectors/computer/routines.js";
@@ -918,6 +922,65 @@ describe("holes that a review found", () => {
     expect(computer.submits.map((item) => item.text)).toEqual([
       "read Sam's newest DM",
     ]);
+  });
+
+  it("sees a send word in a goal, and no denial of it as said", () => {
+    const unsaid: [string, string[], string][] = [
+      [
+        "draft a reply to Sam and send it",
+        ["draft a reply to Sam but do not send it"],
+        "send",
+      ],
+      [
+        "message Sam on Riverchat that I am late",
+        ["tell Sam I'm late"],
+        "message",
+      ],
+      ["email Sam the report", ["write the report for Sam"], "email"],
+      ["e-mail Sam the report", ["write the report for Sam"], "e mail"],
+      ["text Sam hello", ["hello"], "text"],
+      ["dm Sam the link to the doc", ["find the link to the doc"], "dm"],
+      ["tell Dana the meeting moved", ["check when the meeting is"], "tell"],
+      [
+        "invite Dana to the standup",
+        ["add the standup to my calendar"],
+        "invite",
+      ],
+      [
+        "rsvp yes to the party on Riverchat",
+        ["check the party on Riverchat"],
+        "rsvp",
+      ],
+      [
+        "answer Sam's question on Riverchat",
+        ["read Sam's question on Riverchat"],
+        "answer",
+      ],
+      ["reply to Sam", ["don't reply to Sam yet, just read it"], "reply"],
+      [
+        "post the photo on Riverchat",
+        ["never post it, just open the photo"],
+        "post",
+      ],
+    ];
+    for (const [goal, said, step] of unsaid)
+      expect(unsaidStep(goal, said), goal).toBe(step);
+    const fine: [string, string[]][] = [
+      ["read me my newest email", ["read me my newest email"]],
+      ["check my email", ["check my mail"]],
+      ["tell me the weather in Lisbon", ["look up the weather in Lisbon"]],
+      ["copy the text on the page", ["copy what the page says"]],
+      ["text Sam hello", ["text Sam hello"]],
+      ["email Sam the report", ["e-mail Sam the report"]],
+      ["message Sam that I'm late", ["send Sam a message that I'm late"]],
+      [
+        "draft a reply to Sam but don't send it",
+        ["draft a reply to Sam but don't send it"],
+      ],
+      ["answer the question on the page", ["what does the page ask?"]],
+    ];
+    for (const [goal, said] of fine)
+      expect(unsaidStep(goal, said), goal).toBeNull();
   });
 
   it("takes no yes that the owner sent before the question existed", async () => {
