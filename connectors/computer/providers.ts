@@ -1599,7 +1599,8 @@ function complexity(schema: unknown): { optional: number; unions: number } {
   return { optional, unions };
 }
 
-const converted = new WeakMap<readonly FunctionTool[], Tool[]>();
+const convertedStrict = new WeakMap<readonly FunctionTool[], Tool[]>();
+const convertedPlain = new WeakMap<readonly FunctionTool[], Tool[]>();
 /**
  * The functions as Anthropic tools. On a model that takes strict tools, each
  * one is strict while the request stays inside the limits of the service, in
@@ -1609,8 +1610,8 @@ export function messagesTools(
   tools: readonly FunctionTool[],
   strict: boolean,
 ): Tool[] {
-  const key = strict ? tools : null;
-  const known = key ? converted.get(key) : undefined;
+  const cache = strict ? convertedStrict : convertedPlain;
+  const known = cache.get(tools);
   if (known) return known;
   let strictTools = 0;
   let optional = 0;
@@ -1636,7 +1637,7 @@ export function messagesTools(
     }
     return { ...base, input_schema: spec.parameters as Tool["input_schema"] };
   });
-  if (key) converted.set(key, out);
+  cache.set(tools, out);
   return out;
 }
 
@@ -1823,10 +1824,14 @@ export class MessagesTransport implements Transport {
       });
     }
     const effort = sentEffort("anthropic", model, this.options.effort);
+    // Do not set strict: true on Anthropic tool lists: full planner tool sets
+    // exceed Anthropic's server-side compiled grammar limit (400) and even small
+    // strict sets add multi-second cold grammar compilation latency. The worker
+    // validates every tool call strictly in code and repairs malformed calls.
     return {
       model,
       max_tokens: messagesMaxTokens,
-      tools: messagesTools(request.tools, strictModels.test(model)),
+      tools: messagesTools(request.tools, false),
       system: [
         {
           type: "text",
@@ -1925,7 +1930,7 @@ export class MessagesTransport implements Transport {
       max_tokens: conversationMaxTokens,
       ...(request.tools.length
         ? {
-            tools: messagesTools(request.tools, strictModels.test(model)),
+            tools: messagesTools(request.tools, false),
             tool_choice: { type: "auto" as const },
           }
         : {}),
