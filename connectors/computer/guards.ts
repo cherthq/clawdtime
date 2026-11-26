@@ -510,20 +510,33 @@ const commandVerbs =
   "run|execute|install|build|compile|commit|push|pull|clone|deploy|rebase|merge|lint|test|debug";
 const publishVerbs =
   "push|publish|deploy|release|ship|merge|open a pull request|create a pull request|send";
-const denial = /\b(?:don't|do not|never|not|without|no)\s+(?:\w+\s+){0,3}$/;
-/** True when the request holds these words, and no denial right before them. */
+const denial = /\b(?:don't|do not|never|not|without|no)\b/;
+/**
+ * The end of what a denial holds: a mark, or a "but". A denial holds over
+ * "and" and "then": "do not quit and lose my changes" denies both.
+ */
+const denialEnd = /[.;:!?,\n]|\bbut\b/g;
+/**
+ * True when the request holds these words, and no denial before them in
+ * their part of the request: "never run any command in the terminal" asks
+ * for no terminal work, however many words lie between.
+ */
 function requestHolds(goal: string, words: RegExp) {
   const said = plain(goal);
-  for (const found of said.matchAll(new RegExp(words.source, "g")))
-    if (!denial.test(said.slice(0, found.index))) return true;
+  for (const found of said.matchAll(new RegExp(words.source, "g"))) {
+    const before = said.slice(0, found.index);
+    let from = 0;
+    for (const end of before.matchAll(denialEnd))
+      from = end.index + end[0].length;
+    if (!denial.test(before.slice(from))) return true;
+  }
   return false;
 }
 /** The request asks to lose the changes that are not saved. The chat's force quit reads it too. */
 export const asksToLose = (goal: string) =>
-  /\b(?:without saving|don't save|do not save)\b/.test(plain(goal)) ||
   requestHolds(
     goal,
-    /\b(?:discard|throw away|revert|lose (?:the |my |all |any )?(?:changes|edits))\b/,
+    /\b(?:without saving|don't save|do not save|discard|throw away|revert|lose (?:the |my |all |any )?(?:changes|edits))\b/,
   );
 /** The request asks for terminal work: a command, a script, a build, a test, git. */
 export const asksForCommand = (goal: string | undefined) =>

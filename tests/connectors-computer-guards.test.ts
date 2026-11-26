@@ -3,6 +3,7 @@ import {
   againstPage,
   askPolicy,
   asksForCommand,
+  asksToLose,
   browserCan,
   browserMethodNames,
   browserMethods,
@@ -1295,6 +1296,39 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
       );
       expect(asksForCommand("Read my mail")).toBe(false);
       expect(asksForCommand(undefined)).toBe(false);
+    });
+    it("reads a denial anywhere before the words in their part of the request as no yes", () => {
+      for (const goal of [
+        "Never run any command in the terminal",
+        "Do not type anything into the terminal, just read me the error",
+        "Please do not ever touch the git repository of the shop",
+        "Read the error. Never run any of the scripts in the repo",
+      ])
+        expect(asksForCommand(goal), goal).toBe(false);
+      for (const goal of [
+        "Don't worry about the page, run the tests in the terminal",
+        "Read the error, then run the build",
+        "Never mind the page, open the terminal",
+      ])
+        expect(asksForCommand(goal), goal).toBe(true);
+      // A denial holds over "and" up to the next mark or "but".
+      expect(asksForCommand("Never open the page and the terminal")).toBe(
+        false,
+      );
+      for (const goal of [
+        "Quit TextEdit, but never quit without saving",
+        "Close the report. Do not close it without saving",
+        "Never ever close the document without saving it",
+        "Do not quit the app and lose my changes",
+      ])
+        expect(asksToLose(goal), goal).toBe(false);
+      for (const goal of [
+        "Quit TextEdit without saving",
+        "Close the report, do not save it",
+        "Don't ask me, close the draft without saving",
+        "Throw away the changes",
+      ])
+        expect(asksToLose(goal), goal).toBe(true);
     });
     it("asks before a command that deletes, runs as an administrator, runs code from the web or publishes, whatever the request says", () => {
       const goal = "Run the build in the terminal and fix it";

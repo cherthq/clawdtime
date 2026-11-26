@@ -1368,6 +1368,11 @@ How the rows read a name:
   A request that holds the work back, puts it off or makes it hang on
   something ("hang on, reply to Sam", "reply to Sam tomorrow", "reply to Sam
   but wait for me") says no yes ahead of time: every action of the table asks.
+  For the unsaved row and the terminal row, words such as "without saving"
+  or "the terminal" say no yes when a denial comes before them in their part
+  of the request, however far: "never quit without saving" and "never run
+  any command in the terminal" ask as before. A denial holds up to the next
+  mark or "but", over "and" and "then".
 - **A text field.** A click that only gives a text field the focus asks
   nothing.
 - **A part of a control.** A click is judged by every element that it
