@@ -22,6 +22,9 @@ import TaskPanelCore
 /// - After the glide and just before the event, Stop is read once more: at this
 ///   Mac and at the service. If the person moved the mouse or pressed a key in
 ///   that time, nothing is sent and the worker asks.
+/// - The worker's picture leaves the mascot out, so it may act on a field under
+///   the mascot. Before a pointing command or typed text there, the mascot, its
+///   bar and its bubble go to a free corner, and the event waits until they are there.
 @MainActor final class HandsController: NSObject {
   private let pet: PetController
   private let input = HandsInput()
@@ -331,8 +334,9 @@ import TaskPanelCore
       guard await keyboardFree(), !(await focusIsSecure()) else { return .failure(.refused) }
       if stop.stopped { return .failure(.stoppedByPerson) }
       // The guided cursor goes to the field first. That takes a moment, so Stop and the two checks run again after it.
+      // The mascot leaves the field on the way.
       defer { guide.rest() }
-      await pointAtKeyboard(label)
+      await pointAtKeyboard(label, makeRoom: true)
       if let refusal = await lastCheck() { return .failure(refusal) }
       guard await desktop.beginInput() else { return .failure(.staleObservation) }
       defer { desktop.endInput() }
@@ -477,7 +481,8 @@ import TaskPanelCore
 
   /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,
   /// with the label of the command. With no field known it stays where it last pointed.
-  private func pointAtKeyboard(_ label: String, presentTyping: Bool = true) async {
+  /// `makeRoom`: the mascot leaves the field and the place of the cursor first, and this returns when it is there.
+  private func pointAtKeyboard(_ label: String, presentTyping: Bool = true, makeRoom clear: Bool = false) async {
     guard let map = HandsDisplay.main?.map else { return }
     let presentationGeneration = presentation.currentGeneration
     let surface = presentTyping ? presentation.currentSurface : nil
@@ -494,7 +499,20 @@ import TaskPanelCore
         overlay: map.flip(guide.presentationBounds(at: target, label: label)), observedSurface: surface,
         observedGeneration: presentationGeneration)
     }
+    let moving = clear && makeRoom(for: [PetLayout.target(map.flip(target))] + (focus.map { [$0] } ?? []), map: map)
     await travel(to: target, label: label)
+    if moving { await waitForRoom() }
+  }
+  /// The mascot, its bar and its bubble go out of the way of `targets`, in points from the top left of the
+  /// main display, when they lie on one. True when the mascot moves: the input then waits for `waitForRoom`.
+  private func makeRoom(for targets: [CGRect], map: ScreenMap) -> Bool {
+    pet.makeRoom(for: targets.map(map.flip))
+  }
+  /// Waits until the mascot stands where it went, at most `PetLayout.roomWait` seconds. Stop ends the wait,
+  /// and the check after it refuses the input.
+  private func waitForRoom() async {
+    let began = Date()
+    while !pet.roomMade, !stop.stopped, Date().timeIntervalSince(began) < PetLayout.roomWait { await pause(1.0 / 120) }
   }
   /// A command with no place of its own, such as opening an app: the cursor says it where it is.
   private func say(_ label: String) async {
@@ -516,7 +534,10 @@ import TaskPanelCore
       width: max(2, xs.max()! - xs.min()! + 2), height: max(2, ys.max()! - ys.min()! + 2))
     let overlay = map.flip(guide.presentationBounds(at: map.flip(places[0]), label: label))
     presentation.point(action.union(overlay))
+    // The mascot leaves the places while the cursor glides. The event waits until it is there.
+    let moving = makeRoom(for: places.map(PetLayout.target), map: map)
     await travel(to: map.flip(places[0]), label: label)
+    if moving { await waitForRoom() }
     if let refusal = await lastCheck() { return .failure(refusal) }
     let allowCover: Bool
     if case .click(_, _, _, _, let allow) = command { allowCover = allow == true } else { allowCover = false }

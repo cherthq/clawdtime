@@ -134,6 +134,106 @@ public enum PetLayout {
     guard shown > 0.3 else { return false }
     return buttonsArea(size: box.size, side: side).offsetBy(dx: box.minX, dy: box.minY).contains(pointer)
   }
+
+  // MARK: out of the way of the hands
+
+  /// The worker's picture leaves the mascot out, so the worker can act on a field that the mascot covers.
+  /// Before the hands click, drag, scroll or type there, the mascot goes to a corner where it covers nothing
+  /// of the target. A point of the hands counts as this square around it: the pointer and the cursor are there.
+  public static let targetReach: CGFloat = 12
+  /// The longest time that the hands wait for the mascot to arrive, in seconds. Its spring is there in about half.
+  public static let roomWait = 0.8
+
+  /// The square around one point of the hands. Null for a point that is no place.
+  public static func target(_ point: CGPoint) -> CGRect {
+    guard point.x.isFinite, point.y.isFinite else { return .null }
+    return CGRect(x: point.x - targetReach, y: point.y - targetReach, width: targetReach * 2, height: targetReach * 2)
+  }
+  /// What the mascot covers when its window is `pet`: the window, the bar under it and the bubble over it, each
+  /// when it shows. `bubble` and `controls` are their sizes.
+  public static func footprint(pet: CGRect, bubble: CGSize?, controls: CGSize?, in visible: CGRect) -> [CGRect] {
+    var parts = [pet], bar: CGRect?
+    if let controls {
+      let frame = Self.controls(size: controls, pet: pet, in: visible)
+      parts.append(frame); bar = frame
+    }
+    if let bubble { parts.append(Self.bubble(size: bubble, pet: pet, in: visible, clear: bar).frame) }
+    return parts
+  }
+  /// How many square points of `targets` the `parts` cover, each part and each target counted alone.
+  public static func covered(_ parts: [CGRect], _ targets: [CGRect]) -> Double {
+    var area = 0.0
+    for part in parts {
+      for target in targets {
+        let both = part.intersection(target)
+        if !both.isNull, both.width > 0, both.height > 0 { area += Double(both.width * both.height) }
+      }
+    }
+    return area
+  }
+  /// Where the mascot goes so that the hands can act at `targets`.
+  public struct Room: Equatable, Sendable {
+    /// The frame of the mascot's window there.
+    public let frame: CGRect
+    /// The edge that the mascot stays tucked against there. Nil for a mascot that is free.
+    public let docked: PetSide?
+    public init(frame: CGRect, docked: PetSide?) { self.frame = frame; self.docked = docked }
+  }
+  /// Where the mascot goes before the hands act at `targets`, so that neither it nor its bar nor its bubble lies
+  /// on one. All of it is on the screen of `visible`, the free part of the screen that the mascot is on. Nil:
+  /// it stays, because it covers no target, or no corner covers less of them than here.
+  ///
+  /// The places are the four corners of `visible`. A free mascot goes to a corner, `margin` from its edges. A
+  /// tucked one stays tucked, as far as now, at the top or the bottom of the left or the right edge. The nearest
+  /// corner that covers no target wins. When each one covers a target, the one that covers the least wins, and
+  /// only when it covers less than here.
+  public static func room(for targets: [CGRect], pet: CGRect, docked: PetSide?, bubble: CGSize?, controls: CGSize?,
+                          in visible: CGRect, margin: CGFloat = 6) -> Room? {
+    let real = targets.filter { target in
+      !target.isNull && !target.isInfinite && [target.minX, target.minY, target.width, target.height].allSatisfy(\.isFinite)
+        && target.width > 0 && target.height > 0
+    }
+    guard !real.isEmpty, !pet.isNull, !visible.isNull, !visible.isEmpty else { return nil }
+    let now = covered(footprint(pet: pet, bubble: bubble, controls: controls, in: visible), real)
+    guard now > 0 else { return nil }
+    let size = pet.size
+    let bottom = visible.minY + margin, top = visible.maxY - size.height - margin
+    var places: [Room] = []
+    if let docked {
+      // As far out of the screen as now.
+      let shown = max(1, min(size.width, pet.intersection(visible).isNull ? size.width : pet.intersection(visible).width))
+      for side in [docked, docked == .left ? PetSide.right : .left] {
+        let x = side == .left ? visible.minX - (size.width - shown) : visible.maxX - shown
+        for y in [bottom, top] { places.append(Room(frame: CGRect(origin: CGPoint(x: x, y: y), size: size), docked: side)) }
+      }
+    } else {
+      for x in [visible.minX + margin, visible.maxX - size.width - margin] {
+        for y in [bottom, top] { places.append(Room(frame: CGRect(origin: CGPoint(x: x, y: y), size: size), docked: nil)) }
+      }
+    }
+    func distance(_ place: Room) -> CGFloat { hypot(place.frame.minX - pet.minX, place.frame.minY - pet.minY) }
+    let scored = places.map { ($0, covered(footprint(pet: $0.frame, bubble: bubble, controls: controls, in: visible), real)) }
+    if let free = scored.filter({ $0.1 == 0 }).min(by: { distance($0.0) < distance($1.0) }) { return free.0 }
+    guard let least = scored.min(by: { $0.1 != $1.1 ? $0.1 < $1.1 : distance($0.0) < distance($1.0) }), least.1 < now else { return nil }
+    return least.0
+  }
+}
+
+/// ClawdTime's own windows: the mascot, its bubble and its bar, the chat, the bar with Stop, the guided cursor
+/// and its trail. The worker's picture leaves them out, and the hands never judge the screen by them: none is
+/// the surface of an input, a window in front of a target, or the app whose Accessibility tree gives the
+/// elements of a look. So the mascot can move out of the way of a target and no look grows stale for it.
+public enum OwnWindows {
+  /// The rows of the window list that the hands judge the screen by: windows of other processes at the level of
+  /// ordinary windows. A row that names no owner is kept, so that the check of a whole list refuses the list.
+  public static func judged(layer: Int?, owner: Int?, own: Int) -> Bool { layer == 0 && owner != own }
+  /// The app whose Accessibility tree the hands read: the app in front, or the app that owns the menu bar when
+  /// ClawdTime itself is in front. Never ClawdTime: nil then, and nil with no app in front.
+  public static func subject(front: Int?, menuBar: Int?, own: Int) -> Int? {
+    guard let front else { return nil }
+    guard front == own else { return front }
+    return menuBar == own ? nil : menuBar
+  }
 }
 
 /// What the mascot says about everything it supervises, in words and in mood.
