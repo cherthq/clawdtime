@@ -170,8 +170,9 @@ describe("credential flags and pairs", () => {
   });
 
   it("hides a credential pair or flag in a log line and keeps the rest of the line", () => {
+    // A name and a password in a pair is a sign-in: the whole line is hidden.
     expect(redactLine("auth ok user=sam pass=Riverchat2026", fakeHome)).toBe(
-      "auth ok user=sam pass [hidden]",
+      "[hidden: the line looked like it held a credential]",
     );
     expect(
       redactLine("session cookie sid=8f9a7b6c5d4e3f2a1b0c", fakeHome),
