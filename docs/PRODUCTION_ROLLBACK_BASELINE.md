@@ -9,7 +9,7 @@ that installation; automatic outgoing walkthroughs are not yet part of it.
 Checkpoint directory on the installation Mac:
 
 ```text
-/Users/garygao/.local/share/clawdtime-host/checkpoints/working-20261122T183852Z
+~/.local/share/clawdtime-host/checkpoints/working-20261122T183852Z
 ```
 
 `checkpoints/latest-working` contains its path. Preserve the dated checkpoint even
@@ -38,25 +38,25 @@ provider credentials and macOS permission records remain in their original store
 
 ## Exact working setup
 
-| Component                      | Recorded baseline                                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| Installed source               | `/Users/garygao/clawdtime-host`, branch `fix-phone-dispatch`, clean at `e76989e7d54b883dba97f2410b9c4213f13d34bb`   |
-| Repository main                | `0b3d5189251ac9f81fbb72208d6aa6a6475c5d0b`; merging main did not replace the installed runtime                      |
-| Phone startup repair           | `3915f40`                                                                                                           |
-| Qualified native desktop build | `3ba05cc`                                                                                                           |
-| Application                    | `/Users/garygao/Applications/ClawdTime Supervisor.app`                                                              |
-| App identity                   | `com.clawdtime.supervisor.anish`, ad-hoc signature, no distribution Team ID                                         |
-| Node                           | `v24.22.1`, original executable under `~/.nvm/versions/node/v24.22.1/bin/node`                                      |
-| Chert CLI                      | `0.1.0-beta.19`; original package under the same Node installation                                                  |
-| tmux                           | `3.6a`; phone session `clawdtime-line`                                                                              |
-| macOS                          | `15.8.1`, build `24H32`                                                                                             |
-| Global CLI wrapper             | `~/.nvm/versions/node/v24.22.1/bin/clawdtime` runs the installed `dist/cli/main.js`                                 |
-| Desktop launcher               | `~/.local/share/clawdtime-host/launch-desktop.py`                                                                   |
-| Desktop service                | `127.0.0.1:13416`, state `~/.local/share/clawdtime-host/desktop`, selected project `/Users/garygao/clawdtime-anish` |
-| Supervisor settings            | `~/.local/share/clawdtime-supervisor-anish/supervisor`                                                              |
-| Phone configuration            | Installed `line/.env.local`; protected contents are in the checkpoint only                                          |
-| Phone control                  | Installed `line/host.sh start`, `stop`, `status`; runtime records under `~/.local/share/clawdtime/line`             |
-| Automatic updates              | No update cron entry; `~/.local/share/clawdtime/line/update-hold` exists                                            |
+| Component                      | Recorded baseline                                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Installed source               | `~/clawdtime-host`, branch `fix-phone-dispatch`, clean at `e76989e7d54b883dba97f2410b9c4213f13d34bb`    |
+| Repository main                | `0b3d5189251ac9f81fbb72208d6aa6a6475c5d0b`; merging main did not replace the installed runtime          |
+| Phone startup repair           | `3915f40`                                                                                               |
+| Qualified native desktop build | `3ba05cc`                                                                                               |
+| Application                    | `~/Applications/ClawdTime Supervisor.app`                                                               |
+| App identity                   | `com.clawdtime.supervisor.owner`, ad-hoc signature, no distribution Team ID                             |
+| Node                           | `v24.22.1`, original executable under `~/.nvm/versions/node/v24.22.1/bin/node`                          |
+| Chert CLI                      | `0.1.0-beta.19`; original package under the same Node installation                                      |
+| tmux                           | `3.6a`; phone session `clawdtime-line`                                                                  |
+| macOS                          | `15.8.1`, build `24H32`                                                                                 |
+| Global CLI wrapper             | `~/.nvm/versions/node/v24.22.1/bin/clawdtime` runs the installed `dist/cli/main.js`                     |
+| Desktop launcher               | `~/.local/share/clawdtime-host/launch-desktop.py`                                                       |
+| Desktop service                | `127.0.0.1:13416`, state `~/.local/share/clawdtime-host/desktop`, selected project `~/clawdtime-owner`  |
+| Supervisor settings            | `~/.local/share/clawdtime-supervisor-owner/supervisor`                                                  |
+| Phone configuration            | Installed `line/.env.local`; protected contents are in the checkpoint only                              |
+| Phone control                  | Installed `line/host.sh start`, `stop`, `status`; runtime records under `~/.local/share/clawdtime/line` |
+| Automatic updates              | No update cron entry; `~/.local/share/clawdtime/line/update-hold` exists                                |
 
 The desktop launcher explicitly sets `CLAWDTIME_SIMULATION_JOBS=on`,
 `CLAWDTIME_JOB_AGENT=claude`, `CLAWDTIME_COMPUTER_TIMING=on`,
@@ -113,7 +113,7 @@ The proactive deployment on November 22 installed a pinned journal-retention
 adapter. The historical stop/start commands below describe the captured baseline;
 **do not run its unguarded host wrapper after this migration**. Keep the new
 immutable release's `line/host.sh` and retention preload. To select baseline agent
-code, supply `CLAWDTIME_LINE_RELEASE=/Users/garygao/clawdtime-host/line`, the original
+code, supply `CLAWDTIME_LINE_RELEASE=~/clawdtime-host/line`, the original
 `CLAWDTIME_LINE_ENV_FILE`, and the installed protected
 `CLAWDTIME_LINE_RETENTION_CONFIG`. Disable new admissions and reconcile ownership
 before switching. Restore the desktop's original configuration fingerprint only
@@ -132,7 +132,7 @@ and [MEDIA_INTEGRATION.md](MEDIA_INTEGRATION.md) for the installed interface.
    Git bundle, and run `codesign --verify --deep --strict` on the saved app. Confirm
    that the target OS/architecture and dependency paths remain compatible.
 3. Inspect the current desktop-service descriptor and live command line. Stop only
-   this installation's host (`/Users/garygao/clawdtime-host/line/host.sh stop` when
+   this installation's host (`~/clawdtime-host/line/host.sh stop` when
    that is the active launcher), desktop launcher/service and matching panel at an
    idle boundary. Wait for confirmed exit. Do not reuse a historical PID, restore
    a stale `desktop-service.json`, or terminate unrelated services.

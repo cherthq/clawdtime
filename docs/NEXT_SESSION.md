@@ -133,7 +133,7 @@ native targets resolved, and fresh call-continuity grants were prepared at
 `2809bb0`. The new Python process loaded the capture-pacing repair. Current native
 identity, idle-line and exclusive standby checks preceded one call.
 
-Attempt `call_attempt_b0bfed97-240b-4fe2-9fc8-3137ccf87d84` completed media preparation
+Attempt `call_attempt_<attempt-id>` completed media preparation
 and native dialing. Sharing then retired while still prepared, before speech:
 
 - First reason: **frame_stale**, elapsed 16,458 ms.
@@ -149,26 +149,26 @@ specific offline regression but did **not** resolve this live failure. Continuou
 sharing, scene switching, acceptance and explicit sharing Stop were not physically
 exercised. The lead submitted one exact Stop during cleanup without redialing.
 
-Restoration deployment `2197b683-d03e-4381-9c37-d8cda54d9a12` succeeded and matched
+Restoration deployment `<deployment-id>` succeeded and matched
 all original variables. Actual runtime/environment are live, traffic true, with
 zero pending/unknown hosted effects and active calls. Standby deployment
-`9ef7a104-6e6f-4aea-9780-6b7aea93a2b2` is removed. Private bounded metadata and
+`<deployment-id>` is removed. Private bounded metadata and
 restore proofs: `continuity-retest-2-20261119/` under the rehearsal root below.
 
 ## Preserved tasks and local owner
 
-Worktree: `/Users/garygao/clawdtime-coding-demo`, branch `demo/coding-flow`.
+Worktree: `~/clawdtime-coding-demo`, branch `demo/coding-flow`.
 Private rehearsal root:
-`/Users/garygao/.local/share/clawdtime-desktop-call-rehearsal-20261118`.
+`~/.local/share/clawdtime-desktop-call-rehearsal-20261118`.
 
 Current selected task:
 
-- `task_a3f116c1-d47f-44d6-ac43-ef5d7533b996`, **review_ready**, revision 3.
-- One completed run: `run_2505bcd1-26a4-460d-a77a-8da63f441099`.
-- Passing verification: `verification_218a8983-9323-4095-9173-d3a797fbdb4f`.
+- `task_<task-id>`, **review_ready**, revision 3.
+- One completed run: `run_<run-id>`.
+- Passing verification: `verification_<verification-id>`.
 - Result: case-insensitive title filter, No tasks match and Clear filters.
 
-Earlier accepted task `task_764461fc-cbc7-4829-8491-33b7947971ec` remains accepted
+Earlier accepted task `task_<task-id>` remains accepted
 revision 12 with three historical runs. Its acceptance did not start another run.
 Preserve both tasks and all historical unknown effects; confirmed cleanup does
 not rewrite an unknown activation outcome into success.
@@ -188,8 +188,8 @@ Preview: `http://127.0.0.1:8767/`. TextEdit: `Rehearsal source.txt` and
 actual tab and document contents; TextEdit may retain old buffers. All three exact
 windows must be on one desktop, with stable identities/geometry, before preparing
 fresh grants. Used capture grants must never be replayed. Screens/audio remain
-transient. The unrelated desktop task, original checkout, Apple Teams and sibling
-chert-facetime remain untouched.
+transient. The unrelated desktop task, original checkout, the source project and the sibling
+private repository remain untouched.
 
 ## Investigation before another handset test
 

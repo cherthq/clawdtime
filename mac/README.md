@@ -256,7 +256,7 @@ and gateway secrets are distinct from each other and from the agent pairing toke
 
 The companion remains stopped until the tester grants Screen Recording, separately
 Accessibility for control, and chooses Enable locally. This command never grants
-TCC, starts capture, installs over another app, or modifies Apple Teams. Disconnect
+TCC, starts capture, installs over another app, or modifies the source project. Disconnect
 through ClawdTime and use local Stop before quitting the companion and gateway;
 retain their receipt ledgers for reconciliation. `configure.py` does not implement
 remote revocation by itself; active leases also expire within 30 seconds.

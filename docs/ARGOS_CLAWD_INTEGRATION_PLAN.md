@@ -366,14 +366,14 @@ quality are not yet accepted. See the latest checkpoint in
 must still perform and verify native actions; this controller never dispatches them.
 
 Current operational checkpoint (November 17): the user-approved ClawdTime release
-is deployed and this Mac has a fresh 9741/HackPton pairing in standby. Both macOS
+is deployed and this Mac has a fresh 0100/HackPton pairing in standby. Both macOS
 permissions pass after refreshing the exact companion entries; capture stays off.
 See `docs/IMPLEMENTATION_ARGOS_REVIEW.md` for deployment IDs and remaining demo
 steps. Provider upgrade remains withdrawn; no reassignment or FaceTime call.
 
 Draft: November 16, 2026. Revised for general app presentation and CUA.
 First local implementation slice reviewed in simulation; local commit authorized.
-Workspace: `/Users/garygao/clawdtime`, branch `ArgosClawd`.
+Workspace: `~/clawdtime`, branch `ArgosClawd`.
 Reference lab commit: `43441ad`; Argos upstream reference:
 `7ee7310da8c902f3770861b27bdaf0941b301589`.
 
@@ -381,7 +381,7 @@ Reference lab commit: `43441ad`; Argos upstream reference:
 
 ### Production-demo preparation — November 17, 2026
 
-Use the existing 9741 assignment within HackPton. The user dropped the proposed
+Use the existing 0100 assignment within HackPton. The user dropped the proposed
 native messaging upgrade; its candidate must not be installed. ClawdTime now has
 an explicit `standard_once` adapter for the existing send API, with durable unknown
 outcomes and no automatic resubmission or route fallback. Strict receipt mode
@@ -389,7 +389,7 @@ remains the default for older configurations. Matched camera source and companio
 artifacts are prepared locally; production rollout and a fresh exact-line Mac
 pairing remain pending. Preserve all existing records and assignments. No FaceTime
 call is authorized yet. See the current demo section of the implementation review
-for 950-test validation, component checks and GET-only 9741 preflight evidence.
+for 950-test validation, component checks and GET-only 0100 preflight evidence.
 
 The next coding session is **IMPLEMENTATION_ARGOS**. Its executable handoff is
 [IMPLEMENTATION_ARGOS_SESSION_PROMPT.md](IMPLEMENTATION_ARGOS_SESSION_PROMPT.md).
@@ -433,7 +433,7 @@ provider, live line, voice frontend, or FaceTime test was changed by this slice.
 
 ### Current project context
 
-- Work in `/Users/garygao/clawdtime` on exactly `ArgosClawd`. At handoff, HEAD is
+- Work in `~/clawdtime` on exactly `ArgosClawd`. At handoff, HEAD is
   `43441adea70044bbd69c83f807b03543d59b2a2d` and the branch has been pushed to
   `cherthq/clawdtime`. Nothing was pushed to the original Argos repository.
 - The checkout contains substantial pre-existing modified/untracked conversation,
@@ -442,7 +442,7 @@ provider, live line, voice frontend, or FaceTime test was changed by this slice.
   inspected functionality. Do not reset, clean, stash everything, or stage broadly.
 - `experiments/argos/` contains the committed portable lab and patch artifact.
   Its ignored `source/` is an unmodified upstream checkout. The separate operational
-  lab at `/Users/garygao/argos-lab` remains outside this implementation's write scope.
+  lab in a private folder remains outside this implementation's write scope.
 - The completed live lab test proved audible conversation and a synthetic camera,
   not general desktop capture/control. Temporary test access was removed. Historical
   line/credential/deployment notes are not current readiness or permission to dial.

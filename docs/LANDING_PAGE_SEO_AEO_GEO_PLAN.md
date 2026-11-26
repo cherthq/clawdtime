@@ -16,7 +16,7 @@ These are effort and product-fit priorities, not a traffic forecast. ClawdTime s
 
 ## Scope and evidence
 
-Reviewed the supplied meeting transcript, the complete [recommended Chert search plan](https://claude.ai/artifact/V1Vddop1Sc1HLuPhVMywsH), [Juno’s homepage](https://junocompanion.com/), its [low-histamine article](https://junocompanion.com/blog/treatments-and-medication/low-histamine-diet), and [Revnu](https://revnu.com/). Also reviewed ClawdTime’s implementation/session plans, current source, README, latest status and release records, live public HTML and response headers. Public checks were made November 13, 2026, around 4 p.m. Eastern.
+Reviewed the supplied meeting transcript, the complete recommended Chert search plan, [Juno’s homepage](https://junocompanion.com/), its [low-histamine article](https://junocompanion.com/blog/treatments-and-medication/low-histamine-diet), and [Revnu](https://revnu.com/). Also reviewed ClawdTime’s implementation/session plans, current source, README, latest status and release records, live public HTML and response headers. Public checks were made November 13, 2026, around 4 p.m. Eastern.
 
 The meeting and artifact mainly concern **Chert’s API business**. Their keyword volumes, backlink counts, pricing, customer examples and ranking claims are not ClawdTime evidence. They have not been independently re-audited here. ClawdTime’s site is served by the existing Hono/TypeScript backend on Railway, using static HTML/CSS/JavaScript. Chert’s Next.js/Vercel file references do not apply.
 
@@ -253,7 +253,7 @@ The initial planning task changed only this document. The subsequently approved 
 ## Sources and reproducibility
 
 - User-supplied meeting transcript, November 13. Used for strategic themes; unrelated personal discussion omitted.
-- [Recommended Chert search plan](https://claude.ai/artifact/V1Vddop1Sc1HLuPhVMywsH): read in the browser, including all sections. Its metrics remain attributed, unverified Chert claims.
+- Recommended Chert search plan: read in the browser, including all sections. Its metrics remain attributed, unverified Chert claims.
 - [Juno homepage](https://junocompanion.com/) and [article example](https://junocompanion.com/blog/treatments-and-medication/low-histamine-diet): inspected for structure, not medical advice or verified traffic performance.
 - [Revnu homepage](https://revnu.com/): inspected for positioning and navigation patterns, not proof of SEO results.
 - [ClawdTime](https://www.clawdtime.com/), [pricing](https://www.clawdtime.com/pricing), [setup](https://www.clawdtime.com/setup), [agent instructions](https://www.clawdtime.com/agents), plus robots/sitemap/pair and domain-variant HTTP checks.

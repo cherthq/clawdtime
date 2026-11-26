@@ -11,7 +11,7 @@ are in MIGRATION_MEDIA.md. This project does not install or alter Chert workers.
 - Media: Python, port 4212, independent `.data/clawdtime-media.sqlite` (production
   volume `/data/media.sqlite` must be a new volume). Gateway/media/API/helper
   secrets are distinct. Credential field names are protocol configuration, not
-  permission to reuse Apple Teams credentials or volume state.
+  permission to reuse the source project's credentials or volume state.
 
 Build/package with `./mac/scripts/package.sh`. This creates
 `mac/build/ClawdTime Companion.app` and verifies an ad-hoc signature by default.
@@ -93,7 +93,7 @@ disposable fixture, plus lock, sleep, disconnect and hangup. Keep capture disarm
 when not testing. Tests alone establish no physical acceptance or installation.
 
 Stop/disconnect before rollback. Preserve helper/gateway/media ledgers and reconcile
-unknown input by the same ID. Never import Apple Teams data or reset receipts to
+unknown input by the same ID. Never import source project data or reset receipts to
 force a retry. A restarted helper remains stopped; reconnect cannot rearm it.
 
 ## Local evidence, November 11, 2026
@@ -112,7 +112,7 @@ against an attached display followed by the actual `--check-config` binary passe
 resulting files were mode 0600. The temporary fixture was deleted. Nothing was
 installed, armed, granted Screen Recording/Accessibility or launched as a listener.
 
-Apple Teams was rechecked read-only after migration: still clean on audited
+The source project was rechecked read-only after migration: still clean on audited
 `be47b11fe1317c4747db4121bec37896998b5201`. No production runtime state was imported.
 
 ## Independent installation follow-up
@@ -126,34 +126,34 @@ passed. New scoped readiness tests bring counts to **57 media, 15 gateway and
 binary's `--check-config`; gateway startup validation created no ledger or network
 connection. These checks do not establish the later installation or TCC grants.
 
-The coordinating lead performs these steps. No command here changes Apple Teams.
+The coordinating lead performs these steps. No command here changes the source project.
 Do not replace an existing ClawdTime app/configuration without checking its active
 leases and preserving its receipts. Commands assume the stable internal checkout.
 
 ```sh
 # Build before installing; once permissions are granted keep the stable app path.
 ./mac/scripts/package.sh
-mkdir -p /Users/garygao/Applications
-test ! -e '/Users/garygao/Applications/ClawdTime Companion.app' && \
-  ditto '/Users/garygao/clawdtime/mac/build/ClawdTime Companion.app' \
-        '/Users/garygao/Applications/ClawdTime Companion.app'
-codesign --verify --deep --strict '/Users/garygao/Applications/ClawdTime Companion.app'
+mkdir -p /Users/you/Applications
+test ! -e '/Users/you/Applications/ClawdTime Companion.app' && \
+  ditto '/Users/you/clawdtime/mac/build/ClawdTime Companion.app' \
+        '/Users/you/Applications/ClawdTime Companion.app'
+codesign --verify --deep --strict '/Users/you/Applications/ClawdTime Companion.app'
 
 # Empty ACL bootstrap allows metadata/permission setup, never viewing or control.
-python3 mac/scripts/configure.py --bootstrap-device clawdtime_gary_mac \
-  --directory '/Users/garygao/Library/Application Support/ClawdTimeCompanion/setup' \
-  --relay-url wss://media-production-33fda109.up.railway.app/device-gateway \
-  --app '/Users/garygao/Applications/ClawdTime Companion.app'
+python3 mac/scripts/configure.py --bootstrap-device clawdtime_owner_mac \
+  --directory '/Users/you/Library/Application Support/ClawdTimeCompanion/setup' \
+  --relay-url wss://media.example.com/device-gateway \
+  --app '/Users/you/Applications/ClawdTime Companion.app'
 
-open '/Users/garygao/Applications/ClawdTime Companion.app' --args --config \
-  '/Users/garygao/Library/Application Support/ClawdTimeCompanion/setup/helper.json'
+open '/Users/you/Applications/ClawdTime Companion.app' --args --config \
+  '/Users/you/Library/Application Support/ClawdTimeCompanion/setup/helper.json'
 python3 mac/scripts/doctor.py --config \
-  '/Users/garygao/Library/Application Support/ClawdTimeCompanion/setup/helper.json'
+  '/Users/you/Library/Application Support/ClawdTimeCompanion/setup/helper.json'
 ```
 
 The installed app's setup window has **Grant Screen Recording…** and **Grant
 Accessibility…**. The tester must authorize **ClawdTime Companion** in the relevant
-macOS Privacy & Security panes; grants to Apple Teams do not apply to this new
+macOS Privacy & Security panes; grants to the source project do not apply to this new
 bundle. macOS may require quitting/reopening ClawdTime after Screen Recording.
 Leave local Enable off during preparation. An empty bootstrap ACL still prevents
 all capture/input if Enable is chosen, but it is not a verified messaging pairing.
@@ -163,8 +163,8 @@ After the controlled line handoff supplies a real authenticated pairing receipt:
 ```sh
 chmod 600 /absolute/private/clawdtime-pairing.json
 python3 mac/scripts/configure.py --claim /absolute/private/clawdtime-pairing.json \
-  --activate-existing '/Users/garygao/Library/Application Support/ClawdTimeCompanion/setup' \
-  --app '/Users/garygao/Applications/ClawdTime Companion.app'
+  --activate-existing '/Users/you/Library/Application Support/ClawdTimeCompanion/setup' \
+  --app '/Users/you/Applications/ClawdTime Companion.app'
 ```
 
 Activation verifies the exact bootstrap device and attached display. It changes
@@ -183,12 +183,12 @@ the **independent** ClawdTime media service, with `DEVICE_GATEWAY_RELAY=true` an
 `MEDIA_DEVICES_ENABLED=true`. Never print the key or put it in a LaunchAgent plist.
 
 ```sh
-/Users/garygao/clawdtime/media/.venv/bin/python /Users/garygao/clawdtime/gateway/start.py \
-  --config '/Users/garygao/Library/Application Support/ClawdTimeCompanion/setup/gateway.json' \
+/Users/you/clawdtime/media/.venv/bin/python /Users/you/clawdtime/gateway/start.py \
+  --config '/Users/you/Library/Application Support/ClawdTimeCompanion/setup/gateway.json' \
   --check-config
 python3 mac/scripts/prepare_launchagent.py \
-  --config '/Users/garygao/Library/Application Support/ClawdTimeCompanion/setup/gateway.json' \
-  --output '/Users/garygao/Library/LaunchAgents/com.clawdtime.gateway.plist'
+  --config '/Users/you/Library/Application Support/ClawdTimeCompanion/setup/gateway.json' \
+  --output '/Users/you/Library/LaunchAgents/com.clawdtime.gateway.plist'
 ```
 
 The preparation script writes only the new ClawdTime plist, refuses overwrites,
@@ -200,14 +200,14 @@ opening SQLite. Do not run direct `relay.py` alongside the wrapper.
 
 Read media `/health`: `service` must be `clawdtime-media`, and
 `deviceGatewayConnected:true` establishes only transport connectivity. Authenticated
-`GET /devices/clawdtime_gary_mac/readiness/<memberId>/<displayId>` checks exact
+`GET /devices/clawdtime_owner_mac/readiness/<memberId>/<displayId>` checks exact
 loaded ACLs and permissions without capture. Backend doctor handles this scoped
 request and reports missing steps. `activeSessions:0` and `activeLease:false` are
 required during preparation. Phone identity and line ownership are separate gates.
 
 Rollback: use local Stop, quit only ClawdTime Companion, and `launchctl bootout`
 only `gui/<uid>/com.clawdtime.gateway`. Keep the setup directory, gateway SQLite
-and companion receipt journal. Do not uninstall or alter the Apple Teams app,
+and companion receipt journal. Do not uninstall or alter the source project's app,
 LaunchAgents, port 3213, receipts or permissions.
 
 Setup preflight now checks the exact app executable before creating a bootstrap
@@ -218,7 +218,7 @@ including exact device/member/display read-only routing.
 
 Gateway follow-up: the local framework Python installation had no default CA
 bundle. Outbound WSS now loads the pinned certifi bundle explicitly while retaining
-certificate and hostname verification. No system trust settings or Apple Teams
+certificate and hostname verification. No system trust settings or source project
 runtime are changed. Gateway tests now total 18, including offline rejection of an
 untrusted TLS certificate. Install updated `gateway/requirements.txt` in the
 independent gateway environment before the lead restarts its wrapper. The companion
@@ -246,7 +246,7 @@ signature can require renewed macOS grants. No test grants or arms the helper.
 ### Permission identity diagnosis after the relaunch fix
 
 Read-only inspection on November 11 found one running companion at the installed
-`/Users/garygao/Applications/ClawdTime Companion.app` path. Its executable matched
+`/Users/you/Applications/ClawdTime Companion.app` path. Its executable matched
 the `abfdeb7e…` release build above, and strict signature verification passed.
 The designated requirement was solely
 `cdhash H"59feac9a1e76b41d5da86e2f2ef20151d026c84e"`, with no sandbox entitlements.

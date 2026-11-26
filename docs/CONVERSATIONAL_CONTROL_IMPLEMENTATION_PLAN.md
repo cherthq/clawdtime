@@ -48,9 +48,9 @@ At handoff:
   do not discard it to switch to main. Never create/use a `codex/` branch. Follow
   project instructions when choosing main or a generic descriptive branch.
 - Backend release source: `7f1b687`, deployment
-  `c6d304b4-d42b-4deb-8130-0fd5f8bf1063`.
+  `<deployment-id>`.
 - Media startup fix source: `f7611d2`, deployment
-  `cb123fed-509f-499b-93b5-a30b88a2d3cc`. Python source matched the deployed files.
+  `<deployment-id>`. Python source matched the deployed files.
 - `a5af1f3` fixes local timing inspection; it is not a new hosted release.
 - The prior foreground test bridges were closed. Do not reuse their stopped
   sessions, task approvals or call identifiers for new effects.
@@ -362,7 +362,7 @@ before touching deployed services; prepare rollback that preserves new job data
 and does not replay the outbox or resurrect old call sessions.
 
 Only the lead may handle secrets, install/restart components, deploy or own the
-live line. Never modify Apple Teams or `chert-facetime`, or copy their runtime data.
+live line. Never modify the source project or the sibling private repository, or copy their runtime data.
 Use the existing dedicated ClawdTime binding from protected configuration; older
 Liam/Lucas handoff prose is not a new instruction to transfer a line. Recheck idle
 ownership and unknown effects before rollout. No new paid plan/account/line is
@@ -387,9 +387,9 @@ Reviewed November 13, 2026; versions and availability must be freshly verified.
 - [Partner integrations](https://developers.openai.com/api/docs/guides/live-partner-integrations)
 - [LiveKit GPT-Live integration and limitations](https://docs.livekit.io/agents/models/realtime/gpt-live/)
 - [Realtime interruption behavior, a distinct API](https://developers.openai.com/api/docs/guides/realtime-conversations)
-- [FaceTimeOS continuous audio/interruption](https://github.com/dylanelu/FaceTimeOS/blob/main/backend/call.py)
-- [FaceTimeOS utterance-to-agent bridge](https://github.com/dylanelu/FaceTimeOS/blob/main/backend/main.py)
-- [FaceTimeOS agent worker lifecycle](https://github.com/dylanelu/FaceTimeOS/blob/main/Agent-S/src/s3/app.py)
+- FaceTimeOS continuous audio/interruption
+- FaceTimeOS utterance-to-agent bridge
+- FaceTimeOS agent worker lifecycle
 
 Borrow mechanisms after checking license/provenance; do not copy secrets, logging
 of private transcripts, arbitrary generated-code execution, or assumptions from

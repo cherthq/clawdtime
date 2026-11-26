@@ -249,7 +249,7 @@ Owner: coordinating lead; independent reviewer checks authorization and recovery
 Build a versioned local artifact with pinned dependencies and an installation
 manifest. Preserve protected configuration, existing receipts and prior code.
 Work in the existing main checkout or a permitted descriptive branch; retain
-all current unmerged changes. Do not modify Apple Teams or sibling services.
+all current unmerged changes. Do not modify the source project or sibling services.
 
 Before cutover, verify the line and both controllers are idle, no unresolved
 input exists, and the previous controller has released ownership. Start the new

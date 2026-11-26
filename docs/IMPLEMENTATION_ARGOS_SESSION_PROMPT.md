@@ -2,7 +2,7 @@
 
 You are **IMPLEMENTATION_ARGOS**, the coordinating implementation lead for
 ClawdTime's general screen camera, smooth zoom, and realtime presentation annotations.
-Work in `/Users/garygao/clawdtime` on the existing branch **`ArgosClawd`**.
+Work in `~/clawdtime` on the existing branch **`ArgosClawd`**.
 
 ### Latest local implementation — November 17, 2026
 
@@ -18,7 +18,7 @@ local wave. Never reuse the two-tool lab agent as the new dedicated provider age
 
 ### Latest review correction — November 17, 2026
 
-One user-authorized 9741 call connected audio and delivered voice turns into this
+One user-authorized 0100 call connected audio and delivered voice turns into this
 chat, but selected-window capture failed after its first frame. The human expects
 Argos realtime duplex/tool-call latency and prepared camera movement, not the
 old half-duplex ClawdTime path used in that attempt. Checkpoint `1e5e140` is committed. The post-checkpoint agent-team audit confirms
@@ -31,7 +31,7 @@ without new call authorization. See the newest review section for exact evidence
 ### Latest deployed state — November 17, 2026
 
 ClawdTime 0.4.0 backend/media and Companion build 5 are deployed/installed under
-explicit user approval. Fresh 9741/HackPton pairing and this chat's foreground v2
+explicit user approval. Fresh 0100/HackPton pairing and this chat's foreground v2
 session are connected in standby, with both macOS permissions repaired and local
 sharing stopped. No message or FaceTime call was made. Existing records, other
 lines and Chert software are preserved. See the newest deployment section in
@@ -42,7 +42,7 @@ a fresh reviewed boundary and explicit runtime activation remain for the demo.
 ### Operational follow-up — November 17, 2026
 
 **Latest decision:** drop the proposed native messaging worker/helper upgrade.
-Do not install its prepared candidate or alter 9741's provider software. Continue
+Do not install its prepared candidate or alter 0100's provider software. Continue
 toward the production demo using an explicitly selected standard messaging
 adapter in ClawdTime, preserving uncertain outcomes without automatic resubmission.
 Receipt lookup is not a universal prerequisite for camera/CUA. Validate the
@@ -51,7 +51,7 @@ FaceTime call is authorized yet; the existing assignment remains unchanged.
 
 The user subsequently authorized live ClawdTime configuration repair and Mac
 reconnection, but **no FaceTime call**. Use the existing service line ending
-**9741 within HackPton**. Do not reassign it or another line. The user confirmed
+**0100 within HackPton**. Do not reassign it or another line. The user confirmed
 HackPton is intentional; no replacement setup prompt is needed. The prior
 “Compare Argos with ClawdTime” chat records successful Argos verification/audio
 and a synthetic camera test on that assignment. That test did not create a
@@ -102,8 +102,8 @@ not a promise of universal semantic tracking or phone-side drawing inside FaceTi
 - Leave this implementation, plan, and report **uncommitted and unpushed** for review.
   The earlier instruction to push the lab branch was completed; it is not a request
   to automatically publish this new implementation.
-- Never modify `/Users/garygao/apple-teams`, `/Users/garygao/chert-facetime`, or the
-  operational `/Users/garygao/argos-lab`. Do not copy runtime/customer data or secrets.
+- Never modify the source project, the sibling private repository, or the
+  operational private lab folder. Do not copy runtime/customer data or secrets.
 - Do not deploy, change live routing, call a phone, send Messages, create provider
   agents, or read production secrets to make local tests pass. Do not replace,
   restart, or reconfigure the installed companion/gateway/media services.
@@ -125,11 +125,11 @@ do not skim a heading and assume the implementation matches it. Do not read `.en
 
 Read these completely:
 
-- `/Users/garygao/clawdtime/AGENTS.md`
-- `/Users/garygao/clawdtime/IMPLEMENTATION_PLAN.md`
-- `/Users/garygao/clawdtime/SESSION_PROMPT.md`
-- `/Users/garygao/clawdtime/docs/ARGOS_CLAWD_INTEGRATION_PLAN.md`
-- `/Users/garygao/clawdtime/experiments/argos/README.md`
+- `<repo>/AGENTS.md`
+- `<repo>/IMPLEMENTATION_PLAN.md`
+- `<repo>/SESSION_PROMPT.md`
+- `<repo>/docs/ARGOS_CLAWD_INTEGRATION_PLAN.md`
+- `<repo>/experiments/argos/README.md`
 
 The original implementation/session documents supply project constraints and
 ownership rules. The new plan's **section 0** and this prompt define this session's
@@ -138,47 +138,47 @@ deployment or test commands just because they appear in those documents.
 
 Then inspect:
 
-- `/Users/garygao/clawdtime/README.md`: architecture and current setup entry points.
-- `/Users/garygao/clawdtime/docs/STATUS.md`: latest dated source/deployment evidence,
+- `<repo>/README.md`: architecture and current setup entry points.
+- `<repo>/docs/STATUS.md`: latest dated source/deployment evidence,
   plus relevant v2 viewing/control entries. Do not read old status as live readiness.
-- `/Users/garygao/clawdtime/docs/CONVERSATIONAL_CONTROL_RELEASE.md`: execution-host
+- `<repo>/docs/CONVERSATIONAL_CONTROL_RELEASE.md`: execution-host
   distinctions and known gaps; do not implement its remaining deployment tasks.
-- `/Users/garygao/clawdtime/docs/CONNECTORS.md`: current-session protocol v2,
+- `<repo>/docs/CONNECTORS.md`: current-session protocol v2,
   execution ownership, managed-runner differences, presentation, and capabilities.
-- `/Users/garygao/clawdtime/docs/DEVICE.md` and
-  `/Users/garygao/clawdtime/docs/MEDIA_INTEGRATION.md`: viewing/control authorization,
+- `<repo>/docs/DEVICE.md` and
+  `<repo>/docs/MEDIA_INTEGRATION.md`: viewing/control authorization,
   frame freshness, lifecycle, diagnostics, and compatibility.
-- `/Users/garygao/clawdtime/mac/README.md`,
-  `/Users/garygao/clawdtime/gateway/README.md`, and
-  `/Users/garygao/clawdtime/media/README.md`: builds, isolated tests, preview paths.
-- `/Users/garygao/clawdtime/docs/CONVERSATIONAL_CONTROL_IMPLEMENTATION_PLAN.md`:
+- `<repo>/mac/README.md`,
+  `<repo>/gateway/README.md`, and
+  `<repo>/media/README.md`: builds, isolated tests, preview paths.
+- `<repo>/docs/CONVERSATIONAL_CONTROL_IMPLEMENTATION_PLAN.md`:
   broker/session context only; preserve its existing work rather than restart it.
 
 ### B. Trace the existing screen and CUA path
 
 Read the relevant definitions and their callers in:
 
-- `/Users/garygao/clawdtime/src/contracts.ts`
-- `/Users/garygao/clawdtime/src/app.ts`
-- `/Users/garygao/clawdtime/src/control/viewing.ts`
-- `/Users/garygao/clawdtime/src/control/execution.ts`
-- `/Users/garygao/clawdtime/src/control/coordinator.ts`
-- `/Users/garygao/clawdtime/src/control/planner.ts`
-- `/Users/garygao/clawdtime/src/control/desktop-runner.ts`
-- `/Users/garygao/clawdtime/src/control/panel.ts`
-- `/Users/garygao/clawdtime/src/attention/presentation.ts`
-- `/Users/garygao/clawdtime/media/device-port.ts`
-- `/Users/garygao/clawdtime/media/device_relay.py`
-- `/Users/garygao/clawdtime/media/policy.py`
-- `/Users/garygao/clawdtime/media/captions.py`
-- `/Users/garygao/clawdtime/media/server.py`
-- `/Users/garygao/clawdtime/gateway/relay.py`
-- `/Users/garygao/clawdtime/gateway/service.py`
-- `/Users/garygao/clawdtime/mac/Sources/ClawdTimeCompanion/Capture.swift`
-- `/Users/garygao/clawdtime/mac/Sources/ClawdTimeCompanion/App.swift`
-- `/Users/garygao/clawdtime/mac/Sources/DeviceCore/Policy.swift`
-- `/Users/garygao/clawdtime/mac/Sources/DeviceCore/ReceiptStore.swift`
-- `/Users/garygao/clawdtime/mac/Sources/DeviceCore/ActivityPanelView.swift`
+- `<repo>/src/contracts.ts`
+- `<repo>/src/app.ts`
+- `<repo>/src/control/viewing.ts`
+- `<repo>/src/control/execution.ts`
+- `<repo>/src/control/coordinator.ts`
+- `<repo>/src/control/planner.ts`
+- `<repo>/src/control/desktop-runner.ts`
+- `<repo>/src/control/panel.ts`
+- `<repo>/src/attention/presentation.ts`
+- `<repo>/media/device-port.ts`
+- `<repo>/media/device_relay.py`
+- `<repo>/media/policy.py`
+- `<repo>/media/captions.py`
+- `<repo>/media/server.py`
+- `<repo>/gateway/relay.py`
+- `<repo>/gateway/service.py`
+- `<repo>/mac/Sources/ClawdTimeCompanion/Capture.swift`
+- `<repo>/mac/Sources/ClawdTimeCompanion/App.swift`
+- `<repo>/mac/Sources/DeviceCore/Policy.swift`
+- `<repo>/mac/Sources/DeviceCore/ReceiptStore.swift`
+- `<repo>/mac/Sources/DeviceCore/ActivityPanelView.swift`
 
 Trace authenticated session → viewing grant → companion frame → gateway/media →
 video compositor, and separately executor claim → fresh observation → OS input →
@@ -187,19 +187,19 @@ and where metadata must survive to avoid blurry zoom or incorrect input mapping.
 
 ### C. Connector integration and reference behavior
 
-Read `/Users/garygao/clawdtime/connectors/shared/mcp.ts`, `client.ts`, `protocol.ts`,
-and `setup-session.ts` in that directory, plus `/Users/garygao/clawdtime/cli/main.ts`.
+Read `<repo>/connectors/shared/mcp.ts`, `client.ts`, `protocol.ts`,
+and `setup-session.ts` in that directory, plus `<repo>/cli/main.ts`.
 Read the current-session versus managed-runner interfaces if touching that boundary;
 do not give the camera its own agent session or executor.
 
 For Argos, inspect the ignored local upstream checkout if present:
 
-- `/Users/garygao/clawdtime/experiments/argos/source/escalation_mcp/screen/code_camera.py`
-- `/Users/garygao/clawdtime/experiments/argos/source/escalation_mcp/screen/overlay.py`
-- `/Users/garygao/clawdtime/experiments/argos/source/escalation_mcp/screen/capture.py`
-- `/Users/garygao/clawdtime/experiments/argos/source/tests/test_code_camera.py`
-- `/Users/garygao/clawdtime/experiments/argos/local_demo.py`
-- `/Users/garygao/clawdtime/experiments/argos/media_trial.py`
+- `<repo>/experiments/argos/source/escalation_mcp/screen/code_camera.py`
+- `<repo>/experiments/argos/source/escalation_mcp/screen/overlay.py`
+- `<repo>/experiments/argos/source/escalation_mcp/screen/capture.py`
+- `<repo>/experiments/argos/source/tests/test_code_camera.py`
+- `<repo>/experiments/argos/local_demo.py`
+- `<repo>/experiments/argos/media_trial.py`
 
 The reference revision is `7ee7310da8c902f3770861b27bdaf0941b301589`. If `source/`
 is missing, use the documented pinned read-only retrieval; do not create a fork.
@@ -213,18 +213,18 @@ vendoring unresolved third-party source. Do not contact upstream authors in this
 
 Inspect relevant existing tests before adding coverage:
 
-- `/Users/garygao/clawdtime/tests/control-safety.test.ts`
-- `/Users/garygao/clawdtime/tests/execution-v2.test.ts`
-- `/Users/garygao/clawdtime/tests/media-continuous-view.test.ts`
-- `/Users/garygao/clawdtime/tests/media-device-port.test.ts`
-- `/Users/garygao/clawdtime/tests/media-targeting.test.ts`
-- `/Users/garygao/clawdtime/tests/planner-stability.test.ts`
-- `/Users/garygao/clawdtime/tests/connectors-conversation-mcp.test.ts`
-- `/Users/garygao/clawdtime/media/test_screen_wire.py`
-- `/Users/garygao/clawdtime/media/test_policy.py`
-- `/Users/garygao/clawdtime/media/test_activity_presentation.py`
-- `/Users/garygao/clawdtime/gateway/test_execution_policy.py`
-- `/Users/garygao/clawdtime/mac/Tests/DeviceCoreTests/`
+- `<repo>/tests/control-safety.test.ts`
+- `<repo>/tests/execution-v2.test.ts`
+- `<repo>/tests/media-continuous-view.test.ts`
+- `<repo>/tests/media-device-port.test.ts`
+- `<repo>/tests/media-targeting.test.ts`
+- `<repo>/tests/planner-stability.test.ts`
+- `<repo>/tests/connectors-conversation-mcp.test.ts`
+- `<repo>/media/test_screen_wire.py`
+- `<repo>/media/test_policy.py`
+- `<repo>/media/test_activity_presentation.py`
+- `<repo>/gateway/test_execution_policy.py`
+- `<repo>/mac/Tests/DeviceCoreTests/`
 
 Verify platform APIs and OS availability before coding. Apple references:
 
@@ -314,7 +314,7 @@ tests for transform correctness, boundaries, authorization, and lifecycle, inclu
   deterministic fixtures and a fake input sink. Tests must detect wiring failures,
   not merely exercise rendering functions in isolation.
 
-Run the relevant documented commands from `/Users/garygao/clawdtime`:
+Run the relevant documented commands from `~/clawdtime`:
 
 ```sh
 npm run check
@@ -323,7 +323,7 @@ media/.venv/bin/python -m unittest discover -s gateway -p 'test_*.py'
 python3 -m unittest discover -s mac/scripts -p 'test_*.py'
 ```
 
-Run `swift test` and the required build from `/Users/garygao/clawdtime/mac`.
+Run `swift test` and the required build from `<repo>/mac`.
 Use a separate development environment if dependencies are missing; never modify
 an environment used by a running service. Run additional focused tests as justified
 by changes. Do not execute opt-in provider/live-call probes from old runbooks.
@@ -347,7 +347,7 @@ Leave these reviewable, uncommitted deliverables:
 - Meaningful automated tests and runnable synthetic/actual local preview commands.
 - Necessary component documentation updates and an updated integration plan that
   distinguishes implemented, locally verified, and still-pending features.
-- `/Users/garygao/clawdtime/docs/IMPLEMENTATION_ARGOS_REVIEW.md`, containing:
+- `<repo>/docs/IMPLEMENTATION_ARGOS_REVIEW.md`, containing:
   starting HEAD/dirty-tree context; changes and dependencies; architecture decisions;
   capability/command contracts; exact test commands/results; local visual evidence;
   known limits; cleanup/rollback instructions; and a later supervised test checklist.

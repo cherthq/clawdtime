@@ -1,7 +1,7 @@
 # ClawdTime architecture
 
 ClawdTime is a separate TypeScript/Python/Swift application extracted selectively
-from Apple Teams at `be47b11fe1317c4747db4121bec37896998b5201`. It does not run the
+from the source project at `be47b11fe1317c4747db4121bec37896998b5201`. It does not run the
 workspace engine or migrate customer state. It is a single-node internal pilot.
 
 ## Boundaries
@@ -149,7 +149,7 @@ SMS consent records remain recoverable but new setup does not require a code.
   and completion text persist as application records. Provider retention policies
   still apply when an explicitly enabled vision/STT/TTS provider receives data.
 - No customer databases, production grants, existing receipts or installed configs
-  were copied from Apple Teams. Existing native Chert protocol fields are retained
+  were copied from the source project. Existing native Chert protocol fields are retained
   intentionally rather than globally rebranded.
 
 The connector refreshes an explicit heartbeat every five seconds while its stdio

@@ -105,7 +105,7 @@ or retry a call to make progress.
 After a passing checkpoint, obtain fresh specific authorization for one visual
 call to the paired handset and, if still required, one ClawdTime-backend-only
 standby/restore window. Previous voice-only authorizations do not cover this.
-Apple Teams and sibling chert-facetime remain untouched.
+The source project and the sibling private repository remain untouched.
 
 Prepare current app-preview, source and concise verification windows, then
 revalidate them in the visible desktop. Test the task-specific opening, prepared

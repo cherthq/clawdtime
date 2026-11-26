@@ -642,7 +642,7 @@ credential. The agent writes it to a private owner-only file using native file
 tools, without echoing it or placing its token in a command argument/history. The
 caller supplies an independently trusted HTTPS origin. The canonical setup origin
 is `https://www.clawdtime.com`. The legacy Railway origin,
-`https://backend-production-ee686906.up.railway.app`, remains compatible for existing
+`https://api.example.com`, remains compatible for existing
 links and connections; use the independently trusted origin matching the supplied
 link. Only `/setup` (or legacy `/pair`) with fragment `token`, `device` and `display`
 is accepted. Redirects, query credentials, duplicate fields and a different origin
@@ -1185,7 +1185,7 @@ delete credentials as a substitute for revocation.
 
 ### Source and documentation decisions
 
-The connectors are new ClawdTime code, not copied from Apple Teams. Current official
+The connectors are new ClawdTime code, not copied from the source project. Current official
 references were fetched on November 11, 2026:
 
 - [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)

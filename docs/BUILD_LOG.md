@@ -54,7 +54,7 @@ was part of this work.
 
 ## November 18, 2026 — source audit and step a
 
-Branch: `demo/coding-flow`, isolated worktree `/Users/garygao/clawdtime-coding-demo`.
+Branch: `demo/coding-flow`, isolated worktree `~/clawdtime-coding-demo`.
 Fetched `origin`; approved main remains `8c8cf76`. Argos baseline is
 `815d51b82aa81e62e857b08713a9d0b4324a5a6f`. Existing checkouts and untracked
 product/walkthrough drafts were preserved. No merge, deployment, live call,
@@ -517,7 +517,7 @@ Frozen-source pre-commit validation:
   focused review ran 47 TypeScript and 27 handset-media tests successfully.
 - No Swift or gateway source changed; Swift checks are not applicable.
 - Original Argos checkout still has the same four untracked product/walkthrough
-  drafts. No Apple Teams or sibling chert-facetime changes were made.
+  drafts. No source project or sibling private repository changes were made.
 
 Remaining before the physical test is concrete: fresh specific one-call
 permission; verified real pairing/tester, exact current native line ownership,
@@ -534,7 +534,7 @@ The user returned and explicitly authorized one voice-only call to the paired
 handset. A separate explicit approval permits temporarily redeploying only the
 existing ClawdTime backend in standby and restoring its prior live settings after
 confirmed cleanup. The prior hosted backend was live; `/internal/drain` is not a
-pause API. No Apple Teams or sibling service change is included.
+pause API. No source project or sibling service change is included.
 
 Added the composed operator entry `scripts/task-handset.ts`, a private immutable
 one-call task-to-handset grant, an in-place read-only native inspector, exact
@@ -754,11 +754,11 @@ and 3322 are closed. Machine `physicalAcceptance:false` markers remain untouched
 the human report is recorded separately.
 
 After confirmed call cleanup, restoration was submitted exactly once. The restored
-backend deployment `9345ff09-542b-4c10-b8c4-a8aac20ec5d0` is successful and the test
+backend deployment `<deployment-id>` is successful and the test
 standby instance is removed. Every configuration value equals the pre-test snapshot;
 source/manifest/volume metadata is preserved. Fresh runtime checks show live mode,
 traffic enabled, zero active calls, zero pending effects and zero unknown effects.
-Apple Teams and sibling chert-facetime were not modified. Protected immutable
+The source project and the sibling private repository were not modified. Protected immutable
 receipts and the separate human report remain under `retest-3-deepgram/`.
 
 Required acceptance-documentation check: `npm run check` passed **826 tests in
@@ -1158,10 +1158,10 @@ verified run; no spoken revision or new coding run occurred. All metadata receip
 are preserved privately under `visual-1/`; no raw screen/audio was saved.
 
 Restoration was submitted once after confirmed cleanup. Backend deployment
-`a0b95d02-b545-4c7b-8c2f-4c150578d31a` is successful; the temporary standby instance
+`<deployment-id>` is successful; the temporary standby instance
 is removed. Every variable equals the pre-test snapshot. Fresh runtime evidence
 reports live mode, traffic enabled, zero active calls, zero pending effects and
-zero unknown effects. Apple Teams and sibling chert-facetime remain untouched.
+zero unknown effects. The source project and the sibling private repository remain untouched.
 The one-call authorization is consumed; no redial occurred. Step d remains open
 and untagged, with a fresh specific call authorization needed for another attempt.
 
@@ -1201,7 +1201,7 @@ this with independent connector review; no capture guard is being relaxed.
 The lead stopped the unresponsive call once. Native and local cleanup completed,
 including capture, narration, output and child joins; the owner lock was released.
 The backend was restored once afterward. Deployment
-`3e361f03-e4a2-4a9a-ad1a-90f2abc2e09d` is successful, its temporary standby instance
+`<deployment-id>` is successful, its temporary standby instance
 is removed, every variable matches the pre-test snapshot, and runtime is live
 with traffic enabled, zero active calls and no pending/unknown effects. Protected
 metadata remains under `visual-2/`; screens/audio were transient. No further call
@@ -1308,7 +1308,7 @@ polish targets or the full revision-continuity trial.
 Native and local cleanup are confirmed. Media close took 5ms and native end
 submission 307ms; capture, narration, output and children all joined, and the
 owner lock is released. Restoration was submitted once after cleanup. Deployment
-`d2b307f4-65fc-4bfd-9895-4ebef4914bb1` is successful; the temporary standby instance
+`<deployment-id>` is successful; the temporary standby instance
 is removed. Every variable matches the pre-call snapshot; fresh runtime evidence
 reports live mode, traffic enabled, zero active calls and no pending/unknown
 effects. Protected receipts remain under `visual-3/`; screens/audio were
@@ -1816,7 +1816,7 @@ authorization has no dial against it; no physical acceptance is claimed.
 No tracked Python/Swift implementation changed. Restoration proof and independent
 review are recorded below before this checkpoint is committed.
 
-Restoration deployment `af2ba7ab-6d72-4010-b0fb-acd1884d9008` succeeded.
+Restoration deployment `<deployment-id>` succeeded.
 Read-only verification established exact equality with the original variable
 snapshot, runtime/environment mode live, traffic true, zero pending/unknown
 effects and zero active calls. The standby deployment was removed. The task
@@ -1834,7 +1834,7 @@ exact-window checks passed. Resumed the unused one-call authorization with fresh
 task/view grants and a separately recorded standby window. Read-only inspection
 confirmed the selected task at revision 3, one available bound line, and no
 pending/unknown effects or active hosted calls. Standby deployment
-`e8b28c63-d480-467d-87e9-b5c8bdd339d0` and actual running standby/traffic-false
+`<deployment-id>` and actual running standby/traffic-false
 state were verified before the single operator submission. HTTP 202 recorded one
 admission; native connected evidence subsequently established an actual call.
 
@@ -1858,7 +1858,7 @@ Presentation cleanup confirms capture/narration stopped, output cleared and
 children joined. Audio SDK metadata reports 1,583 prepared silent frames and 1,644
 speech frames; those counters do not establish physical audibility. Restored the
 backend to its exact original variables through deployment
-`32849cef-53f3-48de-b23c-1ed73cc1760f`; read-only runtime proof confirms live mode,
+`<deployment-id>`; read-only runtime proof confirms live mode,
 traffic true and zero pending/unknown effects or active calls. No retry/redial or
 second call occurred. Protected attempt/standby proofs remain private.
 
@@ -1916,7 +1916,7 @@ pinned SDK smoke tests and three clarification regressions without live effects.
 Refreshed the current source/result documents, verified displayed revision 7,
 and waited for the user to place the exact windows on the current desktop. All
 three metadata target checks passed. Standby deployment
-`742fd92f-ef9f-43dd-9cdb-98200ee8935b` matched current variables and actual runtime
+`<deployment-id>` matched current variables and actual runtime
 standby/traffic-false state. A new decision request was submitted exactly once;
 HTTP 202 was followed by actual native connection and media activation evidence.
 
@@ -1960,12 +1960,12 @@ there was no redial or third call. Private request, receipt and bounded metadata
 proofs remain under the rehearsal root's `rehearsal-20261119/` directory. Screens
 and audio were not persisted.
 
-Restoration deployment `326891e4-d1cd-476f-ad7a-5806dd2ba36c` succeeded. Read-only
+Restoration deployment `<deployment-id>` succeeded. Read-only
 checks established exact original variable equality, actual runtime/environment
 live, traffic true and zero pending/unknown effects or active calls. The standby
 deployment was removed. The historical unknown activation receipt is preserved
-alongside confirmed cleanup; it was not rewritten as successful. Apple Teams,
-sibling chert-facetime and the unrelated original desktop service/task were not
+alongside confirmed cleanup; it was not rewritten as successful. The source project,
+the sibling private repository and the unrelated original desktop service/task were not
 changed.
 
 ### Diagnostic checkpoint and verification
@@ -2022,7 +2022,7 @@ the current source and revision-11 verification. After the user returned all
 three views to the current desktop, exact target resolution passed. No further
 UI input or feedback prompt was issued while the call was ringing/connected.
 
-Standby deployment `3f84ca74-c9f7-4d8f-81f7-37342af04bba` was verified against exact
+Standby deployment `<deployment-id>` was verified against exact
 variables and actual runtime. Submitted one new review request with fresh
 manifest/grants/authorization, then observed native connection and media voice
 activation with preview sharing still active. HTTP admission alone was not
@@ -2050,13 +2050,13 @@ metadata establishes acceptance. SDK counts (155 source frames, 777 rendered
 frames and 1,202 speech frames) do not establish physical timing or audibility.
 No screens or audio were persisted.
 
-Restoration deployment `256f40da-4b07-4112-8130-994c3507831b` succeeded. Exact
+Restoration deployment `<deployment-id>` succeeded. Exact
 original variables matched, actual runtime/environment were live with traffic
 true, and pending/unknown effects and active calls were all zero. The standby
 deployment was removed. The single call authorization is consumed; no redial,
 additional call, session renewal or local service restart occurred. All receipts,
 including the earlier review's unknown activation outcome, remain preserved.
-The unrelated desktop task, Apple Teams and sibling chert-facetime were untouched.
+The unrelated desktop task, the source project and the sibling private repository were untouched.
 
 This completes the existing desktop-created task lifecycle across a resumed
 decision call and successful review retest. It does not count as a clean complete
@@ -2134,13 +2134,13 @@ No tasks match and Clear filters. Source matched the project; the result documen
 showed current revision 3. Native target resolution confirmed all three views
 before the one submission.
 
-Task `task_a3f116c1-d47f-44d6-ac43-ef5d7533b996` remains review-ready revision 3;
-run `run_2505bcd1-26a4-460d-a77a-8da63f441099` and verification
-`verification_218a8983-9323-4095-9173-d3a797fbdb4f` passed. Fresh call-continuity
+Task `task_<task-id>` remains review-ready revision 3;
+run `run_<run-id>` and verification
+`verification_<verification-id>` passed. Fresh call-continuity
 capture/export grants and current standby/identity/exclusive-idle-line checks
 preceded the single attempt. No prior grant or call request was replayed.
 
-Attempt `call_attempt_34aa06c4-f4bd-4740-a991-0a960c0d1bb8` completed media prepare
+Attempt `call_attempt_<attempt-id>` completed media prepare
 and native dial, but sharing retired while prepared. Diagnostics: first reason
 export_unavailable, elapsed 12,386 ms, last successful source-frame age 1,034 ms,
 21 source frames, 119 rendered frames, no presentationFailure, zero speechFrames.
@@ -2150,8 +2150,8 @@ submitted one exact local Stop request during cleanup, without retrying a dial.
 The user reported only that it hung up. No acceptance/instruction/new run occurred;
 this failed attempt did not physically exercise continuity or scene switching.
 
-Standby deployment `540dcc71-0d5d-4491-9ab6-a303edfa8c73` was removed after restore.
-Restored deployment `7ab45fa8-0e05-4f2f-bbaa-06e5384b1d2a` matched exact original
+Standby deployment `<deployment-id>` was removed after restore.
+Restored deployment `<deployment-id>` matched exact original
 variables, runtime/environment live and traffic true, with zero pending/unknown
 hosted effects and active calls. All five local admissions are closed with cleanup
 confirmed. Original accepted task remains revision 12 with three historical runs.
@@ -2201,7 +2201,7 @@ idle-line checks preceded one submission. Each attempt spawns fresh Python, so
 this call loaded the `2809bb0` pacing/classification changes without restarting
 the unchanged TypeScript parent.
 
-Attempt `call_attempt_b0bfed97-240b-4fe2-9fc8-3137ccf87d84` completed media prepare
+Attempt `call_attempt_<attempt-id>` completed media prepare
 and native dial, then retired sharing while prepared: first reason frame_stale,
 elapsed 16,458 ms, last successful source-frame age 1,017 ms, 54 source / 174
 rendered frames, no presentationFailure and zero speechFrames. Later activation
@@ -2210,10 +2210,10 @@ lead also submitted one exact local Stop during cleanup. All six admissions are
 closed. User reported “just hung up again.” No physical continuity, view-switching,
 acceptance or sharing-Stop qualification resulted.
 
-Restored deployment `2197b683-d03e-4381-9c37-d8cda54d9a12` matched exact original
+Restored deployment `<deployment-id>` matched exact original
 variables and actual live runtime/environment with traffic true and zero pending,
 unknown hosted effects and active calls. Standby
-`9ef7a104-6e6f-4aea-9780-6b7aea93a2b2` was removed. Private bounded proofs are in
+`<deployment-id>` was removed. Private bounded proofs are in
 `continuity-retest-2-20261119/`. No screens/audio were persisted. Call and standby
 permissions are consumed; no automatic redial or broader capture was attempted.
 

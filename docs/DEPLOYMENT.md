@@ -5,15 +5,15 @@ and dedicated persistent volumes containing retained production state. It uses
 existing account capacity. Never treat those volumes as empty or restore an old
 cursor to retry a call. Source is maintained in `cherthq/clawdtime`.
 
-- Project: `9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`.
-- Backend/landing: https://backend-production-ee686906.up.railway.app
-- Media: https://media-production-33fda109.up.railway.app
-- Services: backend `b4af7a8c-c6b1-4b1c-af2f-dbaedad618ea`,
-  media `07eabf9a-c8fd-46da-8210-54c7d2f868fb`.
-- Environment: `8f5a3eb3-37e1-480a-ad07-6e89968a1b8c`.
+- Project: `<project-id>`.
+- Backend/landing: https://api.example.com
+- Media: https://media.example.com
+- Services: backend `<service-id>`,
+  media `<service-id>`.
+- Environment: `<environment-id>`.
 
 Check STATUS.md for current ownership and physical qualification. Deployment health
-alone is not demo readiness. No Apple Teams source or sibling service was replaced.
+alone is not demo readiness. No source project code or sibling service was replaced.
 
 ## Backend
 
@@ -49,7 +49,7 @@ For managed hosting, `CLAWDTIME_LIVE_CONFIG_JSON` may instead carry the same obj
 through the host secret store. Set exactly one source. Null/scalar/array roots and
 malformed JSON are rejected without logging their contents.
 It contains existing supported native transport access, fresh media and encryption
-keys, and the explicit handoff attestation. Never copy an Apple Teams environment
+keys, and the explicit handoff attestation. Never copy a source project environment
 file wholesale. Operator provisions only the required scoped transport credentials.
 
 Shape (placeholders only):
@@ -112,7 +112,7 @@ backend `CLAWDTIME_MEDIA_TOKEN` and media `MEDIA_API_KEY`.
 
 Deploy `media/Dockerfile` separately with its own persistent database volume and
 fresh credentials from `media/.env.example`. Configure `BACKEND_URL` to ClawdTime,
-not Apple Teams. Media health without provider credentials is not call readiness.
+not the source project. Media health without provider credentials is not call readiness.
 Follow `docs/MEDIA_INTEGRATION.md`, `docs/DEVICE.md` and component READMEs.
 
 The Mac gateway makes outbound authenticated WSS to the new media service. The
@@ -151,7 +151,7 @@ operators must configure protected offsite storage before external deployment.
 
 For local configuration, export variables through your secret manager or use
 `node --env-file=.env dist/src/server.js` after building; `npm run dev` does not
-implicitly load a dotenv file. Never use an Apple Teams environment file.
+implicitly load a dotenv file. Never use a source project environment file.
 
 ## Prepared live presentation staging
 
@@ -233,8 +233,8 @@ retain the compatible disabled release. Do not restore a stale cursor or volume.
 ## November 17 native walkthrough release
 
 Source: `89f78397c63b2e9362e764a0ab6b34ad42aa6623`, pushed on `ArgosClawd`.
-Backend deployment: `f320ce4b-e9db-4fc1-812a-8fc01178e820`.
-Media deployment: `cb364e09-af86-4765-9ec4-6712bcee8fd5`.
+Backend deployment: `<deployment-id>`.
+Media deployment: `<deployment-id>`.
 Both services report the baked source SHA. Both presentation/activation admission
 gates remain unset/default-off. Installed companion 0.4.0 build 8 remains disarmed.
 See [STATUS.md](STATUS.md) for artifact hashes, receipt-preservation evidence,
@@ -247,14 +247,14 @@ It is no longer started from a mutable working-tree source directory. The owner-
 release audit beside that directory records configuration/ledger hashes and the
 previous launch arguments, without copying credentials or runtime records.
 
-The original-chat CLI is `/Users/garygao/clawdtime/dist/cli/main.js`; its compiled
+The original-chat CLI is `<repo>/dist/cli/main.js`; its compiled
 tree matches the frozen build and `dist/release-source.json` records the source
 SHA. The current connection is invalid, so no fresh session was registered.
 After restoring an authorized connection for the same intended pairing, prepare
 the new session in this original chat with a new stable run ID:
 
 ```sh
-node /Users/garygao/clawdtime/dist/cli/main.js setup-session --agent codex --project /Users/garygao/clawdtime --run-id CURRENT_CHAT_NEW_STABLE_RUN_ID --native-control desktop --shared-surface true --native-cancellation false --screen-camera true --camera-display 1 --live-presentation true --native-activation true --message-updates false
+node <repo>/dist/cli/main.js setup-session --agent codex --project ~/clawdtime --run-id CURRENT_CHAT_NEW_STABLE_RUN_ID --native-control desktop --shared-surface true --native-cancellation false --screen-camera true --camera-display 1 --live-presentation true --native-activation true --message-updates false
 ```
 
 Read the returned immutable capabilities before any test. Keep existing runs and
@@ -263,8 +263,8 @@ authorize an invitation, call, capture, input or enabling admission.
 
 Preferred recovery is to keep this compatible release installed, disarmed and
 with admission off while reconciling exact receipts. The previous backend
-`3419147a-df04-4166-a4a9-5f32e6681c42` and media
-`4c7de1a8-32b2-4e31-ba3d-c51dad365185` deployments are pre-activation rollback
+`<deployment-id>` and media
+`<deployment-id>` deployments are pre-activation rollback
 targets only after all native reservations are terminal and actors joined. Their
 source is `c7af884`; gateway source and the original companion build 7 bundle are
 retained under

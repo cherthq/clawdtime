@@ -176,11 +176,11 @@ does not prove the turn stopped.
 
 ## Integration choice
 
-`origin/anishfyi/computer-use` was inspected after fetching remote refs. It is not
+A teammate's `computer-use` branch was inspected after fetching remote refs. It is not
 an ancestor of current main. Its `connectors/computer` worker, browser driver and
 panel Hands controller introduce another bounded capture/input owner; merging it
 wholesale would compete with the installed bundled runtime and omit some newer
 native protections. Its task admission remains phrase-gated. This change retains
 the existing task/voice/presentation architecture and bundled helper, adds semantic
 intent to that supervisor, and leaves the independent branch/worktrees intact.
-No Apple Teams or sibling chert-facetime files are modified.
+No files of the source project or the sibling private repository are modified.

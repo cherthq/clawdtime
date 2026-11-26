@@ -9,8 +9,8 @@ could start: `Failed to snapshot repository. Please try again in a few minutes.`
 Each failed deployment has `snapshotId:null`; no new application image ran.
 
 Restored and verified production **0.3.2** using its prior image and custom
-variables. Backend `51db1940-dcbd-46ca-836b-d3d484a1ca4e` is SUCCESS; media
-`7c884f0c-02af-4f0a-92bd-43a33acb084e` remains SUCCESS. All 74 JavaScript,
+variables. Backend `<deployment-id>` is SUCCESS; media
+`<deployment-id>` remains SUCCESS. All 74 JavaScript,
 18 Python and 10 public asset hashes match prior manifest
 `c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
 Running configuration, database entities/events/effects/Messages cursors and media
@@ -160,8 +160,8 @@ website work are excluded from staging and the deployment archive.
 
 ## 0.3.2 tool correctness patch — November 13, 2026
 
-This patch was deployed at 22:43 UTC. Backend `2e5a67d8-cf69-4370-944d-6349d2b024bf`
-and media `7c884f0c-02af-4f0a-92bd-43a33acb084e` are SUCCESS; deployed hashes
+This patch was deployed at 22:43 UTC. Backend `<deployment-id>`
+and media `<deployment-id>` are SUCCESS; deployed hashes
 match source manifest `c7c6e9c65653d7c42c6f09414340a58a3e888034e5e3f2bc2f1705f833a6419d`.
 See the latest STATUS entry for complete real-provider probe outcomes. It does not
 promote unqualified conversational/desktop admission or certify the résumé demo.
@@ -252,8 +252,8 @@ A further call requires fresh readiness/authorization.
 an execution-disabled acoustic test, not acceptance of ordinary full-duplex work.
 The user must still explicitly state readiness for each new call.
 
-- Backend: `2dc6293e-81c1-49a2-b97d-21c8249f8b36`, SUCCESS, Node 24.22.3.
-- Media: `b683019a-6bae-4ac2-be65-ec540cf1d22a`, SUCCESS, Python 3.12.16.
+- Backend: `<deployment-id>`, SUCCESS, Node 24.22.3.
+- Media: `<deployment-id>`, SUCCESS, Python 3.12.16.
 - Isolated uncommitted source manifest:
   `9e50e96d4db5aa9746ca2e7d4679dcbd3eef073fa41628a8a0e151030cfa4768`,
   atop `a5af1f3` on preserved `improvements`; unrelated website work excluded.
@@ -318,12 +318,12 @@ and project service-account key `clawdtime-media-gpt-live`, expiring **December 
 2026**. Stored the secret only in Railway production media `OPENAI_API_KEY`; no
 secret was printed, committed or written into repository files. The key has inherited
 project API read/write permissions, not organization administration permissions.
-No further credential setup is needed from Gary. Rotate the key before expiry.
+No further credential setup is needed from the owner. Rotate the key before expiry.
 
-Media deployment **`c197bb86-a198-4f72-906a-7f6ab1d97f83`** is SUCCESS, replacing
+Media deployment **`<deployment-id>`** is SUCCESS, replacing
 the earlier gated image and intermediate key-only deployment. Its isolated source
 manifest is `1d658394b7349003083d7d1c1bd99cfd1e94d3c0b0006dd607432076eb5746aa`,
-source version 0.3.0. Backend `f8932374-b6a1-4039-9a43-d15697633713` is unchanged.
+source version 0.3.0. Backend `<deployment-id>` is unchanged.
 The media image includes Python 3.12.16, LiveKit RTC 1.2.1/API 1.2.2,
 Agents/plugin 1.8.12, OpenAI 3.50.0 and WebSockets 15.0.1. Build-only
 `ENABLE_GPT_LIVE=true` installs dependencies; all voice, duplex and text-control
@@ -354,7 +354,7 @@ without restoring old data. The preceding 0.3.0 source archive also remains avai
 **API access is ready; handset testing is not yet ready.** The execution-disabled,
 unisolated-audio qualification mode is still missing. Actual remote-only routing,
 echo and downstream interruption/flush behavior remain unqualified. Do not bypass
-isolation flags. Complete the software qualification path before asking Gary to
+isolation flags. Complete the software qualification path before asking the owner to
 prepare for a fresh, explicitly approved call. The older rollout record below is
 historical where it describes missing credentials/dependencies.
 
@@ -370,8 +370,8 @@ all other untracked plans remain unstaged/uncommitted. Nothing was staged or com
 
 | Component            | Deployed / prepared                    | Observed state                                           |
 | -------------------- | -------------------------------------- | -------------------------------------------------------- |
-| Backend              | `f8932374-b6a1-4039-9a43-d15697633713` | SUCCESS; package 0.3.0, Node 24.22.3; 72 JS hashes match |
-| Media                | `720d1ffa-fd1c-4d8b-bf79-996074e3d4e5` | SUCCESS; Python 3.12.16; 16 Python hashes match          |
+| Backend              | `<deployment-id>`                      | SUCCESS; package 0.3.0, Node 24.22.3; 72 JS hashes match |
+| Media                | `<deployment-id>`                      | SUCCESS; Python 3.12.16; 16 Python hashes match          |
 | Public assets        | Existing website from scoped snapshot  | 10 hashes match; website sprint not deployed             |
 | Companion            | Prepared 0.3.0 build 4                 | Ad hoc signed and verified; not installed/notarized      |
 | Installed Mac helper | 0.2.1                                  | Unchanged; no local gateway/helper restart               |
@@ -392,8 +392,8 @@ consistent backups remain on each service volume at
 integrity checks in an isolated temporary file/in memory without restoring live data.
 
 Previous exact code is retained for rollback: backend `7f1b687` (prior deployment
-`c5fcff89-ca61-463b-b0a1-24e04bc9fdae`) and media `f7611d2` (prior deployment
-`cb123fed-509f-499b-93b5-a30b88a2d3cc`). Those predecessors are now REMOVED. Their
+`<deployment-id>`) and media `f7611d2` (prior deployment
+`<deployment-id>`). Those predecessors are now REMOVED. Their
 source was rebuilt and matched against pre-rollout running file hashes. Rollback
 is a **code** redeployment with preserved current volumes/configuration, never a
 routine restore of an older database/cursor. The standby/quiescence rules below
@@ -523,8 +523,8 @@ flags to make a test pass; runtime admission remains disabled.
 ## Evidence and measurements
 
 Pre-rollout audit on November 13 found backend
-`c5fcff89-ca61-463b-b0a1-24e04bc9fdae` (same `7f1b687` image after configuration
-redeploys) and media `cb123fed-509f-499b-93b5-a30b88a2d3cc` (`f7611d2`).
+`<deployment-id>` (same `7f1b687` image after configuration
+redeploys) and media `<deployment-id>` (`f7611d2`).
 Current configuration, database path and transport binding were audited directly;
 older deployment IDs and line assumptions are historical. Both services were idle,
 with no executing legacy turns, broker jobs, grants or unresolved execution ownership.
@@ -622,14 +622,14 @@ samples and an SDK loopback handshake are not production availability or reliabi
 
 ## Operator handoff: GPT-Live and handset qualification
 
-### What Gary needs to do
+### What the owner needs to do
 
 1. **API setup is complete.** The dedicated project service-account key is stored in
    Railway media and has passed real local/cloud GPT-Live session checks. No key
    needs to be pasted or supplied. The current key expires December 13, 2026; rotate
    it securely before that date. Keep runtime voice/control gates off.
 2. **Wait for software readiness.** The execution-disabled audio qualification mode
-   is not implemented yet. The lead must complete that path; Gary should not change
+   is not implemented yet. The lead must complete that path; the owner should not change
    audio-isolation assertions to bypass the missing capability.
 3. Once the lead confirms software readiness, for the physical window, have this Mac unlocked, the ClawdTime panel visible,
    the paired iPhone charged and reachable, headphones available, and a quiet place
@@ -650,7 +650,7 @@ samples and an SDK loopback handshake are not production availability or reliabi
   during acoustic qualification. There is currently **no execution-disabled,
   unisolated-audio qualification mode** in this release, and no upstream handset
   playback-flush acknowledgment. Those are software/transport prerequisites, not
-  settings Gary should bypass. Do not assert `remoteAudioIsolated=true` to unlock
+  settings the owner should bypass. Do not assert `remoteAudioIsolated=true` to unlock
   the test. Establish the real remote-only route before enabling conversational work.
 - First measure one greeting, intelligibility, false speech/echo and assistant
   self-triggering with headphones, then speakerphone. Retain metadata, not audio.

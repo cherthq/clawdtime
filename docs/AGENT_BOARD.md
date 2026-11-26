@@ -119,7 +119,7 @@ The other Mac needs three things, and you set them up once:
   (`clawdtime agents hooks install --agent claude-code` there).
 
 ```
-clawdtime hosts add mini anish@mini.local
+clawdtime hosts add mini owner@mac.local
 clawdtime hosts check mini
 clawdtime hosts list
 clawdtime hosts remove mini

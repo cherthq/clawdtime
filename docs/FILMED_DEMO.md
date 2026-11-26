@@ -27,7 +27,7 @@ stage a successful result or redial automatically if something fails.
 ## Paste into the new chat
 
 ```text
-Work in /Users/garygao/clawdtime. Use the installed ClawdTime skill in this exact
+Work in ~/clawdtime. Use the installed ClawdTime skill in this exact
 chat. This is a short filmed demo, using our existing pairing and installed app.
 I authorize ONE outbound call to my paired handset for this demo and native
 editing of the disposable TextEdit draft below.

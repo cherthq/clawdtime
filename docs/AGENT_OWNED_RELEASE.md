@@ -4,20 +4,20 @@ Prepared November 12, 2026 (America/New_York). Version 0.2.0.
 
 **Current release:** backend/media source `0814e50` is deployed with speech
 repair, diagnostics and subtitles. Backend deployment is
-`9ed4f88e-d2d9-4d9d-9384-82f3687e13b6`; media deployment is
-`3115494a-c9d2-4666-aef2-e5a3417280b7`. Hosted module hashes and health were
+`<deployment-id>`; media deployment is
+`<deployment-id>`. Hosted module hashes and health were
 verified. The companion, gateway and installed connector were not changed by this
 rollout. The speech/subtitle experience awaits a separately authorized physical
 call. Historical native-control observations remain limited to the scopes recorded
 in [STATUS.md](STATUS.md) and [NATIVE_CONTROL_REPAIR.md](NATIVE_CONTROL_REPAIR.md).
 
 The earlier `84d09dc` speech/setup rollout was explicitly authorized with no further
-call. Backend deployment `9ea80a02-2896-4197-9166-98281d3c7b0e` and media deployment
-`d538d1a1-df17-4c70-a3da-41fdb58e00ac` succeeded from a tracked-source archive.
+call. Backend deployment `<deployment-id>` and media deployment
+`<deployment-id>` succeeded from a tracked-source archive.
 Running code, unchanged configuration and durable state were verified, including
 synthetic in-container checks without audio or calls. Its immediate predecessor
-is source `8efbacc`, backend `7942fb9b-472e-4dce-8642-f1f2af18144a` and media
-`a544d42e-9c59-4a52-9b06-28c249c80f20`. Restore binaries only under a separately
+is source `8efbacc`, backend `<deployment-id>` and media
+`<deployment-id>`. Restore binaries only under a separately
 authorized rollback; never restore old ledgers or cursors. This rollout did not
 promote the branch to main or restart the companion/gateway.
 
@@ -31,8 +31,8 @@ scope below is historical, not a statement that deployment or installation is pe
 The user authorized deploying speech repair, bounded diagnostic logging and live
 subtitles, with no new call. Preflight found zero calls, active leases or unresolved
 effects. Actual pre-rollout deployments were backend
-`06da11f3-b841-4bb0-9d7b-2a25b28a101e` and media
-`5d2f9655-a82c-4e9a-8767-16fbb3133440`, superseding the older IDs above.
+`<deployment-id>` and media
+`<deployment-id>`, superseding the older IDs above.
 The backend matched the recorded source except for the intended release changes.
 Media contained the older `8efbacc` speech implementation plus untracked production
 changes in `device_relay.py` and `devices.py` for multiple declared Mac gateways.
@@ -88,16 +88,16 @@ prompts retain their normal client behavior.
 ## Approved deployment scope
 
 The existing independent Railway project is
-`9fafdcf9-c7eb-4465-8387-ec3f8acbaefa`, production environment
-`8f5a3eb3-37e1-480a-ad07-6e89968a1b8c`:
+`<project-id>`, production environment
+`<environment-id>`:
 
-| Target                      | Existing service                       | Artifact                                                       |
-| --------------------------- | -------------------------------------- | -------------------------------------------------------------- |
-| Backend / www.clawdtime.com | `b4af7a8c-c6b1-4b1c-af2f-dbaedad618ea` | Root Dockerfile, tracked source archive                        |
-| Media                       | `07eabf9a-c8fd-46da-8210-54c7d2f868fb` | media/Dockerfile, same source commit                           |
-| Mac companion               | Existing independent ClawdTime app     | Reviewed Swift build, separately approved install/signing plan |
-| Gateway                     | Existing independent ClawdTime relay   | gateway source from same commit, separately approved restart   |
-| Connector                   | Current project integration            | Bundled build and updated skill, new run after old cleanup     |
+| Target                      | Existing service                     | Artifact                                                       |
+| --------------------------- | ------------------------------------ | -------------------------------------------------------------- |
+| Backend / www.clawdtime.com | `<service-id>`                       | Root Dockerfile, tracked source archive                        |
+| Media                       | `<service-id>`                       | media/Dockerfile, same source commit                           |
+| Mac companion               | Existing independent ClawdTime app   | Reviewed Swift build, separately approved install/signing plan |
+| Gateway                     | Existing independent ClawdTime relay | gateway source from same commit, separately approved restart   |
+| Connector                   | Current project integration          | Bundled build and updated skill, new run after old cleanup     |
 
 Approval must identify the exact commit and which targets may change. Do not
 replace the user's companion or restart a gateway merely because hosted deployment

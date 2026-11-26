@@ -16,7 +16,7 @@ export const equal = (a: string, b: string) => {
     bb = Buffer.from(b);
   return aa.length === bb.length && timingSafeEqual(aa, bb);
 };
-// AES-GCM envelope retained from Apple Teams src/security.ts; fresh ClawdTime key only.
+// AES-GCM envelope retained from the source project's src/security.ts; fresh ClawdTime key only.
 export class Vault {
   constructor(private key: string) {
     if (!/^[a-f0-9]{64}$/i.test(key))

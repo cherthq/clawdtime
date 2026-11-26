@@ -1,4 +1,4 @@
-// Transaction/receipt patterns extracted from Apple Teams src/store.ts at be47b11.
+// Transaction/receipt patterns extracted from the source project's src/store.ts at be47b11.
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";

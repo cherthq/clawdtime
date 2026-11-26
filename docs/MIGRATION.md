@@ -1,10 +1,9 @@
 # Source provenance and migration
 
-Audited source: `/Users/garygao/apple-teams`, remote
-`https://github.com/cherthq/apple-teams.git`, commit
+Audited source: a private repository (`<private-repo>`), commit
 `be47b11fe1317c4747db4121bec37896998b5201`. It was clean at implementation start.
 Its main branch and all pre-existing worktrees were preserved. The sibling
-`chert-facetime` was neither edited nor deployed.
+The sibling private repository was neither edited nor deployed.
 
 ClawdTime started from the two approved handoff documents, initialized local main,
 then implemented on `codex/implementation`. There is no new remote or public
@@ -52,7 +51,7 @@ identity and readiness checks; none was stored in this repository. New build
 outputs, virtual environments and synthetic browser artifacts are ignored.
 
 Calendar, team administration, group enrollment/scheduling, external business
-providers, full workspace engine and context dashboard remain in Apple Teams.
+providers, full workspace engine and context dashboard remain in the source project.
 Mode 2, cloud computers, public line pooling, billing and groups are out of scope.
 The source repository contained no root LICENSE file at this baseline; no new
 license or public redistribution right is asserted. Preserve provenance and resolve
