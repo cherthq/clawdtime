@@ -81,6 +81,7 @@ export class ProactiveSourceAdapter {
       jobVerification?: {
         projectRoot: string;
         plan: VerificationPlan;
+        plansByRun?: Record<string, VerificationPlan>;
         authorize: () => void;
       };
     },

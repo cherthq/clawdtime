@@ -1,5 +1,51 @@
 # Proactive calls implementation and production boundary
 
+## November 26: completion callback repair
+
+See [completion walkthroughs and computer control](WALKTHROUGH_CONTINUATION.md)
+for setup, behavior, verification and remaining limits.
+
+Completion hooks must inherit the launching supervisor's configuration root.
+An interactive coding session can finish a turn without exiting its process.
+Use its exact completion receipt and independently checked result to prepare a
+review. A protected `jobChecksByRunPath` can select checks for one launch run;
+other runs keep the default plan. Changed checks produce a new review identity.
+
+Temporary frame loss clears video without closing the voice session. Display
+capture preserves the exact selected display and replaces a failed capture
+process only after it exits. Static displays use a fresh screenshot acquisition.
+Outbound narration starts in English unless the person requests another language.
+
+For a known HTML result, protected `sharedDisplay.artifacts` entries can bind
+`jobId`, source `runId`, `resultDigest`, absolute `path` and file `sha256`.
+Preparation verifies the file inside the selected project, opens it before
+capture starts and retains an opening receipt. It never repeats an uncertain
+opening. A successful application launch does not prove the correct window is
+visible on the selected display; confirm that on the phone. Unconfigured jobs
+continue to show the selected display without automatic navigation.
+
+Production repair reused an existing completed artifact. It did not rerun the
+coding job. Builds passed; local test suites were not run at the operator's
+request. Phone observations confirmed English audio, live video and the correct
+demo page during the completion walkthrough.
+
+Walkthrough continuation can be enabled by explicit operator consent with a new
+policy identity and `allowComputerControl: true`. It requires a selected-display
+walkthrough and the native computer worker. Existing grants stay unchanged.
+The voice tool forwards the original authenticated speech to that call's worker
+lease. Clicks, navigation and follow-up instructions stay in the same call.
+Only that call's reserved requests can use the shared screen. Independent local
+work remains blocked while the walkthrough owns it.
+
+The tool waits for an observed result or a question, for at most 45 seconds.
+Longer work can remain running. Stop cancels only the call's computer work;
+hiding sharing, call termination, revoked authority or expired heartbeats also
+stop that work. Turn receipts prevent repeated input after uncertain delivery.
+The paired person confirmed clicking and navigation both worked during the same
+production walkthrough call, without starting a new session. The existing demo
+was reused. Builds and syntax checks passed; local test suites were not run at
+the operator's request.
+
 ## November 22: observed completion walkthrough
 
 A real managed documentation task completed, passed the normal TypeScript and

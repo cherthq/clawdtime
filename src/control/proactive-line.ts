@@ -22,7 +22,15 @@ const bindingSchema = z
 export type ProactiveLineBinding = z.infer<typeof bindingSchema>;
 const commandSchema = z
   .object({
-    action: z.enum(["prepared", "status", "answer", "stop_sharing", "close"]),
+    action: z.enum([
+      "prepared",
+      "status",
+      "answer",
+      "computer",
+      "stop_computer",
+      "stop_sharing",
+      "close",
+    ]),
     binding: bindingSchema,
     turnId: z.string().min(1).max(200).optional(),
     text: z.string().min(1).max(8000).optional(),
@@ -63,6 +71,16 @@ export class ProactiveLineSessions {
         turnId: string,
       ): Promise<string>;
       stopSharing(intent: ProactiveCallIntent): Promise<{ confirmed: boolean }>;
+      computer?: {
+        submit(
+          intent: ProactiveCallIntent,
+          words: string,
+          turnId: string,
+        ): Promise<string>;
+        renew(intent: ProactiveCallIntent): void;
+        stop(intent: ProactiveCallIntent): string;
+        close(intent: ProactiveCallIntent): void;
+      };
       frame?(intent: ProactiveCallIntent): Promise<{
         bytes: Uint8Array;
         width: number;
@@ -158,9 +176,29 @@ export class ProactiveLineSessions {
       (call.closed ||
         !this.authority.validateGrant(call.grant) ||
         this.now() >= call.grant.expiresAt)
-    )
+    ) {
+      this.ports.computer?.close(call.intent);
       throw new DomainError(403, "Phone runtime authority ended.");
+    }
     return call;
+  }
+  /** This grant is separate from result freshness and never upgrades old calls. */
+  permitsComputer(attemptId: string) {
+    const call = this.calls.get(attemptId);
+    return (
+      !!call &&
+      !!this.ports.computer &&
+      call.grant.inputAllowed &&
+      call.grant.channel === "phone_walkthrough" &&
+      call.grant.viewScope.includes("selected-display") &&
+      call.prepared &&
+      !!call.providerCallerIdentity &&
+      !call.closed &&
+      !call.sharingStopped &&
+      !call.unknownAnswer &&
+      this.now() < call.grant.expiresAt &&
+      this.authority.validateGrant(call.grant)
+    );
   }
   private response(call: Call, message?: string) {
     const current =
@@ -184,6 +222,7 @@ export class ProactiveLineSessions {
         !call.sharingStopped &&
         !call.closed,
       ended: call.closed,
+      computerAllowed: this.permitsComputer(call.grant.attemptId),
     };
   }
   async command(attemptId: string, credential: string, raw: unknown) {
@@ -192,7 +231,7 @@ export class ProactiveLineSessions {
       attemptId,
       credential,
       command.binding,
-      ["close", "stop_sharing"].includes(command.action),
+      ["close", "stop_sharing", "stop_computer"].includes(command.action),
     );
     if (command.action === "prepared") {
       if (!command.media?.audioReady || !command.media.videoReady)
@@ -201,7 +240,11 @@ export class ProactiveLineSessions {
           "Stable warm audio and video publications required.",
         );
       call.prepared = true;
-    } else if (command.action === "answer") {
+    } else if (command.action === "status") {
+      if (this.permitsComputer(attemptId))
+        this.ports.computer?.renew(call.intent);
+      else this.ports.computer?.close(call.intent);
+    } else if (command.action === "answer" || command.action === "computer") {
       if (
         !call.prepared ||
         !command.turnId ||
@@ -214,7 +257,7 @@ export class ProactiveLineSessions {
           "Exact provider caller and speech turn required.",
         );
       const fingerprint = hash(
-        JSON.stringify([command.text, command.callerIdentity]),
+        JSON.stringify([command.action, command.text, command.callerIdentity]),
       );
       const prior = call.answers.get(command.turnId);
       if (prior) {
@@ -235,23 +278,42 @@ export class ProactiveLineSessions {
           );
         // Revalidate immediately before the exact source effect, after every wait.
         this.authorized(attemptId, credential, command.binding);
+        if (command.action === "computer") {
+          if (!this.permitsComputer(attemptId))
+            return "Computer control is not enabled for this walkthrough. No action was sent.";
+          if (command.text!.length > 2000)
+            return "Please give a shorter computer request. No action was sent.";
+          return this.ports.computer!.submit(
+            call.intent,
+            command.text!,
+            command.turnId!,
+          );
+        }
         if (call.resultInvalidated || !this.ports.sourceCurrent(call.intent))
           return "That request is no longer pending. No answer was applied.";
         return this.ports.answer(call.intent, command.text!, command.turnId!);
       });
       call.answerTail = response.catch((error) => {
         call.unknownAnswer = true;
+        this.ports.computer?.close(call.intent);
         throw error;
       });
       void call.answerTail.catch(() => {});
       call.answers.set(command.turnId, { fingerprint, response });
       return this.response(call, await response);
+    } else if (command.action === "stop_computer") {
+      return this.response(
+        call,
+        this.ports.computer?.stop(call.intent) ??
+          "No computer work is owned by this call.",
+      );
     } else if (
       command.action === "stop_sharing" ||
       command.action === "close"
     ) {
       call.sharingStopped = true;
       if (command.action === "close") call.closed = true;
+      this.ports.computer?.close(call.intent);
       const cleanup = await this.ports.stopSharing(call.intent);
       call.cleanupConfirmed = cleanup.confirmed;
     }
@@ -334,6 +396,7 @@ export class ProactiveLineSessions {
     if (!call) return;
     call.closed = true;
     call.sharingStopped = true;
+    this.ports.computer?.close(call.intent);
     call.cleanupConfirmed = true;
     this.calls.delete(attemptId);
   }
@@ -344,6 +407,7 @@ export class ProactiveLineSessions {
         409,
         "Provider termination and capture cleanup must both be confirmed.",
       );
+    this.ports.computer?.close(call.intent);
     this.calls.delete(attemptId);
   }
 }

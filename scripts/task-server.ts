@@ -575,6 +575,7 @@ const proactive =
         origin: `http://127.0.0.1:${port}`,
         board: () => agentBoard,
         execution: () => execution?.snapshot(),
+        phoneDesktop,
       })
     : undefined;
 if (calls && proactive)
@@ -584,15 +585,18 @@ if (calls && proactive)
   };
 if (proactive)
   chosen?.computer.worker?.setOwnershipGuard(
-    () =>
-      !proactive.viewOccupied() &&
-      !proactive.coordinator.list().some(
-        (i) =>
-          ["dispatching", "connected", "unknown"].includes(i.state) &&
-          // A call of the reach only talks: it shares no screen, so the
-          // worker keeps the screen and can take the answer said on it.
-          !voiceOnlyCall(i),
-      ),
+    (authority) =>
+      (phoneDesktop?.ownsExecution(authority) === true &&
+        !!authority &&
+        proactive.permitsComputer(authority.callId)) ||
+      (!proactive.viewOccupied() &&
+        !proactive.coordinator.list().some(
+          (i) =>
+            ["dispatching", "connected", "unknown"].includes(i.state) &&
+            // A call of the reach only talks: it shares no screen, so the
+            // worker keeps the screen and can take the answer said on it.
+            !voiceOnlyCall(i),
+        )),
   );
 // The reach and the routines of the computer worker. The reach calls the
 // owner on the line when a question waits too long in the chat, and texts

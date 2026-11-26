@@ -5,6 +5,7 @@ import { DomainError, hash } from "../storage/security.js";
 import type {
   DesktopExecutionSnapshot,
   DesktopExecutorPort,
+  DesktopExecutionAuthority,
 } from "./desktop-executor.js";
 
 const identity = z.string().regex(/^[A-Za-z0-9_:-]{1,160}$/);
@@ -271,6 +272,20 @@ export class PhoneDesktop {
     return [...this.calls.values()].some((call) => !call.closed);
   }
 
+  /** Only a request already reserved by this call may use its screen lease. */
+  ownsExecution(authority?: DesktopExecutionAuthority) {
+    if (!authority) return false;
+    this.expire();
+    const call = this.calls.get(authority.callId);
+    return (
+      !!call &&
+      !call.closed &&
+      !call.uncertain &&
+      call.requests.has(authority.toolCallId) &&
+      authority.isLive()
+    );
+  }
+
   expire() {
     for (const call of this.calls.values())
       if (!call.closed && call.expiresAt <= this.now()) this.end(call);
@@ -337,7 +352,13 @@ export class PhoneDesktop {
       return context.submitted.result;
     }
     const current = this.runtime.snapshot();
-    if (current.canStop || blocked.has(current.state))
+    if (
+      (current.canStop || blocked.has(current.state)) &&
+      (!current.requestId ||
+        !context.call.owned.has(current.requestId) ||
+        current.state === "uncertain" ||
+        current.state === "stopping")
+    )
       return Promise.resolve({ message: current.message });
     const id = `phone_${hash(JSON.stringify([context.callId, context.requestId]))}`;
     context.call.owned.add(id);

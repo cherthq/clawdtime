@@ -175,6 +175,91 @@ export class ProactiveCallCoordinator {
     if (!record) throw new DomainError(404, "Phone intent is unavailable.");
     return record;
   }
+  /** Operator-authorized recovery after corrected verification, never an automatic
+   * retry. Preserve the failed intent and all grants/effects. A dial reservation,
+   * even without a response, makes this recovery ineligible. */
+  recoverUndialedReview(
+    intentId: string,
+    input: { verificationId: string; brief: string },
+  ) {
+    return this.store.transaction(() => {
+      const prior = this.get(intentId);
+      if (
+        prior.state !== "refused" ||
+        prior.source.kind !== "job" ||
+        !prior.source.resultDigest ||
+        !prior.attemptId ||
+        prior.source.verificationId === input.verificationId
+      )
+        throw new DomainError(
+          409,
+          "An undialed refused job review is required.",
+        );
+      const effects = this.transport.list(prior.attemptId);
+      if (
+        !effects.length ||
+        effects.some(
+          (effect) => effect.state !== "done" || effect.effect === "dial",
+        ) ||
+        !effects.some((effect) => effect.effect === "restore") ||
+        !effects.some((effect) => effect.effect === "views_close") ||
+        !effects.some((effect) => effect.effect === "session_release")
+      )
+        throw new DomainError(
+          409,
+          "No dial and confirmed cleanup are required.",
+        );
+      const value = enqueueCallSchema.parse({
+        source: { ...prior.source, verificationId: input.verificationId },
+        scope: prior.scope,
+        policyId: prior.policyId,
+        channel: prior.channel,
+        trigger: "review",
+        brief: input.brief,
+        expiresAt: prior.expiresAt,
+      });
+      const key = hash(
+        JSON.stringify([
+          "undialed-review-recovery",
+          prior.id,
+          input.verificationId,
+        ]),
+      );
+      const existing = this.records.get(key);
+      if (existing) return existing;
+      if (
+        this.records
+          .all()
+          .some(
+            (other) =>
+              other.id !== prior.id &&
+              (occupied.has(other.state) ||
+                (sameRun(other, value) &&
+                  proactiveSubjectKey(other) === proactiveSubjectKey(value))),
+          )
+      )
+        throw new DomainError(
+          409,
+          "Another call or recovery already owns this result.",
+        );
+      const policy = this.authority.inspect(value);
+      if (!policy.allowed)
+        throw new DomainError(403, policy.reason ?? "Calling policy denied.");
+      const now = this.clock();
+      const reason = `undialed_recovery:${prior.id}`;
+      return this.records.put({
+        ...value,
+        id: key,
+        version: 1,
+        observations: [value.source],
+        state: "queued",
+        createdAt: now,
+        updatedAt: now,
+        reason,
+        history: [{ state: "queued", at: now, reason }],
+      });
+    });
+  }
   list() {
     return this.records
       .all()

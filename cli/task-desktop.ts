@@ -128,6 +128,10 @@ export function childEnvironment(panel = false): NodeJS.ProcessEnv {
           "CODEX_HOME",
           // Where the agent desk and the trove live, when the person moved them.
           "CLAWDTIME_CONFIG_HOME",
+          // Route owner texts to the explicitly configured production line.
+          // The project key and recipient stay in the protected state files.
+          "CHERT_LINE_ID",
+          "CHERT_API_BASE",
           // The language model and speech of the ClawdTime agent.
           "CLAWDTIME_OPENAI_API_KEY",
           "OPENAI_API_KEY",

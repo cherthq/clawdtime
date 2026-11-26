@@ -35,12 +35,12 @@ interface OwnedView {
 
 /** Reuses the existing exact-window Swift capture protocol. Pixel bytes stay in
  * memory and are never sent to logs, persisted, or replaced with a full screen. */
-class CaptureChild {
+export class CaptureChild<T extends object = TaskSceneTarget> {
   readonly process: ChildProcessWithoutNullStreams;
   private buffer: Buffer = Buffer.alloc(0);
   private pending?: {
     id: string;
-    target: TaskSceneTarget;
+    target: T;
     resolve(value: {
       bytes: Uint8Array;
       width: number;
@@ -52,8 +52,11 @@ class CaptureChild {
     header?: Record<string, unknown>;
   };
   private failed = false;
-  constructor(binary: string, config: string) {
-    this.process = spawn(binary, ["--config", config], {
+  get unavailable() {
+    return this.failed;
+  }
+  constructor(binary: string, config: string, mode = "--config") {
+    this.process = spawn(binary, [mode, config], {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
     });
@@ -66,7 +69,7 @@ class CaptureChild {
     this.process.on("exit", () => this.fail());
     this.process.stdin.on("error", () => this.fail());
   }
-  capture(target: TaskSceneTarget) {
+  capture(target: T) {
     if (this.failed || this.pending)
       return Promise.reject(new Error("Exact capture unavailable."));
     return new Promise<{
@@ -105,6 +108,21 @@ class CaptureChild {
         this.buffer = this.buffer.subarray(newline + 1);
       }
       const h = p.header!;
+      // A complete negative response is a refused frame, not a broken stream.
+      // Keep the synchronized child available for a later fresh capture.
+      if (
+        h.id === p.id &&
+        h.ok === false &&
+        h.bytes === 0 &&
+        this.buffer.length === 0
+      ) {
+        clearTimeout(p.timer);
+        this.pending = undefined;
+        p.reject(
+          new DomainError(409, "Fresh exact prepared frame unavailable."),
+        );
+        return;
+      }
       if (
         h.id !== p.id ||
         h.ok !== true ||
@@ -221,7 +239,7 @@ async function invalidateRenderer(owned: OwnedView) {
   return owned.invalidating;
 }
 
-async function joinChild(child: ChildProcessWithoutNullStreams) {
+export async function joinChild(child: ChildProcessWithoutNullStreams) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null)
     return true;
   return new Promise<boolean>((resolve) => {
@@ -240,7 +258,7 @@ async function joinChild(child: ChildProcessWithoutNullStreams) {
     child.kill("SIGTERM");
   });
 }
-function oneJSON(binary: string, args: string[], waitForExit: boolean) {
+export function oneJSON(binary: string, args: string[], waitForExit: boolean) {
   const child = spawn(binary, args, {
     stdio: ["pipe", "pipe", "pipe"],
     shell: false,

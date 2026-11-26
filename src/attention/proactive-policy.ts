@@ -39,6 +39,7 @@ export const proactivePolicySchema = z
       .strict()
       .optional(),
     viewScope: z.array(z.string().min(1).max(2000)).max(32),
+    allowComputerControl: z.boolean().optional(),
     alertFallback: z.boolean(),
     consent: z
       .object({
@@ -101,6 +102,15 @@ export class ProactivePolicyAuthority {
       throw new DomainError(
         400,
         "Walkthrough policy requires an explicit view scope.",
+      );
+    if (
+      value.allowComputerControl &&
+      (!value.channels.includes("phone_walkthrough") ||
+        !value.viewScope.includes("selected-display"))
+    )
+      throw new DomainError(
+        400,
+        "Computer control requires a selected-display walkthrough.",
       );
     if (value.allowedHours) {
       new Intl.DateTimeFormat("en-US", {
@@ -268,7 +278,10 @@ export class ProactivePolicyAuthority {
         ),
         viewScope:
           input.channel === "phone_walkthrough" ? [...policy.viewScope] : [],
-        inputAllowed: false,
+        inputAllowed:
+          policy.allowComputerControl === true &&
+          input.channel === "phone_walkthrough" &&
+          policy.viewScope.includes("selected-display"),
       };
       if (grant.expiresAt <= now)
         throw new DomainError(403, "Call intent expired.");

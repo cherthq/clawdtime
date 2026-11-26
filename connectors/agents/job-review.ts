@@ -35,6 +35,8 @@ export class JobReviews {
       root: string;
       projectRoot: string;
       plan: VerificationPlan;
+      /** Protected operator checks for an exact launched run, never worker-supplied. */
+      plansByRun?: Record<string, VerificationPlan>;
       /** Called before each check, enforcing the service's existing execution ownership. */
       authorize: () => void;
       jobs: () => JobFacts[];
@@ -44,15 +46,18 @@ export class JobReviews {
     },
   ) {
     validateVerificationPlan(options.plan);
+    for (const plan of Object.values(options.plansByRun ?? {}))
+      validateVerificationPlan(plan);
   }
   private file(id: string) {
     return join(this.options.root, "agents", "job-reviews", `${id}.json`);
   }
   private id(job: JobFacts) {
     const p = job.provenance!;
+    const override = this.options.plansByRun?.[p.runId];
     return createHash("sha256")
       .update(
-        `${p.runId}\0${p.resultDigest}\0${this.options.generation?.(job) ?? ""}`,
+        `${p.runId}\0${p.resultDigest}\0${this.options.generation?.(job) ?? ""}${override ? `\0${JSON.stringify(override)}` : ""}`,
       )
       .digest("hex");
   }
@@ -138,7 +143,7 @@ export class JobReviews {
           verification = await (this.options.verify ?? runTaskVerification)(
             p.projectRoot,
             p.runId,
-            this.options.plan,
+            this.options.plansByRun?.[p.runId] ?? this.options.plan,
             new AbortController().signal,
             this.options.authorize,
           );

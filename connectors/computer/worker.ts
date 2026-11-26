@@ -1205,13 +1205,14 @@ function readApproval(words: string): boolean | null {
 }
 
 export class ComputerWorker implements DesktopExecutorPort {
-  private ownershipGuard: () => boolean = () => true;
-  setOwnershipGuard(guard: () => boolean) {
+  private ownershipGuard: (authority?: DesktopExecutionAuthority) => boolean =
+    () => true;
+  setOwnershipGuard(guard: (authority?: DesktopExecutionAuthority) => boolean) {
     this.ownershipGuard = guard;
   }
-  private ownsScreen() {
+  private ownsScreen(authority?: DesktopExecutionAuthority) {
     try {
-      return this.ownershipGuard();
+      return this.ownershipGuard(authority);
     } catch {
       return false;
     }
@@ -1354,7 +1355,7 @@ export class ComputerWorker implements DesktopExecutorPort {
    */
   private halted(run: Run): boolean {
     if (this.current !== run) return true;
-    if (!this.ownsScreen())
+    if (!this.ownsScreen(run.authority))
       this.finish(run, "blocked", "screen_owned_by_call", ownershipText);
     else if (run.authority?.isLive() === false)
       this.finish(run, "canceled", "call_expired", stoppedText, false);
@@ -1541,7 +1542,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     authority?: DesktopExecutionAuthority,
     putOff?: string,
   ): Promise<{ message: string }> {
-    if (!this.ownsScreen()) return { message: ownershipText };
+    if (!this.ownsScreen(authority)) return { message: ownershipText };
     if (authority?.isLive() === false) return { message: stoppedText };
     const id = identity.parse(eventId);
     const goal = z.string().trim().min(1).max(2000).parse(text);
@@ -1699,7 +1700,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     // waits. If an effect command is in flight, do not finish prematurely (so
     // a lost result can still become uncertain), and take no more words.
     const over =
-      !this.ownsScreen() ||
+      !this.ownsScreen(run.authority) ||
       run.authority?.isLive() === false ||
       !this.enabled() ||
       this.now() >= run.deadline;
