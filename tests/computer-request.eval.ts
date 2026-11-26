@@ -16,11 +16,20 @@
  * whether a request still ends with what the app holds, through trouble that
  * a real Mac and a real service give.
  *
+ * The long requests (their names start with "long:") take 30 to 60 steps,
+ * most of them across two apps on one desk: a form of twelve fields, prices
+ * of four products, ten rows of a sheet, five messages and a note, a way that
+ * failed early, a sign-in in the middle, and a list that another person
+ * changes halfway. Each has a step limit and a time limit of its own, under
+ * the limits of the service, and the result of every request says its steps
+ * and its seconds.
+ *
  *   npm run eval:computer:request -- gpt-5.4
  *   npm run eval:computer:request -- gpt-5.4 --repeat 3 --split held --out b.json
  *   npx tsx tests/computer-request.eval.ts --compare a.json b.json
  *   npx tsx tests/computer-request.eval.ts --check
  *   npx tsx tests/computer-request.eval.ts --check --new-actions
+ *   npx tsx tests/computer-request.eval.ts gpt-5.4 --only long: --repeat 2
  *
  * Each argument is provider/model, or a bare model of OpenAI, with "@effort"
  * for a reasoning effort (`gpt-6.2-astra@low`). With none it uses the model
@@ -31,8 +40,9 @@
  * in all. `--split dev|held|all` (default all) takes the dev requests, the
  * held requests (`held: true`, a fixed quarter) or all. `--out FILE.json`
  * (or OUT) writes the result of each request and every run; `--compare
- * A.json B.json` prints what changed from A to B and runs nothing. ONLY
- * names a part of a request's name.
+ * A.json B.json` prints what changed from A to B and runs nothing. `--only
+ * WORDS` (or ONLY) names a part of a request's name: `--only long:` runs the
+ * long requests.
  *
  * With a model it needs a key for the language model in the environment or
  * the key store, and the Chromium of Playwright. It costs real model calls: about two for each
@@ -116,7 +126,16 @@ import {
   type CaseRun,
 } from "./computer-eval-report.js";
 import { inSplit } from "./computer-eval-stats.js";
-import { apps, browserApp, sites } from "./computer-request-apps.js";
+import {
+  apps,
+  bookInvoices,
+  browserApp,
+  people,
+  receiptRows,
+  rotaNewcomers,
+  rotaPeople,
+  sites,
+} from "./computer-request-apps.js";
 
 const flags = evalFlags(process.argv.slice(2));
 const checking = flags.check;
@@ -150,9 +169,10 @@ const knowsEmail: Person = (question, page) =>
       ? typesPassword(question, page)
       : "yes";
 
-/** What the worker said to the person in the request. */
+/** What the worker said to the person in the request, and the faults that were given on the way. */
 interface Talk {
   asked: string[];
+  faults: string[];
 }
 /** One scripted way through a request, for --check. */
 interface Path {
@@ -179,6 +199,8 @@ interface Request {
   held?: true;
   /** The app on the screen. */
   app?: keyof typeof apps;
+  /** Or a desk of several apps, the first one in front: open_app brings another one forward. */
+  desk?: (keyof typeof apps)[];
   /** Or a browser with these tabs, the first one in front unless `active` says another. */
   tabs?: { urls: string[]; active?: number };
   goal: string;
@@ -186,6 +208,15 @@ interface Request {
   faults?: Faults;
   /** It is about the new kinds of action: only with --new-actions. */
   newActions?: true;
+  /** The subgoals of the scripted plan in --check. Without them the plan is one subgoal, the goal itself. */
+  subgoals?: string[];
+  /**
+   * The most actions and minutes for this request. The service's own limits
+   * stay above them: 40 actions, or 80 with a plan of 3 subgoals or more.
+   * Without it the request has the service's step limit and 3 minutes (1 in
+   * --check).
+   */
+  limit?: { steps: number; minutes: number };
   /** True when the app holds what the request asked for. `said` is the worker's last message. */
   done: (
     state: Record<string, unknown>,
@@ -358,6 +389,358 @@ const tellReference: Step = (v) => {
     ? act.done(`The trip request is sent. Its reference is ${reference}.`)
     : act.giveUp("The screen shows no reference.");
 };
+
+/*
+ * Long requests: 30 to 60 steps each, most of them across two apps. Each
+ * has a step limit of its own, about one and a half times its ideal path,
+ * and the scripted plan of --check has several subgoals, as a long plan of
+ * a model has. Most of them are held.
+ */
+
+/** The limits of the service for one request (worker.ts): 40 actions, 80 with a plan of 3 subgoals or more. */
+const serviceLimits = { steps: 40, plannedSteps: 80 };
+/** The limit of a long request: its steps, and 12 minutes with a model. */
+const longLimit = (steps: number) => ({ steps, minutes: 12 });
+
+/** A click on a field by its name, then the text: the field takes the focus first, as a person does it. */
+const fill = (title: string, text: string): Step[] => [
+  clickNamed(title),
+  () => act.type(text),
+];
+/** A choice in a pop-up button, both by their names. */
+const pick = (popup: string, choice: string): Step[] => [
+  clickNamed(popup, "AXPopUpButton"),
+  clickNamed(choice, "AXMenuItem"),
+];
+const openApp =
+  (name: string): Step =>
+  () =>
+    act.openApp(name);
+/** The facts that the plan kept, oldest first, as the planner reads them in its brief. */
+const keptFacts = (v: ScriptView) =>
+  [...v.ask.brief.matchAll(/^- "(.*)"$/gm)].map((found) => found[1]!);
+/**
+ * Keeps facts that the screen shows now in the plan. Once the brief shows
+ * them, the turn goes to the next step. A later step reads them from the
+ * brief, as a model does after the screen is gone.
+ */
+const keep =
+  (facts: (v: ScriptView) => string[]): Step =>
+  (v) => {
+    const wanted = facts(v);
+    const kept = keptFacts(v);
+    return wanted.every((fact) => kept.includes(fact))
+      ? "next"
+      : act.planNote(wanted);
+  };
+/** The names of the elements of the screen, in the order of the screen. */
+const titlesOf = (v: ScriptView) => v.screen.map((item) => item.title);
+/** The value of the one element with this name. */
+const valueOf = (v: ScriptView, title: string, role?: string) =>
+  v.screen.find((item) => item.id === named(v, title, role))?.value ?? "";
+/** A number as a sheet or a person writes it: "$1,240.00" is 1240. */
+const amountOf = (text: string | undefined) =>
+  Number((text ?? "").replace(/[$,\s]/g, "")) || 0;
+const sameSet = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((item) => b.includes(item));
+
+// A form of twelve fields on three pages, sent, and its reference typed back.
+const leaseWanted: Record<string, string> = {
+  first: "Ada",
+  last: "Brook",
+  email: "ada@example.com",
+  phone: "+1 415 555 0100",
+  street: "12 Harbor Road",
+  city: "Lisbon",
+  postcode: "1100-148",
+  movein: "1 March 2027",
+  occupants: "2 people",
+  pets: "A cat",
+  contact: "Mornings",
+};
+/** The three pages, their review and the send, with the contact time that is given. */
+const fillLease = (contact: string): Step[] => [
+  ...fill("First name", "Ada"),
+  ...fill("Last name", "Brook"),
+  ...fill("Email", "ada@example.com"),
+  ...fill("Phone", "+1 415 555 0100"),
+  clickNamed("Next"),
+  ...fill("Street", "12 Harbor Road"),
+  ...fill("City", "Lisbon"),
+  ...fill("Postcode", "1100-148"),
+  ...fill("Move-in date", "1 March 2027"),
+  clickNamed("Next"),
+  ...pick("Occupants", "2 people"),
+  ...pick("Pets", "A cat"),
+  ...pick("Contact time", contact),
+  ...fill("Note to the landlord", "We are quiet tenants."),
+  clickNamed("Review"),
+  clickNamed("Send application"),
+];
+/** The reference that the screen shows, as the planner reads it. */
+const shownLease = (v: ScriptView) => {
+  const reference = /Your reference is (HA-\d+)/.exec(v.ask.brief)?.[1];
+  if (!reference) throw new Error("the screen shows no reference");
+  return reference;
+};
+const confirmLease: Step[] = [
+  clickNamed("Reference"),
+  (v) => act.type(shownLease(v)),
+  clickNamed("Confirm"),
+  (v) =>
+    /Confirmed\. Application HA-\d+ is complete/.test(v.ask.brief)
+      ? act.done(
+          `The application is sent and confirmed. Its reference is ${shownLease(v)}.`,
+        )
+      : act.giveUp("The screen does not confirm the application."),
+];
+const tellLease: Step = (v) =>
+  act.done(`The application is sent. Its reference is ${shownLease(v)}.`);
+
+// Prices of four products in one app, and the cheapest added to a list in another.
+const kettles = [
+  "Brightwave K2 kettle",
+  "Stonepad Steel kettle",
+  "Cobalt One kettle",
+  "Riverstone Mini kettle",
+];
+/** One fact for each product: "Cobalt One kettle: 31.00 plus 3.50 delivery, 34.50 in all". */
+const priceFact = (v: ScriptView, name: string) => {
+  const text = titlesOf(v).join("\n");
+  const price = /^Price \$(\d+\.\d\d)$/m.exec(text)?.[1];
+  const fee = /^Free delivery$/m.test(text)
+    ? "0.00"
+    : /^Delivery \$(\d+\.\d\d)$/m.exec(text)?.[1];
+  if (!price || !fee)
+    throw new Error(`the screen shows no price or delivery of ${name}`);
+  const total = (Number(price) + Number(fee)).toFixed(2);
+  return `${name}: ${price} plus ${fee} delivery, ${total} in all`;
+};
+/** A search for one product, its page and its Delivery tab, a fact of its prices, and back. */
+const lookUp = (name: string): Step[] => [
+  clickNamed("Search"),
+  () => act.key("cmd+a"),
+  () => act.type(name),
+  clickNamed(name, "AXLink"),
+  clickNamed("Delivery", "AXRadioButton"),
+  keep((v) => [priceFact(v, name)]),
+  clickNamed("Back to results"),
+];
+/** The product of the kept facts with the lowest price, with delivery or without it. */
+const cheapestKept = (v: ScriptView, withDelivery: boolean) => {
+  const found = keptFacts(v)
+    .map((fact) =>
+      /^(.*): (\d+\.\d\d) plus (\d+\.\d\d) delivery, (\d+\.\d\d) in all$/.exec(
+        fact,
+      ),
+    )
+    .filter((match) => match !== null)
+    .map((match) => ({
+      name: match[1]!,
+      price: withDelivery ? match[4]! : match[2]!,
+    }))
+    .sort((a, b) => Number(a.price) - Number(b.price));
+  if (!found[0]) throw new Error("the plan kept no prices");
+  return found[0];
+};
+const addCheapest = (withDelivery: boolean): Step[] => [
+  openApp("Lists"),
+  clickNamed("Kitchen"),
+  clickNamed("New item"),
+  (v) => act.type(cheapestKept(v, withDelivery).name, named(v, "Item")),
+  (v) =>
+    act.type(
+      `${cheapestKept(v, withDelivery).price} with delivery`,
+      named(v, "Note"),
+    ),
+  clickNamed("Add"),
+  (v) =>
+    act.done(
+      `The ${cheapestKept(v, withDelivery).name} costs least with delivery, ${cheapestKept(v, withDelivery).price}. It is on your Kitchen list now.`,
+    ),
+];
+
+// Ten rows of one sheet into another, and their total.
+const november = receiptRows.filter((row) => row[0]!.endsWith("Nov"));
+const novemberTotal = november
+  .reduce((sum, row) => sum + Number(row[2]), 0)
+  .toFixed(2);
+/** The receipts of November that the screen of Receipts shows, as two facts of five: "Paper Mill 12.40; Ink House 31.00; ...". */
+const receiptFacts = (v: ScriptView) => {
+  const titles = titlesOf(v);
+  const rows: string[] = [];
+  titles.forEach((title, at) => {
+    if (/^\d+ Nov$/.test(title))
+      rows.push(`${titles[at + 1]} ${titles[at + 2]}`);
+  });
+  if (rows.length !== 10)
+    throw new Error(`the screen shows ${rows.length} receipts of November`);
+  return [rows.slice(0, 5).join("; "), rows.slice(5).join("; ")];
+};
+/** The rows that the plan kept, in their order. */
+const keptRows = (v: ScriptView) =>
+  keptFacts(v)
+    .flatMap((fact) => fact.split("; "))
+    .map((row) => /^(.*) (\d+\.\d\d)$/.exec(row))
+    .filter((match) => match !== null)
+    .map((match) => ({ shop: match[1]!, amount: match[2]! }));
+/** Each kept row typed into the sheet from the selected cell down: the shop, Tab, the amount, Return. One row can be left out. */
+const typeRows = (leaveOut?: number): Step[] =>
+  november
+    .map((_, at) => at)
+    .filter((at) => at !== leaveOut)
+    .flatMap((at): Step[] => [
+      (v) => act.type(keptRows(v)[at]!.shop),
+      () => act.key("tab"),
+      (v) => act.type(keptRows(v)[at]!.amount),
+      () => act.key("return"),
+    ]);
+const totalRow = (formula: string): Step[] => [
+  () => act.type("Total"),
+  () => act.key("tab"),
+  () => act.type(formula),
+  () => act.key("return"),
+];
+/** Done with the total that the sheet shows in B12. */
+const tellTotal: Step = (v) =>
+  act.done(
+    `The ten receipts are in the sheet. Their total is ${valueOf(v, "B12", "AXCell")}.`,
+  );
+
+// Five messages read and flagged, and a note that sums them up.
+const offsite = [
+  "Offsite: sign-up",
+  "Offsite: the bus",
+  "Offsite: budget",
+  "Offsite: new date",
+  "Offsite: the venue",
+];
+/** The main point of the open message: the part that Show the rest opens, the line after its first one. */
+const restOf = (v: ScriptView) => {
+  const titles = titlesOf(v);
+  const from = titles.findIndex((title) => title.startsWith("From "));
+  const rest = from >= 0 ? titles[from + 2] : undefined;
+  if (!rest || rest === "Show the rest" || rest === "Flag")
+    throw new Error("the screen shows no rest of the message");
+  return rest;
+};
+/** Opens one message and the rest of it, keeps its main point, flags it. Without the rest it only flags it. */
+const readMessage = (subject: string, rest = true): Step[] => [
+  clickNamed(subject),
+  ...(rest
+    ? [clickNamed("Show the rest"), keep((v) => [`${subject}: ${restOf(v)}`])]
+    : []),
+  clickNamed("Flag"),
+];
+/** A new note named Offsite summary, with one line for each line that is given. */
+const writeSummary = (lines: (v: ScriptView) => string[]): Step[] => [
+  openApp("Notes"),
+  clickNamed("New note"),
+  () => act.type("Offsite summary"),
+  () => act.key("return"),
+  ...[0, 1, 2, 3, 4].flatMap((at): Step[] => [
+    (v) => {
+      const line = lines(v)[at];
+      return line === undefined ? "next" : act.type(line);
+    },
+    () => act.key("return"),
+  ]),
+  doneStep("The note Offsite summary sums up the five messages."),
+];
+
+// A way that failed early: the New note button never works, Command-N does.
+const designers = people.filter((person) => person[1] === "Design");
+/** The people of the Design team that the directory shows: "Ada Brook 4021; Lena Ortiz 4022; ...". */
+const designFact = (v: ScriptView) => {
+  const titles = titlesOf(v);
+  const found: string[] = [];
+  titles.forEach((title, at) => {
+    if (title === "Design") found.push(`${titles[at - 1]} ${titles[at + 1]}`);
+  });
+  if (found.length !== 7)
+    throw new Error(`the screen shows ${found.length} people of Design`);
+  return [`Design team: ${found.join("; ")}`];
+};
+const keptDesigners = (v: ScriptView) =>
+  (
+    keptFacts(v)
+      .find((fact) => fact.startsWith("Design team: "))
+      ?.slice("Design team: ".length)
+      .split("; ") ?? []
+  ).map((person) => {
+    const [, name, extension] = /^(.*) (\d+)$/.exec(person) ?? [];
+    return { name: name!, extension: extension! };
+  });
+/** One new note for one person: a new note, the name, Return, the extension. With `button` the New note button comes first, every time. */
+const noteFor = (at: number, button = false): Step[] => [
+  ...(button ? [clickNamed("New note")] : []),
+  () => act.key("cmd+n"),
+  (v) => act.type(keptDesigners(v)[at]!.name),
+  () => act.key("return"),
+  (v) => act.type(`Extension ${keptDesigners(v)[at]!.extension}`),
+];
+
+// A sign-in in the middle: the session ends after the third save.
+const fjord = bookInvoices
+  .filter((row) => row[1] === "Fjord Logistics")
+  .map((row) => row[0]!);
+const toFreight = (number: string): Step[] => [
+  (v) => act.click(inRow(v, number, "Edit")),
+  ...pick("Category", "Freight"),
+  clickNamed("Save"),
+];
+/** The person gives their email when asked for it, and types the password into the field when asked for that. */
+const signsInAgain: Person = async (question, page) => {
+  const field = page.locator("#password");
+  const typed =
+    /password/i.test(question) &&
+    (await field.isVisible()) &&
+    !(await field.inputValue());
+  if (typed) {
+    await field.click();
+    await page.keyboard.type("a-test-password");
+  }
+  if (/e-?mail/i.test(question))
+    return typed
+      ? "I typed the password. My email is ada@example.com."
+      : "ada@example.com";
+  return "yes";
+};
+/** The email that the person gave, as the planner reads it in its brief. */
+const answeredEmail = (v: ScriptView) => {
+  const email = /the person answered: ([^\s()]+@[^\s()]+)/.exec(
+    v.ask.brief,
+  )?.[1];
+  if (!email) throw new Error("the answer did not reach the planner");
+  return email;
+};
+const askEmail: Step = () =>
+  act.ask(
+    "Ledger ended the session and asks to sign in again. What is your Ledger email address?",
+  );
+
+// A list that another person changes halfway: three people more, and another order.
+const weekend = [
+  "Ada Brook",
+  "Ivy Laurent",
+  "Lena Ortiz",
+  "Mia Chen",
+  "Noah Grant",
+  "Omar Diaz",
+  "Sam Reed",
+  "Theo Park",
+];
+const toWeekend = (name: string): Step[] => [
+  clickNamed(name),
+  ...pick("Shift", "Weekend"),
+  clickNamed("Save"),
+];
+/** The same steps, but by the place where the person was in the first list: after the change another person is there. */
+const toWeekendByPlace = (name: string): Step[] => [
+  clickAtIn(`#list .person:nth-child(${rotaPeople.indexOf(name) + 1})`),
+  ...pick("Shift", "Weekend"),
+  clickNamed("Save"),
+];
 
 const requests: Request[] = [
   {
@@ -1083,6 +1466,367 @@ const requests: Request[] = [
       ]),
     ],
   },
+  // Long requests: 30 to 60 steps. Most are held.
+  {
+    id: "long: a lease form of twelve fields on three pages, sent, and its reference confirmed",
+    app: "lease",
+    goal: "In Homes, fill in the lease application. Page 1: first name Ada, last name Brook, email ada@example.com, phone +1 415 555 0100. Page 2: street 12 Harbor Road, city Lisbon, postcode 1100-148, move-in date 1 March 2027. Page 3: 2 people, a cat, contact time mornings, and the note to the landlord 'We are quiet tenants.' Check it and send it. Then type its reference into the confirm field, confirm it, and tell me the reference.",
+    person: yes,
+    subgoals: [
+      "Fill in page 1 and go on.",
+      "Fill in page 2 and go on.",
+      "Fill in page 3 and check the review.",
+      "Send the application.",
+      "Type the reference back, confirm it and say it.",
+    ],
+    limit: longLimit(48),
+    done: (state, said, final) =>
+      Object.entries(leaseWanted).every(
+        ([key, value]) =>
+          String(state[key]).trim().toLowerCase() === value.toLowerCase(),
+      ) &&
+      /we are quiet tenants/i.test(String(state.note)) &&
+      state.sent === true &&
+      state.confirmed === true &&
+      final === "completed" &&
+      /HA-48213/.test(said),
+    paths: [
+      ideal([...fillLease("Mornings"), ...confirmLease]),
+      wrong("the evening contact time", [
+        ...fillLease("Evenings"),
+        ...confirmLease,
+      ]),
+      wrong("tells the reference and never confirms it", [
+        ...fillLease("Mornings"),
+        tellLease,
+      ]),
+    ],
+  },
+  {
+    id: "long: four product pages compared, and the cheapest added to a list in another app",
+    desk: ["market", "lists"],
+    goal: "In Market, compare the price with delivery of these four kettles: Brightwave K2 kettle, Stonepad Steel kettle, Cobalt One kettle and Riverstone Mini kettle. Add the one that costs least with delivery to my Kitchen list in the Lists app, with its price with delivery as the note. Then tell me which one it is.",
+    subgoals: [
+      ...kettles.map((name) => `Find the price with delivery of the ${name}.`),
+      "Add the cheapest to the Kitchen list in Lists, and say which one.",
+    ],
+    limit: longLimit(48),
+    done: (state, said) => {
+      const held = (
+        state.lists as {
+          lists: Record<string, { name: string; note: string }[]>;
+        }
+      ).lists;
+      const added = held.Kitchen?.[1];
+      return (
+        held.Kitchen?.length === 2 &&
+        /cobalt one/i.test(added?.name ?? "") &&
+        /34[.,]50/.test(`${added?.name} ${added?.note}`) &&
+        held.Garden?.length === 1 &&
+        held.Gifts?.length === 1 &&
+        /cobalt one/i.test(said)
+      );
+    },
+    paths: [
+      ideal([...kettles.flatMap(lookUp), ...addCheapest(true)]),
+      wrong("the lowest price without delivery", [
+        ...kettles.flatMap(lookUp),
+        ...addCheapest(false),
+      ]),
+      wrong("three of the four", [
+        ...kettles.filter((name) => !/Cobalt/.test(name)).flatMap(lookUp),
+        ...addCheapest(true),
+      ]),
+    ],
+  },
+  {
+    id: "long: ten rows copied from one sheet into another, and their total",
+    held: true,
+    desk: ["receipts", "sheets"],
+    goal: "Copy the ten receipts of November from the Receipts app into the sheet Expenses November in Sheets, one receipt per row from row 2 down, in the order of the list: the shop in column A, the amount in column B. Then write Total in A12 and the total of the ten amounts in B12, and tell me the total.",
+    subgoals: [
+      "Read the ten receipts of November in Receipts.",
+      "Type the first five rows into the sheet from row 2.",
+      "Type the last five rows.",
+      "Write the total in row 12 and say it.",
+    ],
+    limit: longLimit(70),
+    done: (state, said) => {
+      const values = (state.sheets as { values: Record<string, string> })
+        .values;
+      const allowed = new Set(["A1", "B1"]);
+      for (let row = 2; row <= 12; row++) {
+        allowed.add(`A${row}`);
+        allowed.add(`B${row}`);
+      }
+      return (
+        november.every(
+          ([, shop, amount], at) =>
+            (values[`A${at + 2}`] ?? "").trim().toLowerCase() ===
+              shop!.toLowerCase() &&
+            Math.abs(amountOf(values[`B${at + 2}`]) - Number(amount)) < 0.005,
+        ) &&
+        /^total$/i.test((values.A12 ?? "").trim()) &&
+        Math.abs(amountOf(values.B12) - Number(novemberTotal)) < 0.005 &&
+        Object.keys(values).every((address) => allowed.has(address)) &&
+        said.includes(novemberTotal)
+      );
+    },
+    paths: [
+      ideal([
+        keep(receiptFacts),
+        openApp("Sheets"),
+        clickNamed("A2", "AXCell"),
+        ...typeRows(),
+        ...totalRow("=SUM(B2:B11)"),
+        tellTotal,
+      ]),
+      wrong("a row left out", [
+        keep(receiptFacts),
+        openApp("Sheets"),
+        clickNamed("A2", "AXCell"),
+        ...typeRows(5),
+        ...totalRow("=SUM(B2:B11)"),
+        tellTotal,
+      ]),
+      wrong("the total of nine rows", [
+        keep(receiptFacts),
+        openApp("Sheets"),
+        clickNamed("A2", "AXCell"),
+        ...typeRows(),
+        ...totalRow("=SUM(B2:B10)"),
+        tellTotal,
+      ]),
+    ],
+  },
+  {
+    id: "long: five messages read and flagged, and a summary note drafted",
+    held: true,
+    desk: ["mailbox", "notes"],
+    goal: "Read the five messages about the offsite in Mailbox, and flag each of them. Then make a new note in Notes named Offsite summary, with one short line for each message that gives its main point.",
+    subgoals: [
+      "Read and flag the first two offsite messages.",
+      "Read and flag the other three.",
+      "Make the note Offsite summary in Notes.",
+      "Write one line for each message.",
+    ],
+    limit: longLimit(48),
+    done: (state) => {
+      const notes = (state.notes as NotesState).notes;
+      const summary = notes.filter((note) =>
+        /^offsite summary/i.test(note.name.trim()),
+      );
+      return (
+        notes.length === 16 &&
+        summary.length === 1 &&
+        [/Hall B/i, /14 May/i, /900/, /8[:.]15/, /2 May/i].every((point) =>
+          point.test(summary[0]!.text),
+        ) &&
+        notes.filter((note) => /Hall B/i.test(note.text)).length === 1 &&
+        sameSet((state.mailbox as { flagged: string[] }).flagged, offsite)
+      );
+    },
+    paths: [
+      ideal([
+        ...offsite.flatMap((subject) => readMessage(subject)),
+        ...writeSummary((v) =>
+          keptFacts(v).filter((fact) => fact.startsWith("Offsite")),
+        ),
+      ]),
+      wrong("lines from the subjects alone", [
+        ...offsite.flatMap((subject) => readMessage(subject, false)),
+        ...writeSummary(() =>
+          offsite.map((subject) => subject.replace("Offsite: ", "")),
+        ),
+      ]),
+      wrong("a message left out", [
+        ...offsite
+          .filter((subject) => subject !== "Offsite: the bus")
+          .flatMap((subject) => readMessage(subject)),
+        ...writeSummary((v) =>
+          keptFacts(v).filter((fact) => fact.startsWith("Offsite")),
+        ),
+      ]),
+    ],
+  },
+  {
+    id: "long: a way that failed early is not tried again, seven notes later",
+    held: true,
+    desk: ["directory", "notes"],
+    goal: "In Directory, find the seven people of the Design team. Then in Notes, make one new note for each of them: the first line is the name, the second line is the word Extension and their number, for example Extension 4021.",
+    // The New note button never works. Command-N does. A way that did not work stays in the list of failed ways.
+    faults: { hands: { deaf: { selector: "#new", times: 1000 } } },
+    subgoals: [
+      "Read the people of the Design team in Directory.",
+      "Make the notes of the first three people in Notes.",
+      "Make the notes of the other four.",
+    ],
+    limit: longLimit(48),
+    done: (state, _said, _final, talk) => {
+      const notes = (state.notes as NotesState).notes;
+      return (
+        notes.length === 22 &&
+        designers.every(([name, , extension]) => {
+          const mine = notes.filter((note) => note.name.trim() === name);
+          return (
+            mine.length === 1 &&
+            new RegExp(
+              `^${name}\\s*\\n\\s*extension:?\\s*${extension}$`,
+              "i",
+            ).test(mine[0]!.text.trim())
+          );
+        }) &&
+        // The button may be tried twice in a row, never again later.
+        talk.faults.filter((fault) => fault === "a click was not taken")
+          .length <= 2
+      );
+    },
+    paths: [
+      ideal([
+        keep(designFact),
+        openApp("Notes"),
+        // The button does nothing: the screen shows no new note. Command-N does what it should.
+        clickNamed("New note"),
+        ...designers.flatMap((_, at) => noteFor(at)),
+        doneStep("Each of the seven people has a note with their extension."),
+      ]),
+      wrong("tries the button again before every note", [
+        keep(designFact),
+        openApp("Notes"),
+        ...designers.flatMap((_, at) => noteFor(at, true)),
+        doneStep("Each of the seven people has a note with their extension."),
+      ]),
+      wrong("everything into the open note", [
+        keep(designFact),
+        openApp("Notes"),
+        clickIn("#editor"),
+        (v) =>
+          act.type(
+            keptDesigners(v)
+              .map((person) => `${person.name}\nExtension ${person.extension}`)
+              .join("\n"),
+          ),
+        doneStep("Each of the seven people has a note with their extension."),
+      ]),
+    ],
+  },
+  {
+    id: "long: a sign-in in the middle, where the owner types the password",
+    held: true,
+    app: "books",
+    goal: "In Ledger, change the category of every invoice of Fjord Logistics to Freight, and save each one. Then tell me how many you changed.",
+    person: signsInAgain,
+    subgoals: [
+      "Change the first invoices of Fjord Logistics to Freight.",
+      "Change the rest of them.",
+      "Say how many were changed.",
+    ],
+    limit: longLimit(50),
+    done: (state, said, final, talk) => {
+      const held = state as {
+        categories: Record<string, string>;
+        signIns: number;
+        email: string;
+        password: string;
+      };
+      return (
+        bookInvoices.every(
+          ([number, customer, , category]) =>
+            held.categories[number!] ===
+            (customer === "Fjord Logistics" ? "Freight" : category),
+        ) &&
+        held.signIns === 1 &&
+        held.email === "ada@example.com" &&
+        held.password === "a-test-password" &&
+        talk.asked.some((question) => /password/i.test(question)) &&
+        /\b(?:7|seven)\b/i.test(said) &&
+        final === "completed"
+      );
+    },
+    paths: [
+      ideal([
+        ...fjord.slice(0, 3).flatMap(toFreight),
+        askEmail,
+        (v) => act.type(answeredEmail(v), named(v, "Email")),
+        askPassword,
+        clickNamed("Sign in", "AXButton"),
+        ...fjord.slice(3).flatMap(toFreight),
+        doneStep("I changed 7 invoices of Fjord Logistics to Freight."),
+      ]),
+      wrong("gives up at the sign-in", [
+        ...fjord.slice(0, 3).flatMap(toFreight),
+        () => act.giveUp("Ledger asks me to sign in, and I cannot do that."),
+      ]),
+      wrong("says done at the sign-in", [
+        ...fjord.slice(0, 3).flatMap(toFreight),
+        doneStep("I changed 7 invoices of Fjord Logistics to Freight."),
+      ]),
+      // The worker never types into a password field: it hands the field to the person.
+      ideal(
+        [
+          ...fjord.slice(0, 3).flatMap(toFreight),
+          askEmail,
+          (v) => act.type(answeredEmail(v), named(v, "Email")),
+          (v) => act.type("guessed-pass-1", named(v, "Password")),
+          clickNamed("Sign in", "AXButton"),
+          ...fjord.slice(3).flatMap(toFreight),
+          doneStep("I changed 7 invoices of Fjord Logistics to Freight."),
+        ],
+        "tries to type the password, and the person types it",
+      ),
+    ],
+  },
+  {
+    id: "long: a list that another person changes halfway",
+    held: true,
+    app: "rota",
+    goal: "In Rota, give these eight people the Weekend shift, and save each one: Ada Brook, Ivy Laurent, Lena Ortiz, Mia Chen, Noah Grant, Omar Diaz, Sam Reed and Theo Park.",
+    // After the fourth save another person adds three people and sorts the list by last name, between two looks.
+    faults: {
+      hands: {
+        change: {
+          when: "window.state().saves >= 4",
+          run: "window.sync()",
+          label: "the list changed after the fourth save",
+        },
+      },
+    },
+    subgoals: [
+      "Give the first four people the Weekend shift.",
+      "Give the other four the Weekend shift.",
+      "Check the list and say it is done.",
+    ],
+    limit: longLimit(50),
+    done: (state) => {
+      const held = state as {
+        shifts: Record<string, string>;
+        synced: boolean;
+        changes: string[];
+      };
+      return (
+        held.synced &&
+        Object.keys(held.shifts).length ===
+          rotaPeople.length + rotaNewcomers.length &&
+        Object.entries(held.shifts).every(
+          ([name, shift]) =>
+            shift === (weekend.includes(name) ? "Weekend" : "Weekday"),
+        ) &&
+        held.changes.every((name) => weekend.includes(name))
+      );
+    },
+    paths: [
+      ideal([
+        ...weekend.flatMap(toWeekend),
+        doneStep("The eight people have the Weekend shift now."),
+      ]),
+      wrong("waits, then goes on by the places of the first list", [
+        ...weekend.slice(0, 4).flatMap(toWeekend),
+        () => act.wait(500),
+        ...weekend.slice(4).flatMap(toWeekendByPlace),
+        doneStep("The eight people have the Weekend shift now."),
+      ]),
+    ],
+  },
 ];
 
 // Each argument is provider/model, or a bare model of OpenAI, with "@effort"
@@ -1121,7 +1865,7 @@ const planners = new Map<string, PlannerOptions>(
 );
 const models = [...planners.keys()];
 const repeats = repeatsOf(flags, process.env, 1);
-const only = process.env.ONLY;
+const only = flags.only ?? process.env.ONLY;
 const chosen = requests.filter(
   (request) =>
     (withNew || !request.newActions) &&
@@ -1153,6 +1897,8 @@ interface Row {
   state: string;
   reason: string;
   steps: number;
+  /** The step limit of the request, when it has one of its own. */
+  limit?: number;
   inputs: number;
   questions: number;
   seconds: number;
@@ -1188,6 +1934,8 @@ async function one(
   try {
     let desk: Desk;
     let port: EvalBrowser | undefined;
+    /** What the apps hold: the one app, or each app of the desk by its key. */
+    let holds: () => Promise<Record<string, unknown>>;
     if (request.tabs) {
       await serveSites(context, sites);
       const tabs = new EvalBrowser(context);
@@ -1197,11 +1945,46 @@ async function one(
         page: () => tabs.active,
         app: async () => ({ ...browserApp, window: await tabs.active.title() }),
       };
+      holds = () => tabs.state();
+    } else if (request.desk) {
+      // One page for each app. The first is in front, open_app brings another one forward.
+      const shown = await Promise.all(
+        request.desk.map(async (key) => {
+          const page = await context.newPage();
+          await page.setContent(apps[key].html);
+          return { key, app: apps[key].app, page };
+        }),
+      );
+      let front = 0;
+      desk = {
+        page: () => shown[front]!.page,
+        app: async () => shown[front]!.app,
+        open: async (name) => {
+          const at = shown.findIndex(
+            (item) => item.app.name.toLowerCase() === name.trim().toLowerCase(),
+          );
+          if (at < 0) return false;
+          front = at;
+          await shown[at]!.page.bringToFront();
+          return true;
+        },
+      };
+      holds = async () =>
+        Object.fromEntries(
+          await Promise.all(
+            shown.map(async (item) => [
+              item.key,
+              await item.page.evaluate("window.state()"),
+            ]),
+          ),
+        );
     } else {
       const app = apps[request.app!];
       const page = await context.newPage();
       await page.setContent(app.html);
       desk = { page: () => page, app: async () => app.app };
+      holds = async () =>
+        (await page.evaluate("window.state()")) as Record<string, unknown>;
     }
     const applied: string[] = [];
     const pageHands = new PageHands(desk);
@@ -1225,7 +2008,7 @@ async function one(
         : planners.get(chooser.model)!),
       request: withModelFaults(
         script
-          ? scriptedModel(script.choose)
+          ? scriptedModel(script.choose, request.subgoals)
           : withEvalRequest(fetch, {
               effort:
                 "model" in chooser ? efforts.get(chooser.model) : undefined,
@@ -1237,6 +2020,7 @@ async function one(
     });
     const said: string[] = [];
     const timed: StepTiming[] = [];
+    const limit = request.limit;
     const worker = new ComputerWorker({
       unchangedDone: true,
       failedWays: true,
@@ -1246,7 +2030,20 @@ async function one(
       ...(port ? { browser: port } : {}),
       notify: (text) => said.push(text),
       timing: (entry) => timed.push(entry),
-      maxMs: script ? 60_000 : 180_000,
+      // A long request has its own limits, under those of the service.
+      ...(limit
+        ? {
+            maxSteps: Math.min(limit.steps, serviceLimits.steps),
+            plannedMaxSteps: Math.min(limit.steps, serviceLimits.plannedSteps),
+          }
+        : {}),
+      maxMs: script
+        ? limit
+          ? 180_000
+          : 60_000
+        : limit
+          ? limit.minutes * 60_000
+          : 180_000,
     });
     const from = performance.now();
     let questions = 0;
@@ -1272,12 +2069,7 @@ async function one(
     const record = journal.get(id);
     const final = record?.state ?? "unknown";
     const last = said.at(-1) ?? "";
-    const state = port
-      ? await port.state()
-      : ((await desk.page().evaluate("window.state()")) as Record<
-          string,
-          unknown
-        >);
+    const state = await holds();
     const sum = (pick: (entry: StepTiming) => number) =>
       Math.round(timed.reduce((total, entry) => total + pick(entry), 0));
     const trouble = script?.trouble();
@@ -1286,10 +2078,12 @@ async function one(
       request: request.id,
       ...("path" in chooser ? { path: chooser.path.name } : {}),
       run,
-      done: request.done(state, last, final, { asked }),
+      done: request.done(state, last, final, { asked, faults: applied }),
       state: final,
       reason: record?.reason ?? "",
-      steps: timed.length,
+      // An entry of the kind end says what the worker did after the last step: no step of its own.
+      steps: timed.filter((entry) => entry.kind !== "end").length,
+      ...(limit ? { limit: limit.steps } : {}),
       inputs: pageHands.sent.length,
       questions,
       seconds: Math.round(seconds * 10) / 10,
@@ -1318,6 +2112,20 @@ async function one(
   }
 }
 
+/** The steps of a request, with its own limit when it has one: "32 of 48 steps". */
+const stepsText = (row: Row) =>
+  row.limit === undefined
+    ? `${row.steps} steps`
+    : `${row.steps} of ${row.limit} steps`;
+/** The least and the most of some numbers, with the median: "31 to 52, median 40". */
+const spread = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = sorted[Math.floor((sorted.length - 1) / 2)]!;
+  return sorted.length === 1
+    ? `${sorted[0]}`
+    : `${sorted[0]} to ${sorted.at(-1)}, median ${middle}`;
+};
+
 /** A row for a request that failed inside the test itself. */
 const faultRow = (
   model: string,
@@ -1334,6 +2142,7 @@ const faultRow = (
   state: "fault",
   reason: String(error instanceof Error ? error.message : error).slice(0, 160),
   steps: 0,
+  ...(request.limit ? { limit: request.limit.steps } : {}),
   inputs: 0,
   questions: 0,
   seconds: 0,
@@ -1404,7 +2213,7 @@ async function check() {
         if (row.done) {
           proven += 1;
           notes.push(
-            `"${path.name}" done in ${row.steps} steps${row.faults.length ? ` through ${row.faults.join(", ")}` : ""}`,
+            `"${path.name}" done in ${stepsText(row)}, ${row.seconds} s${row.faults.length ? `, through ${[...new Set(row.faults)].join(", ")}` : ""}`,
           );
         } else
           problems.push(
@@ -1413,7 +2222,9 @@ async function check() {
       } else {
         wrongRan += 1;
         if (row.done)
-          problems.push(`wrong "${path.name}" was taken as done (${end})`);
+          problems.push(
+            `wrong "${path.name}" was taken as done (${end}, ${stepsText(row)})`,
+          );
         else refused += 1;
       }
     }
@@ -1525,10 +2336,16 @@ async function measure() {
     );
     for (const row of mine)
       console.log(
-        `${row.request} | ${row.run} | ${row.done ? "yes" : "NO"} | ${row.state}${row.reason && row.state !== "completed" ? ` (${row.reason})` : ""} | ${row.steps} | ${row.inputs} | ${row.questions} | ${row.seconds} | ${row.kinds} | ${row.faults.join(", ")}`,
+        `${row.request} | ${row.run} | ${row.done ? "yes" : "NO"} | ${row.state}${row.reason && row.state !== "completed" ? ` (${row.reason})` : ""} | ${row.limit === undefined ? row.steps : `${row.steps} of ${row.limit}`} | ${row.inputs} | ${row.questions} | ${row.seconds} | ${row.kinds} | ${[...new Set(row.faults)].join(", ")}`,
       );
     for (const row of mine.filter((item) => !item.done))
       console.log(`  not done: ${row.request}, run ${row.run}: ${row.said}`);
+    // The long requests: how far they went, and how long it took.
+    const long = mine.filter((row) => row.limit !== undefined);
+    if (long.length)
+      console.log(
+        `  long requests: ${long.filter((row) => row.done).length} of ${long.length} done | steps ${spread(long.map((row) => row.steps))} | seconds ${spread(long.map((row) => row.seconds))} | ${long.filter((row) => row.reason === "step_limit").length} at the step limit, ${long.filter((row) => row.reason === "time_limit").length} at the time limit`,
+      );
   }
   printResults(out, { word: "done", cases: true });
   if (outFile) console.log(`\nThe result of each request is in ${outFile}.`);

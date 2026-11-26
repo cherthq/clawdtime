@@ -4,10 +4,12 @@
  *
  * The hands look at a page in headless Chromium and click and type there, in
  * place of the Mac. A closer look (zoom) is a larger picture of one part of
- * the page, as the panel takes it. The fault layer wraps them and changes
- * nothing of the product: a window that moves at the first looks and then
- * settles, and a screen that does not take some clicks. Nothing here
- * touches the real mouse, keyboard or screen.
+ * the page, as the panel takes it. A desk can hold several apps, each on a
+ * page of its own, and open_app brings one to the front. The fault layer
+ * wraps the hands and changes nothing of the product: a window that moves at
+ * the first looks and then settles, a screen that does not take some clicks,
+ * and an app that changes between two looks. Nothing here touches the real
+ * mouse, keyboard or screen.
  */
 import type { Page } from "@playwright/test";
 import type {
@@ -32,6 +34,8 @@ export interface AppInfo {
 export interface Desk {
   page(): Page;
   app(): Promise<AppInfo>;
+  /** Brings the app of this name to the front, when the desk has it. Without it the desk holds one app. */
+  open?(name: string): Promise<boolean>;
 }
 
 /** The keys of a combination, in the names that the browser knows. */
@@ -219,11 +223,13 @@ export class PageHands implements Hands {
         return { seq, ok: true };
       }
       case "open_app": {
-        // Only the app of this page is on this desk, and it is in front.
-        const app = await this.desk.app();
+        // An app of this desk comes to the front. A desk of one app has it in front already.
         const wanted = command.name.trim().toLowerCase();
-        if (wanted !== app.name.toLowerCase())
-          return { seq, ok: false, error: "not_found" };
+        const found = this.desk.open
+          ? await this.desk.open(wanted)
+          : wanted === (await this.desk.app()).name.toLowerCase();
+        if (!found) return { seq, ok: false, error: "not_found" };
+        const app = await this.desk.app();
         this.epoch += 1;
         return {
           seq,
@@ -251,12 +257,21 @@ export interface HandsFaults {
    * as real hands do: only the next look shows that nothing changed.
    */
   deaf?: { selector?: string; times: number };
+  /**
+   * Another person changes the app while the request runs: once `when` (a
+   * JavaScript expression on the page in front) is true at a look, the next
+   * look runs `run` first. So the planner chose from the screen before the
+   * change, and the look just before the input sees the screen after it.
+   */
+  change?: { when: string; run: string; label: string };
 }
 
 /** The page hands with the faults of one request in front of them. */
 export class FaultyHands implements Hands {
   private looks = 0;
   private deafLeft: number;
+  /** The change: waiting for its condition, due at the next look, or done. */
+  private change: "waiting" | "due" | "done" = "waiting";
   constructor(
     private readonly inner: PageHands,
     private readonly desk: Desk,
@@ -281,6 +296,14 @@ export class FaultyHands implements Hands {
       );
       if (this.looks === moving.looks)
         this.applied.push(`window moved at the first ${moving.looks} looks`);
+    }
+    const change = this.faults.change;
+    if (command.kind === "observe" && change && this.change !== "done") {
+      if (this.change === "due") {
+        await page.evaluate(change.run);
+        this.change = "done";
+        this.applied.push(change.label);
+      } else if (await page.evaluate(change.when)) this.change = "due";
     }
     if (command.kind === "click" && this.deafLeft > 0) {
       const hit = await page.evaluate(

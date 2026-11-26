@@ -83,18 +83,21 @@ export function toolAnswer(name: string, args: Record<string, unknown>) {
 export type ScriptAction = { kind: string } & Record<string, unknown>;
 
 /**
- * The outline of a scripted request: one subgoal, the goal itself. The
- * worker asks for an outline after its first look (plan.ts).
+ * The outline of a scripted request: the subgoals that the request gives,
+ * or one subgoal, the goal itself. The worker asks for an outline after its
+ * first look (plan.ts). A long request gives 3 subgoals or more, so that it
+ * may take as many actions as a long plan does.
  */
-export function scriptedOutline(ask: PlannerAsk) {
+export function scriptedOutline(ask: PlannerAsk, subgoals?: string[]) {
   const goal = /^Goal: (.*)$/m.exec(ask.brief)?.[1]?.slice(0, 200) ?? "";
   return toolAnswer("outline", {
-    subgoals: [
-      {
-        goal: goal || "Do what the person asked.",
-        check: "The screen shows that the goal is met.",
-      },
-    ],
+    subgoals: (subgoals?.length
+      ? subgoals
+      : [goal || "Do what the person asked."]
+    ).map((part) => ({
+      goal: part,
+      check: "The screen shows that it is done.",
+    })),
     why: "The scripted plan.",
   });
 }
@@ -106,10 +109,11 @@ export function scriptedOutline(ask: PlannerAsk) {
  */
 export function scriptedModel(
   choose: (ask: PlannerAsk) => Promise<ScriptAction> | ScriptAction,
+  subgoals?: string[],
 ): typeof fetch {
   return async (_url, init) => {
     const ask = readAsk(init);
-    if (ask.tools.has("outline")) return scriptedOutline(ask);
+    if (ask.tools.has("outline")) return scriptedOutline(ask, subgoals);
     const { kind, ...args } = await choose(ask);
     return toolAnswer(kind, { ...args, why: "The scripted step." });
   };
