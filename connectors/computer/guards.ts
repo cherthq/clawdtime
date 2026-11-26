@@ -510,20 +510,33 @@ const commandVerbs =
   "run|execute|install|build|compile|commit|push|pull|clone|deploy|rebase|merge|lint|test|debug";
 const publishVerbs =
   "push|publish|deploy|release|ship|merge|open a pull request|create a pull request|send";
-const denial = /\b(?:don't|do not|never|not|without|no)\s+(?:\w+\s+){0,3}$/;
-/** True when the request holds these words, and no denial right before them. */
+const denial = /\b(?:don't|do not|never|not|without|no)\b/;
+/**
+ * The end of what a denial holds: a mark, or a "but". A denial holds over
+ * "and" and "then": "do not quit and lose my changes" denies both.
+ */
+const denialEnd = /[.;:!?,\n]|\bbut\b/g;
+/**
+ * True when the request holds these words, and no denial before them in
+ * their part of the request: "never run any command in the terminal" asks
+ * for no terminal work, however many words lie between.
+ */
 function requestHolds(goal: string, words: RegExp) {
   const said = plain(goal);
-  for (const found of said.matchAll(new RegExp(words.source, "g")))
-    if (!denial.test(said.slice(0, found.index))) return true;
+  for (const found of said.matchAll(new RegExp(words.source, "g"))) {
+    const before = said.slice(0, found.index);
+    let from = 0;
+    for (const end of before.matchAll(denialEnd))
+      from = end.index + end[0].length;
+    if (!denial.test(before.slice(from))) return true;
+  }
   return false;
 }
 /** The request asks to lose the changes that are not saved. The chat's force quit reads it too. */
 export const asksToLose = (goal: string) =>
-  /\b(?:without saving|don't save|do not save)\b/.test(plain(goal)) ||
   requestHolds(
     goal,
-    /\b(?:discard|throw away|revert|lose (?:the |my |all |any )?(?:changes|edits))\b/,
+    /\b(?:without saving|don't save|do not save|discard|throw away|revert|lose (?:the |my |all |any )?(?:changes|edits))\b/,
   );
 /** The request asks for terminal work: a command, a script, a build, a test, git. */
 export const asksForCommand = (goal: string | undefined) =>
@@ -1105,6 +1118,62 @@ const sendingName =
 const sendsOnReturn = (app: Observation["app"]) =>
   sendingBundles.has(app.bundleId.toLowerCase()) ||
   sendingName.test(app.name.trim());
+/** The browsers of the Mac, by their app. */
+const browserBundles = new Set([
+  "com.apple.safari",
+  "com.apple.safaritechnologypreview",
+  "com.google.chrome",
+  "com.google.chrome.beta",
+  "com.google.chrome.dev",
+  "com.google.chrome.canary",
+  "com.google.chrome.for.testing",
+  "org.chromium.chromium",
+  "com.brave.browser",
+  "com.microsoft.edgemac",
+  "org.mozilla.firefox",
+  "company.thebrowser.browser",
+  "com.operasoftware.opera",
+  "com.vivaldi.vivaldi",
+]);
+const browserName =
+  /^(?:safari|google chrome|chrome|chromium|brave browser|microsoft edge|firefox|arc|opera|vivaldi)\b/i;
+/** Messaging sites, by the title of the page or its window: Return sends there as in their apps. */
+const chatSite =
+  /\b(?:slack|whatsapp|messenger|discord|telegram|microsoft teams|google chat|google messages|messages for web)\b/i;
+const chatHosts =
+  /(?:^|\.)(?:slack\.com|whatsapp\.com|messenger\.com|discord\.com|telegram\.org|teams\.microsoft\.com|teams\.live\.com|chat\.google\.com|messages\.google\.com)$/i;
+/** The words of a field where what is typed goes to other people: a message, a comment, a post. */
+const messageWords =
+  /\b(?:message|comment|reply|post|tweet|chat|compose|status|what's happening|say something|write)\b/;
+const searchWords = /\b(?:search|find|filter)\b/i;
+/**
+ * Return in a web chat sends what is typed, as in a chat app: a messaging
+ * site in a browser, or a page whose field with the focus is a message box.
+ * A search field takes Return for its search.
+ */
+function webChat(observation: Observation) {
+  const { app } = observation;
+  if (
+    !browserBundles.has(app.bundleId.toLowerCase()) &&
+    !browserName.test(app.name.trim())
+  )
+    return false;
+  const field = observation.elements.find(
+    (item) => item.focused && textRoles.has(item.role),
+  );
+  if (
+    field &&
+    (field.role === "AXSearchField" || searchWords.test(field.title))
+  )
+    return false;
+  return (
+    chatSite.test(app.window) ||
+    (!!field && messageWords.test(plain(field.title)))
+  );
+}
+/** A page of a messaging site, by its address or its title. */
+const chatPage = (page: BrowserPage) =>
+  chatHosts.test(hostOf(page.url)) || chatSite.test(page.title);
 
 const modifierNames: Record<string, string> = {
   cmd: "cmd",
@@ -1219,7 +1288,11 @@ function keyRisk(
     return ask("loss");
   if (key === "return" && (cmd || modifiers.has("ctrl")))
     return sendKeyRisk(observation, goal);
-  if (key === "return" && !modifiers.size && sendsOnReturn(observation.app))
+  if (
+    key === "return" &&
+    !modifiers.size &&
+    (sendsOnReturn(observation.app) || webChat(observation))
+  )
     return sendKeyRisk(observation, goal);
   // The mail app sends with this one.
   if (
@@ -1273,18 +1346,27 @@ function safeLink(raw: string) {
 }
 const linkRefusal =
   "Only http and https links are opened, with no login in the link.";
-/** A path and a query longer than this, that the person did not write, can carry what the screen shows. */
+/** The parts of an address longer than this together, that the person did not write, can carry what the screen shows. */
 const longAddressPart = 120;
 /**
  * An address that the planner chose opens with no question: a shop, a site of
- * the news, a page that the task needs. Only an address with a long path or
- * query that the person did not write asks: such a part could carry what the
- * screen shows to the site.
+ * the news, a page that the task needs. Only an address with a long part
+ * that the person did not write asks: such a part could carry what the
+ * screen shows to the site. The parts that count are the labels of the host
+ * before its last two ("<data>.x.example" reaches the server that answers
+ * for x.example), and the path, the query and the fragment (a script of the
+ * page reads the fragment).
  */
 const addressRisk = (link: URL, goal?: string) => {
-  const rest = `${link.pathname}${link.search}`;
-  return rest.length > longAddressPart &&
-    !(goal ?? "").toLowerCase().includes(rest.toLowerCase())
+  const said = (goal ?? "").toLowerCase();
+  const parts = [
+    link.hostname.split(".").slice(0, -2).join("."),
+    `${link.pathname}${link.search}${link.hash}`,
+  ];
+  const unwritten = parts
+    .filter((part) => !said.includes(part.toLowerCase()))
+    .reduce((sum, part) => sum + part.length, 0);
+  return unwritten > longAddressPart
     ? ask(
         "send",
         `The address carries a long part that you did not write, which could send what the screen shows to ${clean(link.host, 80)}.`,
@@ -1364,6 +1446,58 @@ function under(
     )
       best = item;
   return best;
+}
+/** The roles that are a part of a control, not a control: a click on one presses what holds it. */
+const partRoles = new Set([
+  "AXImage",
+  "AXStaticText",
+  "AXUnknown",
+  "AXHeading",
+  "OCRText",
+]);
+/**
+ * Every element that a click on `start` presses: `start`, then each larger
+ * element that holds it, up to and with the first one that is no part of
+ * another (no image and no text): a named image inside a "Send" button is a
+ * press of "Send". A container ends the row and is not in it: a group holds
+ * the point, but a click does not press the group. An element beside `start`
+ * that only overlaps it is not in the row.
+ */
+function pressedFrom(observation: Observation, start: ScreenElement) {
+  const row: ScreenElement[] = [start];
+  if (!partRoles.has(start.role)) return row;
+  const holds = (outer: ScreenElement, inner: ScreenElement) =>
+    outer.x <= inner.x + 1 &&
+    outer.y <= inner.y + 1 &&
+    outer.x + outer.w >= inner.x + inner.w - 1 &&
+    outer.y + outer.h >= inner.y + inner.h - 1;
+  const around = observation.elements
+    .filter(
+      (item) =>
+        item !== start &&
+        item.w * item.h > start.w * start.h &&
+        holds(item, start),
+    )
+    .sort((left, right) => left.w * left.h - right.w * right.h);
+  for (const item of around) {
+    if (containerRoles.has(item.role)) break;
+    if (!holds(item, row.at(-1)!)) continue;
+    row.push(item);
+    if (!partRoles.has(item.role)) break;
+  }
+  return row;
+}
+/** The first element of the row whose name asks, with its question. */
+function rowRisk(
+  row: readonly ScreenElement[],
+  observation: Observation,
+  goal?: string,
+) {
+  for (const item of row) {
+    const found = screenRisk(item, observation, goal);
+    if (found) return { item, found };
+  }
+  return null;
 }
 /**
  * A click at the point goes into a text field: on the field, or on a text
@@ -1640,14 +1774,17 @@ const pageKeyRisk = (
     const found = askFor(item.label, scene);
     if (found) return pressRisk(item.label, found);
   }
+  // On a messaging site, Enter sends what is typed, as in its app.
+  if (key === "Enter" && chatPage(page) && !sendAsked(goal ?? "", scene))
+    return ask(
+      "send",
+      `This key sends what is typed. ${askPolicy.send.reason}`,
+    );
   return null;
 };
 /** A field where what is typed goes to other people: a message, a comment, a post. */
 const messageBox = (item: BrowserElement) =>
-  /^textarea$/i.test(item.tag) ||
-  /\b(?:message|comment|reply|post|tweet|chat|compose|status|what's happening|say something|write)\b/.test(
-    plain(item.label),
-  );
+  /^textarea$/i.test(item.tag) || messageWords.test(plain(item.label));
 /**
  * Enter in a field submits its form: what a button of the page would do. A
  * search goes with no question. A message, a comment or a post asks unless
@@ -1869,17 +2006,23 @@ function checkScreen(
       const found = pick(action.element);
       if ("verdict" in found) return found;
       const point = middle(found);
+      // The click presses the element and what holds it, up to its control:
+      // the name that asks may be the button's, not its image's.
+      const pressed = intoField(seen, found, point)
+        ? null
+        : rowRisk(pressedFrom(seen, found), seen, view.goal);
+      const named = pressed?.item ?? found;
       return {
         verdict: "run",
-        label: `${verb(action.double, action.right)} ${nameOf(found)}`,
-        target: clean(found.title, 80),
+        label: `${verb(action.double, action.right)} ${nameOf(named)}`,
+        target: clean(named.title, 80),
         // A click on a text field only gives it the focus. For a control
         // with no name, or one that only holds others, the planner's own
         // words count too. They can add a question. They never remove one.
         ...asking(
           intoField(seen, found, point)
             ? null
-            : (screenRisk(found, seen, view.goal) ??
+            : (pressed?.found ??
                 (nameless(found, seen)
                   ? askFor(why, screenScene(seen, view.goal), "words")
                   : null)),
@@ -1897,7 +2040,21 @@ function checkScreen(
       if (point === "no_image") return refuse(noImageRefusal);
       if (point === "outside") return refuse(outsideRefusal);
       const found = under(seen, point);
-      const named = found && clean(found.title, 80) ? found : null;
+      // Every element under the point, up to the control that the click
+      // presses, counts: a named image inside "Send" asks as a send.
+      const pressed = intoField(seen, found, point)
+        ? null
+        : found
+          ? rowRisk(
+              pressedFrom(seen, found).filter(
+                (item) => item !== found || clean(found.title, 80) !== "",
+              ),
+              seen,
+              view.goal,
+            )
+          : null;
+      const named =
+        pressed?.item ?? (found && clean(found.title, 80) ? found : null);
       return {
         verdict: "run",
         label: named
@@ -1910,7 +2067,7 @@ function checkScreen(
         ...asking(
           intoField(seen, found, point)
             ? null
-            : ((named ? screenRisk(named, seen, view.goal) : null) ??
+            : (pressed?.found ??
                 (nameless(found, seen)
                   ? askFor(why, screenScene(seen, view.goal), "words")
                   : null)),
@@ -2481,6 +2638,32 @@ export function retarget(
   return { ok: true, action, observation };
 }
 
+/**
+ * True when the input presses an element of the look: a click on an
+ * element, a click at a point inside one, or a drag from or onto one. A
+ * label can change in place with no change that a picture shows (Cancel
+ * becomes Delete), so the worker reads the element's own name and role
+ * again, with a walk of the tree, just before such an input goes.
+ */
+export function pressesElement(action: Action, observation: Observation) {
+  const at = (x: number, y: number) => {
+    const point = screenPoint(observation, x, y);
+    return typeof point !== "string" && under(observation, point) !== null;
+  };
+  switch (action.kind) {
+    case "click_element":
+      return true;
+    case "click_at":
+      return at(action.x, action.y);
+    case "drag":
+      return [action.from, action.to].some((end) =>
+        "element" in end ? true : at(end.x, end.y),
+      );
+    default:
+      return false;
+  }
+}
+
 /** The tab of a newer list that is the same as this one: the same address and title. Null when it is gone or two could be it. */
 export function sameTab(was: BrowserTab, tabs: BrowserTab[] | undefined) {
   const alike = (tabs ?? []).filter(
@@ -2494,15 +2677,20 @@ export function sameTab(was: BrowserTab, tabs: BrowserTab[] | undefined) {
 
 /**
  * The same browser action against a newer reading, just before it is sent.
- * An element is found again as `samePageElement` finds it, and a tab by its
- * address and its title. A key has no target of its own: it is checked again
- * against the newer reading. Null when the target is gone or two could be it.
+ * The newer reading must be of the same page as the reading that the
+ * planner chose from (`read`): the same tab, and the same origin and path of
+ * the address (`samePage`). An element is found again as `samePageElement`
+ * finds it, and a tab by its address and its title. A key has no target of
+ * its own: it is checked again against the newer reading. Null when the page
+ * or the target is gone, or two could be it.
  */
 export function againstPage(
   action: Action,
   call: BrowserCall,
   now: BrowserPage,
+  read: BrowserPage,
 ): Action | null {
+  if (call.name !== "switch_tab" && !samePage(read, now)) return null;
   if ("element" in call) {
     const same = samePageElement(call.element, now);
     return same ? ({ ...action, index: same.index } as Action) : null;
@@ -2512,6 +2700,26 @@ export function againstPage(
     return same ? ({ ...action, tab: same.index } as Action) : null;
   }
   return action;
+}
+
+/**
+ * True when two readings are of the same page: the same tab, as the driver
+ * names it, and the same origin and path of the address. Its query and its
+ * fragment may change: a page writes its state there. The same button on
+ * another site, or on another page of the same site, is another button.
+ */
+export function samePage(was: BrowserPage, now: BrowserPage) {
+  if (was.tab !== now.tab) return false;
+  const place = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      return null;
+    }
+  };
+  const before = place(was.url);
+  return before !== null && before === place(now.url);
 }
 
 /** The element of a newer reading of the page that is the same as this one. Null when it is gone or two could be it. */

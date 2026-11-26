@@ -89,7 +89,10 @@ and no Automation right of macOS.
   profile. It refuses any other program.
 - A read may start the browser again after it closed. An input never does, and
   an input whose answer did not come back is never sent again: the request
-  becomes uncertain.
+  becomes uncertain. The same holds when a dialog opens after the input, the
+  tab or the connection is lost, or no reading of the page works after it.
+  Both drivers say so with `BrowserInputUnknown`. Every other error of a
+  browser step means that nothing went out.
 - It never types into a password field and never reads one.
 
 `clawdtime computer doctor`, run with the same variable, says whether a
@@ -108,14 +111,18 @@ computer.
 3. The worker checks that action in code. An action that is not valid is
    refused and not run, and the planner is told why.
 4. When the action needs your yes, the worker asks and waits.
-5. Just before an input, the worker looks again. For a click, a hover, a
-   scroll or a drag it first takes a quick picture with no walk of the tree.
-   When the window is the same and the screen looks as it did (see
-   [The quick picture](#the-quick-picture)), the input goes with the elements
-   of the planner's look. Otherwise, and for keys and text, it looks with no
-   image. It finds the same element again by its role, its name and its
-   place, and it checks the action again against that look. If another
-   window is in front or the target is gone, nothing is sent.
+5. Just before an input, the worker looks again. For a hover, a scroll, or
+   a click or a drag at a point where no element is, it first takes a quick
+   picture with no walk of the tree. When the window is the same and the
+   screen looks as it did (see [The quick picture](#the-quick-picture)), the
+   input goes with the elements of the planner's look. Otherwise, and for
+   keys, text and every click or drag on an element, it looks with no image.
+   A label can change in place with no change that a picture shows (Cancel
+   becomes Delete, Save Draft becomes Send), so a press on an element always
+   reads the element's own name and role again. It finds the same element
+   again by its role, its name and its place, and it checks the action again
+   against that look. If another window is in front, the target is gone or
+   its name changed, nothing is sent and the planner chooses again.
 6. The action goes to the hands or to the browser. Then the worker looks again
    and the planner picks the next action.
 
@@ -138,7 +145,10 @@ takes no picture.
 ### The quick picture
 
 The worker compares two pictures on a grid of 64 by 36 cells, by their
-brightness. The code is in `connectors/computer/visual-diff.ts`.
+brightness. The code is in `connectors/computer/visual-diff.ts`. A grid this
+coarse does not see a label that changed in place, so the quick picture is
+never the only check before a click or a drag on an element: those always
+read the element's name and role again.
 
 - **The target.** The place of the target counts with a margin of one cell,
   and one changed cell there is a change. A target in the menu bar counts
@@ -1236,6 +1246,16 @@ In the browser, when the driver is on:
 - `browser_switch_tab`: brings one tab of the last list to the front of its
   window. The browser itself does not come forward.
 
+Just before a click, a typed text, a hover, a choice or a key, the worker
+reads the page again. The step goes only when that reading is of the same
+page as the one that the planner chose from: the same origin and path of the
+address (the query and the fragment may change), and the same tab, which
+ClawdTime's own browser names in each reading. The same button on another
+site, on another page of the site or in another tab is another button:
+nothing is sent and the planner chooses again. When the tab that ClawdTime's
+own browser read closed, an input never goes to another tab: nothing is
+sent. A read goes on in the tab that is there, and names it.
+
 The planner gets a browser action only when the driver has its method:
 `browserMethods` in `guards.ts` reads them from the driver. The checks refuse
 an action whose method the driver lacks.
@@ -1297,7 +1317,7 @@ from one of them.
 | pay      | Buy, Pay, Place order, Subscribe, Donate, Send money, Book, Rent, a button that is only a price, a Confirm or a Submit while the screen shows a total, a Continue where the screen says that it charges ("your card will be charged"), a Transfer of an amount, and the same names in other languages ("Jetzt kaufen", "Pagar", "Payer")                                                                                        | (always asks)                                                                                            |
 | loss     | Delete forever, Empty Trash, Erase, Delete account, Uninstall, Terminate, Factory reset, Revoke, Overwrite, Shut down, a log out of the Mac, a Delete, Remove or OK where the screen says that it cannot be undone, a Replace of a file that exists, a terminal command that deletes for good (`rm`, `find -delete`, a delete in a script, a move to `/dev/null`), and a terminal move of files that your request does not name | (always asks)                                                                                            |
 | unsaved  | Don't Save, Discard, Revert, every button but Save of a sheet that asks to save (also its Delete for a new document that was never saved, where the sheet says that it cannot be undone), a quit or a close while the window shows unsaved changes ("Report (Edited)"), a force quit of an app, and a stop of a process that is no app (from the chat, see The process level)                                                   | asks to lose the changes: "without saving", "discard", "throw away"                                      |
-| send     | Send, Reply, Reply All, Forward, Post, Comment, Publish, Submit, Share, Return in a messages or mail app, the submit of a message box, a terminal command that publishes (`git push`), and an address with a long part that you did not write                                                                                                                                                                                   | asks for a send of that kind, to the people that the screen shows. A long part of an address always asks |
+| send     | Send, Reply, Reply All, Forward, Post, Comment, Publish, Submit, Share, Return in a messages or mail app or in a web chat, the submit of a message box, a terminal command that publishes (`git push`), and an address with a long part that you did not write                                                                                                                                                                  | asks for a send of that kind, to the people that the screen shows. A long part of an address always asks |
 | public   | Like, Follow, Repost, Upvote                                                                                                                                                                                                                                                                                                                                                                                                    | asks to like, follow or repost                                                                           |
 | account  | a change of a password, two-factor, recovery, privacy or visibility, a switch of the security and privacy settings of macOS, and a terminal command that runs as an administrator (`sudo`), changes the security of the Mac or runs code from the web                                                                                                                                                                           | (always asks)                                                                                            |
 | grant    | Allow, OK, Approve or Trust in a permission dialog of macOS, of a site, of a sign-in that asks for access to your account, or of ClawdTime, and a name that grants access ("Grant access", "Open Anyway")                                                                                                                                                                                                                       | (always asks)                                                                                            |
@@ -1348,8 +1368,19 @@ How the rows read a name:
   A request that holds the work back, puts it off or makes it hang on
   something ("hang on, reply to Sam", "reply to Sam tomorrow", "reply to Sam
   but wait for me") says no yes ahead of time: every action of the table asks.
+  For the unsaved row and the terminal row, words such as "without saving"
+  or "the terminal" say no yes when a denial comes before them in their part
+  of the request, however far: "never quit without saving" and "never run
+  any command in the terminal" ask as before. A denial holds up to the next
+  mark or "but", over "and" and "then".
 - **A text field.** A click that only gives a text field the focus asks
   nothing.
+- **A part of a control.** A click is judged by every element that it
+  presses: the element under the point, or the one chosen by its number, and
+  each larger element that holds it, up to the first one that is no image and
+  no text. A named image or a text inside a "Send" button asks as a send, and
+  the question names Send. A group or a window that holds the point ends the
+  row: a click does not press it.
 - **A point or an icon.** For a point with no named element, for a control
   with no name (an icon chosen by its number, on the screen or on the page),
   and for a large element that only holds others, the planner's own reason is
@@ -1361,6 +1392,12 @@ How the rows read a name:
   with the focus could take the key and would ask, unless a text field has the
   focus. In a page Enter and Space ask while any control of the page would
   ask.
+- **Return in a web chat.** Return sends in a messaging site in a browser
+  (Slack, WhatsApp, Messenger, Discord, Telegram, Teams, Google Chat, by the
+  title of the window or the page, or by the address), and in a page whose
+  field with the focus is a message box ("Type a message", "Write a
+  reply…"), as it does in their apps. It asks as a send there, unless the
+  request asks for one. A search field takes Return for its search.
 - **Keys.** Command with Shift and Q logs you out of the Mac and asks. So do
   Command with Option and Delete, and Command with Shift and Delete, in
   Finder: they delete at once and empty the Trash. Command with Q and Command
@@ -1426,9 +1463,12 @@ question of a page names its site. A no ends the request.
 - **Links.** Only http and https links are opened, with no login in the link.
   An address that the task needs opens with no question, also when your
   request does not name its site: a shop, a feed, a page to read. Only an
-  address with a long path or query (more than 120 characters) that you did
+  address with a long part (more than 120 characters together) that you did
   not write asks first: such a part could carry what the screen shows to the
-  site. After you said more during a task, such an address always asks.
+  site. The parts that count are the labels of the host before its last two
+  (`<data>.x.example` reaches the server of x.example), the path, the query
+  and the fragment, which a script of the page reads. After you said more
+  during a task, such an address always asks.
 - **Opening an address.** A request that only opens one address ("open
   example.com", also with the name of a browser after it) opens it as its
   first step, with no model, no pointer and no key, in the browser that you
@@ -1756,12 +1796,17 @@ weekday" or a day by name, with "at" and an hour, as in "at 9", "at 8:30 am",
   the state folder, for its owner only. A request that looks like a password
   or a key is not kept.
 - At its time the routine hands its request to the worker in your words, as a
-  request of its own. Every rule of the worker holds for it.
+  request of its own. Every rule of the worker holds for it. The routine keeps
+  your whole sentence with its schedule, and the worker reads the request as
+  put off by it: you said it earlier, not now, so it says no yes ahead of time
+  and every action of the table asks (see "Your request" in
+  [The guards](#the-guards)). The planner reads the request alone.
 - It starts only when no other request runs and no call is live on the line.
   Otherwise it waits once, up to five minutes, then skips that time and texts
   you that it skipped.
 - A time that passed more than 15 minutes ago, while the Mac slept or the
-  service was stopped, is not run late. The next time counts.
+  service was stopped, is not run late, also when the routine waited for the
+  way to be free. The next time counts.
 - The same time never starts a second request: the id of the run is made from
   the routine and its time.
 - When the request ends, the routine texts you its result. When the request
@@ -1915,10 +1960,13 @@ of a screen share while the worker runs. Only the cursor is in it.
 
 ## What is not known
 
-Two things make a request `uncertain`:
+Three things make a request `uncertain`:
 
 - The service restarted while the request was running.
 - An action went to the hands and its result never came back.
+- A browser input went out, or may have, and its answer or the reading of the
+  page after it never came: a timeout, a dialog that holds the page, a lost
+  tab. The step is never reported as "did not run".
 
 An uncertain request is never run again, and no new request starts. Look at the
 screen to see what happened. Then run `clawdtime computer clear`. Its record
@@ -1991,7 +2039,8 @@ The journal is `computer/journal.json` in the state folder. The folder and the
 file are for their owner only. It keeps the last 30 requests:
 
 - The request in your words, cut to 300 characters. A request that holds a
-  credential is replaced by a marker.
+  credential is replaced by a marker. A sign-in shorthand counts as one: "log
+  in to shop.example as sam with hunter22", "login: sam pass: hunter22".
 - What you said for the request while it ran, each cut to 300 characters, with
   the time. These are in `computer/guidance.json`, beside the journal, for as
   long as the journal keeps their request (pruned when old requests drop from
@@ -2002,7 +2051,8 @@ file are for their owner only. It keeps the last 30 requests:
   as before.
 - Its state and one word for how it got there: `done`, `stopped`, `restart`.
 - Each step as the kind of action, the name of the element and one word for
-  the outcome. For a link it keeps the site, not the path.
+  the outcome. For a link it keeps the site, not the path. A name that looks
+  like a secret ("token ghp_...") is not kept: the step keeps an empty name.
 
 The journal never holds an image, typed text, the text of a page, a question,
 an answer or the planner's words. With memory on, memory keeps the notes of
@@ -2167,7 +2217,8 @@ the real screen, draws the cursor or calls a language model.
   pictures: an animation beside a static button, a blinking dot beside a
   target in the menu bar, a ticking timer in the menu bar status area, and a
   change at the target, a change that held, a large change and a large region
-  that keeps changing, which still hold.
+  that keeps changing, which still hold. A button whose label changed in place
+  (Cancel to Delete) under the same picture is not clicked.
 - `progress` (18): the swing of two and of three actions, the still screen,
   no alarm while the screen changes, the order of notes, questions and the
   end, and the other ways that fit what is in front.

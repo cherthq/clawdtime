@@ -313,6 +313,12 @@ export interface BrowserPage {
   found?: boolean;
   /** Tabs of the front window, set by browser_tabs. */
   tabs?: BrowserTab[];
+  /**
+   * The tab that the reading came from, as the driver names it, when it can.
+   * The check just before an input compares it: an input never goes to
+   * another tab than the one that the planner read.
+   */
+  tab?: string;
   /** Present when a JavaScript dialog is open on the page. */
   dialog?: BrowserDialog;
   /** Recent browser downloads when non-empty, with sanitized basenames only. */
@@ -327,6 +333,15 @@ export interface BrowserPage {
  * browser for the rest of the request and uses the screen.
  */
 export class BrowserClosed extends Error {}
+
+/**
+ * An input went out, or may have, and its answer or the reading of the page
+ * after it never came: a timeout, a dialog that blocks the page, a lost tab
+ * or connection. It may have happened. The worker makes the request
+ * uncertain and never sends it again. Every other error of a step of a
+ * driver means that nothing went out.
+ */
+export class BrowserInputUnknown extends Error {}
 
 export interface BrowserPort {
   /** Whether a browser can be driven now, and what the person must switch on when it cannot. */

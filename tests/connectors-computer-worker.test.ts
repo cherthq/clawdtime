@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import jpeg from "jpeg-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComputerJournal } from "../connectors/computer/journal.js";
+import { BrowserInputUnknown } from "../connectors/computer/own-browser.js";
 import {
   BrowserClosed,
   type Action,
@@ -5719,6 +5720,34 @@ describe("the browser", () => {
     expect(worker.snapshot().state).toBe("completed");
   });
 
+  it("never clicks the same button on another site or in another tab of the reading just before", async () => {
+    const buy = pageElement(5, { label: "Next" });
+    for (const now of [
+      page([buy], { url: "https://other.example/" }),
+      page([buy], { url: "https://example.com/elsewhere" }),
+      page([buy], { tab: "T2" }),
+    ]) {
+      const browser = new FakeBrowser(page([buy], { tab: "T1" }));
+      const { worker, planner } = setup(
+        [
+          { kind: "browser_read" },
+          () => {
+            browser.current = now;
+            return { kind: "browser_click", index: 5 };
+          },
+          done,
+        ],
+        { browser },
+      );
+      await worker.submit("r1", "Go to the next page");
+      await worker.idle();
+      expect(browser.calls, JSON.stringify(now)).toEqual(["read", "read"]);
+      expect(planner.inputs[2]!.history[1]!.outcome).toBe(
+        "not sent: the page changed since it was read",
+      );
+    }
+  });
+
   it("needs a new reading of the page after an action on the screen", async () => {
     const browser = new FakeBrowser(shop);
     const { worker, planner } = setup(
@@ -5748,11 +5777,44 @@ describe("the browser", () => {
     );
   });
 
-  it("goes on when the browser fails, and reads the page again", async () => {
+  it("ends uncertain when the browser lost the answer of a click that went out, and never clicks again", async () => {
     const browser = new FakeBrowser(shop);
     browser.click = async () => {
-      browser.calls.push("click failed");
-      throw new Error("The script did not run.");
+      browser.calls.push("click lost");
+      throw new BrowserInputUnknown(
+        "The page could not be read after the click. Its result is not known, and it is not sent again.",
+      );
+    };
+    const { worker, planner, journal } = setup(
+      [
+        { kind: "browser_read" },
+        { kind: "browser_click", index: 5 },
+        { kind: "browser_click", index: 5 },
+        done,
+      ],
+      { browser },
+    );
+    await worker.submit("r1", "Next");
+    await worker.idle();
+    expect(browser.calls).toEqual(["read", "read", "click lost"]);
+    // The planner never reads "did not run", and gets no turn to send it again.
+    expect(planner.inputs).toHaveLength(2);
+    expect(worker.snapshot().state).toBe("uncertain");
+    expect(journal.get("r1")).toMatchObject({
+      state: "uncertain",
+      reason: "lost_result",
+      steps: [
+        { kind: "browser_read", outcome: "ok" },
+        { kind: "browser_click", target: "Next", outcome: "lost" },
+      ],
+    });
+  });
+
+  it("goes on when the browser refused before anything went out, and reads the page again", async () => {
+    const browser = new FakeBrowser(shop);
+    browser.click = async () => {
+      browser.calls.push("click refused");
+      throw new Error("Next is disabled now.");
     };
     const { worker, planner } = setup(
       [{ kind: "browser_read" }, { kind: "browser_click", index: 5 }, done],
@@ -5762,10 +5824,32 @@ describe("the browser", () => {
     await worker.idle();
     // The planner reads why, on one line. The browser stays on offer.
     expect(planner.inputs[2]!.history[1]!.outcome).toBe(
-      "did not run: The script did not run.",
+      "did not run: Next is disabled now.",
     );
     expect(planner.inputs[2]!.page).toBeNull();
     expect(planner.inputs[2]!.browser).toBeUndefined();
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("never says that a scroll did not run when its answer was lost", async () => {
+    const browser = new FakeBrowser(shop);
+    browser.scroll = async () => {
+      browser.calls.push("scroll lost");
+      throw new BrowserInputUnknown("The answer did not come back.");
+    };
+    const { worker, planner } = setup(
+      [
+        { kind: "browser_read" },
+        { kind: "browser_scroll", direction: "down" },
+        done,
+      ],
+      { browser },
+    );
+    await worker.submit("r1", "Scroll");
+    await worker.idle();
+    expect(planner.inputs[2]!.history[1]!.outcome).toBe(
+      "no result came back: The answer did not come back.",
+    );
     expect(worker.snapshot().state).toBe("completed");
   });
 
@@ -5808,6 +5892,55 @@ describe("the browser", () => {
     await next.worker.idle();
     expect(next.planner.inputs[0]!.browser).toBeUndefined();
     expect(next.planner.inputs[1]!.page).not.toBeNull();
+  });
+});
+
+describe("the journal of a step", () => {
+  it("keeps no element name that looks like a secret", async () => {
+    const secret = observation([
+      element(1, { title: "token ghp_abcdef0123456789abcdef" }),
+    ]);
+    const { worker, journal, planner } = setup([click, done], {
+      screens: [secret],
+    });
+    await worker.submit("r1", "Copy it");
+    await worker.idle();
+    expect(journal.get("r1")!.steps[0]).toMatchObject({
+      kind: "click_element",
+      target: "",
+      outcome: "ok",
+    });
+    expect(JSON.stringify(journal.get("r1"))).not.toContain("ghp_");
+    expect(JSON.stringify(planner.inputs[1]!.history)).not.toContain("ghp_");
+  });
+});
+
+describe("a request that the owner put off to a time", () => {
+  it("reads a routine's request as put off: every action of the table asks", async () => {
+    const reply = observation([element(1, { title: "Reply" })]);
+    // As a request of now, the request asks for the reply: no question.
+    const now = setup([click, done], { screens: [reply] });
+    await now.worker.submit("r1", "Reply to Sam that I am late");
+    await now.worker.idle();
+    expect(now.hands.sent).toHaveLength(1);
+    // A routine's run of the same words asks first: the owner said them
+    // earlier, with a time.
+    const later = setup([click, done], { screens: [reply] });
+    await later.worker.submitPutOff(
+      "r2",
+      "Reply to Sam that I am late",
+      "every day at 18:00, reply to Sam that I am late",
+    );
+    await later.waiting();
+    expect(later.hands.sent).toEqual([]);
+    expect(later.worker.snapshot()).toMatchObject({
+      state: "waiting_for_person",
+      goal: "Reply to Sam that I am late",
+    });
+    // The planner reads the request, not the schedule.
+    expect(later.planner.inputs[0]!.goal).toBe("Reply to Sam that I am late");
+    later.worker.stop();
+    await later.worker.idle();
   });
 });
 
@@ -6931,26 +7064,29 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
       ...extra,
     });
 
+  // A press on an element always walks the tree: its name may have changed
+  // in place with no change that the picture shows. A hover shows the quick
+  // picture.
+  const hover: Action = { kind: "hover", element: 1 };
+
   it("skips the AX walk in fast pre-action visual re-verify when pixels are unchanged (even after a clock tick)", async () => {
     const initial = realObs(frameBase);
     // Fast image-only observe returns no elements and a ticked menu bar clock.
     const fastOnly = realObs(frameClockTick, []);
-    const afterClick = realObs(frameChanged);
-    const { worker, hands } = setup([click, done], {
-      screens: [initial, fastOnly, afterClick],
+    const afterHover = realObs(frameChanged);
+    const { worker, hands } = setup([hover, done], {
+      screens: [initial, fastOnly, afterHover],
     });
-    await worker.submit("fast_reverify_hit", "Save the note");
+    await worker.submit("fast_reverify_hit", "Show the tip of Save");
     await worker.idle();
 
     expect(worker.snapshot().state).toBe("completed");
-    expect(hands.sent).toEqual([
-      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
-    ]);
-    // Full initial observe -> image-only fast re-verify -> click -> full post-action observe.
+    expect(hands.sent).toEqual([{ kind: "move", x: 150, y: 212 }]);
+    // Full initial observe -> image-only fast re-verify -> hover -> full post-action observe.
     expect(hands.commands).toEqual([
       { kind: "observe", image: true, elements: true },
       { kind: "observe", image: true, elements: false },
-      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "move", x: 150, y: 212 },
       { kind: "observe", image: true, elements: true },
     ]);
   });
@@ -6961,13 +7097,13 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     const axFallback = realObs(frameChanged, [
       element(7, { title: "Save", x: 110, y: 200 }),
     ]);
-    const afterClick = realObs(frameChanged, [
+    const afterHover = realObs(frameChanged, [
       element(7, { title: "Saved", x: 110, y: 200 }),
     ]);
-    const { worker, hands } = setup([click, done], {
-      screens: [initial, changedFast, changedFast, axFallback, afterClick],
+    const { worker, hands } = setup([hover, done], {
+      screens: [initial, changedFast, changedFast, axFallback, afterHover],
     });
-    await worker.submit("fast_reverify_miss", "Save the note");
+    await worker.submit("fast_reverify_miss", "Show the tip of Save");
     await worker.idle();
 
     expect(worker.snapshot().state).toBe("completed");
@@ -6978,9 +7114,39 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
       { kind: "observe", image: true, elements: false },
       { kind: "observe", image: true, elements: false },
       { kind: "observe", image: false, elements: true },
-      { kind: "click", x: 150, y: 212, button: "left", count: 1 },
+      { kind: "move", x: 150, y: 212 },
       { kind: "observe", image: true, elements: true },
     ]);
+  });
+
+  it("reads the name and role of the target again before a click, and sends nothing when its label changed in place", async () => {
+    // The pictures look the same on a grid of 64 by 36: a label swap of the
+    // same length in a button of the same colour.
+    const cancel = [element(1, { title: "Cancel" })];
+    const deleted = [element(1, { title: "Delete" })];
+    const plannerLook = realObs(frameBase, cancel);
+    const quickSame = realObs(frameBase, []);
+    const now = realObs(frameBase, deleted);
+    for (const action of [
+      click,
+      // Inside element 1, as a point of the last image of 320 by 180.
+      { kind: "click_at", x: 33, y: 42 } as Action,
+    ]) {
+      const { worker, hands, planner } = setup([action, done], {
+        screens: [plannerLook, quickSame, now, now],
+      });
+      await worker.submit("label_swap", "Close the dialog");
+      await worker.idle();
+      expect(hands.sent, action.kind).toEqual([]);
+      expect(hands.commands[1], action.kind).toEqual({
+        kind: "observe",
+        image: false,
+        elements: true,
+      });
+      expect(planner.inputs[1]!.history[0]!.outcome, action.kind).toMatch(
+        /target is no longer there\. Nothing was sent\./,
+      );
+    }
   });
 
   it("skips fast visual re-verify when fastReverify is false", async () => {
@@ -7005,7 +7171,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
 
   it("runs one bounded post-action visual follow-up and refreshes full observation when delayed UI change appears", async () => {
     const initial = realObs(frameBase);
-    const fastSame = realObs(frameBase, []);
+    const fastSame = realObs(frameBase);
     const postStillSame = realObs(frameClockTick);
     const probeChanged = realObs(frameChanged, []);
     const refreshedFull = realObs(frameChanged, [
@@ -7025,7 +7191,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     expect(planner.inputs[1]!.observation?.elements[0]?.title).toBe("Saved");
     expect(hands.commands).toEqual([
       { kind: "observe", image: true, elements: true },
-      { kind: "observe", image: true, elements: false },
+      { kind: "observe", image: false, elements: true },
       { kind: "click", x: 150, y: 212, button: "left", count: 1 },
       { kind: "observe", image: true, elements: true },
       { kind: "observe", image: true, elements: false },
@@ -7035,7 +7201,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
 
   it("caps post-action visual follow-up at one probe when screen remains unchanged and triggers unchangedDone", async () => {
     const initial = realObs(frameBase);
-    const fastSame = realObs(frameBase, []);
+    const fastSame = realObs(frameBase);
     const postSame = realObs(frameClockTick);
     const probeStillSame = realObs(frameClockTick, []);
     const { worker, hands, planner } = setup([click, done, done], {
@@ -7058,7 +7224,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     // At most one follow-up probe, no extra full observe refresh when unchanged.
     expect(hands.commands).toEqual([
       { kind: "observe", image: true, elements: true },
-      { kind: "observe", image: true, elements: false },
+      { kind: "observe", image: false, elements: true },
       { kind: "click", x: 150, y: 212, button: "left", count: 1 },
       { kind: "observe", image: true, elements: true },
       { kind: "observe", image: true, elements: false },
@@ -7067,7 +7233,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
 
   it("skips post-action follow-up when the first post-action observe already changed and enforces the 450ms hard cap", async () => {
     const initial = realObs(frameBase);
-    const fastSame = realObs(frameBase, []);
+    const fastSame = realObs(frameBase);
     const postChanged = realObs(frameChanged);
     const started = Date.now();
     const { worker, hands } = setup([click, done], {
@@ -7085,7 +7251,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     // No follow-up probe needed since first post-action observe already changed.
     expect(hands.commands).toEqual([
       { kind: "observe", image: true, elements: true },
-      { kind: "observe", image: true, elements: false },
+      { kind: "observe", image: false, elements: true },
       { kind: "click", x: 150, y: 212, button: "left", count: 1 },
       { kind: "observe", image: true, elements: true },
     ]);
@@ -7093,7 +7259,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
 
   it("cancels post-action settle wait promptly on Stop", async () => {
     const initial = realObs(frameBase);
-    const fastSame = realObs(frameBase, []);
+    const fastSame = realObs(frameBase);
     const { worker, hands } = setup([click, done], {
       screens: [initial, fastSame, realObs(frameBase)],
       postActionSettleMs: 400,
@@ -7127,28 +7293,22 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     const afterClick = realObs(frameChanged);
 
     // Three held click attempts trigger settle():
-    // Each held attempt does: full observe (initial), fast reverify (changed,
-    // one more quick look shows it held -> fallback AX missing) -> held.
+    // Each held attempt does: full observe (initial), then the walk of the
+    // tree before a press on an element (missing) -> held.
     // Then settle() polls image-only twice (settledFrameA, settledFrameB -> visually unchanged -> settled!).
     // Then 4th click succeeds.
     const { worker, hands } = setup([click, click, click, click, done], {
       screens: [
         initial,
         missing,
-        missing,
-        missing,
         initial,
         missing,
-        missing,
-        missing,
         initial,
-        missing,
-        missing,
         missing,
         settledFrameA,
         settledFrameB,
         recovered,
-        settledFrameA,
+        recovered,
         afterClick,
       ],
     });
@@ -7167,7 +7327,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
 
   it("treats real pixel change as progress in judge() even when AX elements did not change", async () => {
     const initial = realObs(frameBase);
-    const fastSame = realObs(frameBase, []);
+    const fastSame = realObs(frameBase);
     // Same AX elements, but real pixel change in window body.
     const afterVisualChange = realObs(frameChanged);
     const { worker, planner } = setup([click, done], {
@@ -7303,26 +7463,22 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     const initial = realObs(frameCancel, [element(1, { title: "Cancel" })], {
       cursor: { x: 150, y: 212 },
     });
-    const fastSwapped = realObs(frameDeleteSwap, [], {
-      cursor: { x: 150, y: 212 },
-    });
     const axSwapped = realObs(
       frameDeleteSwap,
       [element(1, { title: "Delete" })],
       { cursor: { x: 150, y: 212 } },
     );
     const { worker, hands } = setup([click, done], {
-      screens: [initial, fastSwapped, axSwapped, axSwapped],
+      screens: [initial, axSwapped, axSwapped],
     });
     await worker.submit("reverify_target_swap_under_cursor", "Click Cancel");
     await worker.idle();
 
-    // Must detect the in-place button change under the cursor, run full AX look,
-    // see the label changed from Cancel to Delete, and withhold the click!
+    // The press on the button walks the tree at once, sees that the label
+    // changed from Cancel to Delete, and withholds the click.
     expect(hands.sent).toEqual([]);
-    expect(hands.commands.slice(0, 3)).toEqual([
+    expect(hands.commands.slice(0, 2)).toEqual([
       { kind: "observe", image: true, elements: true },
-      { kind: "observe", image: true, elements: false },
       { kind: "observe", image: false, elements: true },
     ]);
   });
@@ -7340,7 +7496,7 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     const initial = realObs(toggleOff, [element(1, { title: "Save" })], {
       cursor: { x: 150, y: 212 },
     });
-    const fastSame = realObs(toggleOff, [], {
+    const fastSame = realObs(toggleOff, [element(1, { title: "Save" })], {
       cursor: { x: 150, y: 212 },
     });
     // Same AX elements, cursor sitting directly on the toggled widget, only pixels under cursor changed.
@@ -7402,9 +7558,13 @@ describe("a screen with small regions that keep changing", () => {
   const quickLook = { kind: "observe", image: true, elements: false };
   const axLook = { kind: "observe", image: false, elements: true };
   const saveClick = { kind: "click", x: 150, y: 212, button: "left", count: 1 };
+  // A press on an element always walks the tree (its name may have changed
+  // in place), so the quick picture is shown with a hover.
+  const hoverSave: Action = { kind: "hover", element: 1 };
+  const saveHover = { kind: "move", x: 150, y: 212 };
 
-  it("lets the click go after one more quick look when only an animation beside the button changed", async () => {
-    const { worker, hands } = setup([click, done], {
+  it("lets the hover go after one more quick look when only an animation beside the button changed", async () => {
+    const { worker, hands } = setup([hoverSave, done], {
       screens: [animated(0), animated(1), animated(2), animated(0)],
     });
     await worker.submit("animated_beside", "Save the note");
@@ -7416,13 +7576,25 @@ describe("a screen with small regions that keep changing", () => {
       fullLook,
       quickLook,
       quickLook,
-      saveClick,
+      saveHover,
       fullLook,
     ]);
   });
 
-  it("uses what it learned: the next click on the same window needs no extra look", async () => {
-    const { worker, hands } = setup([click, click, done], {
+  it("clicks the button at once after a walk of the tree, whatever moves beside it", async () => {
+    const { worker, hands } = setup([click, done], {
+      screens: [animated(0), animated(1), animated(2)],
+    });
+    await worker.submit("animated_click", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    // The name and role of the button are read again: no quick picture.
+    expect(hands.commands).toEqual([fullLook, axLook, saveClick, fullLook]);
+  });
+
+  it("uses what it learned: the next hover on the same window needs no extra look", async () => {
+    const { worker, hands } = setup([hoverSave, hoverSave, done], {
       screens: [
         animated(0),
         animated(1),
@@ -7440,10 +7612,10 @@ describe("a screen with small regions that keep changing", () => {
       fullLook,
       quickLook,
       quickLook,
-      saveClick,
+      saveHover,
       fullLook,
       quickLook,
-      saveClick,
+      saveHover,
       fullLook,
     ]);
   });
@@ -7496,9 +7668,11 @@ describe("a screen with small regions that keep changing", () => {
     look([saveButton, stopIcon, ...(frame % 2 ? [dot] : []), ...extra], [stop]);
   const stopClick = { kind: "click", x: 875, y: 12, button: "left", count: 1 };
   const clickStop: Action = { kind: "click_element", element: 1 };
+  const hoverStop: Action = { kind: "hover", element: 1 };
+  const stopHover = { kind: "move", x: 875, y: 12 };
 
-  it("clicks Stop Recording in the menu bar while the recording dot beside it blinks", async () => {
-    const { worker, hands } = setup([clickStop, done], {
+  it("hovers over Stop Recording in the menu bar while the recording dot beside it blinks", async () => {
+    const { worker, hands } = setup([hoverStop, done], {
       screens: [menuBar(0), menuBar(1), menuBar(0)],
     });
     await worker.submit("menu_bar_dot", "Stop the recording");
@@ -7506,7 +7680,18 @@ describe("a screen with small regions that keep changing", () => {
 
     expect(worker.snapshot().state).toBe("completed");
     // The check used the button's own cells: the dot beside it did not count.
-    expect(hands.commands).toEqual([fullLook, quickLook, stopClick, fullLook]);
+    expect(hands.commands).toEqual([fullLook, quickLook, stopHover, fullLook]);
+  });
+
+  it("clicks Stop Recording after a walk of the tree while the recording dot blinks", async () => {
+    const { worker, hands } = setup([clickStop, done], {
+      screens: [menuBar(0), menuBar(1), menuBar(0)],
+    });
+    await worker.submit("menu_bar_dot_click", "Stop the recording");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.commands).toEqual([fullLook, axLook, stopClick, fullLook]);
   });
 
   it("settles while a recording timer in the menu bar status area ticks, then clicks Stop", async () => {
@@ -7533,7 +7718,7 @@ describe("a screen with small regions that keep changing", () => {
 
   it("still takes a full look when the button itself changed beside the animation", async () => {
     const changedButton: Paint = { ...saveButton, luma: 200 };
-    const { worker, hands } = setup([click, done], {
+    const { worker, hands } = setup([hoverSave, done], {
       screens: [
         animated(0),
         look([changedButton, animation(1)]),
@@ -7544,8 +7729,8 @@ describe("a screen with small regions that keep changing", () => {
     await worker.submit("target_changed", "Save the note");
     await worker.idle();
 
-    const clickAt = hands.commands.findIndex((c) => c.kind === "click");
-    // The look just before the click walked the tree again.
+    const clickAt = hands.commands.findIndex((c) => c.kind === "move");
+    // The look just before the hover walked the tree again.
     expect(hands.commands.slice(0, clickAt)).toEqual([
       fullLook,
       quickLook,
@@ -7555,7 +7740,7 @@ describe("a screen with small regions that keep changing", () => {
 
   it("still takes a full look when the Stop button itself changed in the menu bar", async () => {
     const gone: Paint = { ...stopIcon, luma: 220 };
-    const { worker, hands } = setup([clickStop, done], {
+    const { worker, hands } = setup([hoverStop, done], {
       screens: [
         menuBar(0),
         look([saveButton, gone, dot], [stop]),
@@ -7565,7 +7750,7 @@ describe("a screen with small regions that keep changing", () => {
     await worker.submit("stop_changed", "Stop the recording");
     await worker.idle();
 
-    const clickAt = hands.commands.findIndex((c) => c.kind === "click");
+    const clickAt = hands.commands.findIndex((c) => c.kind === "move");
     expect(hands.commands.slice(0, clickAt)).toEqual([
       fullLook,
       quickLook,
@@ -7597,7 +7782,7 @@ describe("a screen with small regions that keep changing", () => {
 
   it("still takes a full look at once after a large change, with no extra quick look", async () => {
     const window: Paint = { x: 60, y: 20, w: 250, h: 150, luma: 90 };
-    const { worker, hands } = setup([click, done], {
+    const { worker, hands } = setup([hoverSave, done], {
       screens: [
         look([saveButton]),
         look([saveButton, window]),
@@ -7607,7 +7792,7 @@ describe("a screen with small regions that keep changing", () => {
     await worker.submit("large_change", "Save the note");
     await worker.idle();
 
-    const clickAt = hands.commands.findIndex((c) => c.kind === "click");
+    const clickAt = hands.commands.findIndex((c) => c.kind === "move");
     expect(hands.commands.slice(0, clickAt)).toEqual([
       fullLook,
       quickLook,

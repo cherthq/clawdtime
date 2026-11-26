@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,11 +58,14 @@ class FakeWorker implements RoutineWorker {
     message: "Computer use is on.",
   };
   readonly submitted: { id: string; text: string }[] = [];
+  /** The owner's words of the routine, schedule and all, for each run. */
+  readonly said: string[] = [];
   snapshot() {
     return this.now;
   }
-  async submit(id: string, text: string) {
+  async submitPutOff(id: string, text: string, said: string) {
     this.submitted.push({ id, text });
+    this.said.push(said);
     this.now = {
       requestId: id,
       configured: true,
@@ -281,6 +290,52 @@ describe("a routine at its time", () => {
     });
     await run(at(26, 9, 0));
     expect(worker.submitted).toHaveLength(2);
+  });
+
+  it("hands the worker the owner's words with the schedule, so that the request reads as put off", async () => {
+    const { root, routines, worker, at: run } = setup();
+    routines.add(
+      "every morning at 9, follow up on my latest X posts and tell me",
+    );
+    await run(at(25, 9, 0));
+    expect(worker.said).toEqual([
+      "every morning at 9, follow up on my latest X posts and tell me",
+    ]);
+    expect(routines.list()[0]!.words).toBe(
+      "every morning at 9, follow up on my latest X posts and tell me",
+    );
+    // A routine of an older file has no words: its schedule says them.
+    const file = routinesFile(root);
+    const kept = JSON.parse(readFileSync(file, "utf8"));
+    delete kept.routines[0].words;
+    writeFileSync(file, JSON.stringify(kept));
+    worker.set("completed", "Done.");
+    await run(at(26, 9, 0));
+    expect(worker.said.at(-1)).toBe(
+      "every day at 09:00, follow up on my latest X posts",
+    );
+  });
+
+  it("skips a time that went stale while it waited for the way to be free", async () => {
+    const { routines, worker, at: run } = setup();
+    routines.add("every morning at 9, check my mail");
+    worker.now = {
+      ...worker.now,
+      requestId: "r0",
+      state: "running",
+      canStop: true,
+    };
+    await run(at(25, 9, 0));
+    expect(routines.list()[0]!.waitingSince).toBe(at(25, 9, 0));
+    // The Mac slept, or the service was stopped: the next look is hours later.
+    worker.set("completed", "Done.");
+    await run(at(25, 11, 30));
+    expect(worker.submitted).toEqual([]);
+    expect(routines.list()[0]).toMatchObject({
+      lastOutcome: "missed",
+      nextAt: at(26, 9, 0),
+    });
+    expect(routines.list()[0]!.waitingSince).toBeUndefined();
   });
 
   it("waits once when another request runs, then starts when the way is free", async () => {

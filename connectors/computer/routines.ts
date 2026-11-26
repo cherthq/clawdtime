@@ -14,7 +14,9 @@
  *   the line. Then it waits once, a few minutes, and when the way is still
  *   not free it skips that time and says so by text.
  * - A time that passed long ago (the Mac slept, the service was stopped) is
- *   not run late. The next time counts.
+ *   not run late, also after a wait for the way. The next time counts.
+ * - The request goes to the worker as put off, with the owner's whole
+ *   sentence: they said it earlier, so it says no yes ahead of time.
  * - The id of each run is made from the routine and its time, so the same
  *   time never starts a second request, also from a second process.
  * - The file is `computer/routines.json` in the state folder, for its owner
@@ -50,6 +52,7 @@ const waitMs = 5 * 60_000;
 /** A time that passed this long ago is not run late. */
 const staleMs = 15 * 60_000;
 const requestLength = 300;
+const wordsLength = 400;
 const maximumRoutines = 20;
 
 const routineSchema = z
@@ -57,6 +60,12 @@ const routineSchema = z
     id: z.string().regex(/^[a-f0-9]{8}$/),
     /** The request in the owner's words. */
     request: z.string().min(1).max(requestLength),
+    /**
+     * The owner's whole sentence, with the schedule. The worker reads the
+     * request as put off by it. A routine of an older file has none: its
+     * schedule says it.
+     */
+    words: z.string().min(1).max(wordsLength).optional(),
     days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
     hour: z.number().int().min(0).max(23),
     minute: z.number().int().min(0).max(59),
@@ -95,6 +104,14 @@ const fileSchema = z
 export const routinesFile = (root: string) =>
   join(computerDirectory(root), "routines.json");
 
+/** The owner's sentence, as one clean line, the way the routine reads it. */
+const cleanWords = (words: string) =>
+  words
+    .replace(/\p{C}/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[‘’]/g, "'");
+
 /** The schedule and the request in a sentence of the owner, or null when it is no routine. */
 export function readRoutineWords(words: string): {
   request: string;
@@ -102,11 +119,7 @@ export function readRoutineWords(words: string): {
   hour: number;
   minute: number;
 } | null {
-  const text = words
-    .replace(/\p{C}/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[‘’]/g, "'");
+  const text = cleanWords(words);
   const found =
     /^(?:(?:please|pls|ok|okay|hey)[,\s]+)?(?:(?:can|could|would) you\s+)?(?:every|each)\s+(day|morning|afternoon|evening|night|weekday|workday|(?:mon|tues|wednes|thurs|fri|satur|sun)day)s?(?:\s+(?:at|@)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?|\s+at\s+(noon|midnight))?(?:\s*[,:;.]\s*|\s+)(?:then\s+|please\s+)?(.+)$/i.exec(
       text,
@@ -209,8 +222,17 @@ export function nextTime(
 /** What the routines need of the worker: its public surface. */
 export interface RoutineWorker {
   snapshot(): DesktopExecutionSnapshot;
-  submit(eventId: string, text: string): Promise<{ message: string }>;
+  /** Hands over a request that the owner put off to a time, with their words of the routine. */
+  submitPutOff(
+    eventId: string,
+    text: string,
+    said: string,
+  ): Promise<{ message: string }>;
 }
+
+/** The words that put the request of a routine off to its time. */
+export const routineWords = (routine: Routine) =>
+  routine.words ?? `${scheduleText(routine)}, ${routine.request}`;
 
 const live = new Set(["running", "waiting_for_person", "stopping"]);
 const ended = new Set(["completed", "blocked", "canceled", "uncertain"]);
@@ -284,7 +306,8 @@ export class Routines {
         message:
           'I did not read a routine in that. Say it like this: "every morning at 9, follow up on my latest posts".',
       };
-    if (looksSecretStrict(read.request))
+    const said = cleanWords(words);
+    if (looksSecretStrict(read.request) || looksSecretStrict(said))
       return {
         ok: false,
         message:
@@ -316,6 +339,7 @@ export class Routines {
         .digest("hex")
         .slice(0, 8),
       request: read.request,
+      ...(said.length <= wordsLength ? { words: said } : {}),
       days: read.days,
       hour: read.hour,
       minute: read.minute,
@@ -498,7 +522,9 @@ export class Routines {
       };
       for (const routine of routines) {
         if (routine.paused || now < routine.nextAt) continue;
-        if (!routine.waitingSince && now - routine.nextAt > staleMs) {
+        // Also after a wait for the way: a time is never run hours late.
+        if (now - routine.nextAt > staleMs) {
+          delete routine.waitingSince;
           routine.lastOutcome = "missed";
           routine.nextAt = nextTime(routine, now);
           changed = true;
@@ -534,7 +560,13 @@ export class Routines {
         changed = false;
         let answer = "";
         try {
-          answer = (await worker.submit(runId, routine.request)).message;
+          answer = (
+            await worker.submitPutOff(
+              runId,
+              routine.request,
+              routineWords(routine),
+            )
+          ).message;
         } catch {
           answer = "It could not start.";
         }

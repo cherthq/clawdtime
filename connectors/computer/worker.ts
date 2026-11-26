@@ -72,6 +72,7 @@ import {
   check,
   clean,
   focusedSecure,
+  pressesElement,
   quietCall,
   readsBeforeCall,
   retarget,
@@ -133,13 +134,12 @@ import {
   type CellMask,
   type FocusRect,
 } from "./visual-diff.js";
-import { BrowserClosed, handErrors } from "./ports.js";
+import { BrowserClosed, BrowserInputUnknown, handErrors } from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import { directAddress, webAddress } from "./navigation.js";
 import { directOpening } from "./planner.js";
 import { supportedBrowsers } from "./browser.js";
 import { errorPage, notLoadedNote } from "./error-page.js";
-import { BrowserInputUnknown } from "./own-browser.js";
 import {
   giveUpNote,
   otherWays,
@@ -677,6 +677,11 @@ interface Run {
   id: string;
   /** The person's words, for the planner. */
   goal: string;
+  /**
+   * The owner's words when they put the request off to a time (a routine),
+   * with the schedule. Such a request says no yes ahead of time.
+   */
+  putOff?: string;
   /** The same as the journal keeps them, for the panel. */
   shown: string;
   /** What the person said for this request after it began, oldest first. */
@@ -1423,11 +1428,26 @@ export class ComputerWorker implements DesktopExecutorPort {
   ): Promise<{ message: string }> {
     return this.begin(eventId, text, undefined, authority);
   }
+  /**
+   * A request that the owner said earlier and put off to a time, as a
+   * routine (`routines.ts`). `said` is their whole sentence, with the
+   * schedule: "every day at 18:00, reply to the team thread". The planner
+   * reads the request alone. The checks read it as put off: it says no yes
+   * ahead of time, and every action of the table asks.
+   */
+  submitPutOff(
+    eventId: string,
+    text: string,
+    said: string,
+  ): Promise<{ message: string }> {
+    return this.begin(eventId, text, undefined, undefined, said);
+  }
   private async begin(
     eventId: string,
     text: string,
     reading?: NavigationIntent,
     authority?: DesktopExecutionAuthority,
+    putOff?: string,
   ): Promise<{ message: string }> {
     if (!this.ownsScreen()) return { message: ownershipText };
     if (authority?.isLive() === false) return { message: stoppedText };
@@ -1463,6 +1483,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       authority,
       id,
       goal,
+      ...(putOff !== undefined ? { putOff: clean(putOff, 2000) } : {}),
       shown,
       guidance: [],
       ...(remembered.length ? { remembered } : {}),
@@ -1808,12 +1829,17 @@ export class ComputerWorker implements DesktopExecutorPort {
    */
   /**
    * The request as the checks read it, to see what it asked for already. It
-   * says no yes ahead of time when the person said more since, or when its
-   * own words hold the work back, put it off or make it hang on something
-   * ("hang on, reply to Sam", "reply to Sam tomorrow").
+   * says no yes ahead of time when the person said more since, when its own
+   * words hold the work back, put it off or make it hang on something
+   * ("hang on, reply to Sam", "reply to Sam tomorrow"), or when the owner put
+   * it off to a time (a routine: "every day at 18:00, reply to Sam").
    */
   private spoken(run: Run) {
-    return run.guidance.length || defersWork(run.goal) ? "" : run.goal;
+    return run.guidance.length ||
+      run.putOff !== undefined ||
+      defersWork(run.goal)
+      ? ""
+      : run.goal;
   }
   /** All that the person said for the request: its goal and their words after it. */
   private saidAll(run: Run) {
@@ -2283,7 +2309,9 @@ export class ComputerWorker implements DesktopExecutorPort {
   /**
    * Fast pre-action visual re-verify: when eligible (non-typing/non-key, did
    * not pause for user approval, observation is <= 8s old, no secure elements
-   * on screen, and prior look carried a real JPEG), take an image-only observe
+   * on screen, no element under the press (`pressesElement`: its name and
+   * role are read again in the walk of the tree), and prior look carried a
+   * real JPEG), take an image-only observe
    * first and skip the AX walk only when the surface is the same, the
    * target's own region (zero cursor mask) is unchanged, and fewer than
    * `DIFF_MIN_CELLS` other cells changed outside the menu bar status area
@@ -2310,6 +2338,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.observedAt !== undefined &&
       this.now() - run.observedAt <= fastReverifyMaxAgeMs &&
       !before.elements.some((el) => el.secure) &&
+      !pressesElement(action, before) &&
       luminanceGridOf(before) !== null;
     if (canFastReverify) {
       const quick = async (): Promise<Observation | null | "over" | "held"> => {
@@ -4249,10 +4278,12 @@ export class ComputerWorker implements DesktopExecutorPort {
     if (!browser || first.send.via !== "browser") return;
     let call = first.send.call;
     if (readsBeforeCall(call)) {
-      // Just before the input: read the page again and find the same element.
-      // Its number names it inside one reading only. A tab is found again in
-      // a new list of the tabs.
+      // Just before the input: read the page again and find the same element,
+      // on the same page in the same tab. Its number names it inside one
+      // reading only. A tab is found again in a new list of the tabs.
       if (this.halted(run)) return;
+      // The reading that the planner chose from.
+      const read = run.page;
       let now: BrowserPage;
       try {
         const got = await withinOrHalted(
@@ -4301,7 +4332,7 @@ export class ComputerWorker implements DesktopExecutorPort {
           first,
           run.hold ? heldByWordReason : saidMoreText,
         );
-      const moved = againstPage(action, call, now);
+      const moved = read && againstPage(action, call, now, read);
       const again = moved
         ? check(
             moved,
@@ -4387,6 +4418,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         );
       }
       if (!quiet && !(error instanceof BrowserClosed)) this.wentOut(run);
+      // Here only a scroll, whose loss loses nothing, can be unknown. Any
+      // other error of a driver says that nothing went out (`ports.ts`).
       this.note(
         run,
         action,
@@ -4395,14 +4428,12 @@ export class ComputerWorker implements DesktopExecutorPort {
         this.browserFailure(
           run,
           error,
-          error instanceof BrowserInputUnknown
-            ? "no result came back"
-            : "did not run",
+          unknown && !quiet ? "no result came back" : "did not run",
         ),
         "failed",
       );
-      // The browser can fail after the click or the link went out. So this
-      // is in no row: nothing here says that it was sent, or that it was not.
+      // This is in no row of held steps: the step failed, and it did not
+      // meet the same screen again.
       this.halted(run);
       return;
     } finally {

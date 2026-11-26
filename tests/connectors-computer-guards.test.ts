@@ -3,6 +3,7 @@ import {
   againstPage,
   askPolicy,
   asksForCommand,
+  asksToLose,
   browserCan,
   browserMethodNames,
   browserMethods,
@@ -18,6 +19,7 @@ import {
   type View,
 } from "../connectors/computer/guards.js";
 import type {
+  BrowserPage,
   BrowserPort,
   BrowserTab,
   Observation,
@@ -759,6 +761,80 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
         run({ kind: "key", combo: "shift+return" }, view(messages)).policy,
       ).toBeNull();
     });
+    it("asks before Return in a web chat, as in a chat app, unless the request asks to send", () => {
+      const browser = (window: string, name = "Google Chrome") => ({
+        name,
+        bundleId: name === "Safari" ? "com.apple.Safari" : "com.google.Chrome",
+        window,
+      });
+      const box = (title: string, role = "AXTextArea") =>
+        element(1, { role, title, focused: true });
+      const enter = { kind: "key", combo: "return" };
+      const sends = [
+        // A messaging site, named by the window, in Chrome and in Safari.
+        observation([box("Message #general")], {
+          app: browser("general (Channel) - Stonepad - Slack"),
+        }),
+        observation([box("")], { app: browser("WhatsApp", "Safari") }),
+        observation([], { app: browser("Messenger | Riverchat") }),
+        // A page that is a chat: the field with the focus is a message box.
+        observation([box("Type a message", "AXTextField")], {
+          app: browser("Help - shop.example"),
+        }),
+        observation([box("Write a reply…")], {
+          app: browser("Riverchat - Stonepad"),
+        }),
+      ];
+      for (const seen of sends) {
+        expect(run(enter, view(seen)).policy, seen.app.window).toBe("send");
+        expect(
+          run(enter, view(seen, { goal: "Reply to Sam that I am late" }))
+            .policy,
+          seen.app.window,
+        ).toBeNull();
+      }
+      // A search field, a form of a page and an app that is no browser.
+      for (const seen of [
+        observation([box("Search messages", "AXSearchField")], {
+          app: browser("general (Channel) - Stonepad - Slack"),
+        }),
+        observation([box("Search", "AXTextField")], {
+          app: browser("Help - shop.example"),
+        }),
+        observation([box("City", "AXTextField")], {
+          app: browser("Checkout - shop.example"),
+        }),
+        observation([box("Message")], {
+          app: { name: "Notes", bundleId: "com.apple.Notes", window: "Slack" },
+        }),
+      ])
+        expect(run(enter, view(seen)).policy, seen.app.window).toBeNull();
+      // Enter on a page of a messaging site, through the browser driver.
+      const chatPage = page([pageElement(1, { label: "Message #general" })], {
+        title: "general (Channel) - Stonepad - Slack",
+        url: "https://app.slack.com/client/T1/C1",
+      });
+      expect(
+        run(
+          { kind: "browser_key", combo: "Enter" },
+          view(null, {
+            page: chatPage,
+            goal: "Read the channel",
+            browserMethods: ["key"],
+          }),
+        ).policy,
+      ).toBe("send");
+      expect(
+        run(
+          { kind: "browser_key", combo: "Enter" },
+          view(null, {
+            page: chatPage,
+            goal: "Reply to Sam on Slack",
+            browserMethods: ["key"],
+          }),
+        ).policy,
+      ).toBeNull();
+    });
     it("asks before a long address part that the person did not write, and opens any site", () => {
       const long = `https://example.net/form?entry=${"a".repeat(140)}`;
       for (const kind of ["open_url", "browser_open"]) {
@@ -779,6 +855,41 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
           ).policy,
         ).toBeNull();
       }
+    });
+
+    it("counts the fragment and the long labels of the host in the long part of an address", () => {
+      const data = "a".repeat(140);
+      const label = (letter: string) => letter.repeat(60);
+      const goal = "Look up the weather";
+      for (const kind of ["open_url", "browser_open"])
+        for (const url of [
+          `https://x.example/#${data}`,
+          `https://x.example/page?q=1#${data}`,
+          `https://${label("b")}.${label("c")}.x.example/`,
+          `https://${label("b")}.x.example/${"d".repeat(70)}`,
+          `https://${Array.from({ length: 12 }, () => "abcdefghij").join(".")}.x.example/`,
+        ]) {
+          expect(
+            run({ kind, url }, view(observation(), { goal })).policy,
+            `${kind} ${url.slice(0, 60)}`,
+          ).toBe("send");
+          // The person wrote the address: no question.
+          expect(
+            run({ kind, url }, view(observation(), { goal: `open ${url}` }))
+              .policy,
+            `${kind} ${url.slice(0, 60)}`,
+          ).toBeNull();
+        }
+      // Short hosts, a short fragment and a site of many levels ask nothing.
+      for (const url of [
+        "https://docs.shop.example/guide#install",
+        "https://us-east-1.console.cloud.example/home?region=us-east-1#list",
+        "https://www.shop.example/s?k=aa+batteries",
+      ])
+        expect(
+          run({ kind: "open_url", url }, view(observation(), { goal })).policy,
+          url,
+        ).toBeNull();
     });
 
     describe("a reply in a thread of a chat app", () => {
@@ -955,6 +1066,53 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
               .policy,
             why,
           ).toBe("send");
+      });
+
+      it("judges a click by every element under the point, up to the control that it presses", () => {
+        const said = "Read the thread of the last message";
+        // A named image inside the Send button, hit at a point or by its
+        // number: the click presses Send, and the question names it.
+        const icon = {
+          role: "AXImage",
+          title: "paper plane",
+          x: 1310,
+          y: 777,
+          w: 20,
+          h: 20,
+        };
+        const sendButton = {
+          role: "AXButton",
+          title: "Send",
+          x: 1300,
+          y: 772,
+          w: 45,
+          h: 30,
+        };
+        const iconInside = thread([frame, box, sendButton, icon]);
+        for (const raw of [
+          { kind: "click_at", x: 1173, y: 699 },
+          { kind: "click_element", element: 4 },
+        ]) {
+          expect(asks(raw, iconInside, "", said).policy, raw.kind).toBe("send");
+          expect(
+            run(raw, view(iconInside, { goal: said }), "").label,
+            raw.kind,
+          ).toBe('Click "Send"');
+        }
+        // The same image in a button that sends nothing, or in a group whose
+        // name asks: the group holds the point, and a click does not press it.
+        for (const around of [
+          { ...sendButton, title: "Attach" },
+          { ...sendButton, role: "AXGroup", title: "Send feedback" },
+        ])
+          for (const raw of [
+            { kind: "click_at", x: 1173, y: 699 },
+            { kind: "click_element", element: 4 },
+          ])
+            expect(
+              asks(raw, thread([frame, box, around, icon]), "", said),
+              `${around.title} ${raw.kind}`,
+            ).toEqual(none);
       });
     });
   });
@@ -1138,6 +1296,39 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
       );
       expect(asksForCommand("Read my mail")).toBe(false);
       expect(asksForCommand(undefined)).toBe(false);
+    });
+    it("reads a denial anywhere before the words in their part of the request as no yes", () => {
+      for (const goal of [
+        "Never run any command in the terminal",
+        "Do not type anything into the terminal, just read me the error",
+        "Please do not ever touch the git repository of the shop",
+        "Read the error. Never run any of the scripts in the repo",
+      ])
+        expect(asksForCommand(goal), goal).toBe(false);
+      for (const goal of [
+        "Don't worry about the page, run the tests in the terminal",
+        "Read the error, then run the build",
+        "Never mind the page, open the terminal",
+      ])
+        expect(asksForCommand(goal), goal).toBe(true);
+      // A denial holds over "and" up to the next mark or "but".
+      expect(asksForCommand("Never open the page and the terminal")).toBe(
+        false,
+      );
+      for (const goal of [
+        "Quit TextEdit, but never quit without saving",
+        "Close the report. Do not close it without saving",
+        "Never ever close the document without saving it",
+        "Do not quit the app and lose my changes",
+      ])
+        expect(asksToLose(goal), goal).toBe(false);
+      for (const goal of [
+        "Quit TextEdit without saving",
+        "Close the report, do not save it",
+        "Don't ask me, close the draft without saving",
+        "Throw away the changes",
+      ])
+        expect(asksToLose(goal), goal).toBe(true);
     });
     it("asks before a command that deletes, runs as an administrator, runs code from the web or publishes, whatever the request says", () => {
       const goal = "Run the build in the terminal and fix it";
@@ -2387,6 +2578,7 @@ describe("the newer browser actions", () => {
         hover,
         { name: "hover", index: 1, element: menu },
         page([pageElement(4, { label: "Menu" })]),
+        page([menu]),
       ),
     ).toEqual({ kind: "browser_hover", index: 4 });
     expect(
@@ -2394,6 +2586,7 @@ describe("the newer browser actions", () => {
         hover,
         { name: "hover", index: 1, element: menu },
         page([pageElement(4, { label: "Other" })]),
+        page([menu]),
       ),
     ).toBeNull();
     const switching = { kind: "browser_switch_tab", tab: 1 } as const;
@@ -2403,14 +2596,17 @@ describe("the newer browser actions", () => {
       { ...tabs[1]!, index: 1 },
       { ...tabs[0]!, index: 2 },
     ];
-    expect(againstPage(switching, call, page([], { tabs: moved }))).toEqual({
+    const listing = page([], { tabs });
+    expect(
+      againstPage(switching, call, page([], { tabs: moved }), listing),
+    ).toEqual({
       kind: "browser_switch_tab",
       tab: 2,
     });
     expect(
-      againstPage(switching, call, page([], { tabs: [tabs[1]!] })),
+      againstPage(switching, call, page([], { tabs: [tabs[1]!] }), listing),
     ).toBeNull();
-    expect(againstPage(switching, call, page([]))).toBeNull();
+    expect(againstPage(switching, call, page([]), listing)).toBeNull();
     const twins = [
       { ...tabs[0]!, index: 3 },
       { ...tabs[0]!, index: 4 },
@@ -2419,7 +2615,52 @@ describe("the newer browser actions", () => {
     expect(sameTab(tabs[0]!, [...twins, tabs[0]!])).toEqual(tabs[0]);
     // A key has no target: it is checked again against the newer reading.
     const key = { kind: "browser_key", combo: "Enter" } as const;
-    expect(againstPage(key, { name: "key", combo: "Enter" }, page())).toBe(key);
+    expect(
+      againstPage(key, { name: "key", combo: "Enter" }, page(), page()),
+    ).toBe(key);
+  });
+  it("finds the target again only on the same page address and in the same tab", () => {
+    const buy = pageElement(1, { label: "Place order" });
+    const click = { kind: "browser_click", index: 1 } as const;
+    const call: BrowserCall = { name: "click", index: 1, element: buy };
+    const read = page([buy], {
+      url: "https://shop.example/cart?step=2#top",
+      tab: "T1",
+    });
+    const now = (values: Partial<BrowserPage>) =>
+      page([buy], { url: read.url, tab: "T1", ...values });
+    // The same page, with another query and fragment: the same element.
+    expect(
+      againstPage(
+        click,
+        call,
+        now({ url: "https://shop.example/cart?step=3" }),
+        read,
+      ),
+    ).toEqual(click);
+    // The same button on another site, on another path, or in another tab.
+    for (const values of [
+      { url: "https://other.example/cart" },
+      { url: "http://shop.example/cart" },
+      { url: "https://shop.example:8443/cart" },
+      { url: "https://shop.example/checkout" },
+      { tab: "T2" },
+      { tab: undefined },
+    ])
+      expect(
+        againstPage(click, call, now(values), read),
+        JSON.stringify(values),
+      ).toBeNull();
+    // A key goes to the page that has the focus: another page holds it.
+    const key = { kind: "browser_key", combo: "Enter" } as const;
+    expect(
+      againstPage(
+        key,
+        { name: "key", combo: "Enter" },
+        now({ url: "https://other.example/" }),
+        read,
+      ),
+    ).toBeNull();
   });
   it("reads which optional methods a driver has", () => {
     const base = {
