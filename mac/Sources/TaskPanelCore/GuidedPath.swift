@@ -72,6 +72,16 @@ public struct GuidedPath: Equatable, Sendable {
     guard length.isFinite else { return shortestGlide }
     return min(longestGlide, shortestGlide + max(0, length) / 8000)
   }
+  /// The calm glide, for a recording or a call: slow enough that the eye follows it on a picture of the whole
+  /// screen. A short way takes `calmShortestGlide`, a long way a little longer, and no way more than
+  /// `calmLongestGlide`.
+  public static let calmShortestGlide = 0.35, calmLongestGlide = 0.60
+  /// Seconds for the guided cursor to glide `length` points at `pace`. The fast pace is `glideDuration(length:)`.
+  public static func glideDuration(length: Double, pace: CursorPace) -> Double {
+    guard pace == .calm else { return glideDuration(length: length) }
+    guard length.isFinite else { return calmShortestGlide }
+    return min(calmLongestGlide, calmShortestGlide + max(0, length) / 4000)
+  }
   /// Seconds that the cursor waits at the target before the click or the first key, so the eye is there
   /// before the hand and the label can be read. Reduce Motion has no glide to lead the eye, so its wait
   /// is slightly longer. A cursor that did not move waits briefly for a new label, and not at all when the
@@ -100,9 +110,13 @@ public struct GuidedPath: Equatable, Sendable {
   }
   /// The way of the guided cursor to one target. `still` is Reduce Motion: a jump with no glide.
   public static func glide(from start: CGPoint, to target: CGPoint, still: Bool) -> GuidedPath {
+    glide(from: start, to: target, still: still, pace: .fast)
+  }
+  /// The same way at `pace`. The bend and the ease are the same at both paces: only the time differs.
+  public static func glide(from start: CGPoint, to target: CGPoint, still: Bool, pace: CursorPace) -> GuidedPath {
     let length = hypot(Double(target.x - start.x), Double(target.y - start.y))
     // Already there: no glide, and no time spent on one.
-    let duration = length.isFinite && length < inPlace ? 0 : glideDuration(length: length)
+    let duration = length.isFinite && length < inPlace ? 0 : glideDuration(length: length, pace: pace)
     return GuidedPath(from: start, to: target, duration: duration, still: still)
   }
   /// How far the mascot leans toward a target, in radians. A positive lean is toward the left.

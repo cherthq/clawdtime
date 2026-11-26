@@ -6,6 +6,8 @@ import { join } from "node:path";
 import {
   PresentationEvents,
   presentationEventSchema,
+  screenShownHeader,
+  screenShownMs,
 } from "../connectors/computer/presentation.js";
 import { PanelHands } from "../connectors/computer/panel-hands.js";
 import {
@@ -450,5 +452,95 @@ describe("native presentation boundary", () => {
       event: null,
       retired: true,
     });
+  });
+
+  it("counts the screen as shown on a call for two seconds after the call video read it", () => {
+    let now = 10_000;
+    const broker = new PresentationEvents(() => now);
+    expect(broker.shown()).toBe(false);
+    broker.read();
+    expect(broker.shown()).toBe(true);
+    now += screenShownMs;
+    expect(broker.shown()).toBe(true);
+    now += 1;
+    expect(broker.shown()).toBe(false);
+    // A clock that went back is no read now.
+    broker.read();
+    now -= 5000;
+    expect(broker.shown()).toBe(false);
+    expect(screenShownMs).toBe(2000);
+    expect(screenShownHeader).toBe("x-clawdtime-screen-shown");
+
+    // The port counts every read of the presentation, also one that finds it retired.
+    let state = "running";
+    const worker = {
+      status: () => ({ enabled: true, state }),
+      run: () => ({ active: true, goal: "Fixture", step: 1, state }),
+    } as unknown as ComputerWorker;
+    const port = computerPort(worker, new PanelHands({ first: 41 }), {
+      now: () => now,
+    });
+    expect(port.screenShown?.()).toBe(false);
+    port.presentation();
+    expect(port.screenShown?.()).toBe(true);
+    now += screenShownMs + 1;
+    expect(port.screenShown?.()).toBe(false);
+    state = "stopping";
+    expect(port.presentation()).toMatchObject({ retired: true });
+    expect(port.screenShown?.()).toBe(true);
+    expect(offComputerPort("Disabled").screenShown?.() ?? false).toBe(false);
+  });
+
+  it("tells the panel in a header of the next command while a call shows the screen", async () => {
+    const hands = new PanelHands({ first: 41 });
+    const worker = {
+      status: () => ({ enabled: true, state: "running" }),
+      run: () => ({ active: true, goal: "Fixture", step: 1, state: "running" }),
+    } as unknown as ComputerWorker;
+    const desktop = {
+      authorizePanel(token: string) {
+        if (token !== "p".repeat(40)) throw new DomainError(401, "Denied.");
+      },
+    } as TaskDesktopService;
+    const appFor = (port: ReturnType<typeof computerPort>) =>
+      createTaskApp(
+        {} as TaskService,
+        "o".repeat(40),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        desktop,
+        undefined,
+        undefined,
+        undefined,
+        port,
+      );
+    const app = appFor(computerPort(worker, hands));
+    const request = (path: string, token = "p".repeat(40), target = app) =>
+      target.request(path, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+    const shown = async (path: string, target = app) =>
+      (await request(path, undefined, target)).headers.get(screenShownHeader);
+    // No call reads the presentation: the answer says nothing of a call.
+    expect(await shown("/desktop/hands/next?after=0")).toBeNull();
+    expect(await shown("/desktop/hands/next?after=0&wait=0")).toBeNull();
+    // A read that is refused is no call.
+    expect((await request("/desktop/presentation", "wrong")).status).toBe(401);
+    expect(await shown("/desktop/hands/next?after=0")).toBeNull();
+    // The call video reads it: both the plain and the held read say so.
+    expect((await request("/desktop/presentation")).status).toBe(200);
+    expect(await shown("/desktop/hands/next?after=0")).toBe("call");
+    const held = await request("/desktop/hands/next?after=0&wait=0");
+    expect(held.headers.get(screenShownHeader)).toBe("call");
+    expect(held.headers.get("x-clawdtime-hands-wait")).toBe("0");
+    expect(await held.json()).toMatchObject({ version: 1, command: null });
+    // A service where no worker runs never says it.
+    const off = appFor(offComputerPort("Disabled"));
+    expect(
+      (await request("/desktop/presentation", undefined, off)).status,
+    ).toBe(200);
+    expect(await shown("/desktop/hands/next?after=0", off)).toBeNull();
   });
 });

@@ -1861,6 +1861,15 @@ so does a person who watches the shared screen on a phone.
   rays opens out from the tip to 1.6 times their size and fades, once, in 0.32
   seconds. Nothing else moves at the place, so the frame clock stops after the
   glide.
+- **The calm pace.** While macOS records the screen (its recorder
+  `screencaptureui` or `screencapture` runs) or a call shows it (the call video
+  read `GET /desktop/presentation` in the last 2 seconds, and
+  `GET /desktop/hands/next` says so in `X-ClawdTime-Screen-Shown: call`), the
+  cursor glides in 0.35 seconds, and 1 ms more for each 4 points, up to 0.6
+  seconds. A trail of up to 7 marks covers the last 0.18 seconds of the way and
+  fades. At a click the copy of the rays takes 0.48 seconds and a ring opens
+  around the tip. `CLAWDTIME_CURSOR_PACE=calm` or `fast` in the panel's
+  environment chooses a pace at all times.
 - **Typed keys.** A command that types names no place. The cursor goes to the
   field that has the keyboard: to the lower edge of a field of one line, so
   the pointer is under the text. With no field known it stays where it last

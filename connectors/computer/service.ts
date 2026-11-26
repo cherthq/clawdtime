@@ -86,6 +86,11 @@ export interface ComputerPort {
     retired?: true;
   };
   /**
+   * True while a call shows the screen: its video read `presentation()`
+   * within `screenShownMs`. The panel then glides its cursor at the calm pace.
+   */
+  screenShown?(): boolean;
+  /**
    * `POST /desktop/presentation/region`: where a named thing is, for the call
    * video. Read only: no input, no picture, no command for the hands.
    */
@@ -112,9 +117,9 @@ const retiredWorkerStates = new Set([
 export function computerPort(
   worker: ComputerWorker,
   hands: PanelHands,
-  options: { windows?: WindowList } = {},
+  options: { windows?: WindowList; now?: () => number } = {},
 ): ComputerPort {
-  const events = new PresentationEvents();
+  const events = new PresentationEvents(options.now);
   const active = () => {
     const status = worker.status();
     return (
@@ -157,6 +162,8 @@ export function computerPort(
     status: () => computerStatusSchema.parse(worker.status()),
     present: (raw) => events.accept(raw, hands.presentationCommand(), active()),
     presentation: () => {
+      // Only the call video reads this, and only while a call shows the screen.
+      events.read();
       if (retired()) {
         events.retire();
         return { version: 1, event: null, retired: true };
@@ -167,6 +174,7 @@ export function computerPort(
         ? { version: 1, event: null, retired: true }
         : { version: 1, event: null };
     },
+    screenShown: () => events.shown(),
     region: (name) =>
       resolveRegion(name, {
         look: hands.look,

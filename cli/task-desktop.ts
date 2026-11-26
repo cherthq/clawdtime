@@ -177,6 +177,8 @@ export function childEnvironment(panel = false): NodeJS.ProcessEnv {
             "CLAWDTIME_SPACE_LEFT_SHORTCUT",
             "CLAWDTIME_SPACE_RIGHT_SHORTCUT",
             "CLAWDTIME_DESKTOP_SWITCHING",
+            // The pace of the guided cursor: calm or fast.
+            "CLAWDTIME_CURSOR_PACE",
           ].includes(key)) ||
         key.startsWith("LC_"),
     ),

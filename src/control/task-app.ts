@@ -30,6 +30,7 @@ import type { PhoneTurnContext } from "../phone-desktop-contracts.js";
 import { stateRoot } from "../../connectors/agents/hooks.js";
 import { ViewStore } from "../../connectors/agents/view.js";
 import { regionRequestSchema } from "../../connectors/computer/zoom-region.js";
+import { screenShownHeader } from "../../connectors/computer/presentation.js";
 
 /**
  * Computer use as the panel routes see it. The hands that see the screen and
@@ -48,6 +49,8 @@ export interface ComputerPort {
   /** Transient presentation metadata, separate from observations and action receipts. */
   present?(raw: unknown): boolean;
   presentation?(): unknown;
+  /** A call shows the screen now: its video read the presentation a moment ago. */
+  screenShown?(): boolean;
   /** Where a named thing is on the main display, for the call video only. Read only. */
   region?(name: string): Promise<unknown>;
   /** Stop. Absent where no worker runs. */
@@ -392,11 +395,17 @@ export function createTaskApp(
         const ms = wait === undefined ? undefined : handsWaitSchema.parse(wait);
         // A held read: answered as soon as a command waits or what runs
         // changes. The header tells the panel that it may read again at once.
+        // While a call shows the screen the panel's cursor glides at the calm pace.
+        const shown = () => {
+          if (computer.screenShown?.()) c.header(screenShownHeader, "call");
+        };
         if (ms !== undefined && computer.waitNext) {
           const held = await computer.waitNext(after, ms, c.req.raw.signal);
           c.header("X-ClawdTime-Hands-Wait", String(ms));
+          shown();
           return c.json(held);
         }
+        shown();
         return c.json(computer.next(after));
       });
       app.post("/desktop/hands/result", async (c) => {

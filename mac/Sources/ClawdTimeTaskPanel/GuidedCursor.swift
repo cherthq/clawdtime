@@ -17,6 +17,12 @@ import TaskPanelCore
 /// every window of ClawdTime. With Reduce Motion the cursor jumps and nothing
 /// glides. All points here are screen points counted from the bottom left, as
 /// windows are.
+///
+/// It has two paces. The fast one is brisk. The calm one, for a recording or a
+/// call that shows the screen, glides for about half a second, leaves a short
+/// trail that fades, and opens a ring at a click. The trail has a window of its
+/// own over the main display, made at the first calm glide and shown only
+/// while one runs.
 @MainActor final class GuidedCursor {
   private let pet: PetController
   let window: PetWindow
@@ -31,6 +37,11 @@ import TaskPanelCore
   private var fade: Task<Void, Never>?
   /// Reduce Motion, as it was when the cursor last set out.
   private var still = false
+  /// The pace of the last glide. A click takes the pulse of that pace.
+  private var pace = CursorPace.fast
+  /// The window of the trail, under the cursor. Nil until the first calm glide.
+  private var trailWindow: PetWindow?
+  private let trailView = GuidedTrailView(frame: .zero)
 
   init(pet: PetController) {
     self.pet = pet
@@ -52,6 +63,8 @@ import TaskPanelCore
 
   /// Where the tip is now, while the cursor is on the screen.
   var place: CGPoint? { window.isVisible ? shown : nil }
+  /// The windows of the cursor: a screen share shows them, the worker's picture never does.
+  func isOverlay(_ other: NSWindow) -> Bool { other === window || other === trailWindow }
   /// Geometry only: label text stays in this process and never enters metadata.
   func presentationBounds(at target: CGPoint, label text: String) -> CGRect {
     GuidedLayout(tip: target, pillWidth: GuidedCursorView.pillWidth(for: GuidedLook.label(text)), screen: screen)
@@ -83,6 +96,36 @@ import TaskPanelCore
     guard let path else { return }
     elapsed += step
     put(path.point(at: elapsed))
+    if pace == .calm, let trail = trailWindow {
+      trailView.show(GuidedTrail.marks(on: path, at: elapsed, pace: pace, still: still), origin: trail.frame.origin)
+    }
+  }
+  /// The window of the trail over the main display, made the first time. It is under the cursor and lets
+  /// every click through, as the cursor does.
+  private func showTrail() {
+    let trail = trailWindow ?? {
+      let rule = GuidedOverlay.cursor
+      let made = PetWindow.make(size: screen.size)
+      made.contentView = trailView
+      made.ignoresMouseEvents = rule.ignoresMouseEvents
+      made.sharingType = rule.inScreenShare ? .readOnly : .none
+      made.level = NSWindow.Level(rawValue: rule.level - 1)
+      var spaces: NSWindow.CollectionBehavior = [.stationary, .ignoresCycle]
+      if rule.onEverySpace { spaces.insert(.canJoinAllSpaces) }
+      if rule.besideFullScreenApps { spaces.insert(.fullScreenAuxiliary) }
+      made.collectionBehavior = spaces
+      trailWindow = made
+      return made
+    }()
+    if trail.frame != screen { trail.setFrame(screen, display: false) }
+    trailView.clear()
+    trail.orderFrontRegardless()
+  }
+  private func endTrail() {
+    // The fast pace never made the window: nothing to do.
+    guard let trailWindow else { return }
+    trailView.clear()
+    if trailWindow.isVisible { trailWindow.orderOut(nil) }
   }
   private func pause(_ seconds: Double) async {
     try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
@@ -92,13 +135,16 @@ import TaskPanelCore
   /// when it is there and the person had a moment to read it. While it is on
   /// the screen it goes on from where it is; else it comes out of the mascot.
   /// With Reduce Motion there is no glide: the cursor is at the target at once.
+  /// `pace` is fast, or calm for a recording or a call.
   /// It returns the seconds that it took, for the timing of the step.
-  @discardableResult func travel(to target: CGPoint, label text: String) async -> Double {
+  @discardableResult func travel(to target: CGPoint, label text: String, pace: CursorPace = .fast) async -> Double {
     let began = Date()
     fade?.cancel(); fade = nil
     still = Theme.reduceMotion
+    self.pace = pace
     let shownBefore = place
-    let way = GuidedPath.glide(from: GuidedPath.origin(shown: shownBefore, mascot: pet.handsOrigin, pointer: NSEvent.mouseLocation), to: target, still: still)
+    let way = GuidedPath.glide(from: GuidedPath.origin(shown: shownBefore, mascot: pet.handsOrigin, pointer: NSEvent.mouseLocation),
+                               to: target, still: still, pace: pace)
     pet.point(at: target)
     let said = GuidedLook.label(text)
     // The same words at the same place: the person has read them already.
@@ -113,12 +159,15 @@ import TaskPanelCore
     window.orderFrontRegardless()
     // The clock moves the cursor on its way. At the place nothing moves, so the clock stops.
     if way.duration > 0 {
+      // A trail only at the calm pace. The fast pace makes no window for it.
+      if pace == .calm && !still { showTrail() }
       clock.framesPerSecond = 120
       clock.start(on: view)
       await pause(way.duration)
     }
     path = nil
     clock.stop()
+    endTrail()
     put(target)
     await pause(GuidedPath.dwell(still: still, moved: way.length >= GuidedPath.inPlace, relabeled: relabeled))
     return Date().timeIntervalSince(began)
@@ -127,7 +176,7 @@ import TaskPanelCore
   /// once; with Reduce Motion nothing moves.
   func pulse() {
     guard window.isVisible else { return }
-    view.pulse(still: still)
+    view.pulse(still: still, pace: pace)
   }
   /// The command is done: the mascot stands straight, and the cursor fades unless another command sends it on.
   func rest() {
@@ -149,6 +198,7 @@ import TaskPanelCore
   /// The cursor leaves the screen: nothing of it moves or looks any more.
   private func out() {
     clock.stop()
+    endTrail()
     if window.isVisible { window.orderOut(nil) }
   }
   /// The run is over, or it was stopped: nothing points any more.

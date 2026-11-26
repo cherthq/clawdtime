@@ -17,6 +17,8 @@ import TaskPanelCore
 ///   them, and typed keys never go to them.
 /// - Before a click, a scroll, a drag or typed keys, the guided cursor glides
 ///   to the place with the label of the command. A screen share shows it.
+///   While the screen is recorded or shown on a call it glides at the calm
+///   pace, and `CLAWDTIME_CURSOR_PACE` can choose a pace.
 /// - After the glide and just before the event, Stop is read once more: at this
 ///   Mac and at the service. If the person moved the mouse or pressed a key in
 ///   that time, nothing is sent and the worker asks.
@@ -54,7 +56,20 @@ import TaskPanelCore
   }
   /// The guided cursor goes to `target`, and its time counts for this command.
   private func travel(to target: CGPoint, label: String) async {
-    glided = (glided ?? 0) + (await guide.travel(to: target, label: label))
+    glided = (glided ?? 0) + (await guide.travel(to: target, label: label, pace: pace))
+  }
+  /// `CLAWDTIME_CURSOR_PACE`, read once at the start.
+  private let paceSetting = ProcessInfo.processInfo.environment[CursorPace.setting]
+  private let recording = ScreenRecordingWatch()
+  /// The service said with the last read that a call shows the screen.
+  private var shownOnCall = false
+  /// The pace of the guided cursor now. A setting that names a pace wins. Otherwise it is calm while macOS
+  /// records the screen or a call shows it. The processes are read only when no setting names a pace and no
+  /// call shows the screen.
+  private var pace: CursorPace {
+    if let named = CursorPace.named(paceSetting) { return named }
+    if shownOnCall { return CursorPace.choose(setting: nil, recording: false, shownOnCall: true) }
+    return CursorPace.choose(setting: nil, recording: recording.recording, shownOnCall: false)
   }
   private var inputRefusal: HandError?
   /// The app that the name of the last open_app stood for. It goes out with the result.
@@ -137,6 +152,7 @@ import TaskPanelCore
           }
           let read = try await client.handsNext(after: self.ledger.last, wait: HandsPace.hold)
           held = read.held
+          self.shownOnCall = read.shown
           let next = read.next
           failures = 0
           active = next.run.active || next.command != nil
@@ -565,10 +581,10 @@ import TaskPanelCore
     return secure == true || input.secureInput
   }
   /// While the worker runs, every window of this app has a sharing type that
-  /// keeps it out of captures. The bar always has it. The guided cursor never
-  /// has it: a screen share shows where ClawdTime acts.
+  /// keeps it out of captures. The bar always has it. The guided cursor and its
+  /// trail never have it: a screen share shows where ClawdTime acts.
   private func shield(_ on: Bool) {
-    for window in NSApp.windows where window !== bar.window && window !== guide.window {
+    for window in NSApp.windows where window !== bar.window && !guide.isOverlay(window) {
       let type: NSWindow.SharingType = on ? .none : .readOnly
       if window.sharingType != type { window.sharingType = type }
     }

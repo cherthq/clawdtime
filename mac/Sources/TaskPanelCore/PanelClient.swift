@@ -156,13 +156,16 @@ public final class PanelClient {
   /// The same read, which the service may hold for up to `wait` seconds until a command waits or
   /// what runs changes. `held` is true when the service says that it held the read: the hands may
   /// then read again at once. A service that does not know the wait answers at once, as before.
-  public func handsNext(after seq: Int, wait: Double) async throws -> (next: HandsNext, held: Bool) {
+  /// `shown` is true when the service says that a call shows the screen now. A service that does not
+  /// know it says nothing, and the answer is false.
+  public func handsNext(after seq: Int, wait: Double) async throws -> (next: HandsNext, held: Bool, shown: Bool) {
     guard seq >= 0, wait.isFinite else { throw PanelFailure.configuration }
     let ms = Int(min(2000, max(0, (wait * 1000).rounded())))
     let (data, response) = try await exchange(path: "/desktop/hands/next?after=\(seq)&wait=\(ms)")
     let result = try JSONDecoder().decode(HandsNext.self, from: data)
     try result.validate()
-    return (result, response.value(forHTTPHeaderField: HandsPace.heldHeader) != nil)
+    return (result, response.value(forHTTPHeaderField: HandsPace.heldHeader) != nil,
+            response.value(forHTTPHeaderField: HandsPace.screenShownHeader) == "call")
   }
   /// Computer use: true when the worker that commands the panel's hands is the engine of this
   /// service. A service without that route, or without the worker, is not: the call throws or says false.
