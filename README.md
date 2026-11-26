@@ -13,9 +13,9 @@ web pages and accounts for you, and checks each action in code before it acts.
 You reach it in its chat, by voice, by iMessage and on a FaceTime call through
 a Chert line.
 
-[![Watch the ClawdTime demo](docs/assets/clawdtime-demo.jpg)](docs/assets/clawdtime-demo.mp4)
+https://github.com/user-attachments/assets/14001e3f-0ce6-4cd3-9766-7c243b266612
 
-[Watch the demo (3 min 45 sec)](docs/assets/clawdtime-demo.mp4)
+[Watch the full-quality demo on Screen Studio (3 min 45 sec)](https://screen.studio/share/giw9pQaP)
 
 ## What it does
 
