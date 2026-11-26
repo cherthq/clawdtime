@@ -954,7 +954,8 @@ import TaskPanelCore
       guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
       let bounds = CGDisplayBounds(display)
       return !windows.contains { row in
-        guard (row[kCGWindowLayer as String] as? Int) == 0, (row[kCGWindowOwnerPID as String] as? Int) != Int(getpid()) else { return false }
+        guard OwnWindows.judged(layer: row[kCGWindowLayer as String] as? Int, owner: row[kCGWindowOwnerPID as String] as? Int,
+                                own: Int(getpid())) else { return false }
         // A row with no frame cannot be placed: it counts as a window, so the desktop is not called empty.
         guard let raw = row[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: raw) else { return true }
         return !bounds.intersection(frame).isEmpty
@@ -1000,12 +1001,13 @@ import TaskPanelCore
             let id = row[kCGWindowNumber as String] as? Int, id > 0,
             let raw = row[kCGWindowBounds as String] as? NSDictionary, CGRect(dictionaryRepresentation: raw) != nil
             else { diagnostic?("quartz_inventory_incomplete"); return nil }
-          if owner != Int(getpid()) { rows.append(row) }
+          if OwnWindows.judged(layer: layer, owner: owner, own: Int(getpid())) { rows.append(row) }
         }
         ordinary = rows
       } else {
         ordinary = windows.filter { row in
-        guard (row[kCGWindowLayer as String] as? Int) == 0, (row[kCGWindowOwnerPID as String] as? Int) != Int(getpid()),
+        // ClawdTime's own windows, such as the mascot and the guided cursor, are never the surface or a cover.
+        guard OwnWindows.judged(layer: row[kCGWindowLayer as String] as? Int, owner: row[kCGWindowOwnerPID as String] as? Int, own: Int(getpid())),
           let raw = row[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: raw) else { return false }
         return !CGDisplayBounds(display.id).intersection(frame).isEmpty
       }

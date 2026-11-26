@@ -71,6 +71,8 @@ public enum HandsPace {
   public static let shortestGap = 0.02
   /// The header with which a service says that it held the read.
   public static let heldHeader = "X-ClawdTime-Hands-Wait"
+  /// The header with which a service says that a call shows the screen now: its value is `call`.
+  public static let screenShownHeader = "X-ClawdTime-Screen-Shown"
   /// The wait before the next read. `elapsed` is how long the last read took, `held` says that the service
   /// held it, and `ran` that the hands just ran a command and posted its result. A service that does not
   /// answer is asked less often.

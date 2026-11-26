@@ -623,6 +623,31 @@ describe("independent desktop service launcher", () => {
       vi.unstubAllEnvs();
     }
   });
+  it("passes the cursor pace only to the panel, and none when it is not set", async () => {
+    const f = fixture();
+    vi.stubEnv("CLAWDTIME_CURSOR_PACE", "calm");
+    try {
+      await f.run();
+      await f.run();
+      const calls = f.spawnMock.mock.calls;
+      expect(calls[0]![2]).not.toHaveProperty("env.CLAWDTIME_CURSOR_PACE");
+      for (const call of calls.slice(1))
+        expect(call[2]).toMatchObject({
+          env: { CLAWDTIME_CURSOR_PACE: "calm" },
+        });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const g = fixture();
+    vi.stubEnv("CLAWDTIME_CURSOR_PACE", undefined);
+    try {
+      await g.run();
+      for (const call of g.spawnMock.mock.calls)
+        expect(call[2]).not.toHaveProperty("env.CLAWDTIME_CURSOR_PACE");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it("does not manufacture Space shortcut mappings when none were supplied", async () => {
     const f = fixture();
     const keys = [

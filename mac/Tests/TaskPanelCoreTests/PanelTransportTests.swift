@@ -305,6 +305,29 @@ final class PanelTransportTests: XCTestCase {
     do { _ = try await client.handsNext(after: 7, wait: .nan); XCTFail("A wait that is not a number was accepted") } catch {}
     XCTAssertEqual(server.requests().count, 4)
   }
+  func testTheServiceSaysInAHeaderWhenACallShowsTheScreen() async throws {
+    let next = #"{"version":1,"command":null,"run":{"active":true,"goal":"Save the note","step":3,"state":"running"}}"#
+    let server = try FixtureHTTP { request, _ in
+      let json = ["Content-Type": "application/json", "X-ClawdTime-Hands-Wait": "1000"]
+      if request.hasPrefix("GET /desktop/hands/next?after=7&wait=1000 ") {
+        return (200, json.merging(["X-ClawdTime-Screen-Shown": "call"]) { $1 }, Data(next.utf8))
+      }
+      // Any other word in the header, and no header, say nothing of a call.
+      if request.hasPrefix("GET /desktop/hands/next?after=8&wait=1000 ") {
+        return (200, json.merging(["X-ClawdTime-Screen-Shown": "yes"]) { $1 }, Data(next.utf8))
+      }
+      return (200, json, Data(next.utf8))
+    }
+    try await server.start(); defer { server.close() }
+    let client = PanelClient(configuration: config(server.port)); defer { client.close() }
+    let shown = try await client.handsNext(after: 7, wait: HandsPace.hold)
+    XCTAssertTrue(shown.shown); XCTAssertTrue(shown.held)
+    let other = try await client.handsNext(after: 8, wait: HandsPace.hold)
+    XCTAssertFalse(other.shown)
+    let none = try await client.handsNext(after: 9, wait: HandsPace.hold)
+    XCTAssertFalse(none.shown); XCTAssertTrue(none.held)
+    XCTAssertEqual(HandsPace.screenShownHeader, "X-ClawdTime-Screen-Shown")
+  }
   func testAHandsResultIsPostedOnceAndNeverReplayedOrRedirected() async throws {
     for status in [503, 302, 404] {
       let server = try FixtureHTTP { _, port in (status, ["Location": "http://127.0.0.1:\(port)/other"], Data("{}".utf8)) }

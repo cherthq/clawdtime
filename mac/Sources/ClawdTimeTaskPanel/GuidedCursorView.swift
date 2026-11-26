@@ -8,12 +8,14 @@ import TaskPanelCore
 ///
 /// The arrow and the rays are pictures from `GuidedCursorArt`, each on a layer of its own, so they move with no
 /// new drawing. The hot spot is the middle of each picture, and the place of each layer is the tip. Only a
-/// click moves anything here: a copy of the rays opens out from the tip and fades. With Reduce Motion
-/// nothing moves.
+/// click moves anything here: a copy of the rays opens out from the tip and fades. At the calm pace it opens
+/// more slowly, and a thin ring opens around the tip with it. With Reduce Motion nothing moves.
 final class GuidedCursorView: NSView {
   private static let font = Theme.sans(CGFloat(GuidedLook.letters), weight: 600)
   /// The arrow, its rays, and the copy of the rays that a click sends out.
   private let arrow = CALayer(), rays = CALayer(), echo = CALayer()
+  /// The ring of a click at the calm pace, under the other parts. It shows only while it opens.
+  private let ring = CAShapeLayer()
   private var layout: GuidedLayout?
   private var label = ""
   /// The pixels for each point of the screen, and the theme, that the pictures were made for.
@@ -31,6 +33,11 @@ final class GuidedCursorView: NSView {
       layer?.addSublayer(part)
     }
     echo.opacity = 0
+    let reach = CGFloat(GuidedClickRing.endRadius)
+    ring.bounds = CGRect(x: 0, y: 0, width: side, height: side); ring.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+    ring.path = CGPath(ellipseIn: CGRect(x: side / 2 - reach, y: side / 2 - reach, width: reach * 2, height: reach * 2), transform: nil)
+    ring.fillColor = nil; ring.lineWidth = CGFloat(GuidedClickRing.line); ring.opacity = 0
+    layer?.insertSublayer(ring, at: 0)
     setAccessibilityElement(false)
     paint()
   }
@@ -50,6 +57,8 @@ final class GuidedCursorView: NSView {
     arrow.contents = GuidedCursorArt.arrow(scale: scale, dark: dark)
     let burst = GuidedCursorArt.rays(scale: scale * 2, dark: dark)
     rays.contents = burst; echo.contents = burst
+    let orange = GuidedCursorArt.fill(dark: dark)
+    ring.strokeColor = CGColor(srgbRed: CGFloat(orange.red), green: CGFloat(orange.green), blue: CGFloat(orange.blue), alpha: 1)
     CATransaction.commit()
   }
 
@@ -73,7 +82,7 @@ final class GuidedCursorView: NSView {
     let pixels = CGFloat(max(1, grid))
     let tip = CGPoint(x: (layout.tip.x * pixels).rounded() / pixels, y: (layout.tip.y * pixels).rounded() / pixels)
     CATransaction.begin(); CATransaction.setDisableActions(true)
-    arrow.position = tip; rays.position = tip; echo.position = tip
+    arrow.position = tip; rays.position = tip; echo.position = tip; ring.position = tip
     CATransaction.commit()
   }
 
@@ -98,10 +107,11 @@ final class GuidedCursorView: NSView {
 
   // MARK: Motion
 
-  /// The hands click here: a copy of the rays opens out from the tip and fades, once. The arrow and the rays
-  /// stay where they are. With Reduce Motion nothing moves.
-  func pulse(still: Bool) {
-    echo.removeAllAnimations()
+  /// The hands click here: a copy of the rays opens out from the tip and fades, once. At the calm pace it
+  /// takes longer, and a ring opens around the tip with it. The arrow and the rays stay where they are.
+  /// With Reduce Motion nothing moves.
+  func pulse(still: Bool, pace: CursorPace = .fast) {
+    echo.removeAllAnimations(); ring.removeAllAnimations()
     let frames = GuidedClick.frames(still: still)
     guard frames.count >= 2 else { return }
     let times = frames.indices.map { NSNumber(value: Double($0) / Double(frames.count - 1)) }
@@ -109,7 +119,16 @@ final class GuidedCursorView: NSView {
     grow.values = frames.map(\.scale); grow.keyTimes = times
     let fade = CAKeyframeAnimation(keyPath: "opacity")
     fade.values = frames.map { Float($0.opacity) }; fade.keyTimes = times
-    let both = CAAnimationGroup(); both.animations = [grow, fade]; both.duration = GuidedClick.duration
+    let both = CAAnimationGroup(); both.animations = [grow, fade]; both.duration = GuidedClickRing.raysDuration(pace: pace)
     echo.add(both, forKey: "pulse")
+    let opened = GuidedClickRing.frames(pace: pace, still: still)
+    guard opened.count >= 2 else { return }
+    let ringTimes = opened.indices.map { NSNumber(value: Double($0) / Double(opened.count - 1)) }
+    let widen = CAKeyframeAnimation(keyPath: "transform.scale")
+    widen.values = opened.map { $0.radius / GuidedClickRing.endRadius }; widen.keyTimes = ringTimes
+    let dim = CAKeyframeAnimation(keyPath: "opacity")
+    dim.values = opened.map { Float($0.opacity) }; dim.keyTimes = ringTimes
+    let ringBoth = CAAnimationGroup(); ringBoth.animations = [widen, dim]; ringBoth.duration = GuidedClickRing.duration
+    ring.add(ringBoth, forKey: "pulse")
   }
 }

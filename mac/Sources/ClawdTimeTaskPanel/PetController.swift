@@ -645,4 +645,37 @@ final class PetController: NSObject {
   func setTyping(_ on: Bool) { mascot.typing = on }
   /// The hands click a place that is behind the mascot: the mascot lets the click through.
   func letClicksThrough(_ on: Bool) { clickThrough = on; if on { window.ignoresMouseEvents = true } }
+
+  /// True from `makeRoom` until the mascot stands where it went.
+  private var makingRoom = false
+  /// Before the hands act at `targets`, in screen points from the bottom left: when the mascot, its bar or its
+  /// bubble lies on one, the mascot goes to the nearest corner of its screen where none of them does.
+  /// `PetLayout.room` holds the rule. A tucked mascot stays tucked. The place that the person chose is not
+  /// saved over: the next start shows the mascot there again. False when the mascot stays.
+  func makeRoom(for targets: [CGRect]) -> Bool {
+    guard visible, drag == nil, !targets.isEmpty else { return false }
+    let bubbleSize = bubbleWindow.isVisible && shownBubble != nil ? bubble.fit() : nil
+    let bar = controlsWindow.isVisible ? controlsWindow.frame.size : nil
+    guard let room = PetLayout.room(for: targets, pet: window.frame, docked: placement.dockedSide, bubble: bubbleSize,
+                                    controls: bar, in: visibleFrame) else { return false }
+    // A throw that still runs ends here: the springs take the mascot from where it is.
+    if bodyActive {
+      bodyActive = false; mascot.motion = BodyPhysics.Frame(); mascot.held = false
+      x.snap(to: Double(window.frame.minX)); y.snap(to: Double(window.frame.minY))
+    }
+    if let side = room.docked { placement = .docked(side); dockY = room.frame.minY }
+    else { placement = .free; origin = room.frame.origin; dockY = origin.y }
+    buttonsFollowPlacement()
+    makingRoom = true
+    return true
+  }
+  /// The mascot stands where `makeRoom` sent it: within a point and a half, and slow. Always true when it
+  /// was not sent, and when it is put away.
+  var roomMade: Bool {
+    guard makingRoom else { return true }
+    let goal = target(in: visibleFrame), at = window.frame.origin
+    let done = !visible || (hypot(at.x - goal.x, at.y - goal.y) <= 1.5 && abs(x.velocity) < 30 && abs(y.velocity) < 30)
+    if done { makingRoom = false }
+    return done
+  }
 }

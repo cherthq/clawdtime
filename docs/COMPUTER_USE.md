@@ -1861,6 +1861,24 @@ so does a person who watches the shared screen on a phone.
   rays opens out from the tip to 1.6 times their size and fades, once, in 0.32
   seconds. Nothing else moves at the place, so the frame clock stops after the
   glide.
+- **The calm pace.** While macOS records the screen (its recorder
+  `screencaptureui` or `screencapture` runs) or a call shows it (the call video
+  read `GET /desktop/presentation` in the last 2 seconds, and
+  `GET /desktop/hands/next` says so in `X-ClawdTime-Screen-Shown: call`), the
+  cursor glides in 0.35 seconds, and 1 ms more for each 4 points, up to 0.6
+  seconds. A trail of up to 7 marks covers the last 0.18 seconds of the way and
+  fades. At a click the copy of the rays takes 0.48 seconds and a ring opens
+  around the tip. `CLAWDTIME_CURSOR_PACE=calm` or `fast` in the panel's
+  environment chooses a pace at all times.
+- **The mascot out of the way.** The picture of the screen leaves the mascot
+  out, so the worker can act on a field under it, such as the reply box of a
+  chat app. Before a click, a drag, a scroll, a move or typed text whose place
+  or field lies under the mascot, its bar or its bubble, the mascot goes to the
+  nearest corner of its screen where none of them covers the target. A tucked
+  mascot stays tucked. The event waits until the mascot is there, for 0.8
+  seconds at most. The place that you chose stays saved. ClawdTime's own
+  windows are never the surface of an input, a window in front of a target or
+  the app whose elements a look lists.
 - **Typed keys.** A command that types names no place. The cursor goes to the
   field that has the keyboard: to the lower edge of a field of one line, so
   the pointer is under the text. With no field known it stays where it last

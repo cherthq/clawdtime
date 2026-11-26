@@ -32,10 +32,14 @@ struct HandsDisplay {
   /// back at the start of each command.
   var spent = HandsCost()
 
-  /// The app in front. ClawdTime is never its own subject.
+  /// The app in front. ClawdTime is never its own subject: `OwnWindows.subject` holds the rule.
   private var frontApp: NSRunningApplication? {
-    let front = NSWorkspace.shared.frontmostApplication
-    return front?.processIdentifier == getpid() ? NSWorkspace.shared.menuBarOwningApplication : front
+    let front = NSWorkspace.shared.frontmostApplication, menuBar = NSWorkspace.shared.menuBarOwningApplication
+    let subject = OwnWindows.subject(front: front.map { Int($0.processIdentifier) },
+                                     menuBar: menuBar.map { Int($0.processIdentifier) }, own: Int(getpid()))
+    if let front, subject == Int(front.processIdentifier) { return front }
+    if let menuBar, subject == Int(menuBar.processIdentifier) { return menuBar }
+    return nil
   }
 
   /// What the screen shows now. The caller has checked the rights that `image` and `elements` need.

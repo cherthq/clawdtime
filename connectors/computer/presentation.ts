@@ -67,6 +67,14 @@ export const presentationEventSchema = z
   });
 export type PresentationEvent = z.infer<typeof presentationEventSchema>;
 
+/**
+ * The call video reads the latest event every 150 ms while a call shows the
+ * screen. For this long after its last read the screen counts as shown.
+ */
+export const screenShownMs = 2000;
+/** The header of `GET /desktop/hands/next` that says that a call shows the screen now: `call`. */
+export const screenShownHeader = "x-clawdtime-screen-shown";
+
 /** One latest event in memory; sequence fences survive clear so delayed POSTs cannot revive it. */
 export class PresentationEvents {
   private event: PresentationEvent | null = null;
@@ -74,7 +82,19 @@ export class PresentationEvents {
   private sequence = 0;
   private command = 0;
   private retiredState = false;
+  private readAt = Number.NEGATIVE_INFINITY;
   constructor(private readonly now: () => number = Date.now) {}
+
+  /** The call video read the presentation: a call shows the screen now. */
+  read(): void {
+    this.readAt = this.now();
+  }
+
+  /** True while a call shows the screen: its video read within `screenShownMs`. */
+  shown(): boolean {
+    const age = this.now() - this.readAt;
+    return age >= 0 && age <= screenShownMs;
+  }
 
   accept(raw: unknown, commandSeq: number, active: boolean): boolean {
     const event = presentationEventSchema.parse(raw);

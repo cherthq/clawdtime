@@ -216,6 +216,13 @@ words are the task:
 - **Bounds.** One task runs at a time. A task ends after 40 actions (80 with a
   plan of 3 subgoals or more) or 15 minutes.
 
+While macOS records the screen, or a call shows it, the cursor glides at a
+calm pace: about half a second for each move, with a short trail and a pulse
+at each click, so a recording or a phone shows each move. Set
+`CLAWDTIME_CURSOR_PACE=calm` before the command that starts the desktop to keep
+the calm pace at all times, or `CLAWDTIME_CURSOR_PACE=fast` to keep the fast
+pace at all times. With Reduce Motion the cursor jumps at either pace.
+
 ### Words while a task runs
 
 Talk to it while it works. Your words go into the task that runs, and the task
@@ -883,6 +890,7 @@ every `clawdtime` command.
 | `CLAWDTIME_VOCABULARY`                                            | names, comma separated       | Your names for speech to text                                |
 | `CLAWDTIME_VOICE`                                                 | a voice name                 | The voice of spoken answers                                  |
 | `CLAWDTIME_SPACE_LEFT_SHORTCUT`, `CLAWDTIME_SPACE_RIGHT_SHORTCUT` | a key combination            | Your Mission Control shortcuts, for the panel                |
+| `CLAWDTIME_CURSOR_PACE`                                           | `calm`, `fast`               | The pace of the cursor. Not set: calm on a recording or call |
 | `CLAWDTIME_CONFIG_HOME`                                           | a full path                  | Moves the state folder from `~/.local/share/clawdtime`       |
 | `CLAWDTIME_OPENAI_API_KEY`, `OPENAI_API_KEY`                      | a key                        | The OpenAI key, for voice, the older chat and the planner    |
 
