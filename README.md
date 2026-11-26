@@ -13,6 +13,10 @@ web pages and accounts for you, and checks each action in code before it acts.
 You reach it in its chat, by voice, by iMessage and on a FaceTime call through
 a Chert line.
 
+[![Watch the ClawdTime demo](docs/assets/clawdtime-demo.jpg)](docs/assets/clawdtime-demo.mp4)
+
+[Watch the demo (3 min 45 sec)](docs/assets/clawdtime-demo.mp4)
+
 ## What it does
 
 - **Computer and browser use.** It clicks, types, scrolls and reads the screen
