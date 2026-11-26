@@ -362,8 +362,8 @@ import TaskPanelCore
       }
     case .key(let combo):
       guard let keys = KeyCombo.parse(combo), input.keyIsPermitted(keys), await keyboardFree() else { return .failure(.refused) }
-      // A key that prints a character is text: it stays out of a password field too. Return, Tab and shortcuts may go.
-      if keys.typesText, await focusIsSecure() { return .failure(.refused) }
+      // No key goes into a password field: not a character, and not a shortcut such as Command V either.
+      guard SecureField.permitsKey(keys, focusSecure: await focusIsSecure()) else { return .failure(.refused) }
       if stop.stopped { return .failure(.stoppedByPerson) }
       defer { guide.rest() }
       let changesSurface = CallPresentationKeyPolicy.mayChangeSurface(keys)
@@ -374,7 +374,7 @@ import TaskPanelCore
       guard await desktop.beginInput(steady: true) else { return .failure(.staleObservation) }
       defer { desktop.endInput() }
       guard !Self.keyboardIsOwn else { return .failure(.refused) }
-      if keys.typesText, await focusIsSecure() { return .failure(.refused) }
+      guard SecureField.permitsKey(keys, focusSecure: await focusIsSecure()) else { return .failure(.refused) }
       showTyping(); defer { endTyping() }
       return await input.key(keys) ? .success(nil) : .failure(inputFailure())
     case .openApp(let name, let window):
@@ -551,6 +551,12 @@ import TaskPanelCore
     await travel(to: map.flip(places[0]), label: label)
     if moving { await waitForRoom() }
     if let refusal = await lastCheck() { return .failure(refusal) }
+    if case .drag = command, places.count == 2 {
+      // A drag that presses on a password field or drops on one is refused: its text would go out of it or into it.
+      let ends = (places[0], places[1])
+      let secure = await Task.detached(priority: .userInitiated) { (HandsTree.isSecure(at: ends.0), HandsTree.isSecure(at: ends.1)) }.value
+      guard SecureField.permitsDrag(source: secure.0, target: secure.1) else { return .failure(.refused) }
+    }
     let allowCover: Bool
     if case .click(_, _, _, _, let allow) = command { allowCover = allow == true } else { allowCover = false }
     // ClawdTime's windows are not in the picture that the worker saw. A click on

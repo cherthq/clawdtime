@@ -16,7 +16,7 @@ public struct KeyCombo: Equatable, Sendable {
     self.printing = printing ?? (character != nil)
   }
   /// The combo puts a character into a field, as typed text does. With Command or
-  /// Control it is a shortcut. A combo that types never goes into a password field.
+  /// Control it is a shortcut. No combo at all goes into a password field: `SecureField`.
   public var typesText: Bool { printing && flags & (KeyCombo.command | KeyCombo.control) == 0 }
 
   public static let shift: UInt64 = 0x0002_0000, control: UInt64 = 0x0004_0000, option: UInt64 = 0x0008_0000
@@ -76,6 +76,19 @@ public struct KeyCombo: Equatable, Sendable {
     }
     return nil
   }
+}
+
+/// The hands and a password field. Nothing that the hands send may put text into one or take text out of it.
+public enum SecureField {
+  /// A key of the hands with the keyboard in a password field. `focusSecure`: the field that has the keyboard is
+  /// one, as the Accessibility tree or macOS says. No key goes there: not a character, and not a shortcut either.
+  /// Command V would paste the clipboard into it, Control Y would yank cut text into it, and Return would send
+  /// what the person typed there. The person handles a password field.
+  public static func permitsKey(_ combo: KeyCombo, focusSecure: Bool) -> Bool { !focusSecure }
+  /// A drag of the hands. `source` and `target`: the element under the press and under the drop is a password
+  /// field. Nil when the Accessibility tree does not say. A drop on one would put text into it, and a press on
+  /// one would take text out of it.
+  public static func permitsDrag(source: Bool?, target: Bool?) -> Bool { source != true && target != true }
 }
 
 /// One step of typed text.
