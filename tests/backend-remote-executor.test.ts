@@ -311,3 +311,56 @@ describe("scoped local execution worker", () => {
     f.store.close();
   });
 });
+describe("remote worker connections", () => {
+  function managed(f: ReturnType<typeof fixture>, index: number) {
+    const registered = f.service.registerSession(f.pairing.token, {
+      ...f.registration,
+      externalSessionId: `managed-${index}`,
+    });
+    return {
+      session: registered.session,
+      binding: { ...f.binding, sessionId: registered.session.id },
+      details: { ...f.details, externalSessionId: `managed-${index}` },
+    };
+  }
+  it("forgets the worker of a finished session, so finished sessions never fill the capacity", () => {
+    const f = fixture();
+    let accepted = 0;
+    for (let i = 0; i < 150; i++) {
+      const worker = managed(f, i);
+      f.remote.ready(worker.binding, worker.details);
+      accepted++;
+      // The session ends, and its worker stops sending heartbeats.
+      f.store.put("session", { ...worker.session, state: "stopped" });
+      f.advance(1000);
+    }
+    expect(accepted).toBe(150);
+    f.store.close();
+  });
+  it("forgets a worker whose heartbeat stopped, and still bounds live workers", () => {
+    const f = fixture();
+    const workers = Array.from({ length: 99 }, (_, i) => managed(f, i));
+    for (const worker of workers)
+      f.remote.ready(worker.binding, worker.details);
+    const extra = managed(f, 200);
+    expect(() => f.remote.ready(extra.binding, extra.details)).toThrow(
+      "capacity",
+    );
+    // Every worker stops its heartbeat; the sessions stay open.
+    f.advance(10_000);
+    for (const worker of workers)
+      f.store.put("session", {
+        ...f.store.get<typeof worker.session>("session", worker.session.id)!,
+        lastSeenAt: f.service.clock(),
+      });
+    f.store.put("session", { ...extra.session, lastSeenAt: f.service.clock() });
+    expect(f.remote.ready(extra.binding, extra.details)).toEqual({
+      ready: true,
+    });
+    expect(f.remote.capabilities(extra.binding).available).toBe(true);
+    expect(f.remote.capabilities(workers[0]!.binding).available).toBe(false);
+    f.remote.ready(workers[0]!.binding, workers[0]!.details);
+    expect(f.remote.capabilities(workers[0]!.binding).available).toBe(true);
+    f.store.close();
+  });
+});

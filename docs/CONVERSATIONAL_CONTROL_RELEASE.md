@@ -178,8 +178,9 @@ ordering, retains authoritative job tracking across superseded spoken replies an
 records provider commentary context acknowledgments separately from execution or
 handset playback. Reordered/stale transcripts cannot submit an older command.
 Provider errors and transcripts remain transient and suppressed from SDK logs.
-Executor subprocesses exclude frontend/control-plane credential namespaces;
-existing Codex login or explicit CODEX_API_KEY provides executor authentication.
+Executor subprocesses exclude frontend/control-plane credential namespaces and
+every API key; the existing Codex login in `CODEX_HOME` provides executor
+authentication.
 
 Actual local HTTP pull-worker lifecycle validation used Codex
 0.166.0-alpha.5.1: executor acceptance 480 ms, concurrent status 3.375 ms,

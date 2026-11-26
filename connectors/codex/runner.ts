@@ -37,6 +37,8 @@ export interface CodexRunnerOptions {
   timeoutMs?: number;
   interruptTimeoutMs?: number;
   connectionFactory?: (projectRoot: string) => AppServerConnection;
+  /** Says whether a job session is still open. A finished session's app-server ends. */
+  sessionOpen?: (sessionId: string) => boolean;
 }
 const result = (
   outcome: ExecutionResult["outcome"],
@@ -103,6 +105,8 @@ export async function verifyFileResult(
 /** Persistent, explicitly API-managed sessions. Never attaches to an arbitrary desktop chat. */
 export class CodexAppServerRunner implements ExecutionRunner {
   private sessions = new Map<string, ManagedSession>();
+  /** Poisoned sessions hold no app-server but still require reconciliation. */
+  private retired = new Set<string>();
   private seen = new Set<string>();
   private ready: boolean;
   private hostVersion: string;
@@ -191,6 +195,12 @@ export class CodexAppServerRunner implements ExecutionRunner {
         "Executor receipt capacity reached; reconcile before restarting.",
       );
     this.seen.add(dispatchId);
+    this.prune();
+    if (this.retired.has(request.job.sessionId))
+      return result(
+        "failed",
+        "Execution session is busy or requires reconciliation.",
+      );
     let session = this.sessions.get(request.job.sessionId);
     if (session?.busy || session?.poisoned)
       return result(
@@ -428,6 +438,16 @@ export class CodexAppServerRunner implements ExecutionRunner {
       signal.removeEventListener("abort", interrupt);
       active.busy = false;
       if (active.poisoned) connection.close();
+    }
+  }
+  /** End the app-server of each finished or poisoned idle session, so it frees its place. */
+  private prune() {
+    for (const [sessionId, session] of this.sessions) {
+      if (session.busy) continue;
+      if (session.poisoned) this.retired.add(sessionId);
+      else if (this.options.sessionOpen?.(sessionId) !== false) continue;
+      session.connection.close();
+      this.sessions.delete(sessionId);
     }
   }
   close() {

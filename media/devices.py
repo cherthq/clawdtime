@@ -13,7 +13,7 @@ from PIL import Image, ImageOps, ImageDraw
 from captions import WIDTH, HEIGHT, CaptionRenderer
 from policy import capture_allowed
 from screen_diagnostics import ScreenDiagnostics
-from device_relay import RelayFailure
+from device_relay import RelayFailure, FRAME_WAIT_SECONDS
 from camera import ScreenCamera, CameraError, surface, decode_header
 
 
@@ -43,7 +43,7 @@ async def gateway_request(owner,method,path,body=None,frame=False,device=None):
     key=owner.env['DEVICE_GATEWAY_KEY']
     if len(key)<32:raise ValueError('Gateway credential too short')
     async with owner.http.request(method,origin+path,headers={'Authorization':'Bearer '+key},
-            **({'json':body} if body is not None else {}),allow_redirects=False,timeout=1.5) as response:
+            **({'json':body} if body is not None else {}),allow_redirects=False,timeout=FRAME_WAIT_SECONDS if frame else 1.5) as response:
         chunks=[];size=0;limit=2*1024*1024 if frame else 16384
         async for chunk in response.content.iter_chunked(65536):
             size+=len(chunk)

@@ -130,6 +130,31 @@ class CameraFailureDiagnosticTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await client.close();await server.close()
 
+    async def test_camera_frame_deadline_ends_before_the_media_side_gives_up(self):
+        # Media and the gateway relay wait 2 s for a frame. A slower helper must
+        # get the gateway's answer first, so the media side never times out while
+        # the gateway still holds the helper's capture.
+        selected={**lease(),'cameraVersion':1,'surface':{'kind':'window','id':'99','displayId':1,'ownerPid':123}}
+        async def helper(request):
+            await asyncio.sleep(2.3)
+            return web.Response(status=503)
+        app=web.Application();app.router.add_get('/v1/leases/lease/frame',helper)
+        server=TestServer(app);await server.start_server()
+        with tempfile.TemporaryDirectory() as directory:
+            gateway=Gateway({'DEVICE_GATEWAY_KEY':'g'*32,'DEVICE_GATEWAY_DATABASE_PATH':str(Path(directory)/'gateway.sqlite')},
+                {'mac':{'url':str(server.make_url('')).rstrip('/'),'key':'h'*32}})
+            client=TestClient(TestServer(gateway.app()));await client.start_server()
+            try:
+                gateway.db.execute('INSERT INTO leases VALUES(?,?,?,?,?,?,?)',
+                    ('lease','mac',json.dumps(selected),validate_lease(selected),'active',None,None));gateway.db.commit()
+                started=time.monotonic()
+                with self.assertLogs(level='WARNING'):
+                    response=await client.get('/v1/leases/lease/frame',headers={'Authorization':'Bearer '+'g'*32})
+                self.assertNotEqual(response.status,200)
+                self.assertLess(time.monotonic()-started,2)
+            finally:
+                await client.close();await server.close()
+
     async def test_fixed_error_categories_only_no_body_logging_or_retry(self):
         calls=0
         diagnostic={'X-ClawdTime-Capture-Error':'stream_start','X-ClawdTime-Capture-Code':'-3805'}

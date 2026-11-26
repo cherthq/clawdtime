@@ -1250,8 +1250,8 @@ gateway connected. The installed helper and gateway were not replaced/restarted.
 The patch hardens broker launch/interpretation ordering, stale completion reports,
 older unresolved-job checks, speech-item/delegation ordering, playback generations,
 provider commentary context receipts and executor environment separation. No
-frontend/control-plane credentials are inherited by the Codex subprocess. Installed
-Codex login or explicit executor-host CODEX_API_KEY remains the authentication path.
+frontend/control-plane credentials or API keys are inherited by the Codex
+subprocess. The installed Codex login in `CODEX_HOME` is the authentication path.
 
 Real local file-worker lifecycle proof: executor acceptance **480 ms**, concurrent
 status **3.375 ms**, independently verified result **13.555 s**, cancellation with

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -68,4 +68,14 @@ it("copies rather than mutates supplied host environment and filters namespaces 
   expect("openai_api_key" in env).toBe(true);
   expect(child.CODEX_HOME === env.CODEX_HOME).toBe(true);
   expect(child.CODEX_API_KEY).toBeUndefined();
+});
+
+it("documents the Codex login as the only executor authentication, because the allowlist drops every API key", async () => {
+  // The allowlist above drops CODEX_API_KEY, so no doc may offer it as a way in.
+  for (const doc of [
+    "docs/CONNECTORS.md",
+    "docs/STATUS.md",
+    "docs/CONVERSATIONAL_CONTROL_RELEASE.md",
+  ])
+    expect(await readFile(doc, "utf8")).not.toContain("CODEX_API_KEY");
 });

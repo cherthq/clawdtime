@@ -235,6 +235,14 @@ export function createRuntime(
     version: env.CLAWDTIME_CODEX_RUNNER_VERSION ?? "unqualified",
     binary: env.CLAWDTIME_CODEX_BINARY,
     model: env.CLAWDTIME_EXECUTOR_MODEL,
+    // A stopped job session sends no more turns, so its app-server ends.
+    sessionOpen: (id) => {
+      const session = store.get<import("./contracts.js").AgentSession>(
+        "session",
+        id,
+      );
+      return !!session && session.state !== "stopped";
+    },
     projectRoots: env.CLAWDTIME_EXECUTOR_PROJECT_ROOTS
       ? z
           .array(z.string().min(1))

@@ -914,11 +914,17 @@ AXFrontmost/AXRaise behavior. It asks the parent through inherited pipes for loc
 authority immediately before the setter and throughout the existing 600 ms settle.
 The parent serves these checks on its policy actor without running AX there. Stop
 disarms and sends SIGKILL immediately; it never waits on AX or a cloud callback.
+A later reply to the killed child meets a closed pipe and fails with EPIPE: the
+companion ignores SIGPIPE, and the child's input pipe never raises it.
 The asynchronous request joins the child before completing its receipt. An already
 admitted OS request may have taken effect when Stop arrives; killed, interrupted or unconfirmed operations retain uncertainty rather than
 claiming cancellation or verified UI success. A matching child response proves
 that the host returned; if authority was lost before receipt completion, the
 receipt is only `returned`, never `verified`. A child result cannot restore stopped policy.
+A dispatch that ends before the child has the effect request (the child cannot
+start, its qualification refuses or the target changed) sent no input, so its
+receipt is `rejected` with reason `native_refused_before_effect` and clears the
+fence. Any failure after the effect request stays uncertain.
 
 Unknown receipts fence replacement leases, input and execution transfers. Read-only
 receipt retrieval survives Stop and restart. Ledger write failure poisons local

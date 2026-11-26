@@ -840,6 +840,114 @@ describe("production walkthrough lifecycle", () => {
       "current fixed",
     );
   });
+  it("releases native ownership after the server rejects the preparation, so a new operation and a new plan can start", async () => {
+    const f = fixture();
+    const api = vi.mocked(f.client.api);
+    const original = api.getMockImplementation()!;
+    api.mockImplementation(async (path: string, body?: unknown) => {
+      const record = (await original(path, body)) as ProductionNativeRecord;
+      if (path.endsWith("prepare")) {
+        // The server proves that no native input happened.
+        record.phase = "rejected";
+        record.result = {
+          operationId: record.id,
+          state: "rejected",
+          reason: "local_policy_changed",
+        };
+        f.receipts.set(record.id, structuredClone(record));
+      }
+      return record as never;
+    });
+    await expect(f.controller.prepare("finder", "operation")).rejects.toThrow(
+      "did not prepare",
+    );
+    expect(f.owner.executor).toBe("none");
+    expect(f.controller.status()).toMatchObject({
+      prepared: null,
+      dispatchAttempted: false,
+    });
+    api.mockImplementation(original);
+    await f.controller.prepare("finder", "operation-2");
+    expect(f.owner.executor).toBe("native");
+    await f.controller.replan(
+      { ...f.plan, id: "followup" },
+      f.controller.status().scene.generation,
+    );
+    expect(f.owner.executor).toBe("none");
+    expect(f.events.filter((v) => v === "dispatch")).toHaveLength(0);
+  });
+  it("releases native ownership after the server rejects the dispatch before any input, and never dispatches it again", async () => {
+    const f = fixture();
+    await f.controller.prepare("finder", "operation");
+    const api = vi.mocked(f.client.api);
+    const original = api.getMockImplementation()!;
+    api.mockImplementation(async (path: string, body?: unknown) => {
+      if (path.endsWith("dispatch")) {
+        const record = structuredClone(f.receipts.get("operation")!);
+        record.phase = "rejected";
+        record.result = {
+          operationId: record.id,
+          state: "rejected",
+          reason: "incoming_speech",
+        };
+        f.receipts.set(record.id, structuredClone(record));
+        f.events.push("dispatch");
+        return record as never;
+      }
+      return original(path, body);
+    });
+    const reference = f.reference();
+    await expect(f.controller.executePrepared(reference)).rejects.toThrow(
+      "before any input",
+    );
+    expect(f.owner.executor).toBe("none");
+    expect(f.events).not.toContain("present");
+    await expect(f.controller.executePrepared(reference)).rejects.toThrow(
+      "current fixed",
+    );
+    expect(f.events.filter((v) => v === "dispatch")).toHaveLength(1);
+    api.mockImplementation(original);
+    await f.controller.prepare("finder", "operation-2");
+    expect(f.owner.executor).toBe("native");
+    await f.controller.replan(
+      { ...f.plan, id: "followup" },
+      f.controller.status().scene.generation,
+    );
+    expect(f.owner.executor).toBe("none");
+  });
+  it("releases a rejected operation on the next plan when the first release could not run", async () => {
+    const f = fixture();
+    await f.controller.prepare("finder", "operation");
+    const api = vi.mocked(f.client.api);
+    const original = api.getMockImplementation()!;
+    api.mockImplementation(async (path: string, body?: unknown) => {
+      if (path.endsWith("dispatch")) {
+        const record = structuredClone(f.receipts.get("operation")!);
+        record.phase = "rejected";
+        record.result = {
+          operationId: record.id,
+          state: "rejected",
+          reason: "incoming_speech",
+        };
+        f.receipts.set(record.id, structuredClone(record));
+        return record as never;
+      }
+      return original(path, body);
+    });
+    f.actorsRunning();
+    await expect(f.controller.executePrepared(f.reference())).rejects.toThrow(
+      "Stop and join",
+    );
+    expect(f.owner.executor).toBe("native");
+    const stopped = vi.fn(() => true);
+    Object.assign(f.controller.options, { backgroundActorsStopped: stopped });
+    await f.controller.replan(
+      { ...f.plan, id: "followup" },
+      f.controller.status().scene.generation,
+    );
+    expect(f.owner.executor).toBe("none");
+    expect(f.events).not.toContain("cancel");
+  });
   it("authenticates loopback CUA trigger and refuses foreign origin or arbitrary operations", async () => {
     const f = fixture();
     await f.controller.prepare("finder", "operation");

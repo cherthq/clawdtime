@@ -15,7 +15,11 @@ import {
   SimulatedDevice,
 } from "../src/control/coordinator.js";
 import { HumanRouter } from "../src/control/human-router.js";
-import type { ExecutionResult, ExecutionRunner } from "../src/contracts.js";
+import type {
+  ExecutionResult,
+  ExecutionRunner,
+  TextControlGrant,
+} from "../src/contracts.js";
 const reply = (text: string): ProposedIntent => ({
   action: "reply",
   reply: text,
@@ -405,6 +409,73 @@ describe("shared text and voice conversational frontend", () => {
       ).toThrow();
     expect(f.broker.currentSequence(f.binding)).toBe(0);
     expect(f.broker.list(f.binding)).toHaveLength(0);
+    f.store.close();
+  });
+});
+
+describe("text control grant requests", () => {
+  it("a literal stop revokes a grant request that still waits for the owner on the Mac", async () => {
+    const f = fixture();
+    let local: { state: string; grant?: TextControlGrant } = {
+      state: "pending",
+    };
+    const proposed: TextControlGrant[] = [];
+    const textDevice = {
+      proposeGrant: async (grant: TextControlGrant) => {
+        proposed.push(grant);
+      },
+      grantStatus: async () => local,
+      acquire: async () => {},
+      observe: async () => {
+        throw new Error("No screen in this test.");
+      },
+      input: async () => ({ submitted: false }),
+      release: async () => {},
+    };
+    const control = new ControlCoordinator(f.store, new SimulatedDevice());
+    const app = createApp(
+      f.service,
+      control,
+      new HumanRouter(f.service, control),
+      {
+        origin: "http://127.0.0.1:3310",
+        simulation: true,
+        conversation: f.frontend,
+        textDevice,
+      },
+    );
+    const headers = {
+      authorization: `Bearer ${f.agent.token}`,
+      "content-type": "application/json",
+    };
+    const asked = await app.request("/api/control-grants", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        grantId: "grant-one",
+        actions: ["click"],
+        durationSeconds: 60,
+        policyRevision: 1,
+        localEnableGeneration: 1,
+      }),
+    });
+    expect(asked.status).toBe(200);
+    expect(proposed).toHaveLength(1);
+    const stopped = await app.request("/api/conversation/turn", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ eventId: "stop-one", text: "stop" }),
+    });
+    expect(stopped.status).toBe(200);
+    // The owner approves on the Mac after the stop.
+    local = { state: "active", grant: proposed[0] };
+    const status = await app.request("/api/control-grants/grant-one", {
+      headers,
+    });
+    expect(status.status).toBe(409);
+    expect(
+      f.store.get<TextControlGrant>("text_control_grant", "grant-one")?.state,
+    ).toBe("revoked");
     f.store.close();
   });
 });

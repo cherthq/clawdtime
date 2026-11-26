@@ -236,6 +236,30 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.owner.backend.call_args.args[0].endswith('/voice/end'))
         self.assertEqual(set(self.owner.backend.call_args.args[1]), {'eventId', 'callId', 'qualifiedRemoteAudio'})
 
+    async def test_refused_hangup_resets_ending_so_failures_still_end_the_call(self):
+        self.owner.backend.return_value = {'accepted': False}
+        await self.frontend.handle(transcript(1, 'Please hang up now.'))
+        await self.invoke('end_call', identity='end')
+        self.owner.backend.assert_awaited_once()
+        self.assertFalse(self.frontend.ending)
+        # A later background failure ends the call again, as before the hangup.
+        async def broken():
+            raise FrontendFault('provider_disconnected')
+        await asyncio.gather(self.frontend.spawn(broken(), 'read'), return_exceptions=True)
+        self.parent.request_failure.assert_called_once()
+        # A new explicit hangup request reaches the backend.
+        self.owner.backend.return_value = {'accepted': True}
+        await self.frontend.handle(transcript(2, 'Hang up please.'))
+        await self.invoke('end_call', identity='end_again')
+        self.assertEqual(self.owner.backend.await_count, 2)
+        self.assertTrue(self.frontend.ending)
+
+    async def test_unconfirmed_hangup_keeps_ending(self):
+        self.owner.backend.side_effect = TimeoutError()
+        await self.frontend.handle(transcript(1, 'Please hang up now.'))
+        await self.invoke('end_call', identity='end')
+        self.assertTrue(self.frontend.ending)
+
     async def test_stop_and_policy_loss_block_new_tools_audio_and_context(self):
         await self.frontend.handle(transcript())
         self.parent.pause_latched = True
@@ -246,6 +270,50 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         self.parent.policy_at = time.monotonic() - 3
         await self.invoke(identity='stale')
         self.owner.backend.assert_not_awaited()
+
+    async def test_short_pause_during_a_tool_callback_keeps_the_call(self):
+        await self.frontend.handle(transcript())
+        async def pause_while_waiting(*args):
+            self.parent.pause_latched = True  # The owner pauses during the callback.
+            return {'accepted': True, 'reply': 'Queued; not complete.'}
+        self.owner.backend.side_effect = pause_while_waiting
+        await self.invoke()
+        self.owner.backend.assert_awaited_once()
+        self.parent.request_failure.assert_not_called()
+        # Nothing reaches the provider while the call is paused.
+        self.frontend.ws.send_json.assert_not_awaited()
+        self.parent.pause_latched = False
+        await self.invoke()
+        self.owner.backend.assert_awaited_once()
+        self.assertEqual(self.frontend.ws.send_json.call_args.args[0]['tool_call_id'], 'tool1')
+
+    async def test_short_mute_during_a_context_poll_keeps_the_call_and_sends_it_later(self):
+        update = {'id': 'progress', 'revision': 1, 'text': 'Fixture progress.'}
+        calls = 0
+        async def mute_while_waiting(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.parent.two_way = False  # The owner mutes during the poll.
+            value = context(1); value['updates'] = [update]
+            return value
+        self.owner.backend.side_effect = mute_while_waiting
+        poll = self.frontend.spawn(self.frontend.poll(), 'poll')
+        while calls < 1:
+            await asyncio.sleep(.05)
+        await asyncio.sleep(.1)
+        self.assertFalse(poll.done())
+        self.parent.request_failure.assert_not_called()
+        self.frontend.ws.send_json.assert_not_awaited()
+        self.parent.two_way = True
+        self.parent.policy_at = time.monotonic()
+        while calls < 2:
+            await asyncio.sleep(.05)
+        await asyncio.sleep(.1)
+        sent = [call.args[0]['text'] for call in self.frontend.ws.send_json.call_args_list]
+        self.assertEqual(len(sent), 2)
+        self.assertIn('Fixture progress.', sent[1])
+        self.parent.request_failure.assert_not_called()
 
     async def test_interruption_clears_output_and_late_same_response_cannot_resume(self):
         event = {'type': 'audio', 'audio_event': {'event_id': 7,

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from device_relay import DeviceRelay, RelayTimeout, RelayDisconnected
 from screen_diagnostics import ScreenDiagnostics
+from devices import gateway_request
 
 
 class RelayTimingTests(unittest.IsolatedAsyncioTestCase):
@@ -30,6 +31,35 @@ class RelayTimingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('private',stored)
         self.assertNotIn('text',stored)
         self.assertLess(len(stored),2048)
+
+    async def test_relayed_frame_waits_past_the_gateway_camera_deadline(self):
+        # The gateway may take its full camera deadline (1.9 s) to answer a frame.
+        relay=DeviceRelay()
+        async def answer_late(message):
+            async def late():
+                await asyncio.sleep(2.2)
+                relay.pending[message['id']][1].set_result((200,b'frame',{}))
+            asyncio.get_running_loop().create_task(late())
+        relay.socket=SimpleNamespace(closed=False,send_json=AsyncMock(side_effect=answer_late))
+        self.assertEqual(await relay.request('GET','/v1/leases/lease/frame'),(200,b'frame',{}))
+
+    async def test_direct_frame_request_waits_past_the_gateway_camera_deadline(self):
+        seen={}
+        async def chunks(size):
+            yield b'frame'
+        class Response:
+            status=200;headers={}
+            content=SimpleNamespace(iter_chunked=chunks)
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):return False
+        def request(method,url,**kwargs):
+            seen[url.rsplit('/',1)[-1]]=kwargs['timeout'];return Response()
+        owner=SimpleNamespace(env={'DEVICE_GATEWAY_URL':'https://gateway.example','DEVICE_GATEWAY_KEY':'k'*32},
+            http=SimpleNamespace(request=request))
+        await gateway_request(owner,'GET','/v1/leases/lease/frame',frame=True)
+        await gateway_request(owner,'POST','/v1/leases/lease/renew',{})
+        self.assertGreater(seen['frame'],2)
+        self.assertEqual(seen['renew'],1.5)
 
     async def test_send_timeout_is_distinct_from_response_timeout(self):
         relay=DeviceRelay()

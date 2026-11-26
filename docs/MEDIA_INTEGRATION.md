@@ -1085,6 +1085,13 @@ or media scheduling. The latest control-enabled pilot received 18 frames before
 that deadline and recorded no input. Its old logs lacked enough hop metadata to
 identify the trigger. No timeout or freshness limit was relaxed for this diagnosis.
 
+The deadlines nest so that the gateway answers a frame before media gives up. A
+native camera frame takes up to 1.85 s on the helper, and the gateway waits 1.9 s
+for it. The gateway relay forwards for 2 s, and media waits 2.5 s for a frame on
+the relay and on the direct gateway path. Other relayed requests keep the 2 s
+wait, and other direct requests keep 1.5 s. The two-second frame freshness check
+is unchanged.
+
 Future media timeout/disconnect diagnostics retain the generated relay request ID,
 send-versus-response phase, UTC start time, bounded send duration and socket state.
 The gateway retains its last 128 lease/frame/action hop events in a separate
@@ -2276,6 +2283,12 @@ operation identity across duplicates, Stop and restart. Preparation of a retired
 operation cannot overwrite its result. Read-only receipt reconciliation is
 available after session removal and validates the retained fingerprint, host,
 operation and original completion interval before clearing an uncertainty fence.
+Media checks the authority callback before it marks a dispatch, so a refused
+callback sends nothing and leaves the row prepared. When a receipt read finds no
+gateway record (404) two seconds after the dispatch deadline, the dispatch was
+never sent: the gateway records a dispatch before it forwards one and refuses one
+after the deadline. Media then stores the row as `rejected` with reason
+`native_not_dispatched`, which clears its fence.
 The online encrypted media backup includes and validates the new optional table.
 
 Gateway WSS permits only the fixed native prepare/dispatch POSTs and receipt GETs.

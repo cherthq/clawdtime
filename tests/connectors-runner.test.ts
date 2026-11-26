@@ -268,3 +268,103 @@ describe("API-managed Codex executor", () => {
     expect(host.requests.filter((x) => x === "turn/start")).toHaveLength(1);
   });
 });
+
+describe("API-managed Codex executor sessions", () => {
+  class CountedHost extends Host {
+    closed = 0;
+    override close() {
+      this.closed++;
+    }
+  }
+  function many(
+    factory: () => CountedHost,
+    sessionOpen?: (id: string) => boolean,
+  ) {
+    return new CodexAppServerRunner({
+      enabled: true,
+      version: "fixture",
+      timeoutMs: 500,
+      interruptTimeoutMs: 10,
+      connectionFactory: factory,
+      ...(sessionOpen ? { sessionOpen } : {}),
+    });
+  }
+  function job(index: number) {
+    const value = request("/fixture", `dispatch-${index}`);
+    value.job = { ...value.job, id: `job-${index}`, sessionId: `s-${index}` };
+    return value;
+  }
+  it("ends the app-server of a finished session, so finished sessions never fill the capacity", async () => {
+    const hosts: CountedHost[] = [];
+    const open = new Set<string>();
+    const r = many(
+      () => {
+        const host = new CountedHost();
+        host.onStart = () => host.complete("interrupted");
+        hosts.push(host);
+        return host;
+      },
+      (id) => open.has(id),
+    );
+    const summaries: string[] = [];
+    for (let i = 0; i < 25; i++) {
+      open.add(`s-${i}`);
+      summaries.push(
+        (await r.run(job(i), () => {}, new AbortController().signal)).summary,
+      );
+      open.delete(`s-${i}`);
+    }
+    expect(summaries.filter((s) => /capacity/.test(s))).toEqual([]);
+    expect(hosts).toHaveLength(25);
+    // Each finished session's app-server ended when the next run came.
+    expect(hosts.slice(0, 24).every((host) => host.closed === 1)).toBe(true);
+    expect(hosts[24]!.closed).toBe(0);
+  });
+  it("keeps the app-server of an open session for its next turn", async () => {
+    const hosts: CountedHost[] = [];
+    const r = many(
+      () => {
+        const host = new CountedHost();
+        host.onStart = () => host.complete("interrupted");
+        hosts.push(host);
+        return host;
+      },
+      () => true,
+    );
+    await r.run(job(1), () => {}, new AbortController().signal);
+    const again = job(1);
+    again.job = { ...again.job, dispatchId: "dispatch-again" };
+    await r.run(again, () => {}, new AbortController().signal);
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]!.closed).toBe(0);
+    expect(hosts[0]!.requests.filter((x) => x === "turn/start")).toHaveLength(
+      2,
+    );
+  });
+  it("frees the place of a poisoned session but still refuses its next turn", async () => {
+    const hosts: CountedHost[] = [];
+    const r = many(() => {
+      const host = new CountedHost();
+      // The acceptance has no turn ID, so the outcome is unknown.
+      host.request = async (method: string) => {
+        host.requests.push(method);
+        if (method === "thread/start") return { thread: { id: "thread" } };
+        return {};
+      };
+      hosts.push(host);
+      return host;
+    });
+    for (let i = 0; i < 20; i++)
+      expect(
+        (await r.run(job(i), () => {}, new AbortController().signal)).outcome,
+      ).toBe("unknown");
+    const next = await r.run(job(20), () => {}, new AbortController().signal);
+    expect(next.summary).not.toMatch(/capacity/);
+    const again = job(0);
+    again.job = { ...again.job, dispatchId: "dispatch-0-again" };
+    expect(
+      (await r.run(again, () => {}, new AbortController().signal)).summary,
+    ).toMatch(/reconciliation/);
+    expect(hosts).toHaveLength(21);
+  });
+});

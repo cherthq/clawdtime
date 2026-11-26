@@ -248,10 +248,11 @@ npx tsx tests/connectors-runner-spike.ts
 
 The Codex version probe and App Server child do not inherit ClawdTime,
 media/backend, OpenAI frontend, AI Gateway, LiveKit, Deepgram, deployment or
-database environment namespaces. The executor uses its existing Codex login or
-explicit host `CODEX_API_KEY`; frontend `OPENAI_API_KEY` is intentionally not
-forwarded. `HOME`, `PATH` and `CODEX_HOME` remain available for the executor's own
-installation and authentication. This is scoped namespace redaction, not a
+database environment namespaces. The executor signs in with its own Codex login
+in `CODEX_HOME`. The environment allowlist forwards no API key, so neither a
+Codex key nor the frontend `OPENAI_API_KEY` reaches the child. `HOME`, `PATH` and
+`CODEX_HOME` remain available for the executor's own installation and
+authentication. This is scoped namespace redaction, not a
 promise that arbitrary unrelated environment variables or host files are secret-free.
 
 This makes an actual model request using existing Codex login and writes only a

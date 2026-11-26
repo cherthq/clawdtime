@@ -310,10 +310,12 @@ as `failed` and the local call as `ended`, so the line is free for the next
 request. Nothing is retried: the agent must make a new request with a new
 idempotency key. Any failure at or after the allocation request stays unknown.
 
-The same applies to a refusal before any dispatching request: the line guard
-refuses before any request at all, and the event boundary check refuses after
-the read-only preflight. Both raise `NotDispatched` when no earlier attempt left
-a media record. An earlier media record in state `preparing`, `prepared` or
+The same applies to a refusal before any dispatching request: the line guard,
+a closed or expired document grant, stopped listening and a line that audio
+qualification holds refuse before any request at all. The event boundary check,
+and the second check of a qualification call, refuse after the read-only
+preflight. Each raises `NotDispatched` when no earlier attempt left a media
+record. An earlier media record in state `preparing`, `prepared` or
 `closed` without a provider call ID proves that no dial was sent, so it also
 raises `NotDispatched`. Any other earlier media record may hide a dial that was
 sent, so that outcome stays unknown and the line stays reserved.
