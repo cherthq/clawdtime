@@ -131,16 +131,36 @@ describe("phone desktop execution ownership", () => {
     expect(runtime.stop).not.toHaveBeenCalled();
   });
 
-  it("retains ownership of a prior phone run when a later submit is busy", async () => {
+  it("retains ownership of a prior phone run when the worker refuses a later submit as busy", async () => {
     const { adapter, runtime } = fixture();
     adapter.open("call-a");
     await adapter.run("call-a", "request-a", "Open TextEdit", () =>
       adapter.execution.submit("ignored", "Open TextEdit"),
     );
+    const prior = runtime.snapshot().requestId;
+    runtime.submit.mockResolvedValueOnce({ message: "The worker is busy." });
     await adapter.run("call-a", "request-b", "Open Messages", () =>
       adapter.execution.submit("ignored", "Open Messages"),
     );
-    expect(runtime.submit).toHaveBeenCalledOnce();
+    expect(runtime.submit).toHaveBeenCalledTimes(2);
+    expect(runtime.snapshot().requestId).toBe(prior);
+    adapter.close("call-a");
+    expect(runtime.stop).toHaveBeenCalledOnce();
+  });
+
+  it("allows a same-call follow-up and retains control of its new request", async () => {
+    const { adapter, runtime } = fixture();
+    adapter.open("call-a");
+    await adapter.run("call-a", "request-a", "Open TextEdit", () =>
+      adapter.execution.submit("ignored", "Open TextEdit"),
+    );
+    const prior = runtime.snapshot().requestId;
+    await adapter.run("call-a", "request-b", "Open Messages", () =>
+      adapter.execution.submit("ignored", "Open Messages"),
+    );
+    expect(runtime.submit).toHaveBeenCalledTimes(2);
+    expect(runtime.snapshot().requestId).not.toBe(prior);
+    expect(runtime.snapshot().requestId).toBe(runtime.submit.mock.calls[1]![0]);
     adapter.close("call-a");
     expect(runtime.stop).toHaveBeenCalledOnce();
   });

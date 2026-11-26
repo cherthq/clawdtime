@@ -133,6 +133,9 @@ function fixture(
   writeFileSync(node, "#!/bin/sh\n", { mode: 0o755 });
   // The fake chert, in a fake provider package, linked onto the PATH.
   const bin = folder(join(root, "bin"), 0o755);
+  // Expose Node without its global npm bin directory, which can contain the
+  // real provider CLI even when this fixture deliberately omits it.
+  symlinkSync(process.execPath, join(bin, "node"));
   const provider = folder(
     join(root, "provider", "node_modules", "@trychert", "facetime"),
     0o755,
@@ -213,7 +216,7 @@ function fixture(
   // Answers of the operator routes to give once, in place of the normal one.
   const faults: { match: string; status: number | "lost" }[] = [];
   const env: Record<string, string> = {
-    PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin"].join(":"),
+    PATH: [bin, "/usr/bin", "/bin"].join(":"),
     HOME: home,
     CHERT_HOME: chertHome,
     CLAWDTIME_CONFIG_HOME: state,
