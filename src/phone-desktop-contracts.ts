@@ -26,7 +26,16 @@ export const phonePresentationSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 export type PhonePresentation = z.infer<typeof phonePresentationSchema>;
+export const sharedTaskBindingSchema = z
+  .object({
+    taskId: id,
+    callId: id,
+    desktopInstanceId: id,
+  })
+  .strict();
+export type SharedTaskBinding = z.infer<typeof sharedTaskBindingSchema>;
 export interface PhoneTurnContext {
+  sharedTask?: SharedTaskBinding;
   phonePresentation?: PhonePresentation;
   /** Runtime authority supplied by the server; never accepted from JSON. */
   isLive?: () => boolean;
@@ -51,6 +60,7 @@ export const phoneChatPayloadSchema = z
 export const phoneChatSchema = phoneCallSchema
   .extend({
     requestId: id,
+    sharedTask: sharedTaskBindingSchema.optional(),
     ...phoneChatPayloadSchema.shape,
   })
   .strict();

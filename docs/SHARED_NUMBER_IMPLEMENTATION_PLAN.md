@@ -1,13 +1,79 @@
 # Shared number routing implementation plan
 
-Status: identity and ownership domain implemented in the checkout for review.
-Enrollment and device credential primitives are also staged. Shared routing is
-not mounted in a server or line agent, and no production migration occurred.
+Status: the callback, provider and walkthrough integrations are implemented.
+The signed webhook is configured, the previous connector has released the
+line with its journals retained, and the coordinator is enabled. Provider
+readiness and HTTPS authorization checks passed. This checkpoint supersedes
+the older pending integration and physical-test gates below.
 
-Reviewed: 2026-11-26. Recheck the repository, installed release, and provider
-contracts before implementing. A checkout does not prove what production runs.
+Reviewed: 2026-11-26. A checkout does not prove what production runs.
 
-## Implementation checkpoint, 2026-11-26
+## Integrated delivery, 2026-11-26
+
+The service uses a signed HTTPS webhook integration with `customer_decides`
+and no default Assistant. Outbound callbacks use the Calls API. The webhook
+stays assigned during callbacks, so there is no per-call connector release
+and reclaim. The previous dedicated connector must release the line once
+at migration. The optional custom BYOR handler is not the production path.
+
+Implemented components:
+
+- Phone sign-in, durable limits, hashed sessions and separate call proofs.
+- One coordinator with private configuration, a durable SQLite call slot,
+  exclusive process ownership and distinct account, device and line tokens.
+- Outbound HTTPS Mac polling, pinned desktop lifetime, local leases and Stop,
+  transient display frames and no replay after an uncertain command.
+- Signed incoming webhook validation, bounded decision deadlines, replay
+  fencing and transient room credentials. Unknown allocation keeps the slot.
+- Provider readiness checks for the exact project, integration, line, worker
+  and absence of a competing connector. No caller handle authorizes a Mac.
+- Exact job launch and exit receipts, original-owner callback consent and
+  completion reporting. Shared jobs bypass the dedicated-owner callback path.
+- Callback room preparation and Calls submission with one stable effect ID.
+  Worker `bridge_ready` gates narration. An allocated call is not an answer.
+- Terminal provider cleanup, observed media removal and route checks before
+  freeing the slot. Read failures retain ownership without redialing.
+- Walkthrough reports bound to the exact task and result on the original Mac.
+  The local user chooses whether reports may open. Reports contain escaped,
+  inert text, not executable instructions or automatically followed URLs.
+- Same-call computer actions after verification, including during callbacks.
+  Routine lease renewal no longer forgets the callback task.
+- Private standby coordinator and separate voice-worker configuration. HTTPS
+  health and refusal of standby admissions are checked independently.
+
+Participant setup is in [SHARED_NUMBER_SETUP.md](SHARED_NUMBER_SETUP.md).
+Each Mac needs the local desktop service, model credentials, native permissions
+and an active `shared run` connection. The shared number has one simultaneous
+call slot. Each participant verifies their phone and pairs only their own Mac.
+
+The user waived the two-person physical test for this release. Automated
+checks do not establish real handset audio, picture or native input success;
+this is a stated limitation, not an unrequested release gate.
+
+Validation passed typecheck, **10,970 tests across 278 files**, and build.
+The independent line suite passed 325 tests, with two added media tests also
+passing under Node’s runner. Coverage includes focused
+signed-provider, callback, exact-result and same-call regression tests. The
+HTTP integration tests use two simulated Macs and fake provider effects with
+real loopback HTTP. No test sends a real text, places a call or captures a real
+screen. Deployment configuration stays outside this public repository.
+
+Activation completed after explicit approval. The named shared voice worker
+registered successfully. The coordinator reports enabled and configured over
+HTTPS. Invalid signatures and unauthorized line requests return 403. Signed
+invalid bodies reach validation and return 400. The provider reports the exact
+route ready with no competing connector. No live calls or texts were placed.
+The old owner's retained journals remain available for rollback. Participants
+still need to pair their own Mac and keep its shared connection running.
+
+Email identities, shared inbound texting and background participant service
+packaging remain outside this release. Foreground participant setup is usable.
+The older masked-number text poller must never be used for shared routing.
+
+## Earlier foundation checkpoint, 2026-11-26
+
+The following records the earlier domain-only delivery. Its pending items are
+superseded by the integration checkpoint above where explicitly implemented.
 
 The first delivery slice now has source in `src/shared-number-contracts.ts`
 and `src/control/shared-number.ts`, with regression coverage in
@@ -199,7 +265,7 @@ Then inspect `docs/ARCHITECTURE.md`, `docs/COMPUTER_USE.md`,
 `docs/SUPERVISOR.md`, `docs/DEVICE.md`, and the applicable line handoff guide.
 Follow current repository instructions and preserve unrelated work.
 
-## Current findings
+## Baseline findings
 
 | Area              | Existing foundation                                                                                    | Gap                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |

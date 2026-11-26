@@ -53,6 +53,30 @@ const chat = {
   },
 };
 
+it("refuses a replaced pinned desktop and cancellation before sending input", async () => {
+  const f = fixture();
+  expect(
+    await callPhoneDesktop(f.system, chat, {
+      request: f.request,
+      expectedInstanceId: "previous",
+    }),
+  ).toEqual({ ok: false, code: "desktop_unavailable" });
+  expect(f.request).not.toHaveBeenCalled();
+  const abort = new AbortController();
+  f.request.mockImplementationOnce(async () => {
+    abort.abort();
+    return Response.json({ instanceId: "expected" });
+  });
+  expect(
+    await callPhoneDesktop(f.system, chat, {
+      request: f.request,
+      signal: abort.signal,
+      expectedInstanceId: "expected",
+    }),
+  ).toEqual({ ok: false, code: "phone_request_cancelled" });
+  expect(f.request).toHaveBeenCalledOnce();
+});
+
 it("verifies the instance then forwards one exact text and trusted presentation with its call identity", async () => {
   const f = fixture();
   expect(

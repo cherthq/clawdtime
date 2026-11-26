@@ -120,6 +120,9 @@ export interface SharedCall {
   authorizationExpiresAt?: number;
   scope?: SharedCallScope;
   cleanupAt?: number;
+  callbackTaskId?: string;
+  activatedAt?: number;
+  expectedMemberId?: string;
 }
 export interface SharedCallProof {
   id: string;
@@ -141,6 +144,7 @@ export interface SharedTaskOwnership {
   requestDigest: string;
   createdAt: number;
   resultId?: string;
+  callbackRequested?: boolean;
 }
 export interface SharedCallbackOwnership {
   id: string;
@@ -149,6 +153,16 @@ export interface SharedCallbackOwnership {
   callId: string;
   lineId: string;
   scope: SharedCallScope;
-  state: "queued";
+  state:
+    | "queued"
+    | "preparing"
+    | "dialing"
+    | "active"
+    | "unknown"
+    | "ended"
+    | "canceled";
+  roomId?: string;
+  providerCallId?: string;
+  outboundCallId?: string;
   createdAt: number;
 }

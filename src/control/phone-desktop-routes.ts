@@ -22,7 +22,14 @@ export function mountPhoneDesktop(
     ): Promise<unknown>;
   },
 ) {
-  for (const operation of ["open", "renew", "chat", "stop", "close"] as const) {
+  for (const operation of [
+    "open",
+    "renew",
+    "chat",
+    "stop",
+    "close",
+    "inspect",
+  ] as const) {
     app.post(`/desktop/phone/${operation}`, async (c) => {
       const auth = c.req.header("authorization") ?? "";
       options.authorize(auth.startsWith("Bearer ") ? auth.slice(7) : "");
@@ -37,6 +44,12 @@ export function mountPhoneDesktop(
       try {
         if (operation === "chat") {
           const chat = phoneChatSchema.parse(raw);
+          if (
+            chat.sharedTask &&
+            (chat.sharedTask.callId !== chat.callId ||
+              chat.sharedTask.desktopInstanceId !== options.instanceId)
+          )
+            return c.json({ ok: false, code: "shared_task_mismatch" }, 409);
           const reply = await options.scope.run(
             chat.callId,
             chat.requestId,
@@ -46,9 +59,13 @@ export function mountPhoneDesktop(
                 ...(chat.presentation
                   ? { phonePresentation: chat.presentation }
                   : {}),
+                ...(chat.sharedTask ? { sharedTask: chat.sharedTask } : {}),
                 isLive: options.scope.currentContext()?.isLive,
               }),
-            chat.presentation ?? null,
+            {
+              presentation: chat.presentation ?? null,
+              sharedTask: chat.sharedTask ?? null,
+            },
           );
           const value = z
             .object({ text: z.string().max(20000) })

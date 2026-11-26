@@ -48,6 +48,7 @@ import { computerCli } from "./computer.js";
 import { routineCli } from "./routine.js";
 import { keysCli } from "./keys.js";
 import { connectCli } from "./connect.js";
+import { sharedCli } from "./shared.js";
 import { startCli } from "./start.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
 
@@ -65,6 +66,7 @@ export async function main(args = process.argv.slice(2)) {
   const command = args[0] || "help";
   if (command === "proactive") return proactiveCli(args.slice(1));
   if (command === "phone") return phoneCli(args.slice(1));
+  if (command === "shared") return sharedCli(args.slice(1));
   if (command === "task") return taskCli(args.slice(1));
   if (command === "agents") return agentsCli(args.slice(1));
   if (command === "hosts") return agentsCli(["--hosts", ...args.slice(1)]);

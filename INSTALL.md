@@ -5,6 +5,10 @@ it up. You need a Mac with macOS 14 or later, Node 24 or later, the Xcode
 command line tools and an iPhone. The installer checks each one and says how to
 get what is missing.
 
+This guide connects a dedicated line to one Mac. To use an existing shared
+number with your own Mac, follow [shared setup](docs/SHARED_NUMBER_SETUP.md)
+and use its coordinator address. Skip the dedicated line-claim step below.
+
 ## Paste this into your coding agent
 
 Open Claude Code or Codex on the Mac, and paste this:
