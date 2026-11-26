@@ -126,10 +126,49 @@ public enum DesktopWindowVisibility {
     guard focusedRole == "AXMenu" else { return .focused }
     return input && mainRole == "AXWindow" ? .main : .none
   }
+  /// The same rule when the app may name no focused window at all. While a context menu or a menu of the menu bar is
+  /// open, Finder on macOS 26 answers that it has no focused window, and no menu either. The window list shows the menu
+  /// as a window of the app at the level of menus (`menuShown`). With that menu on the screen, the app's main window is
+  /// the surface of the hands' input, as under a menu that Accessibility names. With no menu shown, an app with no
+  /// focused window gives no surface, as before. A move to another app or desktop never starts while a menu is open.
+  public static func inputWindow(focused: Bool, focusedRole: String?, mainRole: String?, input: Bool, menuShown: Bool) -> InputWindow {
+    guard focused else { return input && menuShown && mainRole == "AXWindow" ? .main : .none }
+    return inputWindow(focusedRole: focusedRole, mainRole: mainRole, input: input)
+  }
+  /// The level of the window server at which macOS shows an open menu: a context menu, a menu of the menu bar, the
+  /// menu of a pop-up button (`kCGPopUpMenuWindowLevel`).
+  public static let menuLevel = 101
+  /// A menu of the app `pid` is open on `display`: the window list has a window of that app at the level of menus. A
+  /// menu of another process, such as the menu of an icon in the menu bar, is no menu of the app.
+  public static func menuShown(_ rows: [ListedWindow], pid: Int, display: CGRect) -> Bool {
+    rows.contains { row in
+      guard row.owner == pid, row.layer == menuLevel, let frame = row.frame else { return false }
+      return !display.intersection(frame).isEmpty
+    }
+  }
   /// An open menu has the keyboard: letters pick its items and Return chooses one. An input rests on a look with a
   /// menu of the app open or with none, and goes on only while that holds. A menu that opened since, for example after
   /// a Tab or a Space in typed text, or one that closed, sends the next key or click elsewhere than the look said.
   public static func sameMenu(looked: Bool, now: Bool) -> Bool { looked == now }
+
+  /// The focused window of the app can be a panel of its own above the ordinary windows: the Quick Look of a file,
+  /// which Finder shows at the level of floating windows, or an inspector. Accessibility names it as the focused window,
+  /// and it has the keyboard, so Escape, Space and its close button act on it. The ordinary windows of the list have no
+  /// row for it, so it matched no window, and no key or click could go to it. For the hands' input it is the surface
+  /// when the window list has exactly one window of the app, above the ordinary level and below the level of menus, at
+  /// its place. The list gives such a panel no name or a name of its own (Quick Look has none), so the app and the place
+  /// match it, as for a sheet. A panel of another process is never the surface: it stays a window above the ordinary
+  /// ones, which takes no click if it came up after the look (`OwnWindows.floatingCover`). ClawdTime's own windows are
+  /// never a surface. Windows above the panel are judged by the same rule as windows above any surface.
+  public static func panelWindow(pid: Int, frame: CGRect, rows: [ListedWindow], display: CGRect, own: Int) -> DesktopFocusedWindow? {
+    guard pid != own else { return nil }
+    let matches = rows.filter { row in
+      guard row.owner == pid, let layer = row.layer, layer > 0, layer < menuLevel, let listed = row.frame else { return false }
+      return sameFrame(listed, frame) && !display.intersection(listed).isEmpty
+    }
+    guard matches.count == 1, let id = matches[0].id, id > 0 else { return nil }
+    return .init(id: id, covers: [], front: 0)
+  }
 
   /// The focused window as the hands' input may use it. It is the match of `focusedWindowID`, and one case more:
   /// small windows of the same app lie in front of the focused window. A browser shows the suggestions of its

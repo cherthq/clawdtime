@@ -179,7 +179,7 @@ import TaskPanelCore
       diagnostic: { report.reason = $0 }, fact: { report.checks[$0] = $1 })
     // The hands' input has one rule more: small windows of the app may lie in front of its window.
     let input = DesktopAX.visibleSurface(pid: pid, display: display, covers: true, diagnostic: { _ in },
-      fact: { name, value in if name.hasPrefix("ownWindows") { report.checks[name] = value } })
+      fact: { name, value in if name.hasPrefix("ownWindows") || name.hasPrefix("input") { report.checks[name] = value } })
     report.checks["inputSurfaceReady"] = input != nil
     report.checks["frontAppUnchanged"] = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     guard report.checks["frontAppUnchanged"] == true else { report.reason = "front_app_changed"; return report }
@@ -1122,21 +1122,37 @@ import TaskPanelCore
     private static func readSurface(pid: pid_t, display: HandsDisplay, directional: Bool, covers allowed: Bool,
                                     diagnostic: ((String) -> Void)?, fact: ((String, Bool) -> Void)?, count: ((String, Int) -> Void)? = nil) -> NavigationSurface? {
       let app = app(pid)
-      guard var focused = element(value(app, kAXFocusedWindowAttribute)) else { diagnostic?("ax_focused_window_unavailable"); return nil }
-      // While a menu of the app is open, Accessibility names the menu as the focused window. For the hands' input the
-      // window that it opened over is the surface, and the look records that a menu is open. The menu is a window above
-      // the ordinary ones: one that the look saw takes the click on its item, one that came up after it is a cover.
-      var role = value(focused, kAXRoleAttribute) as? String, menuOpen = false
+      let focusedWindow = element(value(app, kAXFocusedWindowAttribute))
+      guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { diagnostic?("quartz_inventory_unavailable"); return nil }
+      let listed = windows.map { row in
+        ListedWindow(id: row[kCGWindowNumber as String] as? Int, layer: row[kCGWindowLayer as String] as? Int,
+          owner: row[kCGWindowOwnerPID as String] as? Int,
+          frame: (row[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) })
+      }
+      // While a menu of the app is open, Accessibility names the menu as the focused window, or names no focused window
+      // at all (Finder on macOS 26). For the hands' input the window that it opened over is the surface, and the look
+      // records that a menu is open. The menu is a window above the ordinary ones: one that the look saw takes the click
+      // on its item, one that came up after it is a cover.
+      var role = focusedWindow.flatMap { value($0, kAXRoleAttribute) as? String }, menuOpen = false
       let input = allowed && !directional
-      let main = role == "AXMenu" && input ? element(value(app, kAXMainWindowAttribute)) : nil
+      let menuShown = DesktopWindowVisibility.menuShown(listed, pid: Int(pid), display: CGDisplayBounds(display.id))
+      let main = (focusedWindow == nil || role == "AXMenu") && input ? element(value(app, kAXMainWindowAttribute)) : nil
       let mainRole = main.flatMap { value($0, kAXRoleAttribute) as? String }
-      fact?("focusedMenu", role == "AXMenu")
-      switch DesktopWindowVisibility.inputWindow(focusedRole: role, mainRole: mainRole, input: input) {
-      case .focused: break
+      fact?("focusedMenu", role == "AXMenu"); fact?("menuShown", menuShown)
+      let focused: AXUIElement
+      switch DesktopWindowVisibility.inputWindow(focused: focusedWindow != nil, focusedRole: role, mainRole: mainRole, input: input,
+                                                 menuShown: menuShown) {
+      case .focused:
+        guard let focusedWindow else { diagnostic?("ax_focused_window_unavailable"); return nil }
+        focused = focusedWindow
       case .main:
         guard let main else { diagnostic?("ax_menu_without_window"); return nil }
         focused = main; role = mainRole; menuOpen = true
-      case .none: diagnostic?(input ? "ax_menu_without_window" : "ax_menu_open"); return nil
+        fact?("inputMenu", true)
+      case .none:
+        diagnostic?(focusedWindow == nil && !menuShown ? "ax_focused_window_unavailable" : input ? "ax_menu_without_window" : "ax_menu_open")
+        return nil
       }
       // A sheet hangs from a window and takes the focus: "Do you want to save?". It has no title and no
       // minimized state of its own. Without it as a surface, no button of a sheet could ever be pressed.
@@ -1148,8 +1164,6 @@ import TaskPanelCore
         else { diagnostic?("ax_title_unavailable"); return nil }
       guard let bounds = frame(focused) else { diagnostic?("ax_frame_unavailable"); return nil }
       guard !CGDisplayBounds(display.id).intersection(bounds).isEmpty else { diagnostic?("window_outside_main_display"); return nil }
-      guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
-        else { diagnostic?("quartz_inventory_unavailable"); return nil }
       let ordinary: [[String: Any]]
       if directional {
         // Never compact-map away an unpositioned/foreign leading ordinary row.
@@ -1229,20 +1243,22 @@ import TaskPanelCore
         fact?("directionalToolbarCoverage", matched.usesToolbarCoverage)
         group = matched; windowID = matched.parentID
       } else {
-        // Without `allowed` the list of windows that stand alone is withheld, and the match is the strict one.
-        guard let matched = DesktopWindowVisibility.focusedWindow(pid: Int(pid), title: title, frame: bounds,
+        // Without `allowed` the list of windows that stand alone is withheld, and the match is the strict one. For the
+        // hands' input only, the focused window may be a panel of the app above the ordinary windows, such as Quick Look.
+        let ordinaryMatch = DesktopWindowVisibility.focusedWindow(pid: Int(pid), title: title, frame: bounds,
           fullScreenConfirmed: confirmed, display: CGDisplayBounds(display.id), visible: evidence, accessibleFrames: frames,
-          standaloneFrames: allowed ? standalone : nil, sheet: sheet) else { diagnostic?("ax_quartz_window_mismatch"); return nil }
+          standaloneFrames: allowed ? standalone : nil, sheet: sheet)
+        let panel = ordinaryMatch == nil && allowed && !sheet && !menuOpen && role == "AXWindow"
+          ? DesktopWindowVisibility.panelWindow(pid: Int(pid), frame: bounds, rows: listed, display: CGDisplayBounds(display.id), own: Int(getpid()))
+          : nil
+        guard let matched = ordinaryMatch ?? panel else { diagnostic?("ax_quartz_window_mismatch"); return nil }
         windowID = matched.id; covers = matched.covers; front = matched.front; unseen = matched.unseen
-        fact?("ownWindowsInFront", front > 0); fact?("ownWindowsSeenInFront", !covers.isEmpty)
+        fact?("ownWindowsInFront", front > 0); fact?("ownWindowsSeenInFront", !covers.isEmpty); fact?("inputPanel", panel != nil)
       }
-      // Windows of other processes above the ordinary ones on this display. They are never the surface; one that is
-      // new at the place of a click after the look is a cover. ClawdTime's own windows have their own check.
-      let floating: [DesktopCover] = directional ? [] : OwnWindows.floatingCovers(windows.map { row in
-        ListedWindow(id: row[kCGWindowNumber as String] as? Int, layer: row[kCGWindowLayer as String] as? Int,
-          owner: row[kCGWindowOwnerPID as String] as? Int,
-          frame: (row[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) })
-      }, own: Int(getpid()), display: CGDisplayBounds(display.id))
+      // Windows of other processes above the ordinary ones on this display. Only a panel of the app in front that has
+      // the keyboard is ever the surface; one that is new at the place of a click after the look is a cover. ClawdTime's
+      // own windows have their own check.
+      let floating: [DesktopCover] = directional ? [] : OwnWindows.floatingCovers(listed, own: Int(getpid()), display: CGDisplayBounds(display.id))
       let parent = Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
         ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
         fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed, covers: covers, front: front, unseen: unseen, floating: floating,
