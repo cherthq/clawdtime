@@ -508,28 +508,53 @@ import TaskPanelCore
     let wait = DesktopAppWait(at: now)
     let options = NSWorkspace.OpenConfiguration()
     options.activates = true
-    // What macOS answers is not the evidence. The app in front is.
+    // What macOS answers is not the evidence. The app in front (or, for Screenshot,
+    // the visible screencaptureui overlay toolbar window) is.
     NSWorkspace.shared.openApplication(at: url, configuration: options) { _, _ in }
     phase(.waiting)
+    let usesOverlay = DesktopArrival.usesScreenshotOverlay(bundleID: bundleID)
     while true {
       if await allowed() != nil { return unknown }
-      let inFront = DesktopArrival.sameApp(resolved: bundleID, front: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-      switch wait.sample(inFront: inFront, at: now) {
+      let snapshot = usesOverlay
+        ? DesktopAX.screenshotArrivalEvidence()
+        : (evidence: DesktopArrival.AppArrivalEvidence(frontBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier),
+           appsByPID: [Int: NSRunningApplication]())
+      let matched = DesktopArrival.match(resolved: bundleID, evidence: snapshot.evidence)
+      switch wait.sample(inFront: matched.arrived, at: now) {
       case .expired: return unknown
       case .waiting: break
       case .inFront:
+        let overlayApp: NSRunningApplication?
+        if case .overlayApp(_, let pid) = matched { overlayApp = snapshot.appsByPID[pid] }
+        else { overlayApp = nil }
         // The picture and the tree are the evidence for the worker. The same app is in
-        // front before and after they are taken.
-        let read = await observer.observe(image: true, elements: true, accessibility: true, pointer: pointer())
+        // front (or the screencaptureui overlay toolbar remains visible) before and after they are taken.
+        let read = await observer.observe(image: true, elements: true, accessibility: true, pointer: pointer(), appOverride: overlayApp)
         if await allowed() != nil { return unknown }
-        if case .success(let seen) = read, DesktopArrival.sameApp(resolved: bundleID, front: seen.app.bundleId),
-          DesktopArrival.sameApp(resolved: bundleID, front: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
-          // This result permits no input. The worker looks again before it acts.
-          invalidate()
-          ready = true; phase(.ready)
-          let arrived = Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app, elements: seen.elements,
-            image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: surfaceEpoch)
-          return .success(Arrival(observation: arrived, bundleID: DesktopArrival.identity(bundleID)))
+        switch matched {
+        case .overlayApp(let arrivedBundle, _):
+          let confirm = DesktopAX.screenshotArrivalEvidence()
+          if case .success(let seen) = read,
+            DesktopArrival.match(resolved: bundleID, evidence: confirm.evidence).arrived,
+            DesktopArrival.sameApp(resolved: arrivedBundle, front: seen.app.bundleId) {
+            // This result permits no input. The worker looks again before it acts.
+            invalidate()
+            ready = true; phase(.ready)
+            let arrived = Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app, elements: seen.elements,
+              image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: surfaceEpoch)
+            return .success(Arrival(observation: arrived, bundleID: DesktopArrival.identity(arrivedBundle)))
+          }
+        case .frontApp(let arrivedBundle):
+          if case .success(let seen) = read, DesktopArrival.sameApp(resolved: arrivedBundle, front: seen.app.bundleId),
+            DesktopArrival.sameApp(resolved: arrivedBundle, front: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
+            // This result permits no input. The worker looks again before it acts.
+            invalidate()
+            ready = true; phase(.ready)
+            let arrived = Observation(at: seen.at, screen: seen.screen, cursor: seen.cursor, app: seen.app, elements: seen.elements,
+              image: seen.image, imageWidth: seen.imageWidth, imageHeight: seen.imageHeight, surfaceEpoch: surfaceEpoch)
+            return .success(Arrival(observation: arrived, bundleID: DesktopArrival.identity(arrivedBundle)))
+          }
+        case .notArrived: break
         }
         if wait.over(at: now) { return unknown }
       }
@@ -880,6 +905,47 @@ import TaskPanelCore
       guard let minimized = value(window, kAXMinimizedAttribute) as? Bool,
         let title = value(window, kAXTitleAttribute) as? String else { return .failure(.targetNotVisible) }
       return .selected(Target(pid: pid, window: window, title: title, minimized: minimized))
+    }
+    /// Reads running `screencaptureui` processes and on-screen window metadata in Quartz display coordinates
+    /// so `DesktopArrival.match` can verify `open_app("Screenshot")` without weakening normal app checks.
+    static func screenshotArrivalEvidence() -> (evidence: DesktopArrival.AppArrivalEvidence, appsByPID: [Int: NSRunningApplication]) {
+      let overlayApps = NSRunningApplication.runningApplications(withBundleIdentifier: DesktopArrival.screenshotOverlayBundleID)
+        .filter { !$0.isTerminated }
+      let appsByPID = Dictionary(overlayApps.map { (Int($0.processIdentifier), $0) }, uniquingKeysWith: { first, _ in first })
+      let overlayPIDs = Set(appsByPID.keys)
+      let display = activeDisplayBounds()
+      let rawWindows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+      let overlayWindows: [DesktopArrival.OverlayWindow] = rawWindows.compactMap { row in
+        guard let owner = row[kCGWindowOwnerPID as String] as? Int,
+          overlayPIDs.contains(owner),
+          let layer = row[kCGWindowLayer as String] as? Int,
+          let raw = row[kCGWindowBounds as String] as? NSDictionary,
+          let bounds = CGRect(dictionaryRepresentation: raw) else { return nil }
+        return DesktopArrival.OverlayWindow(
+          pid: owner,
+          ownerName: row[kCGWindowOwnerName as String] as? String,
+          layer: layer,
+          frame: bounds,
+          alpha: row[kCGWindowAlpha as String] as? Double,
+          onScreen: (row[kCGWindowIsOnscreen as String] as? Bool) ?? true)
+      }
+      let evidence = DesktopArrival.AppArrivalEvidence(
+        frontBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+        overlayPIDs: overlayPIDs,
+        overlayWindows: overlayWindows,
+        display: display)
+      return (evidence, appsByPID)
+    }
+    private static func activeDisplayBounds() -> CGRect {
+      var count: UInt32 = 0
+      guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else {
+        return CGDisplayBounds(CGMainDisplayID())
+      }
+      var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+      guard CGGetActiveDisplayList(count, &ids, &count) == .success, count > 0 else {
+        return CGDisplayBounds(CGMainDisplayID())
+      }
+      return ids.prefix(Int(count)).reduce(CGRect.null) { $0.union(CGDisplayBounds($1)) }
     }
     /// True when the window server lists no ordinary window on this display: a desktop with no window.
     /// The panel's own windows, the Dock, the menu bar and what lies on the desktop itself do not count.

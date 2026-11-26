@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// A transition can settle only from repeated independent observations. Input
@@ -74,6 +75,94 @@ public enum DesktopEffectOutcome {
 /// name), so the name itself is never compared again after it was resolved.
 /// A window title is compared as every observation carries it: cleaned.
 public enum DesktopArrival {
+  /// Bundle identifier of macOS Screenshot.app (launcher) and its overlay UI process.
+  public static let screenshotLauncherBundleID = "com.apple.screenshot.launcher"
+  public static let screenshotOverlayBundleID = "com.apple.screencaptureui"
+
+  /// Minimum visible size in points for an overlay toolbar window to count as shown on screen.
+  public static let minimumOverlayExtent: CGFloat = 20
+
+  /// True when an app launches the macOS Screenshot overlay UI (`screencaptureui`)
+  /// rather than becoming a regular frontmost application with a standard window.
+  public static func usesScreenshotOverlay(bundleID: String) -> Bool {
+    sameApp(resolved: screenshotLauncherBundleID, front: bundleID) ||
+      sameApp(resolved: screenshotOverlayBundleID, front: bundleID)
+  }
+
+  /// Window metadata for verifying an overlay app window (such as `screencaptureui`).
+  public struct OverlayWindow: Equatable, Sendable {
+    public let pid: Int
+    public let ownerName: String?
+    public let layer: Int
+    public let frame: CGRect
+    public let alpha: Double?
+    public let onScreen: Bool
+    public init(pid: Int, ownerName: String? = nil, layer: Int, frame: CGRect, alpha: Double? = 1, onScreen: Bool = true) {
+      self.pid = pid
+      self.ownerName = ownerName
+      self.layer = layer
+      self.frame = frame
+      self.alpha = alpha
+      self.onScreen = onScreen
+    }
+  }
+
+  /// Inputs used to verify whether `open_app` arrived at the requested application.
+  public struct AppArrivalEvidence: Equatable, Sendable {
+    public let frontBundleID: String?
+    public let overlayPIDs: Set<Int>
+    public let overlayWindows: [OverlayWindow]
+    public let display: CGRect
+    public init(frontBundleID: String?, overlayPIDs: Set<Int> = [], overlayWindows: [OverlayWindow] = [], display: CGRect = .zero) {
+      self.frontBundleID = frontBundleID
+      self.overlayPIDs = overlayPIDs
+      self.overlayWindows = overlayWindows
+      self.display = display
+    }
+  }
+
+  /// Outcome of matching `open_app` against the current desktop state.
+  public enum AppArrivalMatch: Equatable, Sendable {
+    case notArrived
+    case frontApp(bundleID: String)
+    case overlayApp(bundleID: String, pid: Int)
+    public var arrived: Bool {
+      if case .notArrived = self { return false }
+      return true
+    }
+  }
+
+  /// True when `window` is a visible on-screen `screencaptureui` overlay toolbar window on `display`.
+  public static func isVisibleOverlayWindow(_ window: OverlayWindow, overlayPIDs: Set<Int>, display: CGRect) -> Bool {
+    guard overlayPIDs.contains(window.pid), window.onScreen, window.layer >= 0 else { return false }
+    if let alpha = window.alpha, !(alpha.isFinite && alpha > 0.01) { return false }
+    guard !display.isNull, !display.isEmpty,
+      !window.frame.isNull, !window.frame.isEmpty,
+      window.frame.minX.isFinite, window.frame.minY.isFinite,
+      window.frame.width.isFinite, window.frame.height.isFinite else { return false }
+    let shown = display.intersection(window.frame)
+    return !shown.isNull && shown.width >= minimumOverlayExtent && shown.height >= minimumOverlayExtent
+  }
+
+  /// Decides whether `open_app` for `bundleID` has arrived.
+  /// Normal apps require `frontBundleID` to match `bundleID`.
+  /// Screenshot (`com.apple.screenshot.launcher` or `com.apple.screencaptureui`)
+  /// requires a visible on-screen `screencaptureui` overlay toolbar window on `display`.
+  public static func match(resolved bundleID: String, evidence: AppArrivalEvidence) -> AppArrivalMatch {
+    if usesScreenshotOverlay(bundleID: bundleID) {
+      if let window = evidence.overlayWindows.first(where: {
+        isVisibleOverlayWindow($0, overlayPIDs: evidence.overlayPIDs, display: evidence.display)
+      }) {
+        return .overlayApp(bundleID: screenshotOverlayBundleID, pid: window.pid)
+      }
+      return .notArrived
+    }
+    if sameApp(resolved: bundleID, front: evidence.frontBundleID) {
+      return .frontApp(bundleID: identity(bundleID))
+    }
+    return .notArrived
+  }
+
   /// The bundle identifier as an observation carries it.
   public static func identity(_ bundleID: String) -> String { ElementCleaner.line(bundleID, limit: 200) }
   public static func sameApp(resolved: String, front: String?) -> Bool {
