@@ -811,7 +811,7 @@ describe("read-only live preflight", () => {
   });
   it("requires the independent media identity, scoped ACL, attached display, permissions and local Enable", async () => {
     const f = fixture();
-    f.media.service = "apple-teams-media";
+    f.media.service = "other-project-media";
     expect((await f.transport.preflight()).liveReady).toBe(false);
     let report = await f.transport.preflightDevice(f.pairing);
     expect(report.checks.every((c) => c.status === "pass")).toBe(true);

@@ -25,90 +25,90 @@ class MultiDeviceRelayTests(unittest.IsolatedAsyncioTestCase):
         return request
 
     async def test_two_macs_stay_connected_and_requests_route_by_device(self):
-        gary = await self.connect('gary_mac')
-        stanley = await self.connect('stanley_mac')
+        ada = await self.connect('ada_mac')
+        sam = await self.connect('sam_mac')
         relay = self.service.device_relay
         self.assertEqual(len(relay.live()), 2)
-        self.assertTrue(relay.connected_for('gary_mac'))
-        self.assertTrue(relay.connected_for('stanley_mac'))
+        self.assertTrue(relay.connected_for('ada_mac'))
+        self.assertTrue(relay.connected_for('sam_mac'))
         self.assertFalse(relay.connected_for('unknown_mac'))
 
-        task = asyncio.create_task(relay.request('GET', '/v1/devices/stanley_mac/readiness'))
-        request = await self.answer(stanley, b'stanley')
-        self.assertEqual(request['path'], '/v1/devices/stanley_mac/readiness')
-        self.assertEqual((await task)[1], b'stanley')
+        task = asyncio.create_task(relay.request('GET', '/v1/devices/sam_mac/readiness'))
+        request = await self.answer(sam, b'sam')
+        self.assertEqual(request['path'], '/v1/devices/sam_mac/readiness')
+        self.assertEqual((await task)[1], b'sam')
 
-        task = asyncio.create_task(relay.request('POST', '/v1/leases', {'id': 'lease-g', 'deviceId': 'gary_mac'}))
-        await self.answer(gary, b'created')
+        task = asyncio.create_task(relay.request('POST', '/v1/leases', {'id': 'lease-a', 'deviceId': 'ada_mac'}))
+        await self.answer(ada, b'created')
         await task
         # Lease paths carry no device; they follow the socket that created the lease.
-        task = asyncio.create_task(relay.request('GET', '/v1/leases/lease-g/frame'))
-        await self.answer(gary, b'frame-g')
-        self.assertEqual((await task)[1], b'frame-g')
+        task = asyncio.create_task(relay.request('GET', '/v1/leases/lease-a/frame'))
+        await self.answer(ada, b'frame-a')
+        self.assertEqual((await task)[1], b'frame-a')
 
-        task = asyncio.create_task(relay.request('GET', '/v1/leases/lease-s/frame', device='stanley_mac'))
-        await self.answer(stanley, b'frame-s')
+        task = asyncio.create_task(relay.request('GET', '/v1/leases/lease-s/frame', device='sam_mac'))
+        await self.answer(sam, b'frame-s')
         self.assertEqual((await task)[1], b'frame-s')
-        await gary.close()
-        await stanley.close()
+        await ada.close()
+        await sam.close()
 
     async def test_reconnect_for_same_device_replaces_stale_socket(self):
-        first = await self.connect('stanley_mac')
+        first = await self.connect('sam_mac')
         relay = self.service.device_relay
-        pending = asyncio.create_task(relay.request('GET', '/v1/devices/stanley_mac/readiness'))
+        pending = asyncio.create_task(relay.request('GET', '/v1/devices/sam_mac/readiness'))
         await first.receive_json()
         # A plain GET cannot evict the live gateway.
-        self.assertEqual((await self.client.get('/device-gateway', headers={**GATEWAY, 'X-ClawdTime-Devices': 'stanley_mac'})).status, 400)
-        self.assertTrue(relay.connected_for('stanley_mac'))
-        second = await self.connect('stanley_mac')
+        self.assertEqual((await self.client.get('/device-gateway', headers={**GATEWAY, 'X-ClawdTime-Devices': 'sam_mac'})).status, 400)
+        self.assertTrue(relay.connected_for('sam_mac'))
+        second = await self.connect('sam_mac')
         with self.assertRaises(ConnectionError):
             await pending  # never replayed on the new socket
         self.assertEqual(len(relay.live()), 1)
-        task = asyncio.create_task(relay.request('GET', '/v1/devices/stanley_mac/readiness'))
+        task = asyncio.create_task(relay.request('GET', '/v1/devices/sam_mac/readiness'))
         await self.answer(second, b'new')
         self.assertEqual((await task)[1], b'new')
         await first.close()
         await second.close()
 
     async def test_partial_device_overlap_is_refused(self):
-        both = await self.connect('gary_mac,stanley_mac')
-        self.assertEqual((await self.client.get('/device-gateway', headers={**GATEWAY, 'X-ClawdTime-Devices': 'stanley_mac'})).status, 409)
+        both = await self.connect('ada_mac,sam_mac')
+        self.assertEqual((await self.client.get('/device-gateway', headers={**GATEWAY, 'X-ClawdTime-Devices': 'sam_mac'})).status, 409)
         await both.close()
 
     async def test_legacy_gateway_coexists_and_serves_undeclared_devices(self):
         legacy = await self.connect()  # older gateway build, no declaration
-        stanley = await self.connect('stanley_mac')
+        sam = await self.connect('sam_mac')
         relay = self.service.device_relay
         self.assertEqual((await self.client.get('/device-gateway', headers=GATEWAY)).status, 400)
 
-        task = asyncio.create_task(relay.request('GET', '/v1/devices/gary_mac/readiness'))
+        task = asyncio.create_task(relay.request('GET', '/v1/devices/ada_mac/readiness'))
         await self.answer(legacy, b'legacy')
         self.assertEqual((await task)[1], b'legacy')
-        task = asyncio.create_task(relay.request('GET', '/v1/devices/stanley_mac/readiness'))
-        await self.answer(stanley, b'stanley')
-        self.assertEqual((await task)[1], b'stanley')
+        task = asyncio.create_task(relay.request('GET', '/v1/devices/sam_mac/readiness'))
+        await self.answer(sam, b'sam')
+        self.assertEqual((await task)[1], b'sam')
         await legacy.close()
-        await stanley.close()
+        await sam.close()
 
     async def test_disconnect_of_one_mac_fails_only_its_requests(self):
-        gary = await self.connect('gary_mac')
-        stanley = await self.connect('stanley_mac')
+        ada = await self.connect('ada_mac')
+        sam = await self.connect('sam_mac')
         relay = self.service.device_relay
-        task = asyncio.create_task(relay.request('POST', '/v1/leases', {'id': 'lease-s', 'deviceId': 'stanley_mac'}))
-        await stanley.receive_json()
-        await stanley.close()
+        task = asyncio.create_task(relay.request('POST', '/v1/leases', {'id': 'lease-s', 'deviceId': 'sam_mac'}))
+        await sam.receive_json()
+        await sam.close()
         with self.assertRaises(ConnectionError):
             await task
         for _ in range(50):
-            if not relay.connected_for('stanley_mac'):
+            if not relay.connected_for('sam_mac'):
                 break
             await asyncio.sleep(.01)
-        self.assertFalse(relay.connected_for('stanley_mac'))
-        self.assertTrue(relay.connected_for('gary_mac'))
+        self.assertFalse(relay.connected_for('sam_mac'))
+        self.assertTrue(relay.connected_for('ada_mac'))
         with self.assertRaises(ConnectionError):
-            await relay.request('GET', '/v1/devices/stanley_mac/readiness')
+            await relay.request('GET', '/v1/devices/sam_mac/readiness')
         self.assertEqual(relay.pending, {})
-        await gary.close()
+        await ada.close()
 
     async def test_invalid_device_declaration_is_rejected(self):
         self.service.env['DEVICE_GATEWAY_KEY'] = 'g' * 32

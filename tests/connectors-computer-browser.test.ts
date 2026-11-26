@@ -722,7 +722,7 @@ describe("the browser driver: what the page answers", () => {
       reading({
         elements: [
           { ...button, tag: "input", password: true, value: "hunter2" },
-          { ...button, index: 2, tag: "input", value: "anish" },
+          { ...button, index: 2, tag: "input", value: "ada" },
         ],
       }),
     ]);
@@ -732,7 +732,7 @@ describe("the browser driver: what the page answers", () => {
       tag: "input",
       password: true,
     });
-    expect(result.elements[1]!.value).toBe("anish");
+    expect(result.elements[1]!.value).toBe("ada");
     expect(JSON.stringify(result)).not.toContain("hunter2");
   });
 

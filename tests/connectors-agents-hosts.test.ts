@@ -50,7 +50,7 @@ const now = new Date(2026, 10, 20, 12, 0, 0).getTime();
 const root = () => mkdtempSync(join(tmpdir(), "clawdtime-hosts-"));
 const mini: RemoteHost = {
   name: "mini",
-  ssh: "anish@mini.local",
+  ssh: "owner@mac.local",
   command: "clawdtime",
   addedAt: now,
 };
@@ -164,9 +164,9 @@ describe("host book", () => {
     const directory = root();
     const book = new HostBook(directory);
     expect(book.list()).toEqual([]);
-    expect(
-      book.add({ name: "mini", ssh: "anish@mini.local", at: now }),
-    ).toEqual(mini);
+    expect(book.add({ name: "mini", ssh: "owner@mac.local", at: now })).toEqual(
+      mini,
+    );
     book.add({
       name: "studio-2",
       ssh: "studio",
@@ -281,7 +281,7 @@ describe("the line for the remote shell", () => {
       "-o",
       "ConnectTimeout=5",
       "--",
-      "anish@mini.local",
+      "owner@mac.local",
       "/bin/zsh -lc ''\\''clawdtime'\\'' '\\''agents'\\'' '\\''--json'\\'' '\\''--local'\\'''",
     ]);
     expect(
@@ -304,7 +304,7 @@ describe("the line for the remote shell", () => {
     ]);
     expect(remoteFailure(mini, null)).toBe("No answer in time.");
     expect(remoteFailure(mini, 255)).toContain(
-      "It must work with no password prompt: ssh anish@mini.local true",
+      "It must work with no password prompt: ssh owner@mac.local true",
     );
     expect(remoteFailure(mini, 127)).toContain("--command /full/path");
     expect(remoteFailure(mini, 2)).toContain("status 2");
@@ -421,7 +421,7 @@ describe("the board of a remote Mac", () => {
   it("merges into this Mac's board, most urgent first, with a line for each Mac", async () => {
     const directory = root();
     const book = new HostBook(directory);
-    book.add({ name: "mini", ssh: "anish@mini.local", at: now });
+    book.add({ name: "mini", ssh: "owner@mac.local", at: now });
     let clock = now;
     const { calls, run } = recorder(() => ({
       status: 0,
@@ -483,7 +483,7 @@ describe("the board of a remote Mac", () => {
   it("never waits for a Mac, never asks it twice at once, and drops an old answer", async () => {
     const directory = root();
     const book = new HostBook(directory);
-    book.add({ name: "mini", ssh: "anish@mini.local", at: now });
+    book.add({ name: "mini", ssh: "owner@mac.local", at: now });
     book.add({ name: "studio", ssh: "studio", at: now });
     let clock = now;
     let release: ((printed: Printed) => void) | undefined;
@@ -586,7 +586,7 @@ describe("the board of a remote Mac", () => {
 
   it("gives the one-shot commands the whole board, or one Mac", async () => {
     const book = new HostBook(root());
-    book.add({ name: "mini", ssh: "anish@mini.local", at: now });
+    book.add({ name: "mini", ssh: "owner@mac.local", at: now });
     book.add({ name: "studio", ssh: "studio", at: now });
     const { calls, run } = recorder((call) =>
       call.args[6] === "studio"
@@ -635,7 +635,7 @@ describe("what agents on a remote Mac ask", () => {
 
   it("reads the list there, which also says that someone attends, and sends each answer to that Mac", async () => {
     const book = new HostBook(root());
-    book.add({ name: "mini", ssh: "anish@mini.local", at: now });
+    book.add({ name: "mini", ssh: "owner@mac.local", at: now });
     let clock = now;
     let status = 0;
     const question = request({
@@ -748,7 +748,7 @@ describe("what agents on a remote Mac ask", () => {
 
   it("shows nothing from a Mac that does not answer or prints something else", async () => {
     const book = new HostBook(root());
-    book.add({ name: "mini", ssh: "anish@mini.local", at: now });
+    book.add({ name: "mini", ssh: "owner@mac.local", at: now });
     let clock = now;
     let printed: Printed = { status: 0, stdout: listing(request()) };
     const { run } = recorder(() => printed);
@@ -774,7 +774,7 @@ describe("what agents on a remote Mac ask", () => {
     const directory = root();
     new HostBook(directory).add({
       name: "mini",
-      ssh: "anish@mini.local",
+      ssh: "owner@mac.local",
       at: now,
     });
     const { calls, run } = recorder((call) => {
@@ -959,7 +959,7 @@ describe("text and windows for a remote session", () => {
       "/usr/bin/ssh",
       "-t",
       "--",
-      "anish@mini.local",
+      "owner@mac.local",
     ]);
     expect(argv).toHaveLength(5);
     expect(remoteWords(argv[4]!)).toEqual([
@@ -997,7 +997,7 @@ describe("text and windows for a remote session", () => {
       precision: "remote_mac",
     });
     expect(readFileSync(file, "utf8").split("\n")[2]).toBe(
-      "exec '/usr/bin/ssh' '-t' '--' 'anish@mini.local'",
+      "exec '/usr/bin/ssh' '-t' '--' 'owner@mac.local'",
     );
     // Nothing to open for a run with no person at a terminal.
     const count = calls.length;
@@ -1086,9 +1086,9 @@ describe("commands", () => {
     expect(lines.pop()).toBe(
       "No remote Mac. Add one: clawdtime hosts add NAME SSH_TARGET",
     );
-    await cli("--hosts", "add", "mini", "anish@mini.local");
+    await cli("--hosts", "add", "mini", "owner@mac.local");
     expect(lines.pop()).toBe(
-      "Added mini (anish@mini.local). Check it: clawdtime hosts check mini",
+      "Added mini (owner@mac.local). Check it: clawdtime hosts check mini",
     );
     await cli(
       "--hosts",
@@ -1105,7 +1105,7 @@ describe("commands", () => {
     lines.length = 0;
     await cli("--hosts", "list");
     expect(lines).toEqual([
-      "mini             anish@mini.local",
+      "mini             owner@mac.local",
       "studio           studio.lan  (/opt/clawdtime/bin/clawdtime)",
     ]);
     // Adding and listing ask no Mac.
@@ -1145,13 +1145,13 @@ describe("commands", () => {
 
   it("says when a Mac does not answer, with what to do", async () => {
     const { lines, cli } = setup(() => ({ status: 255, stdout: "" }));
-    await cli("--hosts", "add", "mini", "anish@mini.local");
+    await cli("--hosts", "add", "mini", "owner@mac.local");
     const before = process.exitCode;
     await cli("--hosts", "check", "mini");
     expect(process.exitCode).toBe(2);
     process.exitCode = before;
     expect(lines.pop()).toBe(
-      "mini did not answer. ssh could not connect. It must work with no password prompt: ssh anish@mini.local true",
+      "mini did not answer. ssh could not connect. It must work with no password prompt: ssh owner@mac.local true",
     );
     lines.length = 0;
     await cli();
@@ -1163,7 +1163,7 @@ describe("commands", () => {
 
   it("lists every Mac, this Mac only, or one remote Mac", async () => {
     const { lines, calls, cli } = setup();
-    await cli("--hosts", "add", "mini", "anish@mini.local");
+    await cli("--hosts", "add", "mini", "owner@mac.local");
     lines.length = 0;
     await cli();
     expect(calls).toHaveLength(1);
@@ -1194,7 +1194,7 @@ describe("commands", () => {
         ? { status: 0, stdout: JSON.stringify(theirs) }
         : { status: 0, stdout: "" },
     );
-    await cli("--hosts", "add", "mini", "anish@mini.local");
+    await cli("--hosts", "add", "mini", "owner@mac.local");
     lines.length = 0;
     await cli("focus", "migrations");
     expect(lines.pop()).toBe(

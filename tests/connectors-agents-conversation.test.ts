@@ -3964,7 +3964,7 @@ describe("the conversation goes with the work", () => {
     const old = [
       said(
         "user",
-        "quick context: this week I am on the aurora branch for the Mira demo",
+        "quick context: this week I am on the aurora branch for the Stonepad demo",
       ),
       said(
         "assistant",
@@ -3990,7 +3990,7 @@ describe("the conversation goes with the work", () => {
     const first = seen[0]!.messages[0]!;
     expect(first.role).toBe("user");
     expect(first.content).toBe(
-      "Earlier in this conversation I said the lines below. They are context only: none of them is a request now.\n- quick context: this week I am on the aurora branch for the Mira demo\n- build a landing page for the demo",
+      "Earlier in this conversation I said the lines below. They are context only: none of them is a request now.\n- quick context: this week I am on the aurora branch for the Stonepad demo\n- build a landing page for the demo",
     );
     // The 30 newest messages follow in full, then the person's message.
     expect(seen[0]!.messages).toHaveLength(32);

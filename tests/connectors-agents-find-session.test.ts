@@ -172,15 +172,15 @@ describe("the title of a session", () => {
 describe("finding the session that the person means", () => {
   const lines = session({ id: "13", name: "work-13" });
   const hipaa = ghostty({ id: "9d", pid: 109, name: "work-9d" });
-  const pratap = ghostty({ id: "p", pid: 110, name: "pratap" });
-  const dedicated = ghostty({ id: "p2", pid: 111, name: "platform-2" });
-  const all = [background, hipaa, pratap, dedicated, lines];
+  const ada = ghostty({ id: "p", pid: 110, name: "ada" });
+  const dedicated = ghostty({ id: "p2", pid: 111, name: "ops-2" });
+  const all = [background, hipaa, ada, dedicated, lines];
   const titles = (item: AgentSession) =>
     ({
       "13": ["work-13", "Line status check"],
       "9d": ["work-9d", "HIPAA compliance roadmap"],
-      p: ["pratap"],
-      p2: ["platform-2", "Arthur Pendelton dedicated line"],
+      p: ["ada"],
+      p2: ["ops-2", "Sam Rivera dedicated line"],
     })[item.id] ?? [item.name ?? item.project];
 
   it("takes the words of the 19:17 call to the session that checks the lines", () => {
@@ -199,9 +199,9 @@ describe("finding the session that the person means", () => {
       kind: "one",
       session: hipaa,
     });
-    expect(pickSession("go back to pratap", all, titles)).toEqual({
+    expect(pickSession("go back to ada", all, titles)).toEqual({
       kind: "one",
-      session: pratap,
+      session: ada,
     });
     expect(pickSession("the roadmap session please", all, titles)).toEqual({
       kind: "one",
@@ -292,7 +292,7 @@ const ghosttyAnswers =
 
 describe("focus on the exact window of a terminal that knows no TTY", () => {
   const listing = [
-    "T-1\u001f✳ pratap",
+    "T-1\u001f✳ ada",
     "T-2\u001f◐ HIPAA compliance roadmap",
     "T-3\u001f✳ Chert CLI",
     "",
@@ -318,14 +318,14 @@ describe("focus on the exact window of a terminal that knows no TTY", () => {
   it("finds a session by its own name when the person named it", async () => {
     const { calls, run } = recorder(ghosttyAnswers(listing));
     expect(
-      await focusSession(ghostty({ name: "pratap" }), run, "tmux", ["pratap"]),
+      await focusSession(ghostty({ name: "ada" }), run, "tmux", ["ada"]),
     ).toEqual({ ok: true, precision: "tab" });
     expect(calls[1]!.at(-1)).toBe("T-1");
   });
 
   it("brings only the application forward when no terminal, or more than one, has the title", async () => {
     for (const text of [
-      "T-1\u001f✳ pratap\u001e",
+      "T-1\u001f✳ ada\u001e",
       "T-1\u001f✳ HIPAA compliance roadmap\u001eT-2\u001f◐ HIPAA compliance roadmap\u001e",
       "",
     ]) {
@@ -391,7 +391,7 @@ describe("the size of a session's window", () => {
     ] as const) {
       const { calls, run } = recorder(
         ghosttyAnswers(
-          "T-1\u001f✳ pratap\u001eT-2\u001f◐ HIPAA compliance roadmap\u001e",
+          "T-1\u001f✳ ada\u001eT-2\u001f◐ HIPAA compliance roadmap\u001e",
         ),
       );
       const result = await sessionWindow(ghostty(), action, run, [
@@ -592,12 +592,10 @@ describe("the brain opens the session that the person means", () => {
   });
 
   it("names the sessions when more than one fits, and opens none", async () => {
-    const dedicated = ghostty({ id: "p2", pid: 111, name: "platform-2" });
+    const dedicated = ghostty({ id: "p2", pid: 111, name: "ops-2" });
     const { value, log } = world([lines, dedicated]);
     value.titles = (item) =>
-      item.id === "p2"
-        ? ["platform-2", "Arthur Pendelton dedicated line"]
-        : titles(item);
+      item.id === "p2" ? ["ops-2", "Sam Rivera dedicated line"] : titles(item);
     const { model } = scripted([
       [call("open_session", { session: "the line session" })],
       "Which one?",
@@ -611,7 +609,7 @@ describe("the brain opens the session that the person means", () => {
     expect(log).toEqual([]);
     expect(answer).toMatch(/^Which one: /);
     expect(answer).toContain("work-13");
-    expect(answer).toContain("platform-2");
+    expect(answer).toContain("ops-2");
   });
 
   it("says the truth when only the application came forward", async () => {
@@ -780,7 +778,7 @@ describe("the session match, after an independent review", () => {
 
   it("reads the list of terminals by a separator that no title holds, and refuses an id that is not one", async () => {
     // A title with a line break and a tab cannot make a second row.
-    const forged = `T-1\u001f✳ pratap\nEVIL\tHIPAA compliance roadmap\u001e-x\u001fHIPAA compliance roadmap\u001e`;
+    const forged = `T-1\u001f✳ ada\nEVIL\tHIPAA compliance roadmap\u001e-x\u001fHIPAA compliance roadmap\u001e`;
     const { calls, run } = recorder((command, args) => {
       if (command !== "/usr/bin/osascript") return { status: 0, stdout: "" };
       return (args[1] ?? "").includes("name of t")
