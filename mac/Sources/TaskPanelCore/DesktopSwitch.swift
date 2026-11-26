@@ -114,6 +114,23 @@ public enum DesktopWindowVisibility {
     return !(role == "AXHelpTag" || subrole == "AXUnknown")
   }
 
+  /// Which window of the app is the surface of the hands' input: the focused window, the main window, or none.
+  public enum InputWindow: Equatable, Sendable { case focused, main, none }
+  /// While a menu of the app is open (a context menu, a menu of the menu bar, the menu of a pop-up button),
+  /// Accessibility names that menu as the app's focused window. A menu is no window: it has no title, no minimized
+  /// state and no row among the ordinary windows, so it is never a surface, and a look with no surface gives no input
+  /// at all. The menu is part of the window that it opened over, the app's main window. For the hands' input that
+  /// window is the surface, with every check of a focused window: its title, its place and its row in the window list.
+  /// A move to another app or desktop never starts while a menu is open. Every other focused window stays the surface.
+  public static func inputWindow(focusedRole: String?, mainRole: String?, input: Bool) -> InputWindow {
+    guard focusedRole == "AXMenu" else { return .focused }
+    return input && mainRole == "AXWindow" ? .main : .none
+  }
+  /// An open menu has the keyboard: letters pick its items and Return chooses one. An input rests on a look with a
+  /// menu of the app open or with none, and goes on only while that holds. A menu that opened since, for example after
+  /// a Tab or a Space in typed text, or one that closed, sends the next key or click elsewhere than the look said.
+  public static func sameMenu(looked: Bool, now: Bool) -> Bool { looked == now }
+
   /// The focused window as the hands' input may use it. It is the match of `focusedWindowID`, and one case more:
   /// small windows of the same app lie in front of the focused window. A browser shows the suggestions of its
   /// address bar in such a window, and a card or a status line is one too. The focused window is still the
