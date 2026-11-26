@@ -567,7 +567,9 @@ is the result of the tool, and the chat says it: "Force quit Stonepad (pid
 own clear yes in a newer message, by the strict reader of the chat, within 5
 minutes and for the same process (its pid and its start time), lets it go.
 A yes that already answered another question in that message counts for
-nothing. A no ends it.
+nothing. A plain yes answers the newest question that the owner saw: while a
+newer question of the computer task or of an agent waits, the yes goes to
+that one, and the force quit is asked again. A no ends it.
 
 These are never touched, with trust on too: launchd, the kernel,
 WindowServer, loginwindow, a process of another user, and ClawdTime itself:

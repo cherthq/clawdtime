@@ -11,7 +11,9 @@
  *   ask to lose the changes ("without saving"), or the owner's trust is on.
  *   A yes counts only when it is the owner's own clear yes, by the strict
  *   reader of the chat, after the question, within five minutes, for the
- *   same process (its pid and its start time).
+ *   same process (its pid and its start time), and only when the caller
+ *   says that the yes is for this question: a plain yes answers the newest
+ *   question that the owner saw, and an older one is asked again.
  * - Never: launchd, the kernel, WindowServer, loginwindow, a process of
  *   another user, and ClawdTime itself (its own process, those it runs in,
  *   those it started, and its apps and entry points).
@@ -92,6 +94,26 @@ export function protectedReason(
   return null;
 }
 
+/** A question about a process that waits for the owner's yes or no. */
+export interface ProcessAsk {
+  /** The action, the pid and the start time of the process. */
+  key: string;
+  /** When it was asked, or asked again. */
+  at: number;
+  question: string;
+}
+
+/** The owner's newest words, for an action that may need their yes. */
+export interface OwnerWords {
+  words: string;
+  /** When they came: a yes is read from them only for a question that came before. */
+  at: number;
+  /** False when these words decide nothing for this question: they answer another one. */
+  mayDecide?: (ask: ProcessAsk) => boolean;
+  /** Hears when the words were used as a yes. */
+  used?: () => void;
+}
+
 export type ActVerdict =
   | { kind: "act"; trusted: boolean }
   | { kind: "ask"; question: string }
@@ -144,6 +166,19 @@ export class ProcessDesk {
     return this.options.trust;
   }
 
+  private forget(now: number) {
+    for (const [old, ask] of this.asks)
+      if (now - ask.at > askHoldsMs) this.asks.delete(old);
+  }
+
+  /** The questions that wait for the owner's yes now, oldest first. */
+  pending(): ProcessAsk[] {
+    this.forget(this.probes.host.now());
+    return [...this.asks]
+      .map(([key, ask]) => ({ key, ...ask }))
+      .sort((left, right) => left.at - right.at);
+  }
+
   /** When a process started, as ps says it, to tell a pid from a new one with the same number. */
   private async started(pid: number) {
     const result = await this.probes.host.exec(
@@ -193,7 +228,7 @@ export class ProcessDesk {
    */
   async act(
     input: { action: unknown; pid?: unknown; name?: unknown },
-    owner: { words: string; at: number; used?: () => void },
+    owner: OwnerWords,
     options: { background: boolean },
   ): Promise<string> {
     const action = processActions.find((item) => item === input.action);
@@ -221,7 +256,7 @@ export class ProcessDesk {
   private async run(
     action: ProcessAction,
     target: { pid: number | null; name: string | null },
-    owner: { words: string; at: number; used?: () => void },
+    owner: OwnerWords,
     options: { background: boolean },
   ): Promise<string> {
     const host = this.probes.host;
@@ -260,8 +295,7 @@ export class ProcessDesk {
     if (verdict.kind === "ask") {
       const key = `${action}|${row.pid}|${start?.started ?? ""}`;
       const now = host.now();
-      for (const [old, ask] of this.asks)
-        if (now - ask.at > askHoldsMs) this.asks.delete(old);
+      this.forget(now);
       const waiting = this.asks.get(key);
       if (!waiting) {
         this.asks.set(key, { at: now, question: verdict.question });
@@ -269,6 +303,15 @@ export class ProcessDesk {
       }
       const words = clean(owner.words, 600);
       const theirs = owner.at > waiting.at;
+      const said =
+        theirs &&
+        (explicitApprovalYes.test(words) || explicitApprovalNo.test(words));
+      if (said && owner.mayDecide && !owner.mayDecide({ key, ...waiting })) {
+        // The yes or no is for another question. This one is asked again,
+        // so it is the newest one when the owner answers next.
+        waiting.at = now;
+        return `Not done: the owner's "${clean(words, 40)}" answers another question, so it decides nothing here. This one still waits: ask it again in these words: "${waiting.question}" When they say yes, call process_act again with the same action and target.`;
+      }
       if (theirs && explicitApprovalNo.test(words)) {
         this.asks.delete(key);
         return "The owner said no, so nothing was done.";

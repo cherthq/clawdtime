@@ -1046,6 +1046,55 @@ describe("holes that a review found", () => {
     );
   });
 
+  it("gives a plain yes to the newest question: a coding agent's request that came after the computer's", async () => {
+    let time = now;
+    const root = tempRoot();
+    const computer = new FakeComputer()
+      .run("send the report")
+      .ask("approval", "Send the report to Dana?");
+    const world = chatWorld(root, { computer, now: () => time });
+    const first = new ChatAgent({ world, model: null, root });
+    first.refresh();
+    time += 5_000;
+    const request = openDesk(world, "npm test");
+    time += 5_000;
+    const model = scriptedModel([
+      { calls: [call("answer_question", { answer: "yes" })] },
+      { text: "Allowed npm test. The report still waits for your yes." },
+    ]);
+    const agent = new ChatAgent({ world, model, root, graph: first.graph });
+    await agent.answer([], "yes", "chat");
+    expect(world.desk.take(request.id)).toMatchObject({ decision: "allow" });
+    expect(computer.answers).toEqual([]);
+    expect(computer.waiting).toBe("approval");
+  });
+
+  it("gives a plain yes to the computer's question when it came after a coding agent's request", async () => {
+    let time = now;
+    const root = tempRoot();
+    const computer = new FakeComputer().run("send the report");
+    const world = chatWorld(root, { computer, now: () => time });
+    const request = openDesk(world, "npm test");
+    time += 5_000;
+    computer.ask("approval", "Send the report to Dana?");
+    const first = new ChatAgent({ world, model: null, root });
+    first.refresh();
+    time += 5_000;
+    const desk = first.graph.bySource(`desk:${request.id}`)!;
+    const model = scriptedModel([
+      { calls: [call("answer_question", { id: desk.id, answer: "yes" })] },
+      { calls: [call("answer_question", { answer: "yes" })] },
+      { text: "Sent. npm test still waits." },
+    ]);
+    const agent = new ChatAgent({ world, model, root, graph: first.graph });
+    await agent.answer([], "yes", "chat");
+    expect(model.requests[1]!.messages.at(-1)!.content).toMatch(
+      /^Refused: The owner's "yes" answers the newest question they saw: "Send the report to Dana\?"/,
+    );
+    expect(computer.answers).toEqual(["yes"]);
+    expect(world.desk.take(request.id)).toBeNull();
+  });
+
   it("decides a request of an agent only by a message that is a plain yes or no", async () => {
     for (const said of [
       "ok, now search for running shoes",

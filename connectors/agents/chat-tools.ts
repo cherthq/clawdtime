@@ -16,6 +16,10 @@
  *   newest words, and only when they are a clear yes or no by the strict
  *   check that the chat already uses. A request of an agent on the desk is
  *   decided only by the owner's own words, read by the call's strict reader.
+ * - A plain yes or no answers the newest question that the owner saw: of
+ *   the computer task, of an agent on the desk, or of a force quit. An older
+ *   question stays open until it is asked again, or until the owner's words
+ *   name it ("yes, send it").
  * - Memory tools exist only while memory is on.
  *
  * The computer engine keeps its own ask policy and checks for every action.
@@ -163,57 +167,217 @@ export const effectTools = new Set([
   "process_act",
 ]);
 
+/** How late the graph may first see a question of the computer engine: the service reads it again every two seconds. */
+const seenLateMs = 2_500;
+
 /**
- * The question that answer_question would answer. Only what waits now can be
- * answered: the one question of the computer engine that its snapshot asks,
- * or a request on the desk. An id that the model gives must name one of
- * them. While more than one waits, one message cannot say which it answers,
- * so none is answered here.
+ * One question that waits for the owner: of the computer task, of an agent
+ * on the desk, or of a force quit. It was asked between `lo` and `hi`: the
+ * desk and a force quit keep the moment, and the graph sees a question of
+ * the computer engine at most a refresh late. A question with no known time
+ * has no bounds.
  */
-export function questionTarget(
-  world: ChatToolWorld,
-  id: string,
-):
-  | {
-      kind: "computer";
-      waiting: "approval" | "question" | "takeover";
-      node: TaskNode | null;
-    }
-  | { kind: "desk"; request: DecisionRequest; node: TaskNode | null }
-  | { kind: "none"; reason: string } {
-  world.refresh();
+export interface OpenQuestion {
+  kind: "computer" | "desk" | "process";
+  /** "computer:" with the node id, "desk:" with the request id, "process:" with the ask's key. */
+  ref: string;
+  words: string;
+  lo: number;
+  hi: number;
+}
+
+/** The question of the computer engine that waits now, and its node in the graph. */
+function computerQuestion(world: ChatToolWorld) {
   const snapshot = world.execution?.snapshot();
-  const computerWaits =
+  const waiting =
     snapshot?.configured &&
     snapshot.state === "waiting_for_person" &&
     snapshot.waiting
       ? snapshot.waiting
       : null;
-  const asking = computerWaits
-    ? (world.graph
-        .nodes()
-        .find(
-          (node) =>
-            node.kind === "question" &&
-            isActive(node.state) &&
-            node.source?.startsWith(`question:${snapshot!.requestId}:`),
-        ) ?? null)
-    : null;
+  if (!snapshot || !waiting) return null;
+  const node =
+    world.graph
+      .nodes()
+      .find(
+        (item) =>
+          item.kind === "question" &&
+          isActive(item.state) &&
+          item.source?.startsWith(`question:${snapshot.requestId}:`),
+      ) ?? null;
+  return { snapshot, waiting, node };
+}
+
+/** Every question that waits for the owner now. Read the graph again first. */
+export function openQuestions(world: ChatToolWorld): OpenQuestion[] {
+  const out: OpenQuestion[] = [];
+  const computer = computerQuestion(world);
+  if (computer)
+    out.push({
+      kind: "computer",
+      ref: `computer:${computer.node?.id ?? ""}`,
+      words: clean(computer.snapshot.message, 160),
+      lo: computer.node
+        ? computer.node.createdAt - seenLateMs
+        : Number.NEGATIVE_INFINITY,
+      hi: computer.node?.createdAt ?? Number.POSITIVE_INFINITY,
+    });
+  for (const request of world.desk.pending())
+    out.push({
+      kind: "desk",
+      ref: `desk:${request.id}`,
+      words: `${request.agent} asks to run "${clean(request.summary, 100)}"`,
+      lo: request.createdAt,
+      hi: request.createdAt,
+    });
+  let asks: ReturnType<ProcessDesk["pending"]> = [];
+  try {
+    asks = world.system?.pending() ?? [];
+  } catch {
+    asks = [];
+  }
+  for (const ask of asks)
+    out.push({
+      kind: "process",
+      ref: `process:${ask.key}`,
+      words: clean(ask.question, 160),
+      lo: ask.at,
+      hi: ask.at,
+    });
+  return out;
+}
+
+/**
+ * The newest of these questions that the owner saw when their words came at
+ * `ownerAt`: "one", or "many" when two may have come in either order (or one
+ * has no known time), or "none" when they saw none of them.
+ */
+export function newestSeen(
+  questions: readonly OpenQuestion[],
+  ownerAt: number,
+):
+  | { kind: "one"; question: OpenQuestion }
+  | { kind: "many"; questions: OpenQuestion[] }
+  | { kind: "none" } {
+  if (
+    questions.length > 1 &&
+    questions.some((question) => !Number.isFinite(question.hi))
+  )
+    return { kind: "many", questions: [...questions] };
+  const seen = questions
+    .filter((question) => question.hi <= ownerAt)
+    .sort((left, right) => right.hi - left.hi);
+  const [first, ...rest] = seen;
+  if (!first) return { kind: "none" };
+  const close = rest.filter((question) => question.hi >= first.lo);
+  return close.length
+    ? { kind: "many", questions: [first, ...close] }
+    : { kind: "one", question: first };
+}
+
+/** Words that only say yes or no: "yes", "ok", "no thanks", "yes, please". */
+const plainWords =
+  /^(?:(?:yes|yeah|yep|yup|ya|sure|ok|okay|alright|fine|please|no|nope|nah|thanks)[\s,.!]*)+$/i;
+/** True when the owner's words are a plain yes or no, which names no question by itself. */
+export const plainAnswer = (words: string) =>
+  explicitApprovalYes.test(words) ||
+  explicitApprovalNo.test(words) ||
+  plainWords.test(words.trim());
+
+/** The words of a yes or a no that name no question: "yes", "go ahead", "don't". */
+const answerTerms = new Set(
+  terms(
+    "yes yeah yep yup ya sure ok okay alright fine please pls plz go ahead and approve allow proceed confirm no nope nah deny decline reject refuse cancel don dont not thanks thank right",
+  ),
+);
+/** True when the owner's words name this question beyond a yes or no: "yes, send it" for "Send this message to Sam?". */
+export function namesQuestion(owner: string, question: string): boolean {
+  const asked = new Set(terms(question));
+  return terms(owner).some((item) => !answerTerms.has(item) && asked.has(item));
+}
+
+const questionList = (questions: readonly OpenQuestion[]) =>
+  questions.map((question) => `"${clean(question.words, 80)}"`).join("; and ");
+
+/**
+ * Why the owner's plain yes or no does not answer this question: it answers
+ * the newest question that they saw, or none while two came at once.
+ */
+function answersAnother(
+  bound: ReturnType<typeof newestSeen>,
+  owner: string,
+): string {
+  const said = clean(owner, 40);
+  if (bound.kind === "many")
+    return `${bound.questions.length === 2 ? "Two" : "Several"} questions wait for the owner: ${questionList(bound.questions)}. A plain "${said}" cannot say which it answers, so none is answered here. Ask the owner which one, in a few words: they can name it ("yes, send it").`;
+  if (bound.kind === "one")
+    return `The owner's "${said}" answers the newest question they saw: "${clean(bound.question.words, 120)}"${bound.question.kind === "process" ? ". Give it with process_act again, with the same action and target" : ""}. This question stays open: ask it again after that one, in its own words, or the owner names it ("yes, send it").`;
+  return "That question came after the owner's newest message, so those words do not answer it. Tell them what it asks.";
+}
+
+/**
+ * True when the owner's newest words may decide this question: they are no
+ * plain yes or no, or the question is the newest one that they saw, or
+ * their words name it.
+ */
+export function mayAnswer(
+  world: ChatToolWorld,
+  turn: Pick<ChatTurn, "owner" | "ownerAt">,
+  ref: string,
+  words: string,
+): { ok: true } | { ok: false; reason: string } {
+  const owner = clean(turn.owner, 600);
+  if (!plainAnswer(owner)) return { ok: true };
+  const bound = newestSeen(openQuestions(world), turn.ownerAt);
+  if (bound.kind === "one" && bound.question.ref === ref) return { ok: true };
+  if (namesQuestion(owner, words)) return { ok: true };
+  return { ok: false, reason: answersAnother(bound, owner) };
+}
+
+/**
+ * The question that answer_question would answer. Only what waits now can be
+ * answered: the one question of the computer engine that its snapshot asks,
+ * or a request on the desk. An id that the model gives must name one of
+ * them. With no id it is the newest of them that the owner saw when their
+ * words came at `ownerAt`; while two may have come in either order, none.
+ */
+export function questionTarget(
+  world: ChatToolWorld,
+  id: string,
+  ownerAt = Number.POSITIVE_INFINITY,
+):
+  | {
+      kind: "computer";
+      waiting: "approval" | "question" | "takeover";
+      node: TaskNode | null;
+      ref: string;
+      words: string;
+    }
+  | {
+      kind: "desk";
+      request: DecisionRequest;
+      node: TaskNode | null;
+      ref: string;
+      words: string;
+    }
+  | { kind: "none"; reason: string } {
+  world.refresh();
+  const computer = computerQuestion(world);
   const pending = world.desk.pending();
-  const waiting: string[] = [
-    ...(computerWaits
-      ? [`the computer task asks "${clean(snapshot!.message, 80)}"`]
-      : []),
-    ...pending.map(
-      (request) =>
-        `${request.agent} asks to run "${clean(request.summary, 60)}"`,
-    ),
-  ];
-  if (waiting.length > 1)
-    return {
-      kind: "none",
-      reason: `Two questions wait for the owner: ${waiting.join("; and ")}. One message cannot say which it answers, so none is answered here. Tell the owner both: they answer an agent's request in the list of requests or in its terminal, and then a yes or no here answers the computer task.`,
-    };
+  const asComputer = () => ({
+    kind: "computer" as const,
+    waiting: computer!.waiting,
+    node: computer!.node,
+    ref: `computer:${computer!.node?.id ?? ""}`,
+    words: clean(computer!.snapshot.message, 160),
+  });
+  const asDesk = (request: DecisionRequest, node: TaskNode | null) => ({
+    kind: "desk" as const,
+    request,
+    node,
+    ref: `desk:${request.id}`,
+    words: `${request.agent} asks to run "${clean(request.summary, 100)}"`,
+  });
   if (id) {
     const node = world.graph.get(id);
     const named =
@@ -221,22 +385,34 @@ export function questionTarget(
     const desk = named?.source?.startsWith("desk:")
       ? pending.find((request) => `desk:${request.id}` === named.source)
       : undefined;
-    if (desk) return { kind: "desk", request: desk, node: named };
-    if (named && asking && named.id === asking.id && computerWaits)
-      return { kind: "computer", waiting: computerWaits, node: asking };
+    if (desk) return asDesk(desk, named);
+    if (named && computer?.node && named.id === computer.node.id)
+      return asComputer();
     return {
       kind: "none",
       reason: `${clean(id, 20)} is no question that waits now. Read the task list again.`,
     };
   }
-  if (computerWaits)
-    return { kind: "computer", waiting: computerWaits, node: asking };
-  if (pending.length === 1)
+  const answerable = openQuestions(world).filter(
+    (question) => question.kind !== "process",
+  );
+  if (!answerable.length)
+    return { kind: "none", reason: "No question waits for the owner now." };
+  const newest = newestSeen(answerable, ownerAt);
+  if (newest.kind === "many")
     return {
-      kind: "desk",
-      request: pending[0]!,
-      node: world.graph.bySource(`desk:${pending[0]!.id}`),
+      kind: "none",
+      reason: `${newest.questions.length === 2 ? "Two" : "Several"} questions wait for the owner: ${questionList(newest.questions)}. One message cannot say which it answers, so none is answered here. Ask the owner which one, in a few words: they can name it ("yes, send it"), or answer an agent's request in the list of requests or in its terminal.`,
     };
+  // None that they saw: the newest, which the gate then refuses as too new.
+  const chosen =
+    newest.kind === "one"
+      ? newest.question
+      : [...answerable].sort((left, right) => right.hi - left.hi)[0]!;
+  if (chosen.kind === "computer" && computer) return asComputer();
+  const request = pending.find((item) => `desk:${item.id}` === chosen.ref);
+  if (request)
+    return asDesk(request, world.graph.bySource(`desk:${request.id}`));
   return { kind: "none", reason: "No question waits for the owner now." };
 }
 
@@ -406,7 +582,11 @@ export function chatGate(
           reason:
             "The owner's newest message answered a question already. One message answers one question: ask them about this one.",
         };
-      const target = questionTarget(world, word(call.args, "id", 20));
+      const target = questionTarget(
+        world,
+        word(call.args, "id", 20),
+        turn.ownerAt,
+      );
       if (target.kind === "none")
         return { allow: false, reason: target.reason };
       const asked =
@@ -421,6 +601,10 @@ export function chatGate(
           reason:
             "That question came after the owner's newest message, so those words do not answer it. Tell them what it asks.",
         };
+      // A plain yes or no answers the newest question that the owner saw,
+      // whatever the model points it at.
+      const bound = mayAnswer(world, turn, target.ref, target.words);
+      if (!bound.ok) return { allow: false, reason: bound.reason };
       const owner = clean(turn.owner, 600);
       if (target.kind === "computer" && target.waiting === "approval") {
         if (!explicitApprovalYes.test(owner) && !explicitApprovalNo.test(owner))
@@ -603,7 +787,7 @@ export function chatTools(
     effect: true,
     async run(args) {
       const answer = word(args, "answer", 600);
-      const target = questionTarget(world, word(args, "id", 20));
+      const target = questionTarget(world, word(args, "id", 20), turn.ownerAt);
       if (target.kind === "none") return target.reason;
       const owner = clean(turn.owner, 600);
       const request = turn.request();
@@ -959,6 +1143,10 @@ export function chatTools(
     tools.push(
       ...systemTools(world.system, turn, {
         computerBusy: () => runningTask(world) !== null,
+        mayDecide: (ask) => {
+          world.refresh();
+          return mayAnswer(world, turn, `process:${ask.key}`, ask.question).ok;
+        },
       }),
     );
   return tools;

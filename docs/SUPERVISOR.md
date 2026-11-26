@@ -1735,10 +1735,13 @@ model changes:
   yes or no (or one of its choices), and one that is not shown whole is allowed
   only in its terminal.
 - One message answers one question, and only a question that was there when
-  the message came. The question must be the one that waits now, whatever id
-  the model names. While two wait (a question of the task and a request of an
-  agent), none is answered here: the request is answered in the list of
-  requests or its terminal, and then a yes here answers the task.
+  the message came. The question must be one that waits now, whatever id the
+  model names.
+- A plain yes or no answers the newest question that you saw: a question of
+  the computer task, a request of an agent, or a force quit. An older
+  question stays open: ClawdTime asks it again, or you name it in your
+  answer ("yes, send it"). While two questions came at the same moment, a
+  plain yes answers neither, and ClawdTime asks which one you mean.
 - The computer engine takes the words of a goal as your yes, ahead of time, to
   steps such as send, post, buy and delete. So a goal holds such a step only
   where you said it; a plain yes to ClawdTime's own offer of a next step
