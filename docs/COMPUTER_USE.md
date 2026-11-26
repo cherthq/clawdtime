@@ -1195,10 +1195,15 @@ panel whose last read said it.
 
 `npm run bench:computer:speed` shows the same parts with no screen: the real
 worker does one request with a planner that thinks for no time, over made-up
-hands that act out the costs of the panel before this change and now. The
-glide, the wait at the target and the read of the next command are the
-panel's own rules; the picture and the walk are assumptions that the output
-names. It opens no window and calls no language model.
+hands that act out the costs of the panel before this change and now, and now
+with a walk of the whole tree before each press. The glide, the wait at the
+target and the read of the next command are the panel's own rules; the
+picture, the walk and the read of one element again are assumptions that the
+output names. It opens no window and calls no language model. On November 26,
+2026, a press on an element took 82 to 89 ms less with the elements read
+again than with a walk of a busy window (173 ms), and the request 5 percent
+less. A walk that reaches its limit of 0.6 seconds, as in a large
+spreadsheet, gives back about half a second on each press.
 
 The panel needs two permissions in System Settings, Privacy & Security:
 Accessibility, and Screen & System Audio Recording. When one is missing, the
