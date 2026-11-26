@@ -760,6 +760,80 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
         run({ kind: "key", combo: "shift+return" }, view(messages)).policy,
       ).toBeNull();
     });
+    it("asks before Return in a web chat, as in a chat app, unless the request asks to send", () => {
+      const browser = (window: string, name = "Google Chrome") => ({
+        name,
+        bundleId: name === "Safari" ? "com.apple.Safari" : "com.google.Chrome",
+        window,
+      });
+      const box = (title: string, role = "AXTextArea") =>
+        element(1, { role, title, focused: true });
+      const enter = { kind: "key", combo: "return" };
+      const sends = [
+        // A messaging site, named by the window, in Chrome and in Safari.
+        observation([box("Message #general")], {
+          app: browser("general (Channel) - Stonepad - Slack"),
+        }),
+        observation([box("")], { app: browser("WhatsApp", "Safari") }),
+        observation([], { app: browser("Messenger | Riverchat") }),
+        // A page that is a chat: the field with the focus is a message box.
+        observation([box("Type a message", "AXTextField")], {
+          app: browser("Help - shop.example"),
+        }),
+        observation([box("Write a reply…")], {
+          app: browser("Riverchat - Stonepad"),
+        }),
+      ];
+      for (const seen of sends) {
+        expect(run(enter, view(seen)).policy, seen.app.window).toBe("send");
+        expect(
+          run(enter, view(seen, { goal: "Reply to Sam that I am late" }))
+            .policy,
+          seen.app.window,
+        ).toBeNull();
+      }
+      // A search field, a form of a page and an app that is no browser.
+      for (const seen of [
+        observation([box("Search messages", "AXSearchField")], {
+          app: browser("general (Channel) - Stonepad - Slack"),
+        }),
+        observation([box("Search", "AXTextField")], {
+          app: browser("Help - shop.example"),
+        }),
+        observation([box("City", "AXTextField")], {
+          app: browser("Checkout - shop.example"),
+        }),
+        observation([box("Message")], {
+          app: { name: "Notes", bundleId: "com.apple.Notes", window: "Slack" },
+        }),
+      ])
+        expect(run(enter, view(seen)).policy, seen.app.window).toBeNull();
+      // Enter on a page of a messaging site, through the browser driver.
+      const chatPage = page([pageElement(1, { label: "Message #general" })], {
+        title: "general (Channel) - Stonepad - Slack",
+        url: "https://app.slack.com/client/T1/C1",
+      });
+      expect(
+        run(
+          { kind: "browser_key", combo: "Enter" },
+          view(null, {
+            page: chatPage,
+            goal: "Read the channel",
+            browserMethods: ["key"],
+          }),
+        ).policy,
+      ).toBe("send");
+      expect(
+        run(
+          { kind: "browser_key", combo: "Enter" },
+          view(null, {
+            page: chatPage,
+            goal: "Reply to Sam on Slack",
+            browserMethods: ["key"],
+          }),
+        ).policy,
+      ).toBeNull();
+    });
     it("asks before a long address part that the person did not write, and opens any site", () => {
       const long = `https://example.net/form?entry=${"a".repeat(140)}`;
       for (const kind of ["open_url", "browser_open"]) {

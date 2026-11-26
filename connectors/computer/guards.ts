@@ -1105,6 +1105,62 @@ const sendingName =
 const sendsOnReturn = (app: Observation["app"]) =>
   sendingBundles.has(app.bundleId.toLowerCase()) ||
   sendingName.test(app.name.trim());
+/** The browsers of the Mac, by their app. */
+const browserBundles = new Set([
+  "com.apple.safari",
+  "com.apple.safaritechnologypreview",
+  "com.google.chrome",
+  "com.google.chrome.beta",
+  "com.google.chrome.dev",
+  "com.google.chrome.canary",
+  "com.google.chrome.for.testing",
+  "org.chromium.chromium",
+  "com.brave.browser",
+  "com.microsoft.edgemac",
+  "org.mozilla.firefox",
+  "company.thebrowser.browser",
+  "com.operasoftware.opera",
+  "com.vivaldi.vivaldi",
+]);
+const browserName =
+  /^(?:safari|google chrome|chrome|chromium|brave browser|microsoft edge|firefox|arc|opera|vivaldi)\b/i;
+/** Messaging sites, by the title of the page or its window: Return sends there as in their apps. */
+const chatSite =
+  /\b(?:slack|whatsapp|messenger|discord|telegram|microsoft teams|google chat|google messages|messages for web)\b/i;
+const chatHosts =
+  /(?:^|\.)(?:slack\.com|whatsapp\.com|messenger\.com|discord\.com|telegram\.org|teams\.microsoft\.com|teams\.live\.com|chat\.google\.com|messages\.google\.com)$/i;
+/** The words of a field where what is typed goes to other people: a message, a comment, a post. */
+const messageWords =
+  /\b(?:message|comment|reply|post|tweet|chat|compose|status|what's happening|say something|write)\b/;
+const searchWords = /\b(?:search|find|filter)\b/i;
+/**
+ * Return in a web chat sends what is typed, as in a chat app: a messaging
+ * site in a browser, or a page whose field with the focus is a message box.
+ * A search field takes Return for its search.
+ */
+function webChat(observation: Observation) {
+  const { app } = observation;
+  if (
+    !browserBundles.has(app.bundleId.toLowerCase()) &&
+    !browserName.test(app.name.trim())
+  )
+    return false;
+  const field = observation.elements.find(
+    (item) => item.focused && textRoles.has(item.role),
+  );
+  if (
+    field &&
+    (field.role === "AXSearchField" || searchWords.test(field.title))
+  )
+    return false;
+  return (
+    chatSite.test(app.window) ||
+    (!!field && messageWords.test(plain(field.title)))
+  );
+}
+/** A page of a messaging site, by its address or its title. */
+const chatPage = (page: BrowserPage) =>
+  chatHosts.test(hostOf(page.url)) || chatSite.test(page.title);
 
 const modifierNames: Record<string, string> = {
   cmd: "cmd",
@@ -1219,7 +1275,11 @@ function keyRisk(
     return ask("loss");
   if (key === "return" && (cmd || modifiers.has("ctrl")))
     return sendKeyRisk(observation, goal);
-  if (key === "return" && !modifiers.size && sendsOnReturn(observation.app))
+  if (
+    key === "return" &&
+    !modifiers.size &&
+    (sendsOnReturn(observation.app) || webChat(observation))
+  )
     return sendKeyRisk(observation, goal);
   // The mail app sends with this one.
   if (
@@ -1692,14 +1752,17 @@ const pageKeyRisk = (
     const found = askFor(item.label, scene);
     if (found) return pressRisk(item.label, found);
   }
+  // On a messaging site, Enter sends what is typed, as in its app.
+  if (key === "Enter" && chatPage(page) && !sendAsked(goal ?? "", scene))
+    return ask(
+      "send",
+      `This key sends what is typed. ${askPolicy.send.reason}`,
+    );
   return null;
 };
 /** A field where what is typed goes to other people: a message, a comment, a post. */
 const messageBox = (item: BrowserElement) =>
-  /^textarea$/i.test(item.tag) ||
-  /\b(?:message|comment|reply|post|tweet|chat|compose|status|what's happening|say something|write)\b/.test(
-    plain(item.label),
-  );
+  /^textarea$/i.test(item.tag) || messageWords.test(plain(item.label));
 /**
  * Enter in a field submits its form: what a button of the page would do. A
  * search goes with no question. A message, a comment or a post asks unless
