@@ -1314,6 +1314,19 @@ On the screen:
   point of the picture. A double click and a right click too.
 - `type`: one line of text at the caret, or into a field by its number.
 - `key`: one key with its modifiers, for example `cmd+s`.
+- With `type` and `key`, `then` gives up to 3 keys to press after the step,
+  in order, when they are certain already: `return` to send a search after
+  its text, `delete` after `cmd+a`. Each key is a step of its own and goes
+  with no new turn of the planner: the worker looks, checks it as any key
+  (Return in a messages app still asks), and sends it. It goes only when the
+  step before it went through (`ok`), the person said nothing more, and the
+  same app and window are in front as when the planner chose it. Else the
+  keys that are left are dropped and the planner chooses from the new look.
+  Anything other than keys of one press each gives no keys, and the step
+  goes as always. In two runs of the request test on November 26, 2026,
+  with `gpt-6.2-sol`, 6 of 184 steps went this way (a Tab after an email
+  address), all 46 requests were done, and the planner test was right 74 of
+  76 times, as before.
 - `scroll`: at an element or at the middle of the screen. `amount` says how
   far, from 1 to 10 notches of the wheel. Without it the wheel turns 5 notches.
 - `hover`: the pointer goes to an element or to a point and rests there, with
@@ -2343,7 +2356,10 @@ the real screen, draws the cursor or calls a language model.
   change of any, or an element that the hands do not find, walks the tree.
   The read itself, in the panel, needs a real app: the Swift tests cover its
   rules (which element of the last look is the one asked for, and which one
-  stands at the same place), not the Accessibility tree of a real app.
+  stands at the same place), not the Accessibility tree of a real app. Keys
+  that the planner gives in `then` go each after a look and with no new turn,
+  only while the step before went through, the person said nothing more and
+  the same window is in front; Return in a messages app still asks.
 - `progress` (18): the swing of two and of three actions, the still screen,
   no alarm while the screen changes, the order of notes, questions and the
   end, and the other ways that fit what is in front.

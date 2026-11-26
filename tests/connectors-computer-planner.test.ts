@@ -628,6 +628,64 @@ describe("the planner on the chat completions API", () => {
     }
   });
 
+  it("reads the keys to press after a type or a key apart from the action, and only keys of one press each", async () => {
+    const plan = async (name: string, args: string) => {
+      const { request } = fakeFetch(toolCall(name, args));
+      return new OpenAIPlanner({ key: "k", request }).next(input());
+    };
+    const typed = await plan(
+      "type",
+      '{"text":"milk","element":1,"then":["Return"],"why":"w"}',
+    );
+    expect(typed).toEqual({
+      action: { kind: "type", text: "milk", element: 1 },
+      why: "w",
+      then: ["return"],
+    });
+    expect(actionSchema.safeParse(typed.action).success).toBe(true);
+    const keyed = await plan(
+      "key",
+      '{"combo":"cmd+a","then":["delete","cmd+shift+z"],"why":"w"}',
+    );
+    expect(keyed).toEqual({
+      action: { kind: "key", combo: "cmd+a" },
+      why: "w",
+      then: ["delete", "cmd+shift+z"],
+    });
+    // Not keys, too many, or empty: the action stands, and nothing follows it.
+    for (const then of [
+      '["re turn"]',
+      '["return","tab","tab","tab"]',
+      "[]",
+      '"return"',
+      "[1]",
+      "null",
+    ]) {
+      const planned = await plan(
+        "type",
+        `{"text":"milk","then":${then},"why":"w"}`,
+      );
+      expect(planned, then).toEqual({
+        action: { kind: "type", text: "milk" },
+        why: "w",
+      });
+    }
+    // Only a type and a key take keys after them.
+    const { request } = fakeFetch(
+      toolCall("click_element", '{"element":1,"then":["return"],"why":"w"}'),
+    );
+    await expect(
+      new OpenAIPlanner({ key: "k", request }).next(input()),
+    ).rejects.toMatchObject({ trouble: "malformed" });
+    const offered = toolsFor(false).filter((tool) =>
+      Object.hasOwn(
+        (tool.function.parameters as { properties: object }).properties,
+        "then",
+      ),
+    );
+    expect(offered.map((tool) => tool.function.name)).toEqual(["type", "key"]);
+  });
+
   it("passes on no function that was not offered: it asks once more, then fails", async () => {
     const unknown = toolCall("format_disk", '{"disk":"/","why":"clean up"}');
     const answers = [unknown, toolCall("wait", '{"ms":1,"why":"look"}')];
@@ -1177,6 +1235,7 @@ describe("the newer actions in the planner", () => {
     expect(screen.slice(earlierRules(false).length)).toEqual([
       "To open a menu or a tooltip that shows on hover, call hover first, then click what it shows.",
       "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
+      "When the key after a type or a key is certain already, such as Return after the words of a search or Tab to the next cell or field, give it in then of that step: it saves a turn. Leave then out when you must see the screen before that key.",
       ...askRules,
       ...staticTailRules,
     ]);
@@ -1190,6 +1249,7 @@ describe("the newer actions in the planner", () => {
     expect(all.slice(earlierRules(true).length)).toEqual([
       "To open a menu or a tooltip that shows on hover, call hover (on a web page, browser_click with hover true) first, then click what it shows.",
       "Call drag only when the goal needs a drag: a card, a slider, a file or a window that must move. Where a click or a key does the same, use that.",
+      "When the key after a type or a key is certain already, such as Return after the words of a search or Tab to the next cell or field, give it in then of that step: it saves a turn. Leave then out when you must see the screen before that key.",
       "For a dropdown of a web page, prefer browser_page with op select, index, and value set to the text of its option.",
       "To submit a search on a web page, call browser_page with op key and value Enter once the words are in the field.",
       "While a web page is still loading, call browser_page with op wait.",

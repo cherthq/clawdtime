@@ -704,6 +704,20 @@ const sameSpeaker = (
 ) => started?.callId === said?.callId;
 interface Run {
   authority?: DesktopExecutionAuthority;
+  /**
+   * Keys that the planner gave to press after its last step (`then`), each
+   * as its own step with no new turn. They go only while each step before
+   * them went through, the person said nothing more, and the same window is
+   * in front as when the planner chose them.
+   */
+  followUps?: {
+    keys: string[];
+    why: string;
+    /** The step that must have gone through before the next key. */
+    after: number;
+    heard: number;
+    app: { bundleId: string; window: string };
+  };
   /** The closer look that the planner asked for, for its next turn only. */
   closer?: Closer;
   /** What the closer picture was taken of: it goes only with a look of that scene. */
@@ -2761,7 +2775,10 @@ export class ComputerWorker implements DesktopExecutorPort {
         // that go in circles get a note, then a question to the person.
         const judged = await this.judge(run);
         if (judged === "over") return;
-        if (judged === "again") continue;
+        if (judged === "again") {
+          delete run.followUps;
+          continue;
+        }
         this.notLoaded(run);
         this.remind(run);
         const planFrom = this.now();
@@ -2771,62 +2788,69 @@ export class ComputerWorker implements DesktopExecutorPort {
         const heard = run.guidance.length;
         if (heard !== run.heard) delete run.approval;
         run.heard = heard;
-        let planned: Awaited<ReturnType<Planner["next"]>> | "held" | null;
+        let planned: Awaited<ReturnType<Planner["next"]>> | "held" | null =
+          null;
         let late: NodeJS.Timeout | undefined;
         let failure: { error: unknown } | undefined;
-        // The planner hears through this signal when the worker waits no
-        // more for its answer: Stop, a hold, the time limit, the end.
-        const controller = new AbortController();
-        run.plannerAbort = controller;
-        let wake = () => {};
-        const woken = new Promise<"held">((resolve) => {
-          wake = () => {
+        // A key that the planner gave to press after its last step goes with
+        // no new turn: the checks and the look before the input are the same.
+        const followUp = this.followUp(run, heard);
+        if (followUp) planned = followUp;
+        else {
+          // The planner hears through this signal when the worker waits no
+          // more for its answer: Stop, a hold, the time limit, the end.
+          const controller = new AbortController();
+          run.plannerAbort = controller;
+          let wake = () => {};
+          const woken = new Promise<"held">((resolve) => {
+            wake = () => {
+              controller.abort();
+              resolve("held");
+            };
+          });
+          run.wake = wake;
+          try {
+            const input: Parameters<Planner["next"]>[0] & {
+              signal: AbortSignal;
+            } = {
+              goal: run.goal,
+              ...(run.guidance.length
+                ? { guidance: run.guidance.map((said) => said.text) }
+                : {}),
+              ...(run.remembered ? { remembered: run.remembered } : {}),
+              history: run.history.slice(-shownSteps),
+              ...this.failedWays(run),
+              observation: run.observation,
+              page: run.page,
+              ...(run.browserClosed ? { browser: false } : {}),
+              signal: controller.signal,
+              ...(run.plan ? { plan: run.plan.view() } : {}),
+              ...this.closerFor(run),
+            };
+            const plan = this.planner.next(input);
+            plan.catch(() => {});
+            // Neither Stop, hold nor the time limit waits for the planner.
+            planned = await Promise.race([
+              plan,
+              run.halted,
+              woken,
+              new Promise<null>((resolve) => {
+                late = setTimeout(
+                  () => resolve(null),
+                  Math.max(0, run.deadline - this.now()) + 10,
+                );
+                late.unref();
+              }),
+            ]);
+          } catch (error) {
+            failure = { error };
+            planned = null;
+          } finally {
+            clearTimeout(late);
+            delete run.wake;
             controller.abort();
-            resolve("held");
-          };
-        });
-        run.wake = wake;
-        try {
-          const input: Parameters<Planner["next"]>[0] & {
-            signal: AbortSignal;
-          } = {
-            goal: run.goal,
-            ...(run.guidance.length
-              ? { guidance: run.guidance.map((said) => said.text) }
-              : {}),
-            ...(run.remembered ? { remembered: run.remembered } : {}),
-            history: run.history.slice(-shownSteps),
-            ...this.failedWays(run),
-            observation: run.observation,
-            page: run.page,
-            ...(run.browserClosed ? { browser: false } : {}),
-            signal: controller.signal,
-            ...(run.plan ? { plan: run.plan.view() } : {}),
-            ...this.closerFor(run),
-          };
-          const plan = this.planner.next(input);
-          plan.catch(() => {});
-          // Neither Stop, hold nor the time limit waits for the planner.
-          planned = await Promise.race([
-            plan,
-            run.halted,
-            woken,
-            new Promise<null>((resolve) => {
-              late = setTimeout(
-                () => resolve(null),
-                Math.max(0, run.deadline - this.now()) + 10,
-              );
-              late.unref();
-            }),
-          ]);
-        } catch (error) {
-          failure = { error };
-          planned = null;
-        } finally {
-          clearTimeout(late);
-          delete run.wake;
-          controller.abort();
-          if (run.plannerAbort === controller) delete run.plannerAbort;
+            if (run.plannerAbort === controller) delete run.plannerAbort;
+          }
         }
         if (failure) {
           // What the planner threw can hold what was sent to it: it is not
@@ -2905,7 +2929,15 @@ export class ComputerWorker implements DesktopExecutorPort {
         // Done, give_up and ask say their own words.
         if (kind !== "done" && kind !== "give_up" && kind !== "ask")
           run.opening.acting(why);
+        // The keys that are left after this one.
+        const then = followUp
+          ? run.followUps?.keys.slice(1)
+          : "then" in planned
+            ? planned.then
+            : undefined;
+        delete run.followUps;
         await this.act(run, chosen, why);
+        this.queueFollowUps(run, then, why, heard, beforeObs);
         // Plan: an action came, so the plan updates in a row start again.
         run.plan?.acted();
         // The next look says what came of this step.
@@ -4642,6 +4674,63 @@ export class ComputerWorker implements DesktopExecutorPort {
       "ok",
     );
     this.halted(run);
+  }
+
+  /**
+   * The next key that the planner gave to press after its last step, as the
+   * action of this step, when it may go with no new turn: the step before it
+   * went through ("ok"), the person said nothing since, and the same app and
+   * window are in front as when the planner chose it. Else none, and the
+   * keys that are left are dropped: the planner chooses from this look.
+   */
+  private followUp(
+    run: Run,
+    heard: number,
+  ): { action: Action; why: string } | null {
+    const queued = run.followUps;
+    if (!queued) return null;
+    const last = run.history.at(-1);
+    const seen = run.observation;
+    const key = queued.keys[0];
+    if (
+      key === undefined ||
+      last?.step !== queued.after ||
+      last.outcome !== "ok" ||
+      heard !== queued.heard ||
+      !seen ||
+      seen.app.bundleId !== queued.app.bundleId ||
+      !sameWindowTitle(seen.app.window, queued.app.window)
+    ) {
+      delete run.followUps;
+      return null;
+    }
+    return { action: { kind: "key", combo: key }, why: queued.why };
+  }
+
+  /** Keeps the keys to press after the step that just ran, while it went through. */
+  private queueFollowUps(
+    run: Run,
+    keys: string[] | undefined,
+    why: string,
+    heard: number,
+    before: Observation | null,
+  ) {
+    const last = run.history.at(-1);
+    if (
+      !keys?.length ||
+      this.current !== run ||
+      !before ||
+      last?.step !== run.step ||
+      last.outcome !== "ok"
+    )
+      return;
+    run.followUps = {
+      keys: keys.slice(0, 3),
+      why,
+      after: run.step,
+      heard,
+      app: { bundleId: before.app.bundleId, window: before.app.window },
+    };
   }
 
   /*

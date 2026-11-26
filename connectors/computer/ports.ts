@@ -535,7 +535,19 @@ export interface Planner {
     signal?: AbortSignal;
     /** The closer look that the planner asked for in its last turn. It comes with this turn only. */
     closer?: Closer;
-  }): Promise<{ action: Action; why: string } | import("./plan.js").PlanChoice>;
+  }): Promise<
+    | {
+        action: Action;
+        why: string;
+        /**
+         * Keys to press after the action, in order, each as its own step
+         * after a look and only when the step before it went through, with
+         * no new turn of the planner. Absent when there are none.
+         */
+        then?: string[];
+      }
+    | import("./plan.js").PlanChoice
+  >;
   /**
    * Splits the goal into ordered subgoals, after the first look and before
    * the first action, with one line for the person (`opening.ts`). A bare

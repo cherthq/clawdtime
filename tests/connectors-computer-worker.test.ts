@@ -6952,6 +6952,172 @@ describe("trouble of the planner", () => {
   });
 });
 
+describe("keys that the planner gives to press after a step", () => {
+  /** A planner that gives `then` with its first answer, then the script. */
+  class Then implements Planner {
+    readonly inputs: Parameters<Planner["next"]>[0][] = [];
+    constructor(
+      private readonly first: Action,
+      private readonly then: string[],
+      private readonly rest: Action[] = [done],
+    ) {}
+    async next(input: Parameters<Planner["next"]>[0]) {
+      this.inputs.push(input);
+      if (this.inputs.length === 1)
+        return { action: this.first, why: "Search", then: this.then };
+      return {
+        action: this.rest.shift() ?? {
+          kind: "give_up" as const,
+          reason: "end",
+        },
+        why: `step ${this.inputs.length}`,
+      };
+    }
+  }
+  const search = (values: Partial<Observation> = {}) =>
+    observation(
+      [
+        element(1, {
+          role: "AXSearchField",
+          title: "Search",
+          focused: true,
+        }),
+      ],
+      values,
+    );
+  function run(
+    planner: Planner,
+    screens: Observation[],
+    hands = new FakeHands(screens),
+  ) {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-computer-then-"));
+    roots.push(home);
+    const said: string[] = [];
+    const journal = new ComputerJournal(home);
+    const worker = new ComputerWorker({
+      hands,
+      planner,
+      journal,
+      notify: (text) => said.push(text),
+      settleMs: 1,
+      transientMs: 1,
+    });
+    return { worker, hands, journal, said };
+  }
+
+  it("press each key after the step went through, after a look and with the checks, with no new turn of the planner", async () => {
+    const planner = new Then({ kind: "type", text: "dentist", element: 1 }, [
+      "return",
+    ]);
+    const { worker, hands, journal } = run(planner, [search()]);
+    await worker.submit("r1", "Find the note about the dentist");
+    await worker.idle();
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.sent).toEqual([
+      { kind: "type", text: "dentist" },
+      { kind: "key", combo: "return" },
+    ]);
+    // The planner chose twice: the text with its key, and the done.
+    expect(planner.inputs).toHaveLength(2);
+    expect(planner.inputs[1]!.history.map((step) => step.action)).toEqual([
+      { kind: "type", text: "dentist", element: 1 },
+      { kind: "key", combo: "return" },
+    ]);
+    expect(planner.inputs[1]!.history[1]!.outcome).toBe("ok");
+    // The key is its own step in the journal, after its own look.
+    expect(journal.get("r1")!.steps.map((step) => step.kind)).toEqual([
+      "type",
+      "key",
+      "done",
+    ]);
+    const typed = hands.commands.findIndex((c) => c.kind === "type");
+    const pressed = hands.commands.findIndex((c) => c.kind === "key");
+    expect(
+      hands.commands.slice(typed + 1, pressed).map((c) => c.kind),
+    ).toContain("observe");
+  });
+
+  it("press a row of keys in order, each after the one before went through", async () => {
+    const planner = new Then({ kind: "key", combo: "cmd+a" }, ["delete"]);
+    const { worker, hands } = run(planner, [search()]);
+    await worker.submit("r1", "Clear the search");
+    await worker.idle();
+    expect(hands.sent).toEqual([
+      { kind: "key", combo: "cmd+a" },
+      { kind: "key", combo: "delete" },
+    ]);
+    expect(planner.inputs).toHaveLength(2);
+  });
+
+  it("ask the planner again when the step did not go through, another window came, or the person said more", async () => {
+    // The text found no field with the focus: it is no step that went through.
+    const noField = new Then({ kind: "type", text: "dentist" }, ["return"]);
+    const first = run(noField, [observation([element(1)])]);
+    await first.worker.submit("r1", "Find the note about the dentist");
+    await first.worker.idle();
+    expect(first.hands.sent).toEqual([{ kind: "type", text: "dentist" }]);
+    expect(noField.inputs).toHaveLength(2);
+
+    // Another window is in front after the text.
+    const moved = new Then({ kind: "type", text: "dentist", element: 1 }, [
+      "return",
+    ]);
+    const other = search({
+      app: { name: "Notes", bundleId: "com.apple.Notes", window: "Trash" },
+    });
+    const second = run(moved, [search(), search(), other]);
+    await second.worker.submit("r1", "Find the note about the dentist");
+    await second.worker.idle();
+    expect(second.hands.sent).toEqual([{ kind: "type", text: "dentist" }]);
+    expect(moved.inputs).toHaveLength(2);
+
+    // The person said more while the text went out.
+    const told = new Then({ kind: "type", text: "dentist", element: 1 }, [
+      "return",
+    ]);
+    const hands = new FakeHands([search()]);
+    const third = run(told, [search()], hands);
+    hands.answer = (command) => {
+      if (command.kind === "type")
+        void third.worker.submit("r2", "Look for the vet as well");
+      return undefined;
+    };
+    await third.worker.submit("r1", "Find the note about the dentist");
+    await third.worker.idle();
+    expect(third.hands.sent.map((c) => c.kind)).not.toContain("key");
+    expect(told.inputs.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("ask the person before a key that asks, as when the planner chose it", async () => {
+    const chat = observation(
+      [
+        element(1, {
+          role: "AXTextArea",
+          title: "Message",
+          focused: true,
+        }),
+      ],
+      {
+        app: {
+          name: "Messages",
+          bundleId: "com.apple.MobileSMS",
+          window: "Sam",
+        },
+      },
+    );
+    const planner = new Then({ kind: "type", text: "On my way", element: 1 }, [
+      "return",
+    ]);
+    const { worker, hands } = run(planner, [chat]);
+    await worker.submit("r1", "Write on my way to Sam");
+    await until(() => worker.snapshot().state === "waiting_for_person");
+    expect(hands.sent).toEqual([{ kind: "type", text: "On my way" }]);
+    expect(worker.snapshot().message).toMatch(/return/i);
+    worker.stop();
+    await worker.idle();
+  });
+});
+
 describe("a first give_up", () => {
   it("goes back to the planner with the ways it did not try", async () => {
     const chrome = observation([element(1, { title: "Next" })], {
