@@ -1458,9 +1458,12 @@ question of a page names its site. A no ends the request.
 - **Links.** Only http and https links are opened, with no login in the link.
   An address that the task needs opens with no question, also when your
   request does not name its site: a shop, a feed, a page to read. Only an
-  address with a long path or query (more than 120 characters) that you did
+  address with a long part (more than 120 characters together) that you did
   not write asks first: such a part could carry what the screen shows to the
-  site. After you said more during a task, such an address always asks.
+  site. The parts that count are the labels of the host before its last two
+  (`<data>.x.example` reaches the server of x.example), the path, the query
+  and the fragment, which a script of the page reads. After you said more
+  during a task, such an address always asks.
 - **Opening an address.** A request that only opens one address ("open
   example.com", also with the name of a browser after it) opens it as its
   first step, with no model, no pointer and no key, in the browser that you

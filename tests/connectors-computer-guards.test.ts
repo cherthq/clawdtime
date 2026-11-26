@@ -856,6 +856,41 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
       }
     });
 
+    it("counts the fragment and the long labels of the host in the long part of an address", () => {
+      const data = "a".repeat(140);
+      const label = (letter: string) => letter.repeat(60);
+      const goal = "Look up the weather";
+      for (const kind of ["open_url", "browser_open"])
+        for (const url of [
+          `https://x.example/#${data}`,
+          `https://x.example/page?q=1#${data}`,
+          `https://${label("b")}.${label("c")}.x.example/`,
+          `https://${label("b")}.x.example/${"d".repeat(70)}`,
+          `https://${Array.from({ length: 12 }, () => "abcdefghij").join(".")}.x.example/`,
+        ]) {
+          expect(
+            run({ kind, url }, view(observation(), { goal })).policy,
+            `${kind} ${url.slice(0, 60)}`,
+          ).toBe("send");
+          // The person wrote the address: no question.
+          expect(
+            run({ kind, url }, view(observation(), { goal: `open ${url}` }))
+              .policy,
+            `${kind} ${url.slice(0, 60)}`,
+          ).toBeNull();
+        }
+      // Short hosts, a short fragment and a site of many levels ask nothing.
+      for (const url of [
+        "https://docs.shop.example/guide#install",
+        "https://us-east-1.console.cloud.example/home?region=us-east-1#list",
+        "https://www.shop.example/s?k=aa+batteries",
+      ])
+        expect(
+          run({ kind: "open_url", url }, view(observation(), { goal })).policy,
+          url,
+        ).toBeNull();
+    });
+
     describe("a reply in a thread of a chat app", () => {
       const chat = {
         name: "Slack",

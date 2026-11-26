@@ -1333,18 +1333,27 @@ function safeLink(raw: string) {
 }
 const linkRefusal =
   "Only http and https links are opened, with no login in the link.";
-/** A path and a query longer than this, that the person did not write, can carry what the screen shows. */
+/** The parts of an address longer than this together, that the person did not write, can carry what the screen shows. */
 const longAddressPart = 120;
 /**
  * An address that the planner chose opens with no question: a shop, a site of
- * the news, a page that the task needs. Only an address with a long path or
- * query that the person did not write asks: such a part could carry what the
- * screen shows to the site.
+ * the news, a page that the task needs. Only an address with a long part
+ * that the person did not write asks: such a part could carry what the
+ * screen shows to the site. The parts that count are the labels of the host
+ * before its last two ("<data>.x.example" reaches the server that answers
+ * for x.example), and the path, the query and the fragment (a script of the
+ * page reads the fragment).
  */
 const addressRisk = (link: URL, goal?: string) => {
-  const rest = `${link.pathname}${link.search}`;
-  return rest.length > longAddressPart &&
-    !(goal ?? "").toLowerCase().includes(rest.toLowerCase())
+  const said = (goal ?? "").toLowerCase();
+  const parts = [
+    link.hostname.split(".").slice(0, -2).join("."),
+    `${link.pathname}${link.search}${link.hash}`,
+  ];
+  const unwritten = parts
+    .filter((part) => !said.includes(part.toLowerCase()))
+    .reduce((sum, part) => sum + part.length, 0);
+  return unwritten > longAddressPart
     ? ask(
         "send",
         `The address carries a long part that you did not write, which could send what the screen shows to ${clean(link.host, 80)}.`,
