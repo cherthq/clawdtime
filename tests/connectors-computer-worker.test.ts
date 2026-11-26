@@ -6965,14 +6965,17 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
       element(7, { title: "Saved", x: 110, y: 200 }),
     ]);
     const { worker, hands } = setup([click, done], {
-      screens: [initial, changedFast, axFallback, afterClick],
+      screens: [initial, changedFast, changedFast, axFallback, afterClick],
     });
     await worker.submit("fast_reverify_miss", "Save the note");
     await worker.idle();
 
     expect(worker.snapshot().state).toBe("completed");
+    // A change away from the target and not large gets one more quick
+    // look. It held there, so it is no region that keeps changing.
     expect(hands.commands).toEqual([
       { kind: "observe", image: true, elements: true },
+      { kind: "observe", image: true, elements: false },
       { kind: "observe", image: true, elements: false },
       { kind: "observe", image: false, elements: true },
       { kind: "click", x: 150, y: 212, button: "left", count: 1 },
@@ -7124,7 +7127,8 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     const afterClick = realObs(frameChanged);
 
     // Three held click attempts trigger settle():
-    // Each held attempt does: full observe (initial), fast reverify (changed -> fallback AX missing) -> held.
+    // Each held attempt does: full observe (initial), fast reverify (changed,
+    // one more quick look shows it held -> fallback AX missing) -> held.
     // Then settle() polls image-only twice (settledFrameA, settledFrameB -> visually unchanged -> settled!).
     // Then 4th click succeeds.
     const { worker, hands } = setup([click, click, click, click, done], {
@@ -7132,10 +7136,13 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
         initial,
         missing,
         missing,
+        missing,
         initial,
         missing,
         missing,
+        missing,
         initial,
+        missing,
         missing,
         missing,
         settledFrameA,
@@ -7351,5 +7358,292 @@ describe("perceptual visual diff, fast re-verify, and bounded post-action settle
     // Done was accepted on the first try (not rejected as stillAfter)!
     expect(planner.inputs).toHaveLength(2);
     expect(planner.inputs[1]!.history[0]?.outcome).toBe("ok");
+  });
+});
+
+describe("a screen with small regions that keep changing", () => {
+  // A made-up screen of 1440 by 900 points as a picture of 320 by 180
+  // pixels: one cell of the 64 by 36 grid is 5 by 5 pixels.
+  type Paint = { x: number; y: number; w: number; h: number; luma: number };
+  const picture = (paints: Paint[]) => {
+    const width = 320;
+    const height = 180;
+    const data = Buffer.alloc(width * height * 4, 220);
+    for (const { x, y, w, h, luma } of paints)
+      for (let py = y; py < Math.min(height, y + h); py++)
+        for (let px = x; px < Math.min(width, x + w); px++) {
+          const off = (py * width + px) * 4;
+          data[off] = data[off + 1] = data[off + 2] = luma;
+        }
+    for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    return jpeg.encode({ data, width, height }, 85).data.toString("base64");
+  };
+  const look = (paints: Paint[], elements = [element(1, { title: "Save" })]) =>
+    observation(elements, {
+      image: picture(paints),
+      imageWidth: 320,
+      imageHeight: 180,
+    });
+  /** The Save button of the fixture (110, 200, 80 by 24 points), drawn. */
+  const saveButton: Paint = { x: 25, y: 40, w: 18, h: 6, luma: 60 };
+  /** An animation well beside the button: a block that moves on in each frame. */
+  const animation = (frame: number): Paint => ({
+    x: 80 + (frame % 3) * 15,
+    y: 30,
+    w: 20,
+    h: 40,
+    luma: 30,
+  });
+  const animated = (frame: number, extra: Paint[] = []) =>
+    look([saveButton, animation(frame), ...extra]);
+  const frames = (count: number, from = 0) =>
+    Array.from({ length: count }, (_, i) => animated(from + i));
+  const fullLook = { kind: "observe", image: true, elements: true };
+  const quickLook = { kind: "observe", image: true, elements: false };
+  const axLook = { kind: "observe", image: false, elements: true };
+  const saveClick = { kind: "click", x: 150, y: 212, button: "left", count: 1 };
+
+  it("lets the click go after one more quick look when only an animation beside the button changed", async () => {
+    const { worker, hands } = setup([click, done], {
+      screens: [animated(0), animated(1), animated(2), animated(0)],
+    });
+    await worker.submit("animated_beside", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    // No walk of the tree: the target looked the same in all three looks.
+    expect(hands.commands).toEqual([
+      fullLook,
+      quickLook,
+      quickLook,
+      saveClick,
+      fullLook,
+    ]);
+  });
+
+  it("uses what it learned: the next click on the same window needs no extra look", async () => {
+    const { worker, hands } = setup([click, click, done], {
+      screens: [
+        animated(0),
+        animated(1),
+        animated(2),
+        animated(0),
+        animated(1),
+        animated(2),
+      ],
+    });
+    await worker.submit("animated_learned", "Save the note");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    expect(hands.commands).toEqual([
+      fullLook,
+      quickLook,
+      quickLook,
+      saveClick,
+      fullLook,
+      quickLook,
+      saveClick,
+      fullLook,
+    ]);
+  });
+
+  it("settles on an animated page after the panel refused the click three times, then clicks", async () => {
+    const { worker, hands, journal, said } = setup(
+      [click, click, click, click, done],
+      { screens: frames(60) },
+    );
+    let refused = 3;
+    hands.answer = (command) =>
+      command.kind === "click" && refused-- > 0
+        ? { ok: false, error: "stale_observation" }
+        : undefined;
+    await worker.submit("animated_settle", "Save the note");
+    await worker.idle();
+
+    expect(said.at(-1)).toBe("Done. The note is saved.");
+    expect(journal.get("animated_settle")).toMatchObject({
+      state: "completed",
+    });
+    expect(hands.sent).toHaveLength(4);
+    expect(
+      hands.labels.filter((label) => label === "Wait for the screen to settle"),
+    ).toHaveLength(3);
+  });
+
+  // The menu bar of the same screen: row 0 of the grid, 0 to 25 points.
+  // The Stop button sits left of the clock strip, with a blinking
+  // recording dot one cell beside it.
+  const stop = element(1, {
+    role: "AXMenuBarItem",
+    title: "Stop Recording",
+    x: 864,
+    y: 2,
+    w: 22,
+    h: 20,
+  });
+  const stopIcon: Paint = { x: 193, y: 1, w: 4, h: 3, luma: 40 };
+  const dot: Paint = { x: 182, y: 1, w: 6, h: 3, luma: 30 };
+  /** A recording timer pill left of the dot that ticks: five cells. */
+  const timer = (tick: number): Paint => ({
+    x: 165,
+    y: 0,
+    w: 15,
+    h: 5,
+    luma: tick % 2 ? 30 : 200,
+  });
+  const menuBar = (frame: number, extra: Paint[] = []) =>
+    look([saveButton, stopIcon, ...(frame % 2 ? [dot] : []), ...extra], [stop]);
+  const stopClick = { kind: "click", x: 875, y: 12, button: "left", count: 1 };
+  const clickStop: Action = { kind: "click_element", element: 1 };
+
+  it("clicks Stop Recording in the menu bar while the recording dot beside it blinks", async () => {
+    const { worker, hands } = setup([clickStop, done], {
+      screens: [menuBar(0), menuBar(1), menuBar(0)],
+    });
+    await worker.submit("menu_bar_dot", "Stop the recording");
+    await worker.idle();
+
+    expect(worker.snapshot().state).toBe("completed");
+    // The check used the button's own cells: the dot beside it did not count.
+    expect(hands.commands).toEqual([fullLook, quickLook, stopClick, fullLook]);
+  });
+
+  it("settles while a recording timer in the menu bar status area ticks, then clicks Stop", async () => {
+    const { worker, hands, journal, said } = setup(
+      [clickStop, clickStop, clickStop, clickStop, done],
+      {
+        screens: Array.from({ length: 60 }, (_, i) => menuBar(i, [timer(i)])),
+      },
+    );
+    let refused = 3;
+    hands.answer = (command) =>
+      command.kind === "click" && refused-- > 0
+        ? { ok: false, error: "stale_observation" }
+        : undefined;
+    await worker.submit("menu_bar_timer", "Stop the recording");
+    await worker.idle();
+
+    expect(said.at(-1)).toBe("Done. The note is saved.");
+    expect(journal.get("menu_bar_timer")).toMatchObject({
+      state: "completed",
+    });
+    expect(hands.sent).toHaveLength(4);
+  });
+
+  it("still takes a full look when the button itself changed beside the animation", async () => {
+    const changedButton: Paint = { ...saveButton, luma: 200 };
+    const { worker, hands } = setup([click, done], {
+      screens: [
+        animated(0),
+        look([changedButton, animation(1)]),
+        look([changedButton, animation(2)]),
+        look([changedButton, animation(0)]),
+      ],
+    });
+    await worker.submit("target_changed", "Save the note");
+    await worker.idle();
+
+    const clickAt = hands.commands.findIndex((c) => c.kind === "click");
+    // The look just before the click walked the tree again.
+    expect(hands.commands.slice(0, clickAt)).toEqual([
+      fullLook,
+      quickLook,
+      axLook,
+    ]);
+  });
+
+  it("still takes a full look when the Stop button itself changed in the menu bar", async () => {
+    const gone: Paint = { ...stopIcon, luma: 220 };
+    const { worker, hands } = setup([clickStop, done], {
+      screens: [
+        menuBar(0),
+        look([saveButton, gone, dot], [stop]),
+        look([saveButton, gone], [stop]),
+      ],
+    });
+    await worker.submit("stop_changed", "Stop the recording");
+    await worker.idle();
+
+    const clickAt = hands.commands.findIndex((c) => c.kind === "click");
+    expect(hands.commands.slice(0, clickAt)).toEqual([
+      fullLook,
+      quickLook,
+      axLook,
+    ]);
+  });
+
+  it("still takes a full look after a small change that came once and held", async () => {
+    const badge: Paint = { x: 230, y: 100, w: 30, h: 20, luma: 40 };
+    const { worker, hands } = setup([click, done], {
+      screens: [
+        look([saveButton]),
+        look([saveButton, badge]),
+        look([saveButton, badge]),
+        look([saveButton, badge]),
+      ],
+    });
+    await worker.submit("held_change", "Save the note");
+    await worker.idle();
+
+    const clickAt = hands.commands.findIndex((c) => c.kind === "click");
+    expect(hands.commands[clickAt - 1]).toEqual(axLook);
+    expect(
+      hands.commands.slice(0, clickAt).filter((c) => c.kind === "observe"),
+    ).not.toContainEqual(
+      expect.objectContaining({ image: false, elements: false }),
+    );
+  });
+
+  it("still takes a full look at once after a large change, with no extra quick look", async () => {
+    const window: Paint = { x: 60, y: 20, w: 250, h: 150, luma: 90 };
+    const { worker, hands } = setup([click, done], {
+      screens: [
+        look([saveButton]),
+        look([saveButton, window]),
+        look([saveButton, window]),
+      ],
+    });
+    await worker.submit("large_change", "Save the note");
+    await worker.idle();
+
+    const clickAt = hands.commands.findIndex((c) => c.kind === "click");
+    expect(hands.commands.slice(0, clickAt)).toEqual([
+      fullLook,
+      quickLook,
+      axLook,
+    ]);
+  });
+
+  it("does not settle while a large region keeps changing, and ends as before", async () => {
+    const video = (frame: number): Paint => ({
+      x: 60,
+      y: 20,
+      w: 250,
+      h: 150,
+      luma: frame % 2 ? 40 : 160,
+    });
+    const { worker, hands, journal } = setup(
+      [click, click, click, click, done],
+      {
+        screens: Array.from({ length: 60 }, (_, i) =>
+          look([saveButton, video(i)]),
+        ),
+      },
+    );
+    hands.answer = (command) =>
+      command.kind === "click"
+        ? { ok: false, error: "stale_observation" }
+        : undefined;
+    await worker.submit("large_video", "Save the note");
+    await worker.idle();
+
+    expect(journal.get("large_video")).toMatchObject({
+      state: "blocked",
+      reason: "repeated_hold",
+    });
+    expect(
+      hands.labels.filter((label) => label === "Wait for the screen to settle"),
+    ).toHaveLength(8);
   });
 });

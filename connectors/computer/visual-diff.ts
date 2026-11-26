@@ -10,6 +10,9 @@
  *   strict target-area (`focusRect`) sensitivity.
  * - Non-JPEG strings (such as dummy fixtures in unit tests) safely return null
  *   so callers fall back cleanly.
+ * - A steady check (`steadyDiff`) for looks with no input between them: the
+ *   target's own region strictly, the menu bar status area and the regions
+ *   that keep changing by themselves (`keepsChanging`) left out.
  */
 import { createHash } from "node:crypto";
 import jpeg from "jpeg-js";
@@ -21,9 +24,25 @@ export const DIFF_LUMA_THRESHOLD = 14;
 export const DIFF_MIN_CELLS = 4;
 /** First grid column of the top-right row-0 menu-bar clock/status strip. */
 export const MENU_BAR_CLOCK_START_X = Math.floor(DIFF_GRID_W * 0.72);
+/**
+ * First grid column of the menu bar status area: the right half of row 0,
+ * where status items, recording indicators and the clock sit. The steady
+ * check leaves it out, except the own cells of a target in it.
+ */
+export const MENU_BAR_STATUS_START_X = Math.floor(DIFF_GRID_W / 2);
+/** The most cells that may keep changing by themselves: a sixth of the screen. More is no small region. */
+export const NOISE_MAX_CELLS = Math.floor((DIFF_GRID_W * DIFF_GRID_H) / 6);
+/** The margin, in cells, around a region that keeps changing. */
+export const NOISE_MARGIN = 1;
+/** How far, in cells, a change may move from one pair of looks to the next and stay the same region. */
+export const NOISE_REACH = 3;
 
 const MAX_IMAGE_BASE64_LENGTH = 4_000_000;
 const CURSOR_MASK_RADIUS = 2;
+const GRID_CELLS = DIFF_GRID_W * DIFF_GRID_H;
+
+/** One flag for each cell of the grid, row by row: 1 is set. */
+export type CellMask = Uint8Array;
 
 export interface LuminanceGrid {
   width: number;
@@ -376,4 +395,214 @@ export function visuallyChanged(
     ...(options.minCells !== undefined ? { minCells: options.minCells } : {}),
   });
   return diff.comparable ? diff.changed : null;
+}
+
+function isMenuBarStatusCell(gx: number, gy: number): boolean {
+  return gy === 0 && gx >= MENU_BAR_STATUS_START_X;
+}
+
+function usableGrid(grid: LuminanceGrid | null): grid is LuminanceGrid {
+  return (
+    grid !== null &&
+    grid.width === DIFF_GRID_W &&
+    grid.height === DIFF_GRID_H &&
+    grid.cells.length === GRID_CELLS
+  );
+}
+
+/** True when a point of the screen lies in the menu bar row of the grid. */
+export function inMenuBar(
+  y: number,
+  screen: { width: number; height: number } | null | undefined,
+): boolean {
+  return (
+    !!screen &&
+    screen.height > 0 &&
+    Number.isFinite(y) &&
+    y >= 0 &&
+    y < screen.height / DIFF_GRID_H
+  );
+}
+
+/**
+ * The cells of the action's targets. A target in a window keeps a margin of
+ * one cell around it, as `focusRect` does. A target in the menu bar gets its
+ * own cells only: status items sit close together, and the one beside it may
+ * blink.
+ */
+export function targetCells(
+  rects: FocusRect | FocusRect[] | null | undefined,
+  screen: { width: number; height: number } | null | undefined,
+): CellMask {
+  const mask = new Uint8Array(GRID_CELLS);
+  if (!rects || !screen || !(screen.width > 0) || !(screen.height > 0))
+    return mask;
+  const col = (x: number) =>
+    Math.max(
+      0,
+      Math.min(DIFF_GRID_W - 1, Math.floor((x / screen.width) * DIFF_GRID_W)),
+    );
+  const row = (y: number) =>
+    Math.max(
+      0,
+      Math.min(DIFF_GRID_H - 1, Math.floor((y / screen.height) * DIFF_GRID_H)),
+    );
+  for (const rect of Array.isArray(rects) ? rects : [rects]) {
+    if (
+      !Number.isFinite(rect.x) ||
+      !Number.isFinite(rect.y) ||
+      !Number.isFinite(rect.w) ||
+      !Number.isFinite(rect.h)
+    )
+      continue;
+    const w = Math.max(0, rect.w);
+    const h = Math.max(0, rect.h);
+    const own = inMenuBar(rect.y + h / 2, screen);
+    // The right and bottom edges end inside the last cell that the target covers.
+    const gx0 = own ? col(rect.x) : Math.max(0, col(rect.x) - 1);
+    const gx1 = own
+      ? col(Math.max(rect.x, rect.x + w - 0.001))
+      : Math.min(DIFF_GRID_W - 1, col(rect.x + w) + 1);
+    const gy0 = own ? row(rect.y) : Math.max(0, row(rect.y) - 1);
+    const gy1 = own
+      ? row(Math.max(rect.y, rect.y + h - 0.001))
+      : Math.min(DIFF_GRID_H - 1, row(rect.y + h) + 1);
+    for (let gy = gy0; gy <= gy1; gy++)
+      for (let gx = gx0; gx <= gx1; gx++) mask[gy * DIFF_GRID_W + gx] = 1;
+  }
+  return mask;
+}
+
+/** The cells within `margin` cells of a set cell. */
+export function growCells(mask: CellMask, margin = NOISE_MARGIN): CellMask {
+  const grown = new Uint8Array(GRID_CELLS);
+  for (let gy = 0; gy < DIFF_GRID_H; gy++)
+    for (let gx = 0; gx < DIFF_GRID_W; gx++) {
+      if (!mask[gy * DIFF_GRID_W + gx]) continue;
+      for (
+        let y = Math.max(0, gy - margin);
+        y <= Math.min(DIFF_GRID_H - 1, gy + margin);
+        y++
+      )
+        for (
+          let x = Math.max(0, gx - margin);
+          x <= Math.min(DIFF_GRID_W - 1, gx + margin);
+          x++
+        )
+          grown[y * DIFF_GRID_W + x] = 1;
+    }
+  return grown;
+}
+
+/** How many cells of `mask` are set, and not set in `except`. */
+export function countCells(mask: CellMask, except?: CellMask | null): number {
+  let count = 0;
+  for (let i = 0; i < mask.length; i++) if (mask[i] && !except?.[i]) count++;
+  return count;
+}
+
+export interface SteadyOptions {
+  screen?: { width: number; height: number } | null;
+  /** The action's targets (`targetCells`): one changed cell there is a change. */
+  targets?: FocusRect | FocusRect[] | null;
+  /** Cells that keep changing by themselves (`keepsChanging`). They never cover a target. */
+  noise?: CellMask | null;
+  /** Pointer places, left out with a margin as in `compareGrids`. Absent: the pointer counts. */
+  cursorA?: { x: number; y: number } | null;
+  cursorB?: { x: number; y: number } | null;
+}
+
+export interface SteadyDiff {
+  comparable: boolean;
+  /** A cell of a target changed. */
+  targetChanged: boolean;
+  /** The changed cells outside the targets, the menu bar status area, the pointer and the noise. */
+  moved: CellMask;
+  /** How many cells `moved` holds. */
+  count: number;
+}
+
+/**
+ * Compares two looks with no input between them. The target's own region is
+ * checked strictly. The menu bar status area, the regions in `noise` and the
+ * pointer places do not count anywhere else.
+ */
+export function steadyDiff(
+  a: LuminanceGrid | null,
+  b: LuminanceGrid | null,
+  options: SteadyOptions = {},
+): SteadyDiff {
+  const moved = new Uint8Array(GRID_CELLS);
+  if (!usableGrid(a) || !usableGrid(b))
+    return { comparable: false, targetChanged: false, moved, count: 0 };
+  const targets = targetCells(options.targets, options.screen);
+  const cA = cursorCell(options.cursorA, options.screen);
+  const cB = cursorCell(options.cursorB, options.screen);
+  const nearCursor = (gx: number, gy: number) =>
+    (cA !== null &&
+      Math.abs(gx - cA.gx) <= CURSOR_MASK_RADIUS &&
+      Math.abs(gy - cA.gy) <= CURSOR_MASK_RADIUS) ||
+    (cB !== null &&
+      Math.abs(gx - cB.gx) <= CURSOR_MASK_RADIUS &&
+      Math.abs(gy - cB.gy) <= CURSOR_MASK_RADIUS);
+  let targetChanged = false;
+  let count = 0;
+  for (let gy = 0; gy < DIFF_GRID_H; gy++)
+    for (let gx = 0; gx < DIFF_GRID_W; gx++) {
+      const idx = gy * DIFF_GRID_W + gx;
+      if (Math.abs(a.cells[idx]! - b.cells[idx]!) <= DIFF_LUMA_THRESHOLD)
+        continue;
+      if (targets[idx]) {
+        targetChanged = true;
+        continue;
+      }
+      if (isMenuBarStatusCell(gx, gy) || options.noise?.[idx]) continue;
+      if (nearCursor(gx, gy)) continue;
+      moved[idx] = 1;
+      count++;
+    }
+  return { comparable: true, targetChanged, moved, count };
+}
+
+/** Two looks show the same, by `steadyDiff`: the target as it was, and fewer than `DIFF_MIN_CELLS` other cells. */
+export function steady(diff: SteadyDiff): boolean {
+  return diff.comparable && !diff.targetChanged && diff.count < DIFF_MIN_CELLS;
+}
+
+/**
+ * The regions that keep changing by themselves, from the changes (`moved`)
+ * between looks in a row with no input between them, one mask for each pair
+ * of looks. A changed cell keeps changing when another pair changed a cell
+ * within `NOISE_REACH` of it: an animation, a video, a blinking indicator, a
+ * spinner. A change that came once and held is no such region, also right
+ * beside one. The regions get a margin of `NOISE_MARGIN`, and never cover a
+ * cell of `targets`. Null when they are larger than `NOISE_MAX_CELLS`
+ * together: that is no small region.
+ */
+export function keepsChanging(
+  pairs: CellMask[],
+  targets?: CellMask | null,
+): CellMask | null {
+  const reach = pairs.map((pair) => growCells(pair, NOISE_REACH));
+  const again = new Uint8Array(GRID_CELLS);
+  pairs.forEach((pair, i) => {
+    for (let idx = 0; idx < GRID_CELLS; idx++)
+      if (pair[idx] && reach.some((near, j) => j !== i && near[idx]))
+        again[idx] = 1;
+  });
+  const noise = growCells(again);
+  if (targets)
+    for (let idx = 0; idx < GRID_CELLS; idx++) if (targets[idx]) noise[idx] = 0;
+  return countCells(noise) > NOISE_MAX_CELLS ? null : noise;
+}
+
+/** The cells set in either mask. */
+export function joinCells(
+  one: CellMask | null | undefined,
+  other: CellMask | null | undefined,
+): CellMask {
+  const joined = new Uint8Array(GRID_CELLS);
+  for (let i = 0; i < GRID_CELLS; i++)
+    if (one?.[i] || other?.[i]) joined[i] = 1;
+  return joined;
 }

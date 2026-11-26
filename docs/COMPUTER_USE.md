@@ -108,10 +108,14 @@ computer.
 3. The worker checks that action in code. An action that is not valid is
    refused and not run, and the planner is told why.
 4. When the action needs your yes, the worker asks and waits.
-5. Just before an input, the worker looks again, with no image. It finds the
-   same element again by its role, its name and its place, and it checks the
-   action again against that look. If another window is in front or the target
-   is gone, nothing is sent.
+5. Just before an input, the worker looks again. For a click, a hover, a
+   scroll or a drag it first takes a quick picture with no walk of the tree.
+   When the window is the same and the screen looks as it did (see
+   [The quick picture](#the-quick-picture)), the input goes with the elements
+   of the planner's look. Otherwise, and for keys and text, it looks with no
+   image. It finds the same element again by its role, its name and its
+   place, and it checks the action again against that look. If another
+   window is in front or the target is gone, nothing is sent.
 6. The action goes to the hands or to the browser. Then the worker looks again
    and the planner picks the next action.
 
@@ -128,8 +132,34 @@ reads the tree in its own order, leaves out each part of the window that does
 not show (a long list gives only the rows in view), and stops at 2000
 elements, 60 levels or 0.6 seconds. When more than 400 elements remain, the
 field with the keyboard, a password field and the controls that can be used
-stay first, in the order of the tree. The look just before an input takes no
-picture.
+stay first, in the order of the tree. The full look just before an input
+takes no picture.
+
+### The quick picture
+
+The worker compares two pictures on a grid of 64 by 36 cells, by their
+brightness. The code is in `connectors/computer/visual-diff.ts`.
+
+- **The target.** The place of the target counts with a margin of one cell,
+  and one changed cell there is a change. A target in the menu bar counts
+  with its own cells only: status items sit close together, and the one
+  beside it may blink.
+- **The menu bar status area.** The right half of the menu bar does not
+  count anywhere else. Its clock, its recording indicators and its status
+  items change by themselves.
+- **Regions that keep changing.** When the target looked the same and the
+  other changes cover at most a sixth of the screen, the worker takes one
+  more quick picture after 0.15 seconds. A changed cell keeps changing when
+  the other pair of pictures changed a cell within 3 cells of it: an
+  animation, a video, a spinner, a blinking indicator. The input goes on the
+  newest picture only when every change since the planner's picture lies in
+  such regions, with a margin of one cell, and the target looked the same in
+  all three pictures. The regions together cover at most a sixth of the
+  screen. The worker keeps them for the rest of the request, for the same
+  window.
+- **What still holds.** A change at or near the target, a change that came
+  once and held, and a change of more than a sixth of the screen all get the
+  full look. Fewer than 4 changed cells elsewhere count as the same screen.
 
 One request runs at a time. A request ends after 40 actions or 15 minutes,
 whichever comes first. A request with a plan of 3 subgoals or more may take 80
@@ -390,9 +420,13 @@ through all the checks.
   changed, another window came to the front, a list lies over the place, or
   the page changed. Five held actions in a row for mixed reasons count the
   same way. Then the worker sends nothing and waits. It looks at the screen
-  every 0.4 seconds, with no input, until two looks in a row show the same
-  app, window and elements, and the same page when a page was held. It looks
-  8 times or for 6 seconds at most. Then the planner chooses again from a new
+  every 0.4 seconds, with no input, until two looks in a row show the same.
+  On the desktop it compares the pictures, as for
+  [the quick picture](#the-quick-picture), with no target: the menu bar
+  status area does not count, and a small region whose change came in an
+  earlier pair of looks too keeps changing and does not count. With a page
+  it compares the app, the window, the elements and the page. It looks 8
+  times or for 6 seconds at most. Then the planner chooses again from a new
   look, with a note that the screen settled. This happens twice at most in
   one request. When the screen does not settle, or a third such row comes,
   the request ends with what happened and what you can do: "What I tried to
@@ -2099,7 +2133,11 @@ the real screen, draws the cursor or calls a language model.
   the step and time limits; `done` before a fresh observation; the journal
   holds no typed text. Also: a screen that settles and one that never does,
   Stop during each wait, steps that swing, a still screen, a first give_up,
-  each trouble of the planner, and the signal that Stop aborts.
+  each trouble of the planner, and the signal that Stop aborts. With made-up
+  pictures: an animation beside a static button, a blinking dot beside a
+  target in the menu bar, a ticking timer in the menu bar status area, and a
+  change at the target, a change that held, a large change and a large region
+  that keeps changing, which still hold.
 - `progress` (18): the swing of two and of three actions, the still screen,
   no alarm while the screen changes, the order of notes, questions and the
   end, and the other ways that fit what is in front.
