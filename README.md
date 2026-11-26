@@ -38,8 +38,11 @@ a Chert line.
 
 ## Quick start
 
-You need macOS 14 or later, Node 24 or later, Swift (the Xcode command line
-tools) and an iPhone.
+**The simple way: [INSTALL.md](INSTALL.md).** One command installs ClawdTime,
+or one prompt has your coding agent install and set it up.
+
+By hand: you need macOS 14 or later, Node 24 or later, Swift (the Xcode
+command line tools) and an iPhone.
 
 1. **Install** ClawdTime and the `chert` command:
 
@@ -63,10 +66,11 @@ tools) and an iPhone.
      --state ~/.local/share/clawdtime/desktop --project ~/code/my-project
    ```
 
-   The mascot appears. Click it to open the chat. In System Settings, Privacy
-   & Security, give the panel Accessibility and Screen & System Audio
-   Recording. Then run `clawdtime connect` once more, so that the desktop gets
-   its calling policy.
+   `clawdtime start` runs the second command for you. With no `--project`,
+   the first start uses `~/clawdtime-work`. The mascot appears. Click it to
+   open the chat. In System Settings, Privacy & Security, give the panel
+   Accessibility and Screen & System Audio Recording. Then run
+   `clawdtime connect` once more, so that the desktop gets its calling policy.
 
 `clawdtime computer doctor` says what is ready and what is missing.
 
