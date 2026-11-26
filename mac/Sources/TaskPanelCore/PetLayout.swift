@@ -228,9 +228,20 @@ public enum OwnWindows {
   /// ordinary windows. A row that names no owner is kept, so that the check of a whole list refuses the list.
   public static func judged(layer: Int?, owner: Int?, own: Int) -> Bool { layer == 0 && owner != own }
   /// A row of the window list above the level of ordinary windows, of another process: a notification banner, a
-  /// floating panel, the menu bar, the Dock. It is never the surface of an input, but it takes a click at its place.
-  /// A row that names no level or no owner counts as one.
+  /// floating panel, the menu bar, the Dock, an open menu. It is never the surface of an input, but it takes a click at
+  /// its place. A row that names no level or no owner counts as one.
   public static func floating(layer: Int?, owner: Int?, own: Int) -> Bool { (layer ?? 1) > 0 && owner != own }
+  /// The windows that `floating` counts, of the rows that lie on `display` with a place. A row that gives no place
+  /// cannot be placed at a click, and a row with no number counts as number 0. A menu of the app in front counts as
+  /// any other: one that the look saw takes the click on its item (`floatingCover`), and one that came up at the click
+  /// point after the look, such as a submenu that opened as the pointer went by, takes no click the planner did not see.
+  public static func floatingCovers(_ rows: [ListedWindow], own: Int, display: CGRect) -> [DesktopCover] {
+    rows.compactMap { row in
+      guard floating(layer: row.layer, owner: row.owner, own: own), let frame = row.frame,
+        !display.intersection(frame).isEmpty else { return nil }
+      return DesktopCover(id: row.id ?? 0, frame: frame)
+    }
+  }
   /// A window above the ordinary ones lies at `point` now, in screen points from the top left, that did not lie
   /// there at the look: a new one, or one that moved or changed its size. `observed` are the ones of the look.
   public static func floatingCover(at point: CGPoint, observed: [DesktopCover], current: [DesktopCover]) -> Bool {
@@ -253,6 +264,16 @@ public enum OwnWindows {
   }
   /// The keys would go to ClawdTime: one of its windows has the keyboard, or ClawdTime is the app in front.
   public static func holdKeyboard(keyWindow: Bool, active: Bool) -> Bool { keyWindow || active }
+}
+
+/// One row of the window list as the hands read it: its number, its level, the process that owns it and its place,
+/// in screen points from the top left. A part that the list does not give is nil.
+public struct ListedWindow: Equatable, Sendable {
+  public let id: Int?
+  public let layer: Int?
+  public let owner: Int?
+  public let frame: CGRect?
+  public init(id: Int?, layer: Int?, owner: Int?, frame: CGRect?) { self.id = id; self.layer = layer; self.owner = owner; self.frame = frame }
 }
 
 /// One window of ClawdTime as AppKit has it at this moment, in screen points from the bottom left of the main display.
