@@ -13,8 +13,9 @@ if [ ! -d node_modules ]; then
   exit 1
 fi
 
-# The agent name, as node reads it from .env.local: the last AGENT_NAME line, without quotes.
-AGENT_NAME=$(sed -n 's/^[[:space:]]*AGENT_NAME[[:space:]]*=[[:space:]]*//p' .env.local | tail -n 1 | tr -d "\"'" | sed 's/[[:space:]]*$//')
+# The agent name of .env.local, read by node itself as node --env-file reads it for the agent: quotes, inline comments
+# and the last AGENT_NAME line. Only the file counts, not this environment.
+AGENT_NAME=$(env -i PATH="$PATH" node --env-file=.env.local -e 'process.stdout.write(process.env.AGENT_NAME ?? "")' 2>/dev/null || true)
 AGENT_NAME=${AGENT_NAME:-clawdtime}
 
 echo "The agent starts now. Next, in a second terminal:"

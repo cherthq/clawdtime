@@ -23,10 +23,11 @@ MARK="# clawdtime-line update"
 PAUSE=${CLAWDTIME_LINE_RETRY_SECONDS:-10}
 mkdir -p "$STATE"
 
-# One value of .env.local, as node reads it: the last line of that name, without quotes.
+# One value of .env.local, read by node itself as node --env-file reads it for the agent: quotes, inline comments and
+# the last line of a name. Only the file counts, not this environment. Empty when the file has no such value.
 setting() {
   [ -f "$ENV_FILE" ] || return 0
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$ENV_FILE" | tail -n 1 | tr -d "\"'" | sed 's/[[:space:]]*$//'
+  env -i PATH="$PATH" node --env-file="$ENV_FILE" -e 'process.stdout.write(process.env[process.argv[1]] ?? "")' "$1" 2>/dev/null || true
 }
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 # Agent code: explicit environment override, then env-file setting, then this folder.
