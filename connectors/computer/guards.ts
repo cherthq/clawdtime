@@ -1256,6 +1256,83 @@ const systemKeys = new Set([
   "cmd+shift+5",
 ]);
 const systemKey = (combo: string) => systemKeys.has(combo);
+/**
+ * Views of items: the files of a Finder window in a list, as icons or in
+ * columns, a table, an outline, a grid. With the focus there, Space goes to
+ * the chosen item: in Finder it opens Quick Look.
+ */
+const itemViews = new Set([
+  "AXBrowser",
+  "AXCell",
+  "AXGrid",
+  "AXList",
+  "AXOutline",
+  "AXRow",
+  "AXTable",
+]);
+/** The window and the app: they hold the focus with the element that has it. */
+const holderRoles = new Set(["AXApplication", "AXWindow"]);
+/** A button that closes a dialog or a sheet and changes nothing, in the languages that the names are read in. */
+const dismissName =
+  /^(?:cancel|close|no|not now|later|don't (?:save|send|share|allow)|abbrechen|schliessen|schließen|nein|annuler|fermer|non|cancelar|cerrar|annulla|chiudi|annuleren|sluiten|nee)$/;
+const inside = (item: ScreenElement, outer: ScreenElement) =>
+  item.x >= outer.x &&
+  item.y >= outer.y &&
+  item.x + item.w <= outer.x + outer.w &&
+  item.y + item.h <= outer.y + outer.h;
+/**
+ * A dialog or a sheet shows: a button that closes it with no change. The
+ * clear button inside a search field is no such button.
+ */
+const dialogShows = (observation: Observation) =>
+  observation.elements.some(
+    (item) =>
+      item.enabled &&
+      item.role === "AXButton" &&
+      dismissName.test(plain(item.title)) &&
+      !observation.elements.some(
+        (field) => textRoles.has(field.role) && inside(item, field),
+      ),
+  );
+/** Web content, where a script of the page can give a key to any control: a browser, a web app, a web view in an app. */
+const webContent = (observation: Observation) => {
+  const bundle = observation.app.bundleId.toLowerCase();
+  return (
+    browserBundles.has(bundle) ||
+    browserName.test(observation.app.name.trim()) ||
+    /^com\.google\.chrome\.app\.|^com\.microsoft\.edgemac\.app\./.test(
+      bundle,
+    ) ||
+    observation.elements.some((item) => item.role === "AXWebArea")
+  );
+};
+/**
+ * True when Return or Space can press a button that has no focus. The look
+ * does not say which button is the default one, so any button can, unless
+ * the focus is in a view of items of a native app. There Space goes to the
+ * chosen item: it never presses a button that has no focus, so a toolbar
+ * button such as the Share of Finder does not take it. Return goes to the
+ * chosen item only in the files of Finder, where it renames and no window
+ * has a default button, and while no dialog shows. Elsewhere a list passes
+ * Return on to the default button of its window, which the look cannot
+ * name.
+ */
+function buttonsTakeKey(key: string, observation: Observation) {
+  const focus = observation.elements.filter(
+    (item) => item.focused && !holderRoles.has(item.role),
+  );
+  if (
+    !focus.length ||
+    !focus.every((item) => itemViews.has(item.role)) ||
+    webContent(observation)
+  )
+    return true;
+  if (key === "space") return false;
+  return (
+    observation.app.bundleId.toLowerCase() !== "com.apple.finder" ||
+    dialogShows(observation)
+  );
+}
 function keyRisk(
   parsed: NonNullable<ReturnType<typeof parseCombo>>,
   observation: Observation,
@@ -1302,19 +1379,20 @@ function keyRisk(
     observation.app.bundleId.toLowerCase() === "com.apple.mail"
   )
     return sendKeyRisk(observation, goal);
-  // Return and Space press the default button of a window, the chosen item of
-  // an open menu, and whatever has the focus. So a key can do what a click on
-  // "Place order" does. With the focus in a text field the key goes to the
-  // text, and this does not apply.
+  // Return and Space press whatever has the focus and the chosen item of an
+  // open menu, and Return also the default button of a window. So a key can
+  // do what a click on "Place order" does. With the focus in a text field the
+  // key goes to the text, and this does not apply.
   if ((key === "return" || key === "space") && !modifiers.size && !writing) {
     const scene = screenScene(observation, goal);
+    const buttons = buttonsTakeKey(key, observation);
     for (const item of observation.elements) {
       if (
         !item.enabled ||
         !(
-          item.role === "AXButton" ||
+          (item.focused && !holderRoles.has(item.role)) ||
           item.role === "AXMenuItem" ||
-          item.focused
+          (item.role === "AXButton" && buttons)
         )
       )
         continue;
@@ -1405,7 +1483,8 @@ const typingRoles = new Set([
  * True when what has the focus takes typing: a text field, a cell, a sheet,
  * a grid, a canvas or a web editor. Typed text and the keys that edit text go
  * there. Return and Space are judged by `hasTextFocus`: a list or a sheet
- * with the focus passes them on to the default button of the window.
+ * with the focus passes Return on to the default button of its window
+ * (`buttonsTakeKey`).
  */
 export const hasTypingFocus = (observation: Observation) =>
   observation.elements.some(

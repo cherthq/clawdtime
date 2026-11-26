@@ -1465,6 +1465,195 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
     ).toBeNull();
   });
 
+  /**
+   * A made-up Finder window as the hands walk it: the window itself, which
+   * holds the focus too, a toolbar with Share and a search field, a sidebar,
+   * and a view of the files with one file chosen and the focus. `files` and
+   * `share` change the view of the files and the Share button, `more` adds
+   * elements.
+   */
+  const finder = ({
+    files = {},
+    share = {},
+    more = [],
+  }: {
+    files?: Partial<ScreenElement>;
+    share?: Partial<ScreenElement>;
+    more?: (string | Partial<ScreenElement>)[];
+  } = {}) =>
+    screen(
+      [
+        {
+          role: "AXWindow",
+          title: "Drafts",
+          x: 0,
+          y: 25,
+          w: 1100,
+          h: 700,
+          focused: true,
+        },
+        { title: "", x: 12, y: 33, w: 14, h: 14 },
+        { title: "Back", x: 90, y: 40, w: 28, h: 28 },
+        { title: "Forward", x: 120, y: 40, w: 28, h: 28, enabled: false },
+        { role: "AXMenuButton", title: "Group", x: 600, y: 40, w: 40, h: 28 },
+        { title: "Share", x: 650, y: 40, w: 28, h: 28, ...share },
+        { role: "AXMenuButton", title: "Action", x: 690, y: 40, w: 40, h: 28 },
+        {
+          role: "AXSearchField",
+          title: "Search",
+          x: 740,
+          y: 40,
+          w: 200,
+          h: 28,
+        },
+        // The clear button of the search field.
+        { title: "cancel", x: 915, y: 44, w: 20, h: 20 },
+        { ...text("Documents"), x: 20, y: 100, w: 120, h: 20 },
+        {
+          role: "AXOutline",
+          title: "",
+          x: 200,
+          y: 80,
+          w: 800,
+          h: 500,
+          focused: true,
+          ...files,
+        },
+        {
+          role: "AXTextField",
+          title: "",
+          value: "Stonepad notes.txt",
+          x: 220,
+          y: 100,
+          w: 300,
+          h: 20,
+        },
+        { ...text("Today at 09:41"), x: 540, y: 100, w: 120, h: 20 },
+        ...more,
+      ],
+      {
+        app: { name: "Finder", bundleId: "com.apple.finder", window: "Drafts" },
+      },
+    );
+  /** A made-up app of photos: Share and Post in its toolbar, and a grid with the focus. */
+  const photos = (more: Partial<ScreenElement>[] = [], bundleId = "") =>
+    screen(
+      [
+        { title: "Share", x: 650, y: 40, w: 28, h: 28 },
+        { title: "Post", x: 690, y: 40, w: 40, h: 28 },
+        {
+          role: "AXGrid",
+          title: "Library",
+          x: 200,
+          y: 80,
+          w: 800,
+          h: 500,
+          focused: true,
+        },
+        ...more,
+      ],
+      {
+        app: {
+          name: "Stonepad Photos",
+          bundleId: bundleId || "com.example.stonepad.photos",
+          window: "Library",
+        },
+      },
+    );
+  const sends = (name: string) =>
+    `It can press "${name}". It sends as you to other people.`;
+
+  it("gives Space and Return to the chosen file in Finder, though the toolbar shows Share", () => {
+    // Space opens Quick Look and Return renames, in each view of the files.
+    for (const role of ["AXOutline", "AXList", "AXBrowser", "AXTable"])
+      for (const combo of ["space", "return", "enter"])
+        expect(
+          run({ kind: "key", combo }, view(finder({ files: { role } }))).policy,
+          `${role} ${combo}`,
+        ).toBeNull();
+    // Space in a grid of another app: a button with no focus never takes it.
+    expect(run({ kind: "key", combo: "space" }, view(photos())).policy).toBe(
+      null,
+    );
+  });
+
+  it("still asks when Space or Return reaches a Send, a Share or a Post button", () => {
+    // The keyboard focus is on the Share button itself.
+    const onShare = finder({
+      files: { focused: false },
+      share: { focused: true },
+    });
+    for (const combo of ["space", "return"]) {
+      const pressed = run({ kind: "key", combo }, view(onShare));
+      expect(pressed.risk, combo).toBe(sends("Share"));
+      expect(yesQuestion(pressed, onShare, null)).toBe(
+        `Press ${combo} in Finder? ${sends("Share")} Say yes or no.`,
+      );
+    }
+    const onPost = screen([
+      { title: "Cancel" },
+      { title: "Post", focused: true },
+    ]);
+    expect(run({ kind: "key", combo: "space" }, view(onPost)).risk).toBe(
+      sends("Post"),
+    );
+    // An open menu over the files takes the key for its chosen item.
+    const menu = finder({ more: [{ role: "AXMenuItem", title: "Send" }] });
+    for (const combo of ["space", "return"])
+      expect(run({ kind: "key", combo }, view(menu)).risk, combo).toBe(
+        sends("Send"),
+      );
+    // Outside Finder a list passes Return on to the default button of its
+    // window, which the look cannot name: a sheet of people, or a Send
+    // under the list.
+    expect(run({ kind: "key", combo: "return" }, view(photos())).risk).toBe(
+      sends("Share"),
+    );
+    // A dialog over the files of Finder, in English or in another language,
+    // with any button that closes it: Return goes on to its default button.
+    // Space never presses a default button.
+    for (const out of ["Cancel", "Close", "No", "Not Now", "Abbrechen"]) {
+      const dialog = finder({
+        share: { enabled: false },
+        more: [
+          { title: out, x: 600, y: 380, w: 80, h: 24 },
+          { title: out === "Abbrechen" ? "Senden" : "Send", x: 700, y: 380 },
+        ],
+      });
+      expect(
+        run({ kind: "key", combo: "return" }, view(dialog)).risk,
+        out,
+      ).toBe(sends(out === "Abbrechen" ? "Senden" : "Send"));
+      expect(
+        run({ kind: "key", combo: "space" }, view(dialog)).policy,
+        out,
+      ).toBeNull();
+    }
+    // Web content: a script of the page can give a key to any control. A
+    // browser, a web app of a browser, a web view in an app.
+    const browser = finder();
+    browser.app = {
+      name: "Google Chrome",
+      bundleId: "com.google.Chrome",
+      window: "Files",
+    };
+    for (const web of [
+      browser,
+      photos([], "com.google.Chrome.app.abcdefghijklmnop"),
+      photos([{ role: "AXWebArea", title: "Library", x: 0, y: 25 }]),
+    ])
+      expect(run({ kind: "key", combo: "space" }, view(web)).policy).toBe(
+        "send",
+      );
+    // Asked to share: no question.
+    expect(
+      run(
+        { kind: "key", combo: "return" },
+        view(onShare, { goal: "Share the notes" }),
+      ).policy,
+    ).toBeNull();
+  });
+
   it("asks before the keys that log out of the Mac, or delete at once in Finder", () => {
     for (const combo of ["cmd+shift+q", "cmd+opt+shift+q"])
       expect(run({ kind: "key", combo }).policy, combo).toBe("loss");
