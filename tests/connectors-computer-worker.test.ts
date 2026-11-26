@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import jpeg from "jpeg-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComputerJournal } from "../connectors/computer/journal.js";
+import { BrowserInputUnknown } from "../connectors/computer/own-browser.js";
 import {
   BrowserClosed,
   type Action,
@@ -5748,11 +5749,44 @@ describe("the browser", () => {
     );
   });
 
-  it("goes on when the browser fails, and reads the page again", async () => {
+  it("ends uncertain when the browser lost the answer of a click that went out, and never clicks again", async () => {
     const browser = new FakeBrowser(shop);
     browser.click = async () => {
-      browser.calls.push("click failed");
-      throw new Error("The script did not run.");
+      browser.calls.push("click lost");
+      throw new BrowserInputUnknown(
+        "The page could not be read after the click. Its result is not known, and it is not sent again.",
+      );
+    };
+    const { worker, planner, journal } = setup(
+      [
+        { kind: "browser_read" },
+        { kind: "browser_click", index: 5 },
+        { kind: "browser_click", index: 5 },
+        done,
+      ],
+      { browser },
+    );
+    await worker.submit("r1", "Next");
+    await worker.idle();
+    expect(browser.calls).toEqual(["read", "read", "click lost"]);
+    // The planner never reads "did not run", and gets no turn to send it again.
+    expect(planner.inputs).toHaveLength(2);
+    expect(worker.snapshot().state).toBe("uncertain");
+    expect(journal.get("r1")).toMatchObject({
+      state: "uncertain",
+      reason: "lost_result",
+      steps: [
+        { kind: "browser_read", outcome: "ok" },
+        { kind: "browser_click", target: "Next", outcome: "lost" },
+      ],
+    });
+  });
+
+  it("goes on when the browser refused before anything went out, and reads the page again", async () => {
+    const browser = new FakeBrowser(shop);
+    browser.click = async () => {
+      browser.calls.push("click refused");
+      throw new Error("Next is disabled now.");
     };
     const { worker, planner } = setup(
       [{ kind: "browser_read" }, { kind: "browser_click", index: 5 }, done],
@@ -5762,10 +5796,32 @@ describe("the browser", () => {
     await worker.idle();
     // The planner reads why, on one line. The browser stays on offer.
     expect(planner.inputs[2]!.history[1]!.outcome).toBe(
-      "did not run: The script did not run.",
+      "did not run: Next is disabled now.",
     );
     expect(planner.inputs[2]!.page).toBeNull();
     expect(planner.inputs[2]!.browser).toBeUndefined();
+    expect(worker.snapshot().state).toBe("completed");
+  });
+
+  it("never says that a scroll did not run when its answer was lost", async () => {
+    const browser = new FakeBrowser(shop);
+    browser.scroll = async () => {
+      browser.calls.push("scroll lost");
+      throw new BrowserInputUnknown("The answer did not come back.");
+    };
+    const { worker, planner } = setup(
+      [
+        { kind: "browser_read" },
+        { kind: "browser_scroll", direction: "down" },
+        done,
+      ],
+      { browser },
+    );
+    await worker.submit("r1", "Scroll");
+    await worker.idle();
+    expect(planner.inputs[2]!.history[1]!.outcome).toBe(
+      "no result came back: The answer did not come back.",
+    );
     expect(worker.snapshot().state).toBe("completed");
   });
 

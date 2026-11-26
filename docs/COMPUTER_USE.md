@@ -89,7 +89,10 @@ and no Automation right of macOS.
   profile. It refuses any other program.
 - A read may start the browser again after it closed. An input never does, and
   an input whose answer did not come back is never sent again: the request
-  becomes uncertain.
+  becomes uncertain. The same holds when a dialog opens after the input, the
+  tab or the connection is lost, or no reading of the page works after it.
+  Both drivers say so with `BrowserInputUnknown`. Every other error of a
+  browser step means that nothing went out.
 - It never types into a password field and never reads one.
 
 `clawdtime computer doctor`, run with the same variable, says whether a
@@ -1915,10 +1918,13 @@ of a screen share while the worker runs. Only the cursor is in it.
 
 ## What is not known
 
-Two things make a request `uncertain`:
+Three things make a request `uncertain`:
 
 - The service restarted while the request was running.
 - An action went to the hands and its result never came back.
+- A browser input went out, or may have, and its answer or the reading of the
+  page after it never came: a timeout, a dialog that holds the page, a lost
+  tab. The step is never reported as "did not run".
 
 An uncertain request is never run again, and no new request starts. Look at the
 screen to see what happened. Then run `clawdtime computer clear`. Its record

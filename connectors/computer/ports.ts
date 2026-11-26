@@ -328,6 +328,15 @@ export interface BrowserPage {
  */
 export class BrowserClosed extends Error {}
 
+/**
+ * An input went out, or may have, and its answer or the reading of the page
+ * after it never came: a timeout, a dialog that blocks the page, a lost tab
+ * or connection. It may have happened. The worker makes the request
+ * uncertain and never sends it again. Every other error of a step of a
+ * driver means that nothing went out.
+ */
+export class BrowserInputUnknown extends Error {}
+
 export interface BrowserPort {
   /** Whether a browser can be driven now, and what the person must switch on when it cannot. */
   doctor(): Promise<{ ok: boolean; browser: string | null; reason: string }>;

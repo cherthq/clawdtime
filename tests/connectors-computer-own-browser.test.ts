@@ -672,6 +672,55 @@ describe("ClawdTime's own browser: no blind retry", () => {
     ).toHaveLength(1);
   });
 
+  it("says that the result of an input is not known when a dialog or a lost reading follows it", async () => {
+    const pressed = (paper: PaperBrowser) =>
+      paper
+        .of("Input.dispatchMouseEvent")
+        .filter((item) => item.params.type === "mousePressed");
+    // A dialog opens while the click goes out.
+    {
+      const { paper, browser } = setup();
+      await browser.read();
+      paper.before = (sent) => {
+        if (sent.params.type === "mouseReleased")
+          paper.emit("Page.javascriptDialogOpening", {
+            message: "Delete all orders?",
+            type: "confirm",
+          });
+      };
+      const error = await browser.click(1).catch((failure) => failure);
+      expect(error).toBeInstanceOf(BrowserInputUnknown);
+      expect(error.message).toMatch(/The page shows a dialog/);
+      expect(error.message).toMatch(/Its result is not known/);
+      expect(pressed(paper)).toHaveLength(1);
+    }
+    // The click went out, and no reading of the page after it worked.
+    {
+      const { paper, browser } = setup();
+      await browser.read();
+      paper.before = (sent) => {
+        if (sent.params.type === "mouseReleased") paper.page = { lost: true };
+      };
+      const error = await browser.click(1).catch((failure) => failure);
+      expect(error).toBeInstanceOf(BrowserInputUnknown);
+      expect(error.message).toMatch(/Its result is not known/);
+      expect(pressed(paper)).toHaveLength(1);
+    }
+    // A dialog that was open before the step: nothing went out.
+    {
+      const { paper, browser } = setup();
+      await browser.read();
+      paper.emit("Page.javascriptDialogOpening", {
+        message: "Leave page?",
+        type: "beforeunload",
+      });
+      const error = await browser.click(1).catch((failure) => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(BrowserInputUnknown);
+      expect(paper.inputs()).toEqual([]);
+    }
+  });
+
   it("does not open an address again when the browser ended while it opened", async () => {
     const { paper, browser } = setup();
     paper.dieOn = (sent) => sent.method === "Page.navigate";

@@ -133,13 +133,12 @@ import {
   type CellMask,
   type FocusRect,
 } from "./visual-diff.js";
-import { BrowserClosed, handErrors } from "./ports.js";
+import { BrowserClosed, BrowserInputUnknown, handErrors } from "./ports.js";
 import { navigationIntentSchema, type NavigationIntent } from "./navigation.js";
 import { directAddress, webAddress } from "./navigation.js";
 import { directOpening } from "./planner.js";
 import { supportedBrowsers } from "./browser.js";
 import { errorPage, notLoadedNote } from "./error-page.js";
-import { BrowserInputUnknown } from "./own-browser.js";
 import {
   giveUpNote,
   otherWays,
@@ -4387,6 +4386,8 @@ export class ComputerWorker implements DesktopExecutorPort {
         );
       }
       if (!quiet && !(error instanceof BrowserClosed)) this.wentOut(run);
+      // Here only a scroll, whose loss loses nothing, can be unknown. Any
+      // other error of a driver says that nothing went out (`ports.ts`).
       this.note(
         run,
         action,
@@ -4395,14 +4396,12 @@ export class ComputerWorker implements DesktopExecutorPort {
         this.browserFailure(
           run,
           error,
-          error instanceof BrowserInputUnknown
-            ? "no result came back"
-            : "did not run",
+          unknown && !quiet ? "no result came back" : "did not run",
         ),
         "failed",
       );
-      // The browser can fail after the click or the link went out. So this
-      // is in no row: nothing here says that it was sent, or that it was not.
+      // This is in no row of held steps: the step failed, and it did not
+      // meet the same screen again.
       this.halted(run);
       return;
     } finally {

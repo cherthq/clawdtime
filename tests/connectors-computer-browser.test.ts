@@ -22,6 +22,7 @@ import {
   pageScript,
   type PageCall,
 } from "../connectors/computer/browser-script.js";
+import { BrowserInputUnknown } from "../connectors/computer/own-browser.js";
 import {
   BrowserClosed,
   type BrowserPort,
@@ -882,6 +883,72 @@ describe("the browser driver: the wait after a step", () => {
       "Google Chrome cannot run a script on the page in front, which is one of its own pages: open a web page, then try again.",
     );
     expect(lost.slept.reduce((sum, ms) => sum + ms, 0)).toBe(3000);
+  });
+
+  it("says that the result of an input is not known when its answer or the reading after it is lost", async () => {
+    const between = "clawdtime:no-answer";
+    const silent: CommandOutput = { status: null, stdout: "" };
+    const lost = [
+      // The click went out, and no reading after it worked.
+      { replies: [done, between], run: (b: BrowserPort) => b.click(1) },
+      { replies: [done, silent], run: (b: BrowserPort) => b.click(1) },
+      // The click script itself timed out, or gave nothing back.
+      { replies: [silent], run: (b: BrowserPort) => b.click(1) },
+      {
+        replies: [marked(-1712, "AppleEvent timed out.")],
+        run: (b: BrowserPort) => b.type(1, "tea", true),
+      },
+      { replies: [between], run: (b: BrowserPort) => b.key!("Enter") },
+      { replies: ["{"], run: (b: BrowserPort) => b.back() },
+      {
+        replies: [marked(-2700, "Something new.")],
+        run: (b: BrowserPort) => b.select!(1, "Large"),
+      },
+      // An address that went out, and a switch of the tab.
+      { replies: [silent], run: (b: BrowserPort) => b.open("https://a.test") },
+      {
+        replies: ["clawdtime:opened", between],
+        run: (b: BrowserPort) => b.open("https://a.test"),
+      },
+      {
+        replies: ["clawdtime:switched", silent],
+        run: (b: BrowserPort) => b.switchTab!(2),
+      },
+    ];
+    for (const { replies, run } of lost) {
+      const { browser, sent } = paper(replies);
+      const error = await run(browser).catch((failure: unknown) => failure);
+      expect(error, JSON.stringify(replies)).toBeInstanceOf(
+        BrowserInputUnknown,
+      );
+      expect((error as Error).message).toMatch(
+        /Its result is not known, and it is not sent again\./,
+      );
+      // The input went out once, never again: the rest are readings.
+      expect(
+        sent().filter((call) => !String(call.args[2]).includes('"do":"read"')),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("keeps a refusal before any input a plain error: nothing was sent", async () => {
+    const refusals = [
+      JSON.stringify({ ok: false, error: "Number 1 is disabled now." }),
+      marked(-1743, "Not authorized to send Apple events to Google Chrome."),
+      marked(12, "Executing JavaScript through AppleScript is turned off."),
+      marked(-600, "Application isn't running."),
+      "clawdtime:no-window",
+    ];
+    for (const reply of refusals) {
+      const { browser, sent } = paper([reply]);
+      const error = await browser.click(1).catch((failure: unknown) => failure);
+      expect(error, reply).toBeInstanceOf(Error);
+      expect(error, reply).not.toBeInstanceOf(BrowserInputUnknown);
+      expect(sent()).toHaveLength(1);
+    }
+    await expect(
+      paper(["clawdtime:no-tab"]).browser.switchTab(9),
+    ).rejects.not.toBeInstanceOf(BrowserInputUnknown);
   });
 
   it("waits after open until the new tab shows a web address", async () => {

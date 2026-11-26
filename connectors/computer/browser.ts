@@ -44,6 +44,7 @@ import {
 import { OwnBrowser } from "./own-browser.js";
 import {
   BrowserClosed,
+  BrowserInputUnknown,
   type BrowserElement,
   type BrowserPage,
   type BrowserPort,
@@ -515,6 +516,24 @@ export function pageOfReading(
 const refusal = (result: { reason: string; closed?: true }) =>
   result.closed ? new BrowserClosed(result.reason) : new Error(result.reason);
 
+/**
+ * The error of a step whose input went out, or may have: its answer, or the
+ * reading of the page after it, never came. It is not sent again.
+ */
+const lostInput = (browser: SupportedBrowser, why: unknown) =>
+  new BrowserInputUnknown(
+    `The step went to ${browser.name}, and ${oneLine(messageOf(why), 200)} Its result is not known, and it is not sent again. Read the page to see what happened.`,
+  );
+/** The failure of the script of an input, as the step tells it. */
+function inputRefusal(
+  browser: SupportedBrowser,
+  result: { reason: string; closed?: true; unsure?: true },
+) {
+  return result.unsure
+    ? lostInput(browser, `its answer did not come back: ${result.reason}`)
+    : refusal(result);
+}
+
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
@@ -585,11 +604,11 @@ export class AppleEventsBrowser implements BrowserPort {
       browser,
       await this.command(["-e", openScript(browser), address]),
     );
-    if ("reason" in result) throw refusal(result);
+    if ("reason" in result) throw inputRefusal(browser, result);
     if (result.text !== "clawdtime:opened")
-      throw new Error(unreadable(browser));
+      throw lostInput(browser, unreadable(browser));
     // A new tab holds an empty first document until the address answers.
-    return this.settled(browser, (page) => /^https?:/i.test(page.url));
+    return this.after(browser, (page) => /^https?:/i.test(page.url));
   }
 
   async read(): Promise<BrowserPage> {
@@ -714,21 +733,42 @@ export class AppleEventsBrowser implements BrowserPort {
       browser,
       await this.command(["-e", switchTabScript(browser), String(tab)]),
     );
-    if ("reason" in result) throw refusal(result);
+    if ("reason" in result) throw inputRefusal(browser, result);
     if (result.text === "clawdtime:no-tab")
       throw new Error(
         "That tab is not in the front window any more: list the tabs again.",
       );
     if (result.text !== "clawdtime:switched")
-      throw new Error(unreadable(browser));
-    return this.settled(browser);
+      throw lostInput(browser, unreadable(browser));
+    return this.after(browser);
   }
 
-  /** One step that changes the page, then the page when it is ready again. */
+  /**
+   * One step that changes the page, then the page when it is ready again.
+   * Once its script went out, a timeout, no answer or an answer that cannot
+   * be read leaves its result unknown, and so does a wait with no reading.
+   * A refusal of the page, or a door that is closed, says that nothing ran.
+   */
   private async step(call: PageCall) {
     const browser = await this.chosen();
-    await this.ask(browser, call);
-    return this.settled(browser);
+    await this.ask(browser, call, true);
+    return this.after(browser);
+  }
+
+  /** The wait after an input that went out. With no reading, its result is not known. */
+  private async after(
+    browser: SupportedBrowser,
+    fits?: (page: BrowserPage) => boolean,
+  ) {
+    try {
+      return await this.settled(browser, fits);
+    } catch (error) {
+      if (error instanceof BrowserClosed) throw error;
+      throw lostInput(
+        browser,
+        `the page could not be read after it: ${messageOf(error)}`,
+      );
+    }
   }
 
   private async command(args: string[]): Promise<CommandOutput> {
@@ -770,9 +810,11 @@ export class AppleEventsBrowser implements BrowserPort {
   private outcome(
     browser: SupportedBrowser,
     output: CommandOutput,
-  ): { text: string } | { reason: string; closed?: true } {
+  ): { text: string } | { reason: string; closed?: true; unsure?: true } {
+    // unsure: the script may have run. A timeout, a page that gave nothing
+    // back and an error that ClawdTime does not know cannot say that it did not.
     if (output.status === null)
-      return { reason: reasonFor("timed_out", browser) };
+      return { reason: reasonFor("timed_out", browser), unsure: true };
     // osascript ends what it prints with one line break.
     const printed = output.stdout.replace(/\r?\n$/, "");
     const marked = /^clawdtime:error:(-?\d+):([\s\S]*)$/.exec(printed);
@@ -789,23 +831,30 @@ export class AppleEventsBrowser implements BrowserPort {
           ...(trouble === "javascript_off" || trouble === "automation_denied"
             ? { closed: true as const }
             : {}),
+          ...(trouble === "timed_out" || trouble === "no_answer"
+            ? { unsure: true as const }
+            : {}),
         };
       const detail =
         oneLine(marked ? `${text} (${number})` : text, 200) ||
         `osascript ended with status ${output.status}.`;
       return {
         reason: `${browser.name} gave an error that ClawdTime does not know: ${detail}`,
+        unsure: true,
       };
     }
     if (printed === "clawdtime:no-window")
       return { reason: reasonFor("no_window", browser) };
     if (printed === "clawdtime:no-answer")
-      return { reason: reasonFor("no_answer", browser) };
+      return { reason: reasonFor("no_answer", browser), unsure: true };
     return { text: printed };
   }
 
-  /** One call into the page. It throws the reason when the door is closed or the page refuses. */
-  private async ask(browser: SupportedBrowser, call: PageCall) {
+  /**
+   * One call into the page. It throws the reason when the door is closed or
+   * the page refuses. For an input, an answer that is lost says so.
+   */
+  private async ask(browser: SupportedBrowser, call: PageCall, input = false) {
     const script = pageScript(call, {
       session: this.session,
       start: this.next,
@@ -814,9 +863,13 @@ export class AppleEventsBrowser implements BrowserPort {
       browser,
       await this.command(["-e", runScript(browser), script]),
     );
-    if ("reason" in result) throw refusal(result);
+    if ("reason" in result)
+      throw input ? inputRefusal(browser, result) : refusal(result);
     const answer = parsePageAnswer(result.text);
-    if (!answer) throw new Error(unreadable(browser));
+    if (!answer)
+      throw input
+        ? lostInput(browser, unreadable(browser))
+        : new Error(unreadable(browser));
     if (!answer.ok) throw new Error(oneLine(answer.error, 300));
     if (answer.next !== undefined) this.next = Math.max(this.next, answer.next);
     return answer;

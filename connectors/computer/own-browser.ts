@@ -75,6 +75,7 @@ import {
 import { computerDirectory } from "./journal.js";
 import {
   BrowserClosed,
+  BrowserInputUnknown,
   type BrowserDialog,
   type BrowserDownload,
   type BrowserExtract,
@@ -83,12 +84,19 @@ import {
   type BrowserTab,
 } from "./ports.js";
 
-/**
- * An input went out and its answer never came: the connection closed, or the
- * browser did not answer in time. It may have happened. The worker makes the
- * request uncertain and never sends it again.
- */
-export class BrowserInputUnknown extends Error {}
+export { BrowserInputUnknown };
+
+/** A JavaScript dialog holds the page. Before an input, nothing went out; after one, its result is not known. */
+class PageDialog extends Error {}
+/** The wait after an input ended with no reading of the page. */
+class Unsettled extends Error {}
+/** A failure that, after an input went out, leaves its result unknown. */
+const lostAfterInput = (error: unknown) =>
+  error instanceof BrowserInputUnknown ||
+  error instanceof DevToolsClosed ||
+  error instanceof DevToolsTimeout ||
+  error instanceof PageDialog ||
+  error instanceof Unsettled;
 
 /** A program that started. */
 export interface LaunchedBrowser {
@@ -216,6 +224,9 @@ const me = "ClawdTime's browser";
 const notOpen = `${me} is not open. Nothing was sent. Read the page or open an address first: that starts it.`;
 const endedNothingSent = `${me} closed. Nothing was sent. Read the page again: that starts it again.`;
 const lostInput = `${me} closed while the input went out. Its result is not known, and it is not sent again. Read the page to see what happened.`;
+const notKnown =
+  "Its result is not known, and it is not sent again. Read the page to see what happened.";
+const silentInput = `${me} did not answer an input in time. ${notKnown}`;
 const ownPage = `${me} shows one of its own pages, which ClawdTime does not read or operate: open a web page, then try again.`;
 const unreadable = `${me} gave an answer that ClawdTime could not read: read the page again.`;
 const changing = `The page changed while ${me} read it: read the page again.`;
@@ -861,9 +872,7 @@ export class OwnBrowser implements BrowserPort {
         );
       } catch (error) {
         if (error instanceof DevToolsTimeout)
-          throw new BrowserInputUnknown(
-            `${me} did not answer an input in time. Its result is not known, and it is not sent again. Read the page to see what happened.`,
-          );
+          throw new BrowserInputUnknown(silentInput);
         throw error;
       }
       if (tab.dialog === handling) tab.dialog = null;
@@ -969,8 +978,8 @@ export class OwnBrowser implements BrowserPort {
             );
             field = page.elements.find((item) => item.index === index);
           } catch (fallbackError) {
-            if (fallbackError instanceof DevToolsClosed) throw fallbackError;
-            // Input.insertText already succeeded; swallow script fallback errors.
+            if (lostAfterInput(fallbackError)) throw fallbackError;
+            // Input.insertText already succeeded; swallow a refusal of the script.
           }
         }
         if (field && !field.password && field.value === "")
@@ -1117,7 +1126,7 @@ export class OwnBrowser implements BrowserPort {
               });
               ranFallback = true;
             } catch (fallbackError) {
-              if (fallbackError instanceof DevToolsClosed) throw fallbackError;
+              if (lostAfterInput(fallbackError)) throw fallbackError;
             }
           }
         }
@@ -2291,15 +2300,30 @@ export class OwnBrowser implements BrowserPort {
   }
 
   /**
-   * The error to tell, when the connection closed during a step. Once an
-   * input went out, its result is not known.
+   * The error to tell when a step failed. Once an input went out, a closed
+   * connection, a browser that did not answer in time, a dialog that holds
+   * the page or a wait with no reading leaves its result unknown. A refusal
+   * of the driver or of the page stays as it is: it says what happened.
    */
   private lost(step: Step, error: unknown) {
     if (error instanceof BrowserInputUnknown) return error;
-    if (!(error instanceof DevToolsClosed)) return error;
-    return step.sent
-      ? new BrowserInputUnknown(lostInput)
-      : new Error(endedNothingSent);
+    if (!step.sent)
+      return error instanceof DevToolsClosed
+        ? new Error(endedNothingSent)
+        : error;
+    if (error instanceof DevToolsClosed)
+      return new BrowserInputUnknown(lostInput);
+    if (error instanceof DevToolsTimeout)
+      return new BrowserInputUnknown(silentInput);
+    if (error instanceof PageDialog)
+      return new BrowserInputUnknown(
+        `${error.message} It opened after the input went out. ${notKnown}`,
+      );
+    if (error instanceof Unsettled)
+      return new BrowserInputUnknown(
+        `The input went out, and ${me} could not read the page after it: ${oneLine(error.message, 200)} ${notKnown}`,
+      );
+    return error;
   }
 
   private commandSession<T = Record<string, unknown>>(
@@ -2337,12 +2361,13 @@ export class OwnBrowser implements BrowserPort {
     method: string,
     params: Record<string, unknown>,
   ): Promise<T> {
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
+    if (tab.dialog !== null)
+      throw new PageDialog(dialogText(tab.dialog.message));
     step.sent = true;
     let stop = () => {};
     const dialog = new Promise<never>((_resolve, reject) => {
       const watch = () =>
-        reject(new Error(dialogText(tab.dialog?.message ?? "")));
+        reject(new PageDialog(dialogText(tab.dialog?.message ?? "")));
       tab.dialogWatch.add(watch);
       stop = () => tab.dialogWatch.delete(watch);
     });
@@ -2351,11 +2376,10 @@ export class OwnBrowser implements BrowserPort {
     try {
       return await Promise.race([pending, dialog]);
     } catch (error) {
-      // The command went out and no answer came: it may have happened.
+      // The command went out and no answer came: it may have happened. A
+      // dialog that opened meanwhile leaves it unknown too (see `lost`).
       if (error instanceof DevToolsTimeout)
-        throw new BrowserInputUnknown(
-          `${me} did not answer an input in time. Its result is not known, and it is not sent again. Read the page to see what happened.`,
-        );
+        throw new BrowserInputUnknown(silentInput);
       throw error;
     } finally {
       stop();
@@ -2550,7 +2574,8 @@ export class OwnBrowser implements BrowserPort {
 
   /** Runs the page script once and gives back its answer as text. */
   private async evaluate(tab: Tab, call: PageCall): Promise<string> {
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
+    if (tab.dialog !== null)
+      throw new PageDialog(dialogText(tab.dialog.message));
     const expression = pageScript(call, {
       session: this.session,
       start: this.next,
@@ -2644,7 +2669,8 @@ export class OwnBrowser implements BrowserPort {
     frameId: string,
     call: PageCall,
   ): Promise<string> {
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
+    if (tab.dialog !== null)
+      throw new PageDialog(dialogText(tab.dialog.message));
     const expression = pageScript(call, {
       session: this.session,
       start: this.next,
@@ -3554,7 +3580,8 @@ export class OwnBrowser implements BrowserPort {
         navigation = true;
         effectiveCap = Math.max(effectiveCap, ownTiming.openWaitMs);
       }
-      if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
+      if (tab.dialog !== null)
+        throw new PageDialog(dialogText(tab.dialog.message));
       if (
         !navigation &&
         (tab.documents > docsBefore ||
@@ -3604,12 +3631,17 @@ export class OwnBrowser implements BrowserPort {
     }
     const popup = await this.adoptPendingPopup(tab);
     if (popup) tab = popup;
-    if (tab.dialog !== null) throw new Error(dialogText(tab.dialog.message));
+    if (tab.dialog !== null)
+      throw new PageDialog(dialogText(tab.dialog.message));
     try {
       return (await this.look(tab)).page;
     } catch (error) {
-      if (error instanceof DevToolsClosed) throw error;
-      throw failed ?? error;
+      if (error instanceof DevToolsClosed || error instanceof PageDialog)
+        throw error;
+      // Every caller waits here after an input went out: with no reading,
+      // its result is not known (see `lost`).
+      const last = failed ?? error;
+      throw new Unsettled(last instanceof Error ? last.message : String(last));
     }
   }
 }
