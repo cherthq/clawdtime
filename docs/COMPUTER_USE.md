@@ -659,11 +659,16 @@ The planner's rules for the outline and for each turn with a plan say:
   before a close.
 - Carry the task to its natural end: after a post, see the post; after a save
   or a change of a setting, see the saved state.
-- When a password, a code or another secret is needed, ask, and say what is
-  needed and where. The person types it on the Mac. A name or an email
-  address that only the person knows is no secret: the planner asks for it
-  and types it itself. The rule that made the person type every part of a
-  sign-in left the request test asking 7 times in a row for a work email.
+- When a password, a PIN, a code that the person receives (a sign-in code, a
+  one-time code) or another secret is needed, ask, and say what is needed and
+  where. The person types it on the Mac. A name or an email address that only
+  the person knows is no secret: the planner asks for it and types it itself.
+  The rule that made the person type every part of a sign-in left the request
+  test asking 7 times in a row for a work email. A reference, order, booking
+  or confirmation number that the screen shows or the goal names is no secret
+  either: the planner reads it, keeps it and types it itself. The rule that
+  said only "a code" made `gpt-6.2-sol` ask the person to type the reference
+  of the lease form.
 
 The outline alone also reads two lines on `say`: one line in the language of
 the goal, in the first person and the present tense, about what the planner
