@@ -908,7 +908,17 @@ CLAWDTIME_OPENAI_API=chat npm run eval:computer:planner -- gpt-6.1-terra@none
   from step to step. Only the turn after them changes. OpenAI keeps such a
   first part in its cache by itself. For Anthropic the rules carry one cache
   marker, so the functions and the rules come from the cache after the first
-  step.
+  step. The turn itself starts with the goal and the steps so far, which
+  change least.
+- A turn costs about the same time whatever its size. Measured on November
+  26, 2026, with one screen of the request test, 5 or 6 rounds of each: on
+  `gpt-6.2-sol` a turn took a median of 1.6 to 2.0 seconds with 4,400 to
+  4,900 tokens (3,000 to 3,500 from the cache, 25 to 29 out, no reasoning),
+  and 1.6 to 2.1 seconds with no picture, a small picture, a picture at 0.6
+  of its size, half of the elements or a cache key: no change beyond the
+  spread of the same request. On `claude-opus-5-5` a turn took 1.2
+  to 1.3 seconds with 7,900 tokens, and the same with no cache. So the number
+  of turns sets the time, not their size: `then` saves whole turns.
 - Each answer tells how many tokens of the request came from the cache. The
   planner gives them, with the input and output tokens, to its `onUsage`
   callback.
