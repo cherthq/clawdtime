@@ -1370,6 +1370,12 @@ How the rows read a name:
   but wait for me") says no yes ahead of time: every action of the table asks.
 - **A text field.** A click that only gives a text field the focus asks
   nothing.
+- **A part of a control.** A click is judged by every element that it
+  presses: the element under the point, or the one chosen by its number, and
+  each larger element that holds it, up to the first one that is no image and
+  no text. A named image or a text inside a "Send" button asks as a send, and
+  the question names Send. A group or a window that holds the point ends the
+  row: a click does not press it.
 - **A point or an icon.** For a point with no named element, for a control
   with no name (an icon chosen by its number, on the screen or on the page),
   and for a large element that only holds others, the planner's own reason is

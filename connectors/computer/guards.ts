@@ -1365,6 +1365,58 @@ function under(
       best = item;
   return best;
 }
+/** The roles that are a part of a control, not a control: a click on one presses what holds it. */
+const partRoles = new Set([
+  "AXImage",
+  "AXStaticText",
+  "AXUnknown",
+  "AXHeading",
+  "OCRText",
+]);
+/**
+ * Every element that a click on `start` presses: `start`, then each larger
+ * element that holds it, up to and with the first one that is no part of
+ * another (no image and no text): a named image inside a "Send" button is a
+ * press of "Send". A container ends the row and is not in it: a group holds
+ * the point, but a click does not press the group. An element beside `start`
+ * that only overlaps it is not in the row.
+ */
+function pressedFrom(observation: Observation, start: ScreenElement) {
+  const row: ScreenElement[] = [start];
+  if (!partRoles.has(start.role)) return row;
+  const holds = (outer: ScreenElement, inner: ScreenElement) =>
+    outer.x <= inner.x + 1 &&
+    outer.y <= inner.y + 1 &&
+    outer.x + outer.w >= inner.x + inner.w - 1 &&
+    outer.y + outer.h >= inner.y + inner.h - 1;
+  const around = observation.elements
+    .filter(
+      (item) =>
+        item !== start &&
+        item.w * item.h > start.w * start.h &&
+        holds(item, start),
+    )
+    .sort((left, right) => left.w * left.h - right.w * right.h);
+  for (const item of around) {
+    if (containerRoles.has(item.role)) break;
+    if (!holds(item, row.at(-1)!)) continue;
+    row.push(item);
+    if (!partRoles.has(item.role)) break;
+  }
+  return row;
+}
+/** The first element of the row whose name asks, with its question. */
+function rowRisk(
+  row: readonly ScreenElement[],
+  observation: Observation,
+  goal?: string,
+) {
+  for (const item of row) {
+    const found = screenRisk(item, observation, goal);
+    if (found) return { item, found };
+  }
+  return null;
+}
 /**
  * A click at the point goes into a text field: on the field, or on a text
  * that it shows, such as its placeholder "Reply\u2026". It gives the field the
@@ -1869,17 +1921,23 @@ function checkScreen(
       const found = pick(action.element);
       if ("verdict" in found) return found;
       const point = middle(found);
+      // The click presses the element and what holds it, up to its control:
+      // the name that asks may be the button's, not its image's.
+      const pressed = intoField(seen, found, point)
+        ? null
+        : rowRisk(pressedFrom(seen, found), seen, view.goal);
+      const named = pressed?.item ?? found;
       return {
         verdict: "run",
-        label: `${verb(action.double, action.right)} ${nameOf(found)}`,
-        target: clean(found.title, 80),
+        label: `${verb(action.double, action.right)} ${nameOf(named)}`,
+        target: clean(named.title, 80),
         // A click on a text field only gives it the focus. For a control
         // with no name, or one that only holds others, the planner's own
         // words count too. They can add a question. They never remove one.
         ...asking(
           intoField(seen, found, point)
             ? null
-            : (screenRisk(found, seen, view.goal) ??
+            : (pressed?.found ??
                 (nameless(found, seen)
                   ? askFor(why, screenScene(seen, view.goal), "words")
                   : null)),
@@ -1897,7 +1955,21 @@ function checkScreen(
       if (point === "no_image") return refuse(noImageRefusal);
       if (point === "outside") return refuse(outsideRefusal);
       const found = under(seen, point);
-      const named = found && clean(found.title, 80) ? found : null;
+      // Every element under the point, up to the control that the click
+      // presses, counts: a named image inside "Send" asks as a send.
+      const pressed = intoField(seen, found, point)
+        ? null
+        : found
+          ? rowRisk(
+              pressedFrom(seen, found).filter(
+                (item) => item !== found || clean(found.title, 80) !== "",
+              ),
+              seen,
+              view.goal,
+            )
+          : null;
+      const named =
+        pressed?.item ?? (found && clean(found.title, 80) ? found : null);
       return {
         verdict: "run",
         label: named
@@ -1910,7 +1982,7 @@ function checkScreen(
         ...asking(
           intoField(seen, found, point)
             ? null
-            : ((named ? screenRisk(named, seen, view.goal) : null) ??
+            : (pressed?.found ??
                 (nameless(found, seen)
                   ? askFor(why, screenScene(seen, view.goal), "words")
                   : null)),

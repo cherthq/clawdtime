@@ -957,6 +957,53 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
             why,
           ).toBe("send");
       });
+
+      it("judges a click by every element under the point, up to the control that it presses", () => {
+        const said = "Read the thread of the last message";
+        // A named image inside the Send button, hit at a point or by its
+        // number: the click presses Send, and the question names it.
+        const icon = {
+          role: "AXImage",
+          title: "paper plane",
+          x: 1310,
+          y: 777,
+          w: 20,
+          h: 20,
+        };
+        const sendButton = {
+          role: "AXButton",
+          title: "Send",
+          x: 1300,
+          y: 772,
+          w: 45,
+          h: 30,
+        };
+        const iconInside = thread([frame, box, sendButton, icon]);
+        for (const raw of [
+          { kind: "click_at", x: 1173, y: 699 },
+          { kind: "click_element", element: 4 },
+        ]) {
+          expect(asks(raw, iconInside, "", said).policy, raw.kind).toBe("send");
+          expect(
+            run(raw, view(iconInside, { goal: said }), "").label,
+            raw.kind,
+          ).toBe('Click "Send"');
+        }
+        // The same image in a button that sends nothing, or in a group whose
+        // name asks: the group holds the point, and a click does not press it.
+        for (const around of [
+          { ...sendButton, title: "Attach" },
+          { ...sendButton, role: "AXGroup", title: "Send feedback" },
+        ])
+          for (const raw of [
+            { kind: "click_at", x: 1173, y: 699 },
+            { kind: "click_element", element: 4 },
+          ])
+            expect(
+              asks(raw, thread([frame, box, around, icon]), "", said),
+              `${around.title} ${raw.kind}`,
+            ).toEqual(none);
+      });
     });
   });
 
