@@ -163,6 +163,93 @@ public enum DesktopArrival {
     return .notArrived
   }
 
+  /// One running process: its process identifier and the bundle identifier that macOS lists for it.
+  public struct RunningApp: Equatable, Sendable {
+    public let pid: Int
+    public let bundleID: String?
+    public init(pid: Int, bundleID: String?) { self.pid = pid; self.bundleID = bundleID }
+  }
+
+  /// One read of the desktop while `open_app` waits for an app that was named alone (not Screenshot).
+  public struct AppSighting: Equatable, Sendable {
+    /// The app that macOS lists in front, by the rule of every observation (`OwnWindows.subject`). Nil with none.
+    public let front: RunningApp?
+    /// The app in front answers itself that it is the active app (Accessibility `AXFrontmost`). Nil: no answer, or not read.
+    public let frontClaims: Bool?
+    /// The processes of the app that the name stood for, as macOS lists them now.
+    public let apps: [RunningApp]
+    /// For each of those processes: it answers itself that it is the active app. A process with no answer is left out.
+    public let claims: [Int: Bool]
+    /// The windows on the screen, front to back, as the window server lists them. ClawdTime's own are left out.
+    public let windows: [OverlayWindow]
+    /// All active displays together, in the points of the window list.
+    public let display: CGRect
+    public init(front: RunningApp?, frontClaims: Bool? = nil, apps: [RunningApp], claims: [Int: Bool] = [:],
+                windows: [OverlayWindow] = [], display: CGRect) {
+      self.front = front; self.frontClaims = frontClaims; self.apps = apps; self.claims = claims
+      self.windows = windows; self.display = display
+    }
+  }
+
+  /// What one sighting says of an app that was named alone.
+  public enum AppArrival: Equatable, Sendable {
+    /// Another app is in front, or nothing says that this one is.
+    case absent
+    /// The app is in front, and no window or sheet of it shows on the screen yet.
+    case inFront(pid: Int)
+    /// The app is in front, and a window or a sheet of it shows on the screen.
+    case shown(pid: Int)
+    public var pid: Int? {
+      switch self {
+      case .absent: return nil
+      case .inFront(let pid), .shown(let pid): return pid
+      }
+    }
+  }
+
+  /// The levels of the window list at which an app shows its own windows: ordinary windows and sheets (0),
+  /// floating panels (3), modal panels (8), utility windows (19). The Dock (20) and everything above it are not.
+  public static let appWindowLayers = 0..<20
+
+  /// The window is on the screen, can be seen, and shows at least `minimumOverlayExtent` points each way on `display`.
+  static func shows(_ window: OverlayWindow, on display: CGRect) -> Bool {
+    guard window.onScreen else { return false }
+    if let alpha = window.alpha, !(alpha.isFinite && alpha > 0.01) { return false }
+    guard !display.isNull, !display.isEmpty, !window.frame.isNull, !window.frame.isEmpty,
+      window.frame.minX.isFinite, window.frame.minY.isFinite,
+      window.frame.width.isFinite, window.frame.height.isFinite else { return false }
+    let shown = display.intersection(window.frame)
+    return !shown.isNull && shown.width >= minimumOverlayExtent && shown.height >= minimumOverlayExtent
+  }
+
+  /// A window or a sheet of the process `pid` shows on the screen.
+  public static func showsWindow(of pid: Int, in sighting: AppSighting) -> Bool {
+    sighting.windows.contains { $0.pid == pid && appWindowLayers.contains($0.layer) && shows($0, on: sighting.display) }
+  }
+
+  /// Decides whether `open_app` for an app named alone has arrived. The process decides, with the bundle
+  /// identifier that the name stood for: never a window of the same name, and never a window alone.
+  ///
+  /// 1. macOS lists the app in front: one of its processes, with that bundle identifier. It is in front with or
+  ///    without a window: a sheet, a welcome sheet, a window on another desktop or one that is not key yet all count.
+  /// 2. macOS still lists another app in front, but that app answers that it is not the active app, exactly one
+  ///    process of the named app answers that it is, and the top ordinary window on the screen is that process's own
+  ///    window or sheet. The list of macOS lags behind the activation here. A window alone never counts.
+  public static func appArrival(resolved bundleID: String, sighting: AppSighting) -> AppArrival {
+    let instances = sighting.apps.filter { sameApp(resolved: bundleID, front: $0.bundleID) }
+    let pids = Set(instances.map(\.pid))
+    if let front = sighting.front, pids.contains(front.pid), sameApp(resolved: bundleID, front: front.bundleID) {
+      return showsWindow(of: front.pid, in: sighting) ? .shown(pid: front.pid) : .inFront(pid: front.pid)
+    }
+    let claiming = instances.filter { sighting.claims[$0.pid] == true }
+    guard claiming.count == 1, let claimer = claiming.first else { return .absent }
+    // The app that macOS lists must say that it is not active. One that says it is, or says nothing, is in front.
+    if let front = sighting.front, pids.contains(front.pid) || sighting.frontClaims != false { return .absent }
+    guard let top = sighting.windows.first(where: { $0.layer == 0 && shows($0, on: sighting.display) }), top.pid == claimer.pid
+      else { return .absent }
+    return .shown(pid: claimer.pid)
+  }
+
   /// The bundle identifier as an observation carries it.
   public static func identity(_ bundleID: String) -> String { ElementCleaner.line(bundleID, limit: 200) }
   public static func sameApp(resolved: String, front: String?) -> Bool {
@@ -286,6 +373,36 @@ public struct DesktopAppWait {
     guard at.isFinite, at >= began else { return .expired }
     if inFront { return .inFront }
     return over(at: at) ? .expired : .waiting
+  }
+}
+
+/// The same wait, for an app named alone, by the process that is in front (`DesktopArrival.appArrival`). An app in
+/// front with a window or a sheet on the screen has arrived at once. An app in front with none yet gets
+/// `windowGrace` for its window to open, so that the picture of the arrival shows it. After that, or at the end of
+/// the wait, the app in front has arrived without one, as before: its window may be on another desktop. Only an app
+/// that is not in front when the wait is over leaves the result unknown.
+public struct DesktopAppArrivalWait {
+  public enum Decision: Equatable, Sendable { case waiting, arrived(pid: Int, shown: Bool), expired }
+  public static let windowGrace: TimeInterval = 1.5
+  private let wait: DesktopAppWait
+  private let began: TimeInterval
+  private var front: (pid: Int, since: TimeInterval)?
+  public init(at: TimeInterval) { wait = DesktopAppWait(at: at); began = at }
+  public func over(at: TimeInterval) -> Bool { wait.over(at: at) }
+  public mutating func sample(_ arrival: DesktopArrival.AppArrival, at: TimeInterval) -> Decision {
+    guard at.isFinite, at >= began else { return .expired }
+    switch arrival {
+    case .absent:
+      front = nil
+      return over(at: at) ? .expired : .waiting
+    case .shown(let pid):
+      return .arrived(pid: pid, shown: true)
+    case .inFront(let pid):
+      // Another process of the app in front starts its own grace.
+      if front?.pid != pid { front = (pid, at) }
+      let since = front?.since ?? at
+      return over(at: at) || at - since >= Self.windowGrace ? .arrived(pid: pid, shown: false) : .waiting
+    }
   }
 }
 
