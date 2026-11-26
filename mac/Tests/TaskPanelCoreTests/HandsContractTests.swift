@@ -356,6 +356,26 @@ final class HandsContractTests: XCTestCase {
     // The service did not answer: nothing is sent.
     XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false, run: nil), .failed)
   }
+  func testWhileMacOSGuardsTheKeyboardThePersonHoldsItAndNoInputGoes() {
+    let running = HandsNext.Run(active: true, goal: "Save the note", step: 2, state: "running")
+    // With Secure Event Input on, the tap sees none of the person's keys, Escape held among them: the person
+    // counts as one who holds the keyboard. No click, drag, scroll or key goes, and the worker asks.
+    XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false, keyboardHidden: true, run: running), .refused)
+    XCTAssertEqual(HandsGate.refusal(stopped: false, watching: true, personActed: false, keyboardHidden: true, run: nil), .refused)
+    XCTAssertEqual(HandsGate.refusal(stopped: false, watching: false, personActed: false, keyboardHidden: true, run: running), .refused)
+    // Stop still comes first.
+    XCTAssertEqual(HandsGate.refusal(stopped: true, watching: true, personActed: false, keyboardHidden: true, run: running), .stoppedByPerson)
+    XCTAssertNil(HandsGate.refusal(stopped: false, watching: true, personActed: false, keyboardHidden: false, run: running))
+    // The result says that the person took the Mac, so the worker pauses and asks as for a takeover.
+    XCTAssertTrue(HandsGate.interrupted(watching: true, personActed: false, keyboardHidden: true))
+    XCTAssertTrue(HandsGate.interrupted(watching: true, personActed: true, keyboardHidden: false))
+    XCTAssertFalse(HandsGate.interrupted(watching: true, personActed: false, keyboardHidden: false))
+    // Without the tap nobody listened, so nothing is said about the person.
+    XCTAssertFalse(HandsGate.interrupted(watching: false, personActed: true, keyboardHidden: true))
+    // The bar says why, in words of every day.
+    XCTAssertTrue(HandsGate.keyboardHiddenDetail.contains("keyboard"))
+    XCTAssertLessThanOrEqual(HandsGate.keyboardHiddenDetail.count, 120)
+  }
 
   func testACloserLookShowsOnlyThePartOfTheDisplayThatIsThere() {
     let display = CGRect(x: 0, y: 0, width: 1512, height: 982)

@@ -22,6 +22,9 @@ import TaskPanelCore
 /// - After the glide and just before the event, Stop is read once more: at this
 ///   Mac and at the service. If the person moved the mouse or pressed a key in
 ///   that time, nothing is sent and the worker asks.
+/// - While macOS guards the keyboard (Secure Event Input), the tap sees none of
+///   the person's keys, and so no Escape held for Stop. No input of any kind goes
+///   then, the bar says why, and the worker asks.
 /// - The worker's picture leaves the mascot out, so it may act on a field under
 ///   the mascot. Before a pointing command or typed text there, the mascot, its
 ///   bar and its bubble go to a free corner, and the event waits until they are there.
@@ -75,6 +78,11 @@ import TaskPanelCore
     return CursorPace.choose(setting: nil, recording: recording.recording, shownOnCall: false)
   }
   private var inputRefusal: HandError?
+  /// macOS guarded the keyboard during this command, as it does for a password field. The tap then saw none of
+  /// the person's keys, Escape held for Stop among them, so the person counts as one who holds the keyboard.
+  private var keyboardHeld = false
+  /// What the bar says after a command that the hands held back for the person, until the next command.
+  private var heldDetail: String?
   /// The app that the name of the last open_app stood for. It goes out with the result.
   private var resolvedApp: String?
   private let menuItems = NSHashTable<NSMenuItem>.weakObjects()
@@ -96,7 +104,7 @@ import TaskPanelCore
     input.onEscapeHold = { [weak self] in self?.stopByPerson() }
     input.mayContinue = { [weak self] in
       guard let self else { return false }
-      return !self.stop.stopped && self.sessionOpen && self.input.watching && !self.input.personActed
+      return !self.stop.stopped && self.sessionOpen && self.input.watching && !self.input.personActed && !self.keyboardHidden()
         && AXIsProcessTrusted() && CGPreflightScreenCaptureAccess() && self.desktop.inputGenerationCurrent
     }
     input.beforeInput = { [weak self] in
@@ -233,7 +241,7 @@ import TaskPanelCore
     remoteCheckAt = nil
     presentation.reset()
     guard live || bar.isShown else { return }
-    live = false; label = ""
+    live = false; label = ""; heldDetail = nil
     desktop.retireObservation()
     bar.hide(); guide.hide(); guide.typing(false)
     input.unwatch()
@@ -247,7 +255,7 @@ import TaskPanelCore
     else if !label.isEmpty { detail = label }
     else { detail = ElementCleaner.line(run?.goal ?? "", limit: 80) }
     if !bar.isShown { barUp = Date() }
-    bar.show(detail: detail, stopped: stop.stopped, canStop: !stop.stopped)
+    bar.show(detail: heldDetail.flatMap { stop.stopped ? nil : $0 } ?? detail, stopped: stop.stopped, canStop: !stop.stopped)
   }
 
   // MARK: Stop
@@ -294,11 +302,17 @@ import TaskPanelCore
     input.beginCommand()
     inputRefusal = nil
     resolvedApp = nil
+    keyboardHeld = false
+    if heldDetail != nil { heldDetail = nil; showBar() }
+    // While macOS guards the keyboard the tap sees none of the person's keys, Escape held among them. No input of
+    // any kind goes then: the person holds the keyboard, and the worker asks.
+    if mutates, keyboardHidden() { return heldForKeyboard(seq) }
     presentation.begin(seq)
     let outcome = await act(command, sequence: seq, label: pending.label, accessibility: accessibility)
     // Without the tap nobody listened, so nothing is said about the person.
-    let interrupted = input.watching && input.personActed
+    let interrupted = HandsGate.interrupted(watching: input.watching, personActed: input.personActed, keyboardHidden: keyboardHeld)
     if interrupted { presentation.reset() }
+    if keyboardHeld, input.watching { heldDetail = HandsGate.keyboardHiddenDetail; showBar() }
     switch outcome {
     case .success(let seen):
       let result = HandResult.done(seq, observation: seen, interrupted: interrupted, resolvedBundleId: resolvedApp)
@@ -460,7 +474,7 @@ import TaskPanelCore
   /// loss and stale desktop identity distinct; perform() upgrades partial effects.
   private func inputFailure() -> HandError {
     if stop.stopped || Task.isCancelled || input.halted { return .stoppedByPerson }
-    if input.personActed { return .refused }
+    if input.personActed || keyboardHeld { return .refused }
     if let inputRefusal { return inputRefusal }
     if !AXIsProcessTrusted() { return .noAccessibility }
     if !CGPreflightScreenCaptureAccess() { return .noScreenRecording }
@@ -476,9 +490,9 @@ import TaskPanelCore
     guard sessionOpen, input.watching else { return .refused }
     guard AXIsProcessTrusted() else { return .noAccessibility }
     guard CGPreflightScreenCaptureAccess() else { return .noScreenRecording }
-    // Stop at this Mac and the person's own input need no read of the service.
+    // Stop at this Mac, the person's own input and a keyboard that macOS guards need no read of the service.
     if let refusal = HandsGate.refusal(stopped: stop.stopped, watching: input.watching, personActed: input.personActed,
-                                       run: .init(active: true, goal: "", step: 0, state: "running")) { return refusal }
+                                       keyboardHidden: keyboardHidden(), run: .init(active: true, goal: "", step: 0, state: "running")) { return refusal }
     // Coalesce redundant loopback service polls within 80 ms inside the same command.
     if let checkedAt = remoteCheckAt, Date().timeIntervalSince(checkedAt) < 0.08 { return nil }
     // The number of this command is taken already, so this read gives no command: only what the worker does now.
@@ -486,9 +500,23 @@ import TaskPanelCore
     guard sessionOpen, input.watching else { remoteCheckAt = nil; return .refused }
     guard AXIsProcessTrusted() else { remoteCheckAt = nil; return .noAccessibility }
     guard CGPreflightScreenCaptureAccess() else { remoteCheckAt = nil; return .noScreenRecording }
-    let refusal = HandsGate.refusal(stopped: stop.stopped || Task.isCancelled, watching: input.watching, personActed: input.personActed, run: now?.run)
+    let refusal = HandsGate.refusal(stopped: stop.stopped || Task.isCancelled, watching: input.watching, personActed: input.personActed,
+                                    keyboardHidden: keyboardHidden(), run: now?.run)
     remoteCheckAt = refusal == nil ? Date() : nil
     return refusal
+  }
+  /// macOS guards the keyboard now (Secure Event Input). Each time it does during a command, the command counts as
+  /// held back for the person.
+  private func keyboardHidden() -> Bool {
+    guard input.secureInput else { return false }
+    keyboardHeld = true
+    return true
+  }
+  /// The answer to an input that waits while macOS guards the keyboard: nothing was sent, and the person holds it.
+  private func heldForKeyboard(_ seq: Int) -> HandResult {
+    presentation.reset()
+    if input.watching { heldDetail = HandsGate.keyboardHiddenDetail; showBar() }
+    return .failure(seq, .refused, interrupted: HandsGate.interrupted(watching: input.watching, personActed: input.personActed, keyboardHidden: true))
   }
 
   /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,

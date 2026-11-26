@@ -43,15 +43,26 @@ public enum HandsGate {
   ///   worker pauses and asks.
   /// - `run`: what the service says now, read just before the event. Nil when it did not
   ///   answer. A stop that came through the chat, a call or the panel shows here as `stopping`.
-  public static func refusal(stopped: Bool, watching: Bool, personActed: Bool, run: HandsNext.Run?) -> HandError? {
+  /// - `keyboardHidden`: macOS guards the keyboard (Secure Event Input), as it does for a password field. The tap
+  ///   then sees none of the person's keys, and so no Escape held for Stop either. The person counts as one who
+  ///   holds the keyboard: nothing is sent, whatever the kind of input, and the worker asks.
+  public static func refusal(stopped: Bool, watching: Bool, personActed: Bool, keyboardHidden: Bool = false, run: HandsNext.Run?) -> HandError? {
     if stopped { return .stoppedByPerson }
     if watching && personActed { return .refused }
+    if keyboardHidden { return .refused }
     // With no word from the service nothing is sent: its result could not be posted either.
     guard let run else { return .failed }
     if run.state == "stopping" { return .stoppedByPerson }
     // Only a request that runs may act. One that ended or waits for the person sends nothing.
     return run.active && run.state == "running" ? nil : .refused
   }
+  /// The result says that the person took the Mac: the worker then pauses and asks. Without the tap nobody
+  /// listened, so nothing is said about the person.
+  public static func interrupted(watching: Bool, personActed: Bool, keyboardHidden: Bool) -> Bool {
+    watching && (personActed || keyboardHidden)
+  }
+  /// What the bar says while the hands wait because macOS guards the keyboard.
+  public static let keyboardHiddenDetail = "macOS guards the keyboard, as for a password. ClawdTime cannot see your keys now, so it waits for you."
 }
 
 /// How often the hands ask for the next command.
