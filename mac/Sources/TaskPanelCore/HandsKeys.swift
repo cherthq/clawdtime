@@ -121,4 +121,26 @@ public enum TypingPlan {
     flush()
     return steps
   }
+
+  /// Typed text reads the place of the keyboard again on its way, because a key or the app can move it: to
+  /// ClawdTime's chat, or to a password field. The caller reads it before the first step. After that the full
+  /// read comes before each Return and each Tab, after each of them, and after at most `checkEvery` characters.
+  public static let checkEvery = 8
+  /// For each step: true when the full read of the keyboard's place comes before it.
+  public static func checks(_ steps: [TypingStep], every: Int = checkEvery) -> [Bool] {
+    var unchecked = 0
+    var checks: [Bool] = []
+    for (index, step) in steps.enumerated() {
+      var check = false
+      if index > 0 {
+        if case .key = step { check = true }
+        if case .key = steps[index - 1] { check = true }
+        if unchecked >= max(1, every) { check = true }
+      }
+      checks.append(check)
+      if check { unchecked = 0 }
+      if case .text(let piece) = step { unchecked += piece.count }
+    }
+    return checks
+  }
 }

@@ -200,18 +200,22 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// Types text as Unicode, so every script goes whatever the keyboard layout
   /// is. A line break is the Return key. The caller checks the place of the
   /// keyboard before the first character. `allowed` asks again when that place
-  /// can have changed: after a Return or a Tab, and every few characters.
+  /// can have changed: before and after a Return or a Tab, and every few
+  /// characters (`TypingPlan.checks`). Before every step, with no wait, the
+  /// keyboard must still be outside ClawdTime and macOS must not guard it as it
+  /// does for a password field.
   func type(_ text: String, allowed: () async -> Bool) async -> Typed {
     let steps = TypingPlan.steps(text, perStep: 8)
-    var unchecked = 0
+    let checks = TypingPlan.checks(steps)
     for (index, step) in steps.enumerated() {
       if interrupted { return .stopped }
-      if unchecked >= 40 {
+      if keyboardTaken { return .refused }
+      if checks[index] {
         guard await allowed() else { return .refused }
-        unchecked = 0
+        // The full read waits: the quick one comes again after it, right before the event.
+        if interrupted { return .stopped }
+        if keyboardTaken { return .refused }
       }
-      // After the last check: the keyboard did not move to a window of ClawdTime, such as its chat.
-      if keyboardIsOwn { return .refused }
       switch step {
       case .text(let piece):
         let units = Array(piece.utf16)
@@ -220,20 +224,19 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
           event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
           post(event)
         }
-        unchecked += piece.count
       case .key(let code):
         await press(code)
-        if index < steps.count - 1 {
-          // The key can move the keyboard to another field, for example from a name to a password. The app gets a moment to do it.
-          await pause(0.05)
-          guard await allowed() else { return .refused }
-          unchecked = 0
-        }
+        // The key can move the keyboard to another field, for example from a name to a password. The app gets a
+        // moment to do it before the read of the next step.
+        if index < steps.count - 1 { await pause(0.05) }
       }
       await pause(0.004)
     }
     return .done
   }
+  /// The quick read before each piece of typed text: the keyboard went to ClawdTime, or macOS guards it as it does
+  /// for a password field.
+  private var keyboardTaken: Bool { keyboardIsOwn || secureInput }
   /// One key with its modifiers. False when Stop came first.
   func key(_ combo: KeyCombo) async -> Bool {
     if interrupted { return false }
