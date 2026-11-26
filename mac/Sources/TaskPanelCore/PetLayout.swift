@@ -227,6 +227,15 @@ public enum OwnWindows {
   /// The rows of the window list that the hands judge the screen by: windows of other processes at the level of
   /// ordinary windows. A row that names no owner is kept, so that the check of a whole list refuses the list.
   public static func judged(layer: Int?, owner: Int?, own: Int) -> Bool { layer == 0 && owner != own }
+  /// A row of the window list above the level of ordinary windows, of another process: a notification banner, a
+  /// floating panel, the menu bar, the Dock. It is never the surface of an input, but it takes a click at its place.
+  /// A row that names no level or no owner counts as one.
+  public static func floating(layer: Int?, owner: Int?, own: Int) -> Bool { (layer ?? 1) > 0 && owner != own }
+  /// A window above the ordinary ones lies at `point` now, in screen points from the top left, that did not lie
+  /// there at the look: a new one, or one that moved or changed its size. `observed` are the ones of the look.
+  public static func floatingCover(at point: CGPoint, observed: [DesktopCover], current: [DesktopCover]) -> Bool {
+    current.contains { $0.frame.contains(point) && !observed.contains($0) }
+  }
   /// The app whose Accessibility tree the hands read: the app in front, or the app that owns the menu bar when
   /// ClawdTime itself is in front. Never ClawdTime: nil then, and nil with no app in front.
   public static func subject(front: Int?, menuBar: Int?, own: Int) -> Int? {
