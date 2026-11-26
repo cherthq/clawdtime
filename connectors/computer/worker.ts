@@ -119,8 +119,18 @@ import {
   coversThePlace,
 } from "./desktop.js";
 import {
+  countCells,
+  DIFF_MIN_CELLS,
+  inMenuBar,
+  joinCells,
+  keepsChanging,
   luminanceGridOf,
+  NOISE_MAX_CELLS,
+  steady,
+  steadyDiff,
+  targetCells,
   visuallyChanged,
+  type CellMask,
   type FocusRect,
 } from "./visual-diff.js";
 import { BrowserClosed, handErrors } from "./ports.js";
@@ -305,6 +315,11 @@ const postActionSettleCapMs = 450;
 const postActionFollowUpMs = 180;
 /** Maximum age (ms) of an observation eligible for fast visual pre-action re-verify. */
 const fastReverifyMaxAgeMs = 8_000;
+/** The pause before one more quick look, when only small regions away from the target changed. */
+const noiseLookMs = 150;
+/** The margin around a point target, in points. In the menu bar a point target keeps its own small place. */
+const pointPad = 24;
+const menuBarPointPad = 4;
 /** What the planner reads in the line of the last held step, after the screen settled. */
 const settledNote =
   "Then the worker waited with no input until the screen was still. Choose again from the new look: the target may be in another place now.";
@@ -734,6 +749,12 @@ interface Run {
   };
   /** Pending post-action visual settle after a successful screen effect. */
   postSettle?: { before: Observation | null };
+  /**
+   * The regions of the screen that kept changing by themselves (an
+   * animation, a video, a blinking indicator), learned from looks with no
+   * input between them, and the surface where they were seen. No picture.
+   */
+  noise?: { place: Observation; cells: CellMask };
   /** The kind of the last input, when the look after it showed the same screen as before it. */
   stillAfter?: string;
   /** A done after an input that changed nothing was sent back once. */
@@ -2204,13 +2225,10 @@ export class ComputerWorker implements DesktopExecutorPort {
     before: Observation,
     command: HandCommand,
   ): FocusRect | FocusRect[] | null {
-    const pad = 24;
-    const pointRect = (x: number, y: number): FocusRect => ({
-      x: x - pad,
-      y: y - pad,
-      w: pad * 2,
-      h: pad * 2,
-    });
+    const pointRect = (x: number, y: number): FocusRect => {
+      const pad = inMenuBar(y, before.screen) ? menuBarPointPad : pointPad;
+      return { x: x - pad, y: y - pad, w: pad * 2, h: pad * 2 };
+    };
     const elementRect = (id: number): FocusRect | null => {
       const found = before.elements.find((item) => item.id === id);
       return found ? { x: found.x, y: found.y, w: found.w, h: found.h } : null;
@@ -2251,13 +2269,30 @@ export class ComputerWorker implements DesktopExecutorPort {
         return null;
     }
   }
+  /** What kept changing by itself on the surface of `seen`, as this request learned it. */
+  private noiseOn(run: Run, seen: Observation): CellMask | null {
+    return run.noise && sameSurface(run.noise.place, seen)
+      ? run.noise.cells
+      : null;
+  }
+  /** Keeps what kept changing on the surface of `seen`, without its picture. */
+  private learned(run: Run, seen: Observation, cells: CellMask) {
+    const { image: _image, imageWidth: _w, imageHeight: _h, ...place } = seen;
+    run.noise = { place: { ...place, elements: [] }, cells };
+  }
   /**
    * Fast pre-action visual re-verify: when eligible (non-typing/non-key, did
    * not pause for user approval, observation is <= 8s old, no secure elements
    * on screen, and prior look carried a real JPEG), take an image-only observe
-   * first and skip the AX walk only when surface and pixels (with zero cursor
-   * mask and strict target focusRect) are unchanged. Otherwise run a full AX
-   * look.
+   * first and skip the AX walk only when the surface is the same, the
+   * target's own region (zero cursor mask) is unchanged, and fewer than
+   * `DIFF_MIN_CELLS` other cells changed outside the menu bar status area
+   * and the regions that kept changing by themselves. When only a few cells
+   * away from the target changed, one more image-only look tells a region
+   * that keeps changing (an animation, a video, a spinner) from a change that
+   * came and held: the action goes on the newest look only when every change
+   * since the planner's look lies in such small regions, and the target was
+   * the same in all three looks. Otherwise run a full AX look.
    */
   private async reverify(
     run: Run,
@@ -2277,28 +2312,68 @@ export class ComputerWorker implements DesktopExecutorPort {
       !before.elements.some((el) => el.secure) &&
       luminanceGridOf(before) !== null;
     if (canFastReverify) {
-      const handed = await this.hand(
-        run,
-        { kind: "observe", image: true, elements: false },
-        "Check the screen",
-      );
-      if (handed.over) return "over";
-      if (run.hold || run.takeover || this.outdated(run)) return null;
-      const fast = handed.result?.ok
-        ? (handed.result.observation ?? null)
-        : null;
-      const focusRect = this.focusRectFor(action, before, command);
-      if (
-        fast &&
-        fast.at >= before.at &&
-        fast.at - before.at <= fastReverifyMaxAgeMs &&
-        sameSurface(before, fast) &&
-        visuallyChanged(before, fast, {
-          maskCursor: false,
-          focusRect,
-        }) === false
-      ) {
-        return { ...fast, elements: before.elements };
+      const quick = async (): Promise<Observation | null | "over" | "held"> => {
+        const handed = await this.hand(
+          run,
+          { kind: "observe", image: true, elements: false },
+          "Check the screen",
+        );
+        if (handed.over) return "over";
+        if (run.hold || run.takeover || this.outdated(run)) return "held";
+        const seen = handed.result?.ok
+          ? (handed.result.observation ?? null)
+          : null;
+        return seen &&
+          seen.at >= before.at &&
+          seen.at - before.at <= fastReverifyMaxAgeMs &&
+          sameSurface(before, seen)
+          ? seen
+          : null;
+      };
+      const fast = await quick();
+      if (fast === "over") return "over";
+      if (fast === "held") return null;
+      if (fast) {
+        const targets = this.focusRectFor(action, before, command);
+        const known = this.noiseOn(run, before);
+        const options = { screen: fast.screen, targets, noise: known };
+        const planned = luminanceGridOf(before);
+        const now = luminanceGridOf(fast);
+        const first = steadyDiff(planned, now, options);
+        if (steady(first)) return { ...fast, elements: before.elements };
+        if (
+          first.comparable &&
+          !first.targetChanged &&
+          first.count <= NOISE_MAX_CELLS
+        ) {
+          const rested = await this.rest(
+            run,
+            Math.min(noiseLookMs, this.settleMs),
+          );
+          if (rested === "over") return "over";
+          if (rested === "held") return null;
+          const next = await quick();
+          if (next === "over") return "over";
+          if (next === "held") return null;
+          const newest = next && luminanceGridOf(next);
+          if (next && newest) {
+            const again = steadyDiff(now, newest, options);
+            const kept = keepsChanging(
+              [first.moved, again.moved],
+              targetCells(targets, next.screen),
+            );
+            const noise = kept && joinCells(kept, known);
+            if (
+              noise &&
+              !again.targetChanged &&
+              countCells(noise) <= NOISE_MAX_CELLS &&
+              steady(steadyDiff(planned, newest, { ...options, noise }))
+            ) {
+              this.learned(run, next, noise);
+              return { ...next, elements: before.elements };
+            }
+          }
+        }
       }
     }
     return this.look(run);
@@ -3487,6 +3562,8 @@ export class ComputerWorker implements DesktopExecutorPort {
       luminanceGridOf(run.observation) !== null;
     let last: string | null = null;
     let lastObs: Observation | null = null;
+    /** What changed between each two looks in a row on the same surface. */
+    let pairs: CellMask[] = [];
     let settled = false;
     for (let looks = 0; looks < settleLooks; looks++) {
       if (looks > 0) {
@@ -3507,15 +3584,29 @@ export class ComputerWorker implements DesktopExecutorPort {
         ? (handed.result.observation ?? null)
         : null;
       if (visual) {
-        if (
-          obs !== null &&
-          lastObs !== null &&
-          sameSurface(lastObs, obs) &&
-          visuallyChanged(lastObs, obs) === false
-        ) {
-          settled = true;
-          break;
-        }
+        const diff =
+          obs !== null && lastObs !== null && sameSurface(lastObs, obs)
+            ? steadyDiff(luminanceGridOf(lastObs), luminanceGridOf(obs), {
+                screen: obs.screen,
+                cursorA: lastObs.cursor,
+                cursorB: obs.cursor,
+              })
+            : null;
+        if (diff?.comparable) {
+          if (diff.count < DIFF_MIN_CELLS) {
+            settled = true;
+            break;
+          }
+          // What changed now changed before too, in small regions: an
+          // animation, a video, a blinking indicator. The rest is still.
+          pairs.push(diff.moved);
+          const noise = pairs.length >= 2 ? keepsChanging(pairs) : null;
+          if (noise && countCells(diff.moved, noise) < DIFF_MIN_CELLS) {
+            this.learned(run, obs!, noise);
+            settled = true;
+            break;
+          }
+        } else pairs = [];
         lastObs = obs;
       } else {
         let print = settlePrint(obs);

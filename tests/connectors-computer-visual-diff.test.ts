@@ -8,13 +8,23 @@ import {
 } from "../connectors/computer/desktop.js";
 import {
   compareGrids,
+  countCells,
   decodeLuminanceGrid,
   DIFF_GRID_H,
   DIFF_GRID_W,
   DIFF_LUMA_THRESHOLD,
   DIFF_MIN_CELLS,
+  inMenuBar,
+  keepsChanging,
   luminanceGridOf,
+  MENU_BAR_STATUS_START_X,
+  NOISE_MAX_CELLS,
+  steady,
+  steadyDiff,
+  targetCells,
   visuallyChanged,
+  type CellMask,
+  type LuminanceGrid,
 } from "../connectors/computer/visual-diff.js";
 import { observation } from "./connectors-computer-fixture.js";
 
@@ -448,5 +458,156 @@ describe("resilient dynamic window-title normalization", () => {
     expect(sameSurface(before, different)).toBe(false);
     expect(closerOutOfDate(closerScene(before), updated)).toBe(false);
     expect(closerOutOfDate(closerScene(before), different)).toBe(true);
+  });
+});
+
+describe("steady check for looks with no input between them", () => {
+  // The fixture screen is 1440 by 900 points: one cell is 22.5 by 25 points.
+  const screen = { width: 1440, height: 900 };
+  type Block = { gx: number; gy: number; w: number; h: number; luma: number };
+  const grid = (...blocks: Block[]): LuminanceGrid => {
+    const cells = new Uint8Array(DIFF_GRID_W * DIFF_GRID_H).fill(220);
+    for (const { gx, gy, w, h, luma } of blocks)
+      for (let y = gy; y < gy + h; y++)
+        for (let x = gx; x < gx + w; x++) cells[y * DIFF_GRID_W + x] = luma;
+    return { width: DIFF_GRID_W, height: DIFF_GRID_H, cells, digest: "" };
+  };
+  const at = (mask: CellMask, gx: number, gy: number) =>
+    mask[gy * DIFF_GRID_W + gx] === 1;
+  /** A button over cells 5 to 8 of row 10 (112.5 to 202.5, 250 to 275 points). */
+  const button = { x: 112.5, y: 250, w: 90, h: 25 };
+  /** An animation of 3 by 3 cells that moves on by two cells in each frame, well beside the button. */
+  const frame = (k: number, ...more: Block[]) =>
+    grid(
+      { gx: 5, gy: 10, w: 4, h: 1, luma: 60 },
+      { gx: 20 + 2 * (k % 3), gy: 8, w: 3, h: 3, luma: 30 },
+      ...more,
+    );
+
+  it("gives a target in a window a margin of one cell, and a target in the menu bar its own cells", () => {
+    // As `focusRect`: one cell before it, and one after the cell of its far edge.
+    const window = targetCells(button, screen);
+    expect(countCells(window)).toBe(7 * 4);
+    expect(at(window, 4, 9) && at(window, 10, 12)).toBe(true);
+    // A status item of 22 by 20 points at 864, 2: cells 38 and 39 of row 0.
+    const item = targetCells({ x: 864, y: 2, w: 22, h: 20 }, screen);
+    expect(countCells(item)).toBe(2);
+    expect(at(item, 38, 0) && at(item, 39, 0)).toBe(true);
+    expect(inMenuBar(12, screen)).toBe(true);
+    expect(inMenuBar(30, screen)).toBe(false);
+  });
+
+  it("leaves out the menu bar status area, and checks a target in it strictly", () => {
+    const quiet = grid({ gx: 40, gy: 0, w: 1, h: 1, luma: 40 });
+    const blink = grid(
+      { gx: 40, gy: 0, w: 1, h: 1, luma: 40 },
+      { gx: MENU_BAR_STATUS_START_X, gy: 0, w: 6, h: 1, luma: 30 },
+    );
+    const away = steadyDiff(quiet, blink, { screen });
+    expect(away).toMatchObject({ comparable: true, targetChanged: false });
+    expect(away.count).toBe(0);
+    expect(steady(away)).toBe(true);
+    // The same blink on the target's own cell is a change of the target.
+    const own = steadyDiff(quiet, blink, {
+      screen,
+      targets: { x: 32 * 22.5 + 2, y: 2, w: 18, h: 20 },
+    });
+    expect(own.targetChanged).toBe(true);
+    expect(steady(own)).toBe(false);
+    // Left of the status area, the menu bar counts as before.
+    const menus = steadyDiff(
+      grid(),
+      grid({ gx: 2, gy: 0, w: DIFF_MIN_CELLS, h: 1, luma: 30 }),
+      { screen },
+    );
+    expect(menus.count).toBe(DIFF_MIN_CELLS);
+  });
+
+  it("learns a region that keeps changing, and the frames then look steady", () => {
+    const one = steadyDiff(frame(0), frame(1), { screen, targets: button });
+    const two = steadyDiff(frame(1), frame(2), { screen, targets: button });
+    expect(steady(one)).toBe(false);
+    expect(one.targetChanged || two.targetChanged).toBe(false);
+    const noise = keepsChanging(
+      [one.moved, two.moved],
+      targetCells(button, screen),
+    );
+    expect(noise).not.toBeNull();
+    expect(countCells(noise!)).toBeLessThanOrEqual(NOISE_MAX_CELLS);
+    // With a margin of one cell around the moving block.
+    expect(at(noise!, 19, 7) && at(noise!, 27, 11)).toBe(true);
+    expect(at(noise!, 8, 10)).toBe(false);
+    expect(
+      steady(
+        steadyDiff(frame(0), frame(2), { screen, targets: button, noise }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not learn a change that came once and held, beside the animation", () => {
+    const badge = { gx: 40, gy: 20, w: 3, h: 2, luma: 40 };
+    const one = steadyDiff(frame(0), frame(1, badge), { screen });
+    const two = steadyDiff(frame(1, badge), frame(2, badge), { screen });
+    const noise = keepsChanging([one.moved, two.moved]);
+    expect(noise).not.toBeNull();
+    expect(at(noise!, 41, 20)).toBe(false);
+    const all = steadyDiff(frame(0), frame(2, badge), { screen, noise });
+    expect(all.count).toBe(6);
+    expect(steady(all)).toBe(false);
+  });
+
+  it("does not learn a change that came once and held right beside the animation", () => {
+    // A card of 8 by 3 cells that opens one cell right of the moving block.
+    const card = { gx: 27, gy: 8, w: 8, h: 3, luma: 90 };
+    const one = steadyDiff(frame(0), frame(1, card), { screen });
+    const two = steadyDiff(frame(1, card), frame(2, card), { screen });
+    const noise = keepsChanging([one.moved, two.moved])!;
+    expect(at(noise, 34, 9)).toBe(false);
+    expect(
+      steady(steadyDiff(frame(0), frame(2, card), { screen, noise })),
+    ).toBe(false);
+  });
+
+  it("still sees a change of the target when an animation runs beside it", () => {
+    const pressed = { gx: 5, gy: 10, w: 4, h: 1, luma: 200 };
+    const diff = steadyDiff(frame(0), frame(1, pressed), {
+      screen,
+      targets: button,
+      // Even a mask over the whole screen leaves the target strict.
+      noise: new Uint8Array(DIFF_GRID_W * DIFF_GRID_H).fill(1),
+    });
+    expect(diff.targetChanged).toBe(true);
+    expect(steady(diff)).toBe(false);
+  });
+
+  it("never lets a region that keeps changing cover the target", () => {
+    // A spinner right on the edge of the button's margin.
+    const spin = (k: number) =>
+      grid(
+        { gx: 5, gy: 10, w: 4, h: 1, luma: 60 },
+        { gx: 10, gy: 10, w: 2, h: 2, luma: k % 2 ? 30 : 150 },
+      );
+    const targets = targetCells(button, screen);
+    const one = steadyDiff(spin(0), spin(1), { screen, targets: button });
+    const two = steadyDiff(spin(1), spin(2), { screen, targets: button });
+    const noise = keepsChanging([one.moved, two.moved], targets)!;
+    expect(countCells(noise)).toBeGreaterThan(0);
+    for (let i = 0; i < noise.length; i++)
+      if (targets[i]) expect(noise[i]).toBe(0);
+  });
+
+  it("calls a large region that keeps changing no small region", () => {
+    const video = (k: number) =>
+      grid({ gx: 4, gy: 4, w: 40, h: 20, luma: k % 2 ? 30 : 160 });
+    const one = steadyDiff(video(0), video(1), { screen });
+    const two = steadyDiff(video(1), video(2), { screen });
+    expect(one.count).toBeGreaterThan(NOISE_MAX_CELLS);
+    expect(keepsChanging([one.moved, two.moved])).toBeNull();
+  });
+
+  it("is not comparable without two grids", () => {
+    const diff = steadyDiff(null, grid(), { screen });
+    expect(diff).toMatchObject({ comparable: false, count: 0 });
+    expect(steady(diff)).toBe(false);
   });
 });
