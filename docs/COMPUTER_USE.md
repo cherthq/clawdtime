@@ -1028,6 +1028,85 @@ path that looks closer first and clicks in the closer picture. Run it after
 every change to a test or an app:
 `npx tsx tests/computer-request.eval.ts --check --new-actions`.
 
+#### Long requests
+
+The other requests take 1 to 15 steps, so a fault after step 30 went
+unseen. Seven long requests have ideal paths of 31 to 47 steps. Their names start with
+`long:`, so `--only long:` runs them alone. Most of them use two apps on one
+desk: the first app is in front, and `open_app` brings the other one forward.
+
+| Request                                                         | Ideal path | Limit | What it tests                                                                                                                               |
+| --------------------------------------------------------------- | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| A lease form of twelve fields on three pages                    | 32 steps   | 48    | Text fields, pop-up menus, a review, the send, and the reference typed back to confirm it                                                   |
+| Four product pages, the cheapest added to a list in another app | 31 steps   | 48    | A shop that lists products only for a search, four prices kept as facts, the price with delivery against the price alone, and a second app  |
+| Ten rows from one sheet into another, and their total           | 47 steps   | 70    | Ten rows kept as facts and typed with Tab and Return, then a total                                                                          |
+| Five messages read and flagged, and a summary note              | 31 steps   | 48    | The rest of each message, five main points kept, and a new note in another app                                                              |
+| A way that failed early, seven notes later                      | 31 steps   | 48    | The New note button never works and Command-N does. The button must not come back after it left the last 12 steps (the list of failed ways) |
+| A sign-in in the middle                                         | 33 steps   | 50    | The session ends after the third save. The planner asks for the email, the person types the password, and the work goes on                  |
+| A list that another person changes halfway                      | 33 steps   | 50    | After the fourth save, three people more and a new order, between the look that the planner chose from and the look just before the input   |
+
+Five of the seven are held. The two dev requests are the form and the
+prices. Each wrong path of `--check` ends with what the check refuses: a
+wrong contact time, a reference that was never confirmed, the price without
+delivery, a product left out, a row left out, the total of nine rows, lines
+from the subjects alone, a message left out, the button tried again before
+every note, all the text in one note, a give up or a done at the sign-in,
+and clicks at the places of the old list. One more path of the sign-in tries
+to type the password itself: the worker never types into a password field,
+it hands the field to the person, so that path ends done.
+
+Each long request has a step limit of its own, about one and a half times its
+ideal path, and a time limit of 12 minutes with a model (3 in `--check`). The
+limits of the service stay above them: 40 actions, or 80 with a plan of 3
+subgoals or more. So a model whose outline has fewer than 3 subgoals stops at
+40 steps, as the service does. The scripted plan of `--check` gives each long
+request 3 to 5 subgoals. Every line of `--check` and every row of a model run
+says the steps, with the limit when there is one, and the seconds. A model run
+also prints one line for the long requests: how many were done, the spread of
+the steps and of the seconds, and how many ended at the step limit or at the
+time limit.
+
+Two faults of the test hands serve them. A deaf button never takes a click,
+as before. A change runs a script of the app at the look after its condition
+first held, so the planner chose from the screen before the change. Nothing
+of the worker or of the planner changes for them.
+
+Results of November 26, 2026, the seven long requests:
+
+| Model                              | Done     | Steps of a run      | Seconds of a run     |
+| ---------------------------------- | -------- | ------------------- | -------------------- |
+| `gpt-6.2-sol`, 2 runs              | 13 of 14 | 18 to 41, median 29 | 49 to 101, median 73 |
+| `anthropic/claude-opus-5-5`, 1 run | 7 of 7   | 21 to 39, median 29 | 39 to 78, median 57  |
+
+No run reached its step limit or its time limit. What the runs showed:
+
+- `gpt-6.2-sol` takes the reference of the lease form for a code that the
+  person must type. After the send it asked the person to type HA-48213 into
+  the Reference field, twice, in each of 4 runs (two rounds of 2). The person
+  of the test says yes and types nothing. In 3 of the 4 runs it then gave up:
+  "Homes sent the lease application. Your reference is HA-48213. It isn't
+  confirmed yet: enter the reference in the Reference field in Homes and
+  click Confirm." In 1 run it typed the reference itself after the second
+  yes. The goal says to type the reference. `claude-opus-5-5` typed it itself
+  in 2 of 2 runs, with no question.
+- Both models spend 3 to 5 steps at the start of the two requests that read
+  one app and write in another: open_app Sheets, Receipts, Sheets, Receipts,
+  Sheets, and the same with Notes and Directory. The first turn runs before
+  the outline arrives: it keeps the facts and opens the second app. The
+  outline then names the first app in its first subgoal ("Read the ten
+  November receipts from the Receipts list"), so the planner opens that app
+  again to meet it ("read receipts list"), marks it done ("receipts read")
+  and opens the second app again ("open target sheet").
+- The models take fewer steps than the ideal paths. They type into a field by
+  its name, one step for each field. The form took 22 to 24 steps and the
+  sheet 28 to 29. The shop took 18 to 21 while it listed every product, and
+  19 to 29 once it listed products only for a search: `gpt-6.2-sol` searched
+  for "kettle" once and so found all four. The other four requests took 29 to
+  41 steps.
+- The list that changed halfway, the sign-in in the middle and the button
+  that never works were done in every run. The button got one click in each
+  run, and never again after Command-N worked.
+
 Results of November 22, 2026, 13 requests, 3 runs of each, `gpt-5.4`:
 
 | What                        | Result                                            |
@@ -1128,7 +1207,10 @@ A fixed quarter of the cases of each test is held (`held: true` on the case),
 chosen once by a hash of its name. `--split dev`, `--split held` or `--split
 all` (the default) runs those cases. The rule: tune prompts and rules only on
 dev, and judge a change on held. A new case is held when `heldByHash` in
-`tests/computer-eval-stats.ts` says so.
+`tests/computer-eval-stats.ts` says so. The long requests of the request test
+are held by choice, five of seven, so that a fault after step 30 is judged on
+requests that no rule was made on. `--only WORDS` (or `ONLY`) runs only the
+cases whose name holds the words.
 
 `--out FILE.json` writes the result of each case and every run.
 `--compare A.json B.json` reads two such files and runs nothing. It prints the
