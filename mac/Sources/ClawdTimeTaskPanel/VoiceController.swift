@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import os
 import TaskPanelCore
 
 /// One spoken conversation with ClawdTime: listen for a sentence, send it, play
@@ -7,7 +8,16 @@ import TaskPanelCore
 final class VoiceController: NSObject, AVAudioPlayerDelegate {
   enum Phase: Equatable { case off, listening, thinking, speaking }
   private(set) var phase = Phase.off { didSet { if phase != oldValue { onChange?() } } }
-  var micOn = true { didSet { onChange?() } }
+  /// Off: no sound of the room leaves the Mac. No buffer heard from now on goes into a recording, so a sentence
+  /// that the person began ends with what was heard before.
+  var micOn = true {
+    didSet {
+      if micOn != oldValue { latch.set(on: micOn) }
+      onChange?()
+    }
+  }
+  /// The gate of the microphone, shared with the audio thread that writes the recording.
+  private let latch = MicrophoneLatch()
   var speakerOn = true {
     didSet {
       if !speakerOn, phase == .speaking { player?.stop(); player = nil; listen() }
@@ -76,16 +86,17 @@ final class VoiceController: NSObject, AVAudioPlayerDelegate {
     recording = url; activity.reset(); meter.rest()
     let rate = format.sampleRate
     // The tap runs on the audio thread: it writes to the file it was given, never to a property.
-    let out = file
-    input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+    let out = file, gate = latch
+    input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, when in
       var sum: Float = 0
       let count = Int(buffer.frameLength)
       if let samples = buffer.floatChannelData, count > 0 {
         for index in 0..<count { let value = samples[0][index]; sum += value * value }
         sum = (sum / Float(count)).squareRoot()
       }
-      try? out?.write(from: buffer)
       let seconds = Double(count) / rate
+      // Only what was heard with the microphone on goes into the file that is sent.
+      if gate.admits(when, seconds: seconds) { try? out?.write(from: buffer) }
       DispatchQueue.main.async { self?.heard(rms: Double(sum), seconds: seconds) }
     }
     do { try engine.start(); phase = .listening }
@@ -129,5 +140,22 @@ final class VoiceController: NSObject, AVAudioPlayerDelegate {
     meterTimer?.invalidate(); meterTimer = nil
     self.player = nil
     if phase == .speaking { listen() }
+  }
+}
+
+/// The microphone's gate behind a lock: the main thread mutes and unmutes, the audio thread asks for each buffer.
+/// `MicrophoneGate` holds the rule.
+final class MicrophoneLatch: Sendable {
+  private let gate = OSAllocatedUnfairLock(initialState: MicrophoneGate())
+  /// The person turned the microphone on or off now.
+  func set(on: Bool) {
+    let now = AVAudioTime.seconds(forHostTime: mach_absolute_time())
+    gate.withLock { on ? $0.unmute(at: now) : $0.mute(at: now) }
+  }
+  /// The buffer that the engine stamped with `when` and that lasts `seconds` may go into the recording.
+  func admits(_ when: AVAudioTime, seconds: Double) -> Bool {
+    guard when.isHostTimeValid else { return gate.withLock { $0.admitsUntimed } }
+    let start = AVAudioTime.seconds(forHostTime: when.hostTime)
+    return gate.withLock { $0.admits(start: start, seconds: seconds) }
   }
 }

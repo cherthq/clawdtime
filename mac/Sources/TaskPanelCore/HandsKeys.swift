@@ -16,7 +16,7 @@ public struct KeyCombo: Equatable, Sendable {
     self.printing = printing ?? (character != nil)
   }
   /// The combo puts a character into a field, as typed text does. With Command or
-  /// Control it is a shortcut. A combo that types never goes into a password field.
+  /// Control it is a shortcut. No combo at all goes into a password field: `SecureField`.
   public var typesText: Bool { printing && flags & (KeyCombo.command | KeyCombo.control) == 0 }
 
   public static let shift: UInt64 = 0x0002_0000, control: UInt64 = 0x0004_0000, option: UInt64 = 0x0008_0000
@@ -78,6 +78,19 @@ public struct KeyCombo: Equatable, Sendable {
   }
 }
 
+/// The hands and a password field. Nothing that the hands send may put text into one or take text out of it.
+public enum SecureField {
+  /// A key of the hands with the keyboard in a password field. `focusSecure`: the field that has the keyboard is
+  /// one, as the Accessibility tree or macOS says. No key goes there: not a character, and not a shortcut either.
+  /// Command V would paste the clipboard into it, Control Y would yank cut text into it, and Return would send
+  /// what the person typed there. The person handles a password field.
+  public static func permitsKey(_ combo: KeyCombo, focusSecure: Bool) -> Bool { !focusSecure }
+  /// A drag of the hands. `source` and `target`: the element under the press and under the drop is a password
+  /// field. Nil when the Accessibility tree does not say. A drop on one would put text into it, and a press on
+  /// one would take text out of it.
+  public static func permitsDrag(source: Bool?, target: Bool?) -> Bool { source != true && target != true }
+}
+
 /// One step of typed text.
 public enum TypingStep: Equatable, Sendable {
   /// Characters that go as Unicode, whatever the keyboard layout is.
@@ -120,5 +133,27 @@ public enum TypingPlan {
     }
     flush()
     return steps
+  }
+
+  /// Typed text reads the place of the keyboard again on its way, because a key or the app can move it: to
+  /// ClawdTime's chat, or to a password field. The caller reads it before the first step. After that the full
+  /// read comes before each Return and each Tab, after each of them, and after at most `checkEvery` characters.
+  public static let checkEvery = 8
+  /// For each step: true when the full read of the keyboard's place comes before it.
+  public static func checks(_ steps: [TypingStep], every: Int = checkEvery) -> [Bool] {
+    var unchecked = 0
+    var checks: [Bool] = []
+    for (index, step) in steps.enumerated() {
+      var check = false
+      if index > 0 {
+        if case .key = step { check = true }
+        if case .key = steps[index - 1] { check = true }
+        if unchecked >= max(1, every) { check = true }
+      }
+      checks.append(check)
+      if check { unchecked = 0 }
+      if case .text(let piece) = step { unchecked += piece.count }
+    }
+    return checks
   }
 }

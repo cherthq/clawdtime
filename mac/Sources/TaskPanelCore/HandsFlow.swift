@@ -43,15 +43,60 @@ public enum HandsGate {
   ///   worker pauses and asks.
   /// - `run`: what the service says now, read just before the event. Nil when it did not
   ///   answer. A stop that came through the chat, a call or the panel shows here as `stopping`.
-  public static func refusal(stopped: Bool, watching: Bool, personActed: Bool, run: HandsNext.Run?) -> HandError? {
+  /// - `keyboardHidden`: macOS guards the keyboard (Secure Event Input), as it does for a password field. The tap
+  ///   then sees none of the person's keys, and so no Escape held for Stop either. The person counts as one who
+  ///   holds the keyboard: nothing is sent, whatever the kind of input, and the worker asks.
+  public static func refusal(stopped: Bool, watching: Bool, personActed: Bool, keyboardHidden: Bool = false, run: HandsNext.Run?) -> HandError? {
     if stopped { return .stoppedByPerson }
     if watching && personActed { return .refused }
+    if keyboardHidden { return .refused }
     // With no word from the service nothing is sent: its result could not be posted either.
     guard let run else { return .failed }
     if run.state == "stopping" { return .stoppedByPerson }
     // Only a request that runs may act. One that ended or waits for the person sends nothing.
     return run.active && run.state == "running" ? nil : .refused
   }
+  /// The result says that the person took the Mac: the worker then pauses and asks. Without the tap nobody
+  /// listened, so nothing is said about the person.
+  public static func interrupted(watching: Bool, personActed: Bool, keyboardHidden: Bool) -> Bool {
+    watching && (personActed || keyboardHidden)
+  }
+  /// What the bar says while the hands wait because macOS guards the keyboard.
+  public static let keyboardHiddenDetail = "macOS guards the keyboard, as for a password. ClawdTime cannot see your keys now, so it waits for you."
+}
+
+/// What the person did with the mouse and the keys, as the hands keep it between commands. Times are seconds of
+/// one clock, such as the system uptime.
+///
+/// The worker plans each input from a look. What the person does after that look, also between two commands,
+/// counts for the input: the screen may not be what the worker saw. So a command that sends input starts with
+/// the person's input since the start of the last look that gave the screen, and a look starts clean. A command
+/// that sends nothing (a wait, a closer picture) says only what happened during it.
+public struct HandsOwnerWatch: Equatable, Sendable {
+  /// The person acted during this command, or, for a command that sends input, after the look that it rests on.
+  public private(set) var acted = false
+  /// When the person last moved the mouse or pressed a key.
+  private var lastInput: Double?
+  /// When the last look that gave the screen began.
+  private var lookBegan: Double?
+  public init() {}
+  /// The person moved the mouse or pressed a key at `time`.
+  public mutating func saw(at time: Double) {
+    acted = true
+    lastInput = max(lastInput ?? time, time)
+  }
+  /// A command begins at `time`. `input`: it sends input to the Mac, so it rests on the last look.
+  public mutating func begin(at time: Double, input: Bool) { acted = input && actedSinceLook }
+  /// The command that began at `time` gave a look of the screen.
+  public mutating func looked(began time: Double) { lookBegan = max(lookBegan ?? time, time) }
+  /// The person acted at or after the start of the last look, or acted with no look at all.
+  private var actedSinceLook: Bool {
+    guard let lastInput else { return false }
+    guard let lookBegan else { return true }
+    return lastInput >= lookBegan
+  }
+  /// The tap stopped listening: what it saw before says nothing about later.
+  public mutating func forget() { self = HandsOwnerWatch() }
 }
 
 /// How often the hands ask for the next command.

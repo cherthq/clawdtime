@@ -22,6 +22,9 @@ import TaskPanelCore
 /// - After the glide and just before the event, Stop is read once more: at this
 ///   Mac and at the service. If the person moved the mouse or pressed a key in
 ///   that time, nothing is sent and the worker asks.
+/// - While macOS guards the keyboard (Secure Event Input), the tap sees none of
+///   the person's keys, and so no Escape held for Stop. No input of any kind goes
+///   then, the bar says why, and the worker asks.
 /// - The worker's picture leaves the mascot out, so it may act on a field under
 ///   the mascot. Before a pointing command or typed text there, the mascot, its
 ///   bar and its bubble go to a free corner, and the event waits until they are there.
@@ -75,6 +78,11 @@ import TaskPanelCore
     return CursorPace.choose(setting: nil, recording: recording.recording, shownOnCall: false)
   }
   private var inputRefusal: HandError?
+  /// macOS guarded the keyboard during this command, as it does for a password field. The tap then saw none of
+  /// the person's keys, Escape held for Stop among them, so the person counts as one who holds the keyboard.
+  private var keyboardHeld = false
+  /// What the bar says after a command that the hands held back for the person, until the next command.
+  private var heldDetail: String?
   /// The app that the name of the last open_app stood for. It goes out with the result.
   private var resolvedApp: String?
   private let menuItems = NSHashTable<NSMenuItem>.weakObjects()
@@ -96,7 +104,7 @@ import TaskPanelCore
     input.onEscapeHold = { [weak self] in self?.stopByPerson() }
     input.mayContinue = { [weak self] in
       guard let self else { return false }
-      return !self.stop.stopped && self.sessionOpen && self.input.watching && !self.input.personActed
+      return !self.stop.stopped && self.sessionOpen && self.input.watching && !self.input.personActed && !self.keyboardHidden()
         && AXIsProcessTrusted() && CGPreflightScreenCaptureAccess() && self.desktop.inputGenerationCurrent
     }
     input.beforeInput = { [weak self] in
@@ -104,6 +112,18 @@ import TaskPanelCore
       if let error = await self.lastCheck() { self.inputRefusal = error; return false }
       // Before the first event of this command the windows in front must be as they were. After it they may change.
       guard await self.desktop.inputStillCurrent(steady: !self.input.submittedInput) else { self.inputRefusal = .staleObservation; return false }
+      return true
+    }
+    input.ownWindowAt = { [weak self] place in
+      guard let self else { return true }
+      guard self.ownWindowTakes(place) else { return false }
+      self.inputRefusal = .targetNotVisible
+      return true
+    }
+    input.ownKeyboard = { [weak self] in
+      guard let self else { return true }
+      guard Self.keyboardIsOwn else { return false }
+      self.inputRefusal = .refused
       return true
     }
     desktop.onTransition = { [weak self] phase, epoch in
@@ -221,7 +241,7 @@ import TaskPanelCore
     remoteCheckAt = nil
     presentation.reset()
     guard live || bar.isShown else { return }
-    live = false; label = ""
+    live = false; label = ""; heldDetail = nil
     desktop.retireObservation()
     bar.hide(); guide.hide(); guide.typing(false)
     input.unwatch()
@@ -235,7 +255,7 @@ import TaskPanelCore
     else if !label.isEmpty { detail = label }
     else { detail = ElementCleaner.line(run?.goal ?? "", limit: 80) }
     if !bar.isShown { barUp = Date() }
-    bar.show(detail: detail, stopped: stop.stopped, canStop: !stop.stopped)
+    bar.show(detail: heldDetail.flatMap { stop.stopped ? nil : $0 } ?? detail, stopped: stop.stopped, canStop: !stop.stopped)
   }
 
   // MARK: Stop
@@ -279,16 +299,29 @@ import TaskPanelCore
     let accessibility = AXIsProcessTrusted()
     let screenRecording = !command.needsScreenRecording || CGPreflightScreenCaptureAccess()
     if let missing = command.missingRight(accessibility: accessibility, screenRecording: screenRecording) { return .failure(seq, missing) }
-    input.beginCommand()
+    let began = ProcessInfo.processInfo.systemUptime
+    input.beginCommand(at: began, input: mutates)
     inputRefusal = nil
     resolvedApp = nil
+    keyboardHeld = false
+    if heldDetail != nil { heldDetail = nil; showBar() }
+    // The worker planned this input from its last look, and the person used the mouse or the keys after that look,
+    // between the commands: nothing is sent, and the worker asks, as for input during a command.
+    if mutates, input.watching, input.personActed { presentation.reset(); return .failure(seq, .refused, interrupted: true) }
+    // While macOS guards the keyboard the tap sees none of the person's keys, Escape held among them. No input of
+    // any kind goes then: the person holds the keyboard, and the worker asks.
+    if mutates, keyboardHidden() { return heldForKeyboard(seq) }
     presentation.begin(seq)
     let outcome = await act(command, sequence: seq, label: pending.label, accessibility: accessibility)
     // Without the tap nobody listened, so nothing is said about the person.
-    let interrupted = input.watching && input.personActed
+    let interrupted = HandsGate.interrupted(watching: input.watching, personActed: input.personActed, keyboardHidden: keyboardHeld)
     if interrupted { presentation.reset() }
+    if keyboardHeld, input.watching { heldDetail = HandsGate.keyboardHiddenDetail; showBar() }
     switch outcome {
     case .success(let seen):
+      // A look of the whole screen: the next input rests on it, and the person's input before it no longer counts.
+      // A closer picture shows one part only, so it is no such look.
+      if seen != nil, !command.isZoom { input.looked(began: began) }
       let result = HandResult.done(seq, observation: seen, interrupted: interrupted, resolvedBundleId: resolvedApp)
       // Contract failure cannot erase an already-submitted external effect.
       guard (try? result.validate()) != nil else {
@@ -350,8 +383,8 @@ import TaskPanelCore
       }
     case .key(let combo):
       guard let keys = KeyCombo.parse(combo), input.keyIsPermitted(keys), await keyboardFree() else { return .failure(.refused) }
-      // A key that prints a character is text: it stays out of a password field too. Return, Tab and shortcuts may go.
-      if keys.typesText, await focusIsSecure() { return .failure(.refused) }
+      // No key goes into a password field: not a character, and not a shortcut such as Command V either.
+      guard SecureField.permitsKey(keys, focusSecure: await focusIsSecure()) else { return .failure(.refused) }
       if stop.stopped { return .failure(.stoppedByPerson) }
       defer { guide.rest() }
       let changesSurface = CallPresentationKeyPolicy.mayChangeSurface(keys)
@@ -361,8 +394,8 @@ import TaskPanelCore
       if let refusal = await lastCheck() { return .failure(refusal) }
       guard await desktop.beginInput(steady: true) else { return .failure(.staleObservation) }
       defer { desktop.endInput() }
-      guard NSApp.keyWindow == nil else { return .failure(.refused) }
-      if keys.typesText, await focusIsSecure() { return .failure(.refused) }
+      guard !Self.keyboardIsOwn else { return .failure(.refused) }
+      guard SecureField.permitsKey(keys, focusSecure: await focusIsSecure()) else { return .failure(.refused) }
       showTyping(); defer { endTyping() }
       return await input.key(keys) ? .success(nil) : .failure(inputFailure())
     case .openApp(let name, let window):
@@ -448,7 +481,7 @@ import TaskPanelCore
   /// loss and stale desktop identity distinct; perform() upgrades partial effects.
   private func inputFailure() -> HandError {
     if stop.stopped || Task.isCancelled || input.halted { return .stoppedByPerson }
-    if input.personActed { return .refused }
+    if input.personActed || keyboardHeld { return .refused }
     if let inputRefusal { return inputRefusal }
     if !AXIsProcessTrusted() { return .noAccessibility }
     if !CGPreflightScreenCaptureAccess() { return .noScreenRecording }
@@ -464,9 +497,9 @@ import TaskPanelCore
     guard sessionOpen, input.watching else { return .refused }
     guard AXIsProcessTrusted() else { return .noAccessibility }
     guard CGPreflightScreenCaptureAccess() else { return .noScreenRecording }
-    // Stop at this Mac and the person's own input need no read of the service.
+    // Stop at this Mac, the person's own input and a keyboard that macOS guards need no read of the service.
     if let refusal = HandsGate.refusal(stopped: stop.stopped, watching: input.watching, personActed: input.personActed,
-                                       run: .init(active: true, goal: "", step: 0, state: "running")) { return refusal }
+                                       keyboardHidden: keyboardHidden(), run: .init(active: true, goal: "", step: 0, state: "running")) { return refusal }
     // Coalesce redundant loopback service polls within 80 ms inside the same command.
     if let checkedAt = remoteCheckAt, Date().timeIntervalSince(checkedAt) < 0.08 { return nil }
     // The number of this command is taken already, so this read gives no command: only what the worker does now.
@@ -474,9 +507,23 @@ import TaskPanelCore
     guard sessionOpen, input.watching else { remoteCheckAt = nil; return .refused }
     guard AXIsProcessTrusted() else { remoteCheckAt = nil; return .noAccessibility }
     guard CGPreflightScreenCaptureAccess() else { remoteCheckAt = nil; return .noScreenRecording }
-    let refusal = HandsGate.refusal(stopped: stop.stopped || Task.isCancelled, watching: input.watching, personActed: input.personActed, run: now?.run)
+    let refusal = HandsGate.refusal(stopped: stop.stopped || Task.isCancelled, watching: input.watching, personActed: input.personActed,
+                                    keyboardHidden: keyboardHidden(), run: now?.run)
     remoteCheckAt = refusal == nil ? Date() : nil
     return refusal
+  }
+  /// macOS guards the keyboard now (Secure Event Input). Each time it does during a command, the command counts as
+  /// held back for the person.
+  private func keyboardHidden() -> Bool {
+    guard input.secureInput else { return false }
+    keyboardHeld = true
+    return true
+  }
+  /// The answer to an input that waits while macOS guards the keyboard: nothing was sent, and the person holds it.
+  private func heldForKeyboard(_ seq: Int) -> HandResult {
+    presentation.reset()
+    if input.watching { heldDetail = HandsGate.keyboardHiddenDetail; showBar() }
+    return .failure(seq, .refused, interrupted: HandsGate.interrupted(watching: input.watching, personActed: input.personActed, keyboardHidden: true))
   }
 
   /// Before typed text or a key: the guided cursor glides to the field that has the keyboard,
@@ -539,6 +586,12 @@ import TaskPanelCore
     await travel(to: map.flip(places[0]), label: label)
     if moving { await waitForRoom() }
     if let refusal = await lastCheck() { return .failure(refusal) }
+    if case .drag = command, places.count == 2 {
+      // A drag that presses on a password field or drops on one is refused: its text would go out of it or into it.
+      let ends = (places[0], places[1])
+      let secure = await Task.detached(priority: .userInitiated) { (HandsTree.isSecure(at: ends.0), HandsTree.isSecure(at: ends.1)) }.value
+      guard SecureField.permitsDrag(source: secure.0, target: secure.1) else { return .failure(.refused) }
+    }
     let allowCover: Bool
     if case .click(_, _, _, _, let allow) = command { allowCover = allow == true } else { allowCover = false }
     // ClawdTime's windows are not in the picture that the worker saw. A click on
@@ -583,16 +636,26 @@ import TaskPanelCore
     }
     return restore
   }
+  /// A window of ClawdTime that shows and takes clicks lies at `place`, in screen points from the top left. It came
+  /// up after `passThrough`, or it takes clicks again. With no main display nothing is known, and the place is not free.
+  private func ownWindowTakes(_ place: CGPoint) -> Bool {
+    guard let map = HandsDisplay.main?.map else { return true }
+    return OwnWindows.takePointer(at: map.flip(place), NSApp.windows.map(OwnWindowState.init(window:)))
+  }
+  /// The keys would go to ClawdTime: its chat or another of its windows has the keyboard, or it is the app in front.
+  private static var keyboardIsOwn: Bool { OwnWindows.holdKeyboard(keyWindow: NSApp.keyWindow != nil, active: NSApp.isActive) }
   /// Keys go to the window that has the keyboard. When that is a window of
   /// ClawdTime, for example its chat, this waits a moment for it to close.
   private func keyboardFree() async -> Bool {
-    for _ in 0..<12 where NSApp.keyWindow != nil { await pause(0.05) }
-    return NSApp.keyWindow == nil
+    for _ in 0..<12 where Self.keyboardIsOwn { await pause(0.05) }
+    return !Self.keyboardIsOwn
   }
   /// In the middle of typed text: the keyboard is still outside ClawdTime and outside a password field.
   private func mayType() async -> Bool {
-    guard NSApp.keyWindow == nil, await lastCheck() == nil, await desktop.inputStillCurrent(steady: false) else { return false }
-    return !(await focusIsSecure())
+    guard !Self.keyboardIsOwn, await lastCheck() == nil, await desktop.inputStillCurrent(steady: false) else { return false }
+    guard !(await focusIsSecure()) else { return false }
+    // The reads above wait: the keyboard is read once more after them.
+    return !Self.keyboardIsOwn
   }
   /// The field that has the keyboard is a password field: the Accessibility
   /// tree says so, or macOS guards the keyboard as it does for one. An app that
@@ -751,4 +814,16 @@ import TaskPanelCore
     if alert.runModal() == .alertSecondButtonReturn,
       let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") { NSWorkspace.shared.open(url) }
   }
+}
+
+extension OwnWindowState {
+  /// A window of this app as AppKit has it now. The frame counts from the bottom left of the main display.
+  @MainActor init(window: NSWindow) {
+    self.init(frame: window.frame, visible: window.isVisible, takesClicks: !window.ignoresMouseEvents)
+  }
+}
+
+private extension HandCommand {
+  /// A closer picture of one part of the screen.
+  var isZoom: Bool { if case .zoom = self { return true }; return false }
 }

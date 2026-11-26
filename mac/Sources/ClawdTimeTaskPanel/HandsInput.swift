@@ -36,14 +36,25 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   var mayContinue: (() -> Bool)?
   /// Recheck the independently observed window after pointer travel and before input.
   var beforeInput: (() async -> Bool)?
+  /// Read at once, with no wait between it and the event, right before each press of a button and each turn of
+  /// the wheel. True: a window of ClawdTime that takes clicks lies at the place, in screen points from the top left.
+  /// Nothing goes there.
+  var ownWindowAt: ((CGPoint) -> Bool)?
+  /// Read the same way right before each key and each piece of typed text. True: the keys would go to ClawdTime.
+  var ownKeyboard: (() -> Bool)?
+  private func ownPointer(_ place: CGPoint) -> Bool { ownWindowAt?(place) ?? false }
+  private var keyboardIsOwn: Bool { ownKeyboard?() ?? false }
   private var interrupted: Bool { halted || personActed || mayContinue?() == false }
   private func allowed() async -> Bool {
     guard !interrupted else { return false }
     let permitted = await beforeInput?() ?? true
     return permitted && !interrupted
   }
-  /// The person moved the mouse or pressed a key since the command began.
-  private(set) var personActed = false
+  /// The person moved the mouse or pressed a key since the command began, or, for a command that sends input,
+  /// since the start of the look that it rests on. `HandsOwnerWatch` holds the rule.
+  var personActed: Bool { owner.acted }
+  private var owner = HandsOwnerWatch()
+  private var now: Double { ProcessInfo.processInfo.systemUptime }
   /// Any meaningful input already submitted may have affected the UI.
   private(set) var submittedInput = false
   /// The person held Escape for a moment.
@@ -66,8 +77,11 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   var pointer: CGPoint { CGEvent(source: nil)?.location ?? .zero }
   /// A password field has the keyboard: macOS guards it, and the hands stay out.
   var secureInput: Bool { IsSecureEventInputEnabled() }
-  /// A command begins: what the person did before it does not count.
-  func beginCommand() { personActed = false; submittedInput = false }
+  /// A command begins at `time`. For a look, what the person did before it does not count. For a command that
+  /// sends input, what the person did since the start of the last look counts: the worker planned it from that look.
+  func beginCommand(at time: Double, input: Bool) { owner.begin(at: time, input: input); submittedInput = false }
+  /// The command that began at `time` gave a look of the screen.
+  func looked(began time: Double) { owner.looked(began: time) }
 
   private func pause(_ seconds: Double) async {
     try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
@@ -116,6 +130,9 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     for press in 1...max(1, min(2, count)) {
       if interrupted { return false }
       if press > 1 { guard await allowed() else { return false } }
+      // After the last wait and the last check of the service: a window of ClawdTime that came up at the place,
+      // such as a request with Approve on it, gets no press.
+      if interrupted || ownPointer(point) { return false }
       // A button that went down always comes up: nothing between the two can stop.
       mouse(right ? .rightMouseDown : .leftMouseDown, at: point, button: right ? .right : .left, clicks: Int64(press))
       await pause(0.012)
@@ -131,20 +148,26 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     await pause(0.02)
     if interrupted { return false }
     guard await allowed() else { return false }
+    // Neither the place of the press nor the place of the drop lies under a window of ClawdTime.
+    if interrupted || ownPointer(from) || ownPointer(to) { return false }
     mouse(.leftMouseDown, at: from, clicks: 1)
     held = from
     // An app starts a drag only after the button stays down for a moment.
     await pause(0.05)
     let length = hypot(Double(to.x - from.x), Double(to.y - from.y))
     let path = GuidedPath(from: from, to: to, duration: GuidedPath.dragDuration(length: length), arc: 0)
+    var cut = false
     for point in path.points(every: 1.0 / 60) {
       if interrupted || held == nil { break }
+      // A window of ClawdTime that came up on the way ends the drag where it is: the button comes up there, and
+      // the drag did not finish.
+      if ownPointer(point) { cut = true; break }
       mouse(.leftMouseDragged, at: point)
       held = point
       await pause(1.0 / 60)
     }
     await pause(0.025)
-    let finished = !interrupted && held != nil
+    let finished = !cut && !interrupted && held != nil
     letGo()
     return finished
   }
@@ -162,7 +185,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
       if index % 2 == 0 {
         guard await allowed() else { return false }
       }
-      if interrupted { return false }
+      if interrupted || ownPointer(point) { return false }
       let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: tick.vertical, wheel2: tick.horizontal, wheel3: 0)
       event?.location = point
       post(event)
@@ -183,15 +206,21 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
   /// Types text as Unicode, so every script goes whatever the keyboard layout
   /// is. A line break is the Return key. The caller checks the place of the
   /// keyboard before the first character. `allowed` asks again when that place
-  /// can have changed: after a Return or a Tab, and every few characters.
+  /// can have changed: before and after a Return or a Tab, and every few
+  /// characters (`TypingPlan.checks`). Before every step, with no wait, the
+  /// keyboard must still be outside ClawdTime and macOS must not guard it as it
+  /// does for a password field.
   func type(_ text: String, allowed: () async -> Bool) async -> Typed {
     let steps = TypingPlan.steps(text, perStep: 8)
-    var unchecked = 0
+    let checks = TypingPlan.checks(steps)
     for (index, step) in steps.enumerated() {
       if interrupted { return .stopped }
-      if unchecked >= 40 {
+      if keyboardTaken { return .refused }
+      if checks[index] {
         guard await allowed() else { return .refused }
-        unchecked = 0
+        // The full read waits: the quick one comes again after it, right before the event.
+        if interrupted { return .stopped }
+        if keyboardTaken { return .refused }
       }
       switch step {
       case .text(let piece):
@@ -201,24 +230,25 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
           event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
           post(event)
         }
-        unchecked += piece.count
       case .key(let code):
         await press(code)
-        if index < steps.count - 1 {
-          // The key can move the keyboard to another field, for example from a name to a password. The app gets a moment to do it.
-          await pause(0.05)
-          guard await allowed() else { return .refused }
-          unchecked = 0
-        }
+        // The key can move the keyboard to another field, for example from a name to a password. The app gets a
+        // moment to do it before the read of the next step.
+        if index < steps.count - 1 { await pause(0.05) }
       }
       await pause(0.004)
     }
     return .done
   }
+  /// The quick read before each piece of typed text: the keyboard went to ClawdTime, or macOS guards it as it does
+  /// for a password field.
+  private var keyboardTaken: Bool { keyboardIsOwn || secureInput }
   /// One key with its modifiers. False when Stop came first.
   func key(_ combo: KeyCombo) async -> Bool {
     if interrupted { return false }
     guard await allowed(), keyIsPermitted(combo) else { return false }
+    // After the last check of the service: the keyboard is still outside ClawdTime.
+    if interrupted || keyboardIsOwn { return false }
     // The combo names a character. On a keyboard of another country that
     // character is on another key, so the key is found on the layout in use.
     let code = combo.character.flatMap(Self.keyCode(printing:)) ?? combo.keyCode
@@ -285,6 +315,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
       session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
     guard DesktopShortcutConfiguration.isEnabled(shortcut, in: Self.enabledHotKeys()) else { return .failure(.desktopShortcutUnavailable) }
+    guard !keyboardIsOwn else { return .failure(.refused) }
     post(down, flags: CGEventFlags(rawValue: shortcut.flags))
     await pause(0.02)
     post(up, flags: CGEventFlags(rawValue: shortcut.flags))
@@ -304,6 +335,7 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     guard CGPreflightScreenCaptureAccess() else { return .failure(.noScreenRecording) }
     guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
       session[kCGSessionOnConsoleKey as String] as? Bool == true, session["CGSSessionScreenIsLocked"] as? Bool != true else { return .failure(.refused) }
+    guard !keyboardIsOwn else { return .failure(.refused) }
     post(down, flags: .maskCommand)
     // Once down was submitted, always release both keys, including on Stop.
     await pause(0.02)
@@ -357,12 +389,14 @@ private func handsTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     if let tapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes) }
     CFMachPortInvalidate(tap)
     self.tap = nil; tapSource = nil; escapeDown = nil; watchTried = nil
+    // Nobody listens now: what the tap saw says nothing about later.
+    owner.forget()
   }
   fileprivate func listenAgain() { if let tap { CGEvent.tapEnable(tap: tap, enable: true) } }
   fileprivate func saw(_ type: CGEventType, mark: Int64, keyCode: Int64, repeated: Bool) {
     // An event with the mark is the hands' own.
     guard mark != Self.mark else { return }
-    personActed = true
+    owner.saw(at: now)
     guard keyCode == Int64(KeyCombo.escapeKey) else { return }
     if type == .keyUp { escapeDown = nil; return }
     guard type == .keyDown, !repeated else { return }

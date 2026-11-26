@@ -263,6 +263,18 @@ enum HandsTree {
     return ElementCleaner.isSecure(role: role, subrole: text(values[1]))
   }
 
+  /// Whether the element at `point`, in screen points from the top left, is a password field. Nil when the tree does not say.
+  static func isSecure(at point: CGPoint) -> Bool? {
+    let system = AXUIElementCreateSystemWide()
+    AXUIElementSetMessagingTimeout(system, 0.3)
+    var found: AXUIElement?
+    guard point.x.isFinite, point.y.isFinite,
+      AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &found) == .success, let found else { return nil }
+    let values = many(found, [kAXRoleAttribute, kAXSubroleAttribute])
+    guard let role = text(values[0]) else { return nil }
+    return ElementCleaner.isSecure(role: role, subrole: text(values[1]))
+  }
+
   /// The frame of the element that has the keyboard, in screen points from the top left. Nil when the tree does not say.
   static func focusFrame() -> CGRect? {
     let system = AXUIElementCreateSystemWide()

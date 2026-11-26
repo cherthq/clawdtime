@@ -227,12 +227,43 @@ public enum OwnWindows {
   /// The rows of the window list that the hands judge the screen by: windows of other processes at the level of
   /// ordinary windows. A row that names no owner is kept, so that the check of a whole list refuses the list.
   public static func judged(layer: Int?, owner: Int?, own: Int) -> Bool { layer == 0 && owner != own }
+  /// A row of the window list above the level of ordinary windows, of another process: a notification banner, a
+  /// floating panel, the menu bar, the Dock. It is never the surface of an input, but it takes a click at its place.
+  /// A row that names no level or no owner counts as one.
+  public static func floating(layer: Int?, owner: Int?, own: Int) -> Bool { (layer ?? 1) > 0 && owner != own }
+  /// A window above the ordinary ones lies at `point` now, in screen points from the top left, that did not lie
+  /// there at the look: a new one, or one that moved or changed its size. `observed` are the ones of the look.
+  public static func floatingCover(at point: CGPoint, observed: [DesktopCover], current: [DesktopCover]) -> Bool {
+    current.contains { $0.frame.contains(point) && !observed.contains($0) }
+  }
   /// The app whose Accessibility tree the hands read: the app in front, or the app that owns the menu bar when
   /// ClawdTime itself is in front. Never ClawdTime: nil then, and nil with no app in front.
   public static func subject(front: Int?, menuBar: Int?, own: Int) -> Int? {
     guard let front else { return nil }
     guard front == own else { return front }
     return menuBar == own ? nil : menuBar
+  }
+  /// A press of a button or a turn of the wheel at `point`, in screen points from the bottom left, would land on a
+  /// window of ClawdTime: one that shows and takes clicks lies there. The windows that the hands let clicks through,
+  /// such as the mascot, take none. A window that came up after that does: the bubble with Approve on it, the card
+  /// of a question with Approve and No, the chat. The window list that the hands judge the screen by leaves all of
+  /// them out, so this rule reads AppKit's own list, at once, right before the event.
+  public static func takePointer(at point: CGPoint, _ windows: [OwnWindowState]) -> Bool {
+    windows.contains { $0.visible && $0.takesClicks && $0.frame.contains(point) }
+  }
+  /// The keys would go to ClawdTime: one of its windows has the keyboard, or ClawdTime is the app in front.
+  public static func holdKeyboard(keyWindow: Bool, active: Bool) -> Bool { keyWindow || active }
+}
+
+/// One window of ClawdTime as AppKit has it at this moment, in screen points from the bottom left of the main display.
+public struct OwnWindowState: Equatable, Sendable {
+  public let frame: CGRect
+  /// It is on the screen.
+  public let visible: Bool
+  /// It takes a click: it does not let mouse events through to the window behind it.
+  public let takesClicks: Bool
+  public init(frame: CGRect, visible: Bool, takesClicks: Bool) {
+    self.frame = frame; self.visible = visible; self.takesClicks = takesClicks
   }
 }
 

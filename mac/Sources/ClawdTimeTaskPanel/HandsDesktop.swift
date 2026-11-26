@@ -41,9 +41,18 @@ import TaskPanelCore
     /// How many windows of the same app lie in front at all, seen or not, and the ones that show nothing.
     var front = 0
     var unseen: [DesktopUnseen] = []
-    /// What one look holds on to: the window, and the windows in front of it as they were.
-    struct Look: Equatable { let surface: Surface; let covers: [DesktopCover] }
-    var look: Look { Look(surface: self, covers: covers) }
+    /// Windows of other processes above the ordinary ones on the display, such as a notification banner, the menu
+    /// bar or the Dock. No part of what makes two surfaces equal.
+    var floating: [DesktopCover] = []
+    /// What one look holds on to: the window, and the windows in front of it as they were. `floating` are the
+    /// windows above the ordinary ones that the look saw. A change of them elsewhere on the screen does not make
+    /// another look; one that is new at the place of a click is a cover (`OwnWindows.floatingCover`).
+    struct Look: Equatable {
+      let surface: Surface; let covers: [DesktopCover]
+      var floating: [DesktopCover] = []
+      static func == (lhs: Look, rhs: Look) -> Bool { lhs.surface == rhs.surface && lhs.covers == rhs.covers }
+    }
+    var look: Look { Look(surface: self, covers: covers, floating: floating) }
     static func == (lhs: Self, rhs: Self) -> Bool {
       lhs.pid == rhs.pid && CFEqual(lhs.window, rhs.window) && DesktopArrival.sameLiveTitle(lhs.title, rhs.title) && lhs.frame == rhs.frame
         && lhs.windowID == rhs.windowID && lhs.displayID == rhs.displayID && lhs.map == rhs.map && lhs.ordinary == rhs.ordinary && lhs.fullScreen == rhs.fullScreen && lhs.fullScreenConfirmed == rhs.fullScreenConfirmed
@@ -80,6 +89,8 @@ import TaskPanelCore
   private var inputPlaces: [CGPoint] = []
   private var inputAllowCover = false
   private var inputObservedCovers: [DesktopCover] = []
+  /// The windows above the ordinary ones that the look of this input saw.
+  private var inputObservedFloating: [DesktopCover] = []
   private var tokens: [(NotificationCenter, NSObjectProtocol)] = []
   private var inputSurface: Surface?
   private var inputEpoch: Int?
@@ -128,7 +139,10 @@ import TaskPanelCore
   var surfaceEpoch: Int { lease.surfaceEpoch }
   /// Idle/run completion consumes input evidence but retains a verified previous
   /// desktop in this panel session. External Space/session/display changes do not.
-  func retireObservation() { lease.consume(); inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; inputAllowCover = false; inputObservedCovers = [] }
+  func retireObservation() {
+    lease.consume(); inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; inputAllowCover = false; inputObservedCovers = []
+    inputObservedFloating = []
+  }
   private func phase(_ value: DesktopTransitionPhase) { onTransition?(value, epoch) }
   private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
   /// Zero when the list of displays cannot be read: then nothing that needs one display runs.
@@ -304,7 +318,11 @@ import TaskPanelCore
       // Another window retires the way back to the desktop before, as it always did. The same window with
       // another list in front of it is a new look, and the way back stays.
       let held = lease.held?.surface
-      lease.record(after.look, at: now)
+      // The look saw a window above the ordinary ones only when both reads around the picture had it, the same
+      // window at the same place: one that came up during the look may not be in the picture.
+      var look = after.look
+      look.floating = after.floating.filter { (before?.floating ?? []).contains($0) }
+      lease.record(look, at: now)
       if let held, held != after { history.invalidate() }
     }
     else { invalidate() }
@@ -326,11 +344,18 @@ import TaskPanelCore
     let expected = epoch
     let current = await surface()
     guard expected == epoch, lease.permits(current?.look, at: now) else { invalidate(); return false }
+    // A window of another app above the ordinary ones that came up at a place after the look, such as a
+    // notification banner, would take the click.
+    let observedFloating = lease.held?.floating ?? []
+    if steady, let current, places.contains(where: { OwnWindows.floatingCover(at: $0, observed: observedFloating, current: current.floating) }) {
+      invalidate(); return false
+    }
     inputSurface = current; inputEpoch = epoch
     inputFront = steady ? current.map { ($0.covers, $0.unseen) } : nil
     inputPlaces = places
     inputAllowCover = allowCover
     inputObservedCovers = current?.covers ?? []
+    inputObservedFloating = observedFloating
     return true
   }
   /// One of the places is under a window of the app that lies in front of the surface. The look does not say
@@ -355,6 +380,10 @@ import TaskPanelCore
     // press of a double click can open a list. Even then no place of the command may lie under an unobserved
     // or changed cover.
     if steady, let held = inputFront, held.covers != current.covers || held.unseen != current.unseen { invalidate(); return false }
+    // Before the first event, a window of another app above the ordinary ones that is new at a place takes the click.
+    if steady, inputPlaces.contains(where: { OwnWindows.floatingCover(at: $0, observed: inputObservedFloating, current: current.floating) }) {
+      invalidate(); return false
+    }
     for place in inputPlaces {
       if inputAllowCover && DesktopFocusedWindow.hides(inputObservedCovers, place) {
         guard DesktopFocusedWindow.permitsObservedCover(place, observed: inputObservedCovers, current: current.covers) else {
@@ -366,7 +395,10 @@ import TaskPanelCore
     }
     return true
   }
-  func endInput() { inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; inputAllowCover = false; inputObservedCovers = []; lease.consume() }
+  func endInput() {
+    inputSurface = nil; inputEpoch = nil; inputFront = nil; inputPlaces = []; inputAllowCover = false; inputObservedCovers = []
+    inputObservedFloating = []; lease.consume()
+  }
 
   /// One activation attempt. Every effect is preceded by the controller's Stop,
   /// takeover, permission and session checks. Once anything is dispatched, failure
@@ -1075,9 +1107,17 @@ import TaskPanelCore
         windowID = matched.id; covers = matched.covers; front = matched.front; unseen = matched.unseen
         fact?("ownWindowsInFront", front > 0); fact?("ownWindowsSeenInFront", !covers.isEmpty)
       }
+      // Windows of other processes above the ordinary ones on this display. They are never the surface; one that is
+      // new at the place of a click after the look is a cover. ClawdTime's own windows have their own check.
+      let floating: [DesktopCover] = directional ? [] : windows.compactMap { row in
+        guard OwnWindows.floating(layer: row[kCGWindowLayer as String] as? Int, owner: row[kCGWindowOwnerPID as String] as? Int, own: Int(getpid())),
+          let raw = row[kCGWindowBounds as String] as? NSDictionary, let frame = CGRect(dictionaryRepresentation: raw),
+          !CGDisplayBounds(display.id).intersection(frame).isEmpty else { return nil }
+        return DesktopCover(id: row[kCGWindowNumber as String] as? Int ?? 0, frame: frame)
+      }
       let parent = Surface(pid: pid, window: focused, title: title, frame: bounds, windowID: windowID, displayID: display.id, map: display.map,
         ordinary: (value(focused, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole,
-        fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed, covers: covers, front: front, unseen: unseen)
+        fullScreen: fullScreen(focused), fullScreenConfirmed: confirmed, covers: covers, front: front, unseen: unseen, floating: floating)
       diagnostic?(group == nil ? "ax_quartz_matched" : "directional_composition_ready")
       return group.map { .composite(parent, $0) } ?? .strict(parent)
     }

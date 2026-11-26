@@ -199,6 +199,30 @@ public struct VoiceActivity: Equatable, Sendable {
   }
 }
 
+/// Which buffers of the microphone go into a recording. Mute means that no sound of the room leaves the Mac: while
+/// the microphone is off no buffer is written, and after it is on again only a buffer heard since then is. Times are
+/// seconds of the host clock that the audio engine stamps on each buffer.
+public struct MicrophoneGate: Equatable, Sendable {
+  /// The microphone is on from this time.
+  private var openFrom = -Double.infinity
+  private var muted = false
+  public init() {}
+  /// The person turned the microphone off at `time`.
+  public mutating func mute(at time: Double) { muted = true }
+  /// The person turned it on again at `time`.
+  public mutating func unmute(at time: Double) {
+    guard muted else { return }
+    muted = false; openFrom = time
+  }
+  /// The buffer that starts at `start` and lasts `seconds` may go into the recording now: the microphone is on, and
+  /// all of the buffer was heard since it was turned on.
+  public func admits(start: Double, seconds: Double) -> Bool {
+    !muted && start.isFinite && seconds.isFinite && seconds >= 0 && start >= openFrom
+  }
+  /// A buffer with no time of its own: it may go only while the microphone is on now.
+  public var admitsUntimed: Bool { !muted }
+}
+
 /// UI-only handoff policy: withdrawing our editor never activates another app.
 public enum NativeExecutionPresentation {
   /// The engine works on the screen of this Mac.
