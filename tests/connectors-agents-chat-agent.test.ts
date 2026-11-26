@@ -10,6 +10,7 @@ import {
   ChatAgent,
   chatBrain,
   chatMode,
+  trueAfterTheEnd,
 } from "../connectors/agents/chat-agent.js";
 import { chatTools, effectTools } from "../connectors/agents/chat-tools.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
@@ -1257,5 +1258,207 @@ describe("the chat agent wires call_view for apps, sessions, and screen", () => 
     await feed.say("Zoom in on Stonepad", "call");
     expect(offeredInFeed[0]).toContain("call_view");
     feed.close();
+  });
+});
+
+describe("a reply that comes after the task's own result", () => {
+  const photos = {
+    ask: "Open Photos and tell me how many items the library shows",
+    result: "Done. The Photos library showed 0 items. I quit Photos.",
+    stale:
+      "The Photos check is still running. I haven't confirmed the library count yet.",
+    early: "Opening Photos to count the items in the library.",
+  };
+  const calendar = {
+    ask: "Open Calendar and tell me how many events I have tomorrow",
+    result: "Done. Calendar shows 3 events tomorrow. I quit Calendar.",
+    stale:
+      "Checking your Calendar now. I'll tell you how many events once it's done.",
+    early: "I'm opening Calendar to count tomorrow's events.",
+  };
+
+  /**
+   * The panel's chat over a slow model. Its first answer starts the task.
+   * With `endsFirst`, the engine ends the task and says its result in the
+   * chat, as the service does, while the model still writes its words;
+   * then `meanwhile` runs.
+   */
+  function slowChat(options: {
+    reply: string;
+    result: string;
+    endsFirst: boolean;
+    meanwhile?: (feed: BoardFeed) => void;
+  }) {
+    const root = tempRoot();
+    const computer = new FakeComputer();
+    let requests = 0;
+    const feed: BoardFeed = new BoardFeed({
+      root,
+      now: () => now,
+      speech: null,
+      chat: "agent",
+      execution: computer,
+      model: {
+        async complete(input) {
+          requests++;
+          if (requests === 1)
+            return {
+              text: "",
+              toolCalls: [
+                {
+                  id: "call_1",
+                  name: "computer_do",
+                  arguments: JSON.stringify({
+                    goal: input.messages.at(-1)!.content,
+                  }),
+                },
+              ],
+            };
+          if (options.endsFirst && requests === 2) {
+            ends();
+            options.meanwhile?.(feed);
+          }
+          return { text: options.reply, toolCalls: [] };
+        },
+      },
+    });
+    const ends = () => {
+      computer.finish(options.result);
+      feed.appendExecutionResult(computer.message);
+    };
+    const lines = () =>
+      new ChatLog(root)
+        .recent()
+        .map((message) => `${message.role}:${message.text}`);
+    return { root, computer, feed, ends, lines };
+  }
+
+  it.each([photos, calendar])(
+    "saves no stale status after the result when the task ended first: $ask",
+    async (job) => {
+      const chat = slowChat({
+        reply: job.stale,
+        result: job.result,
+        endsFirst: true,
+      });
+      const reply = await chat.feed.say(job.ask);
+      expect(chat.computer.submits).toHaveLength(1);
+      // The result answers the owner, once; the chat ends with it.
+      expect(chat.lines()).toEqual([
+        `user:${job.ask}`,
+        `assistant:${job.result}`,
+      ]);
+      // What a call or a voice turn says is the result, never the stale claim.
+      expect(reply.text).toBe(job.result);
+    },
+  );
+
+  it.each([photos, calendar])(
+    "keeps today's order when the reply comes before the task ends: $ask",
+    async (job) => {
+      const chat = slowChat({
+        reply: job.early,
+        result: job.result,
+        endsFirst: false,
+      });
+      const reply = await chat.feed.say(job.ask);
+      expect(reply.text).toBe(job.early);
+      chat.ends();
+      expect(chat.lines()).toEqual([
+        `user:${job.ask}`,
+        `assistant:${job.early}`,
+        `assistant:${job.result}`,
+      ]);
+    },
+  );
+
+  it("speaks the result on a voice turn in place of the stale claim", async () => {
+    const chat = slowChat({
+      reply: photos.stale,
+      result: photos.result,
+      endsFirst: true,
+    });
+    const reply = await chat.feed.say(photos.ask, "voice");
+    expect(reply.text).toBe(photos.result);
+    expect(chat.lines()).toEqual([
+      `user:${photos.ask}`,
+      `assistant:${photos.result}`,
+    ]);
+  });
+
+  it("keeps the part of the reply that answers a second question", async () => {
+    const ask = `${photos.ask}, and what is 12 times 12?`;
+    const chat = slowChat({
+      reply: "The Photos check is still running. 12 times 12 is 144.",
+      result: photos.result,
+      endsFirst: true,
+    });
+    const reply = await chat.feed.say(ask);
+    expect(reply.text).toBe("12 times 12 is 144.");
+    expect(chat.lines()).toEqual([
+      `user:${ask}`,
+      `assistant:${photos.result}`,
+      "assistant:12 times 12 is 144.",
+    ]);
+  });
+
+  it("writes neither the stale claim nor the result again when the owner spoke after the result", async () => {
+    let joined!: Promise<unknown>;
+    const chat = slowChat({
+      reply: photos.stale,
+      result: photos.result,
+      endsFirst: true,
+      meanwhile: (feed) => (joined = feed.say("thanks")),
+    });
+    const reply = await chat.feed.say(photos.ask);
+    await joined;
+    expect(reply.text).toBe("");
+    expect(chat.lines()).toEqual([
+      `user:${photos.ask}`,
+      `assistant:${photos.result}`,
+      "user:thanks",
+    ]);
+  });
+
+  it("drops only the sentences that say the work goes on", () => {
+    for (const claim of [
+      "The Photos check is still running.",
+      "I haven’t confirmed the library count yet.",
+      "Opening Photos now.",
+      'Started on the screen: "open Photos".',
+      "I started the Photos check.",
+      "It's running now; I'll let you know.",
+      "The task is in progress.",
+      "I can't confirm the count until it finishes.",
+      "I'll tell you how many events once it's done.",
+    ])
+      expect(trueAfterTheEnd(claim)).toBe("");
+    for (const fact of [
+      "Photos showed 0 items in the library.",
+      "I didn't find any events tomorrow.",
+      "Your next meeting started at 3 and nothing else is on today.",
+      "Something went wrong, and Photos did not open.",
+      "Okay.",
+    ])
+      expect(trueAfterTheEnd(fact)).toBe(fact);
+    expect(trueAfterTheEnd("Okay. Still checking Photos.")).toBe("");
+    expect(
+      trueAfterTheEnd("Still checking Photos. Lisbon is 2 hours behind."),
+    ).toBe("Lisbon is 2 hours behind.");
+  });
+
+  it("keeps the reply while the task's result is not in the chat", async () => {
+    const computer = new FakeComputer();
+    const model = scriptedModel([
+      { calls: [call("computer_do", { goal: photos.ask })] },
+      () => {
+        // The task ended, but its result has not reached the chat yet.
+        computer.finish(photos.result);
+        return { text: photos.stale };
+      },
+    ]);
+    const { agent } = setup({ computer, model });
+    const answer = await agent.answer([], photos.ask, "chat");
+    expect(answer.text).toBe(photos.stale);
   });
 });
