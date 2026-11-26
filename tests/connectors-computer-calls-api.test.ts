@@ -116,6 +116,8 @@ class FakeChert {
   lose: ("before" | "after")[] = [];
   /** The status of POST /calls, in place of 201. */
   placeStatus: number | null = null;
+  /** Chert's own error code on a refusal, as its API sends it. */
+  placeCode: string | null = null;
   /** POST /calls never answers. */
   hang = false;
   /** Events that the end request adds. */
@@ -133,9 +135,14 @@ class FakeChert {
       const lost = this.lose.shift();
       if (lost === "before") throw new TypeError("fetch failed");
       if (this.placeStatus !== null)
-        return new Response(JSON.stringify({ error: "refused" }), {
-          status: this.placeStatus,
-        });
+        return new Response(
+          JSON.stringify(
+            this.placeCode
+              ? { error: { code: this.placeCode, message: "Refused." } }
+              : { error: "refused" },
+          ),
+          { status: this.placeStatus },
+        );
       const key = headers["Idempotency-Key"]!;
       if (!this.byKey.has(key)) this.byKey.set(key, callId);
       if (lost === "after") throw new TypeError("fetch failed");
@@ -661,6 +668,24 @@ describe("the Calls API call of the reach", () => {
     });
     await f.reach.tick();
     expect(f.text.sent).toHaveLength(1);
+  });
+
+  it("keeps Chert's own error code of a refusal in the reason, and only a plain code", async () => {
+    const f = setup();
+    f.chert.placeStatus = 403;
+    f.chert.placeCode = "owner_required";
+    const id = await f.place();
+    await f.calls.settled(id);
+    expect(f.calls.phase(id)).toMatchObject({
+      result: "failed",
+      reason: "call_refused_403_owner_required",
+    });
+    const g = setup();
+    g.chert.placeStatus = 403;
+    g.chert.placeCode = "Not A Code; drop table";
+    const other = await g.place();
+    await g.calls.settled(other);
+    expect(g.calls.phase(other)).toMatchObject({ reason: "call_refused_403" });
   });
 
   it("a refused request places no call, fails, and texts; a failed call fails too", async () => {
