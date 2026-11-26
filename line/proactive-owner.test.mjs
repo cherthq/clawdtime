@@ -403,7 +403,11 @@ for (const failure of [
           renameSync(f.initialJournal, f.initialJournal + ".old");
           writeFileSync(f.initialJournal, bytes, { mode: 0o600 });
         };
-      await assert.rejects(owner.acquire("attempt-one"));
+      // From the stop on, the rejection never says that nothing was sent.
+      await assert.rejects(
+        owner.acquire("attempt-one"),
+        (error) => error.message !== "owner_release_not_sent",
+      );
       assert.equal(owner.diagnostics().phase, "unknown");
       assert.equal((await owner.readiness()).ready, false);
       await assert.rejects(owner.acquire("attempt-one"));
@@ -437,7 +441,13 @@ for (const failure of ["authorization", "configuration"])
         f.config.assertConfiguration = () => {
           if (existsSync(hold)) throw Error("synthetic_configuration_changed");
         };
-      await assert.rejects(failing.acquire("attempt-one"), /synthetic_/);
+      // The rejection says that nothing was sent, so the transport can record it the same way.
+      await assert.rejects(
+        failing.acquire("attempt-one"),
+        (error) =>
+          error.message === "owner_release_not_sent" &&
+          /^synthetic_/.test(error.cause?.message),
+      );
       delete f.config.assertConfiguration;
       assert.equal(f.stops(), 0);
       assert.equal(failing.diagnostics().phase, "incoming");
@@ -458,6 +468,28 @@ for (const failure of ["authorization", "configuration"])
       await f.close();
     }
   });
+
+test("a release refused at its readiness sends nothing and says so", async () => {
+  const f = await fixture();
+  try {
+    const owner = f.make();
+    f.line.current_call_id = "incoming-call";
+    await assert.rejects(
+      owner.acquire("attempt-one"),
+      (error) =>
+        error.message === "owner_release_not_sent" &&
+        error.cause?.message === "owner_not_ready",
+    );
+    assert.equal(f.stops(), 0);
+    assert.equal(owner.diagnostics().phase, "incoming");
+    assert.throws(() => statSync(`${f.config.stateFile}.lock`));
+    f.line.current_call_id = null;
+    assert.deepEqual(await owner.acquire("attempt-two"), { exclusive: true });
+    assert.equal(f.stops(), 1);
+  } finally {
+    await f.close();
+  }
+});
 
 test("concurrent acquire observations share the filesystem owner fence", async () => {
   const f = await fixture();

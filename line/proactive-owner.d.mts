@@ -38,6 +38,8 @@ export interface RetainedOwnerPorts {
 export class RetainedProactiveLineOwner {
   constructor(config: RetainedOwnerConfig, ports?: RetainedOwnerPorts);
   readiness(): Promise<{ ready: boolean; reason?: string; checkedAt: number }>;
+  /** Rejects with the message `owner_release_not_sent` only when it failed before the host was asked to stop:
+   * nothing reached the line, the lock is free and the release is recorded as not sent. Any other rejection is unknown. */
   acquire(attemptId: string): Promise<{ exclusive: true }>;
   verify(attemptId: string): Promise<boolean>;
   restore(attemptId: string): Promise<{ confirmed: true }>;

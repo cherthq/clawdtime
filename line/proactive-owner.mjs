@@ -622,11 +622,17 @@ export class RetainedProactiveLineOwner {
     };
   }
   async acquire(attemptId) {
-    id(attemptId);
-    if (!(await this.readiness()).ready) throw Error("owner_not_ready");
-    this.lockMutation();
     // Until the host is asked to stop, nothing reached the line: a failure before then frees the lock, takes back
-    // the hold that this attempt wrote, and records the release as not sent. From the stop on it is unknown.
+    // the hold that this attempt wrote, records the release as not sent and rejects with owner_release_not_sent,
+    // so the caller can record it the same way. From the stop on it is unknown.
+    const notSent = (cause) => Error("owner_release_not_sent", { cause });
+    try {
+      id(attemptId);
+      if (!(await this.readiness()).ready) throw Error("owner_not_ready");
+      this.lockMutation();
+    } catch (error) {
+      throw notSent(error);
+    }
     let stopping = false,
       holdWritten = false;
     try {
@@ -691,7 +697,7 @@ export class RetainedProactiveLineOwner {
       return { exclusive: true };
     } catch (error) {
       if (!stopping) {
-        let notSent = false;
+        let reverted = false;
         try {
           if (holdWritten) unlinkSync(this.hold);
           this.save("incoming", "release_not_sent", {
@@ -701,13 +707,13 @@ export class RetainedProactiveLineOwner {
             releaseBoundary: undefined,
             releasePid: undefined,
           });
-          notSent = true;
+          reverted = true;
         } catch {
           // The hold or the record could not be put back: the lock stays, as for any unknown outcome.
         }
-        if (notSent) {
+        if (reverted) {
           this.unlock();
-          throw error;
+          throw notSent(error);
         }
       }
       this.save("unknown", "release_outcome_unknown");
