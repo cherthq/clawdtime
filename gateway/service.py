@@ -28,6 +28,9 @@ class CameraGeometryChanged(web.HTTPClientError):
 
 ID = re.compile(r'^[A-Za-z0-9_-]{1,160}$')
 MAX_FRAME = 2 * 1024 * 1024
+# A native camera frame takes up to 1.85 s on the helper. Media and the gateway
+# relay wait 2 s or more for a frame, so this deadline answers before they give up.
+CAMERA_FRAME_SECONDS = 1.9
 CAPTURE_ERRORS = frozenset(('output_registration','stream_start','stream_interrupted',
     'frame_deadline','frame_decode','stop_deadline','stop_failed','target_before','target_after'))
 CAMERA_REFUSALS = frozenset(('window_missing','window_owner_changed','window_owner_unavailable',
@@ -220,7 +223,7 @@ class Gateway:
                 # acknowledged stop. Let that bounded operation report its result;
                 # frame() still rejects pixels older than two seconds. Input and
                 # lease requests retain the original short/uncertain-outcome limit.
-                **({'timeout':ClientTimeout(total=3,connect=.7)} if frame and body.get('cameraVersion')==1 else {}),
+                **({'timeout':ClientTimeout(total=CAMERA_FRAME_SECONDS,connect=.7)} if frame and body.get('cameraVersion')==1 else {}),
                 **({'json':payload} if payload is not None else {}),allow_redirects=False) as response:
             limit = MAX_FRAME if frame else 16384
             chunks, size = [], 0

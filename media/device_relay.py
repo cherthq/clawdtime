@@ -8,6 +8,13 @@ import time
 from datetime import datetime, timezone
 from aiohttp import web,WSMsgType
 
+# Media waits this long for a relayed answer. A camera frame may take the
+# gateway's whole camera deadline (1.9 s in gateway/service.py), so a frame
+# waits longer than that: the gateway answers first and never holds the
+# helper's capture after media gave up.
+REQUEST_WAIT_SECONDS=2
+FRAME_WAIT_SECONDS=2.5
+
 MAX_BODY=2*1024*1024
 
 class RelayFailure:
@@ -162,7 +169,7 @@ class DeviceRelay:
             await socket.send_json({'id':request_id,'method':method,'path':path,'body':body})
             sent_at=time.monotonic()
             phase='response'
-            return await asyncio.wait_for(future,2)
+            return await asyncio.wait_for(future,FRAME_WAIT_SECONDS if method=='GET' and path.endswith('/frame') else REQUEST_WAIT_SECONDS)
         except TimeoutError as error:
             raise RelayTimeout(diagnostic()) from error
         except ConnectionError as error:

@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from server import Service
+from device_relay import FRAME_WAIT_SECONDS
 from devices import ScreenController
 from captions import CaptionPublisher, CaptionScene
 sys.path.append(str(Path(__file__).resolve().parents[1] / 'gateway'))
@@ -431,12 +432,12 @@ class OutboundScreenWireTests(ScreenWireTests):
         original=ClientWebSocketResponse.send_json
         async def delayed(socket,data,*args,**kwargs):
             if data.get('status')==200 and any(k.lower()=='content-type' and v=='image/jpeg' for k,v in data.get('headers',{}).items()):
-                await asyncio.sleep(2.1)
+                await asyncio.sleep(FRAME_WAIT_SECONDS+.1)  # Just past the media frame wait.
             return await original(socket,data,*args,**kwargs)
         with patch.object(ClientWebSocketResponse,'send_json',delayed):
             response=await self.client.post(f'/sessions/{self.sid}/screen/lease',headers=self.headers,json={'leaseId':'view_fixture'})
             self.assertEqual(response.status,200)
-            for _ in range(260):
+            for _ in range(320):
                 if 'view_fixture' in self.screen.stopped:break
                 await asyncio.sleep(.01)
             self.assertIn('view_fixture',self.screen.stopped)

@@ -1085,6 +1085,13 @@ or media scheduling. The latest control-enabled pilot received 18 frames before
 that deadline and recorded no input. Its old logs lacked enough hop metadata to
 identify the trigger. No timeout or freshness limit was relaxed for this diagnosis.
 
+The deadlines nest so that the gateway answers a frame before media gives up. A
+native camera frame takes up to 1.85 s on the helper, and the gateway waits 1.9 s
+for it. The gateway relay forwards for 2 s, and media waits 2.5 s for a frame on
+the relay and on the direct gateway path. Other relayed requests keep the 2 s
+wait, and other direct requests keep 1.5 s. The two-second frame freshness check
+is unchanged.
+
 Future media timeout/disconnect diagnostics retain the generated relay request ID,
 send-versus-response phase, UTC start time, bounded send duration and socket state.
 The gateway retains its last 128 lease/frame/action hop events in a separate
