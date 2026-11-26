@@ -1566,10 +1566,20 @@ How the rows read a name:
 - **A terminal line.** The worker cannot see what is typed on the line
   already, so text that starts with the end of a command that deletes or
   moves is read as that command too: "r", then "m -rf ~", asks.
-- **Return and Space.** They ask while a button, a menu item or the element
-  with the focus could take the key and would ask, unless a text field has the
-  focus. In a page Enter and Space ask while any control of the page would
-  ask.
+- **Return and Space.** They ask while the element with the focus, an item
+  of an open menu, or a button could take the key and would ask, unless a
+  text field has the focus. With the focus in a list or a grid of an app (the
+  files of a Finder window, a table, the icons), Space goes to the chosen
+  item: it never presses a button that has no focus, so a toolbar button
+  such as Share does not take it. In Finder, Return renames the chosen file
+  and no window has a default button, so a button counts for Return there
+  only while a dialog shows a button that closes it (Cancel, Close, No, Not
+  Now, and these words in the other languages that the names are read in).
+  Elsewhere a list passes Return on to the default button of its window, so
+  any button counts. With no focus in the look, or in web content (a
+  browser, a web app, a web view in an app), a page can give either key to
+  any control, and any button counts. In a page Enter and Space ask while
+  any control of the page would ask.
 - **Return in a web chat.** Return sends in a messaging site in a browser
   (Slack, WhatsApp, Messenger, Discord, Telegram, Teams, Google Chat, by the
   title of the window or the page, or by the address), and in a page whose
@@ -1631,8 +1641,8 @@ question of a page names its site. A no ends the request.
   its own editor (AXWebArea, as web sheets and slides do) and the view of a
   document (AXScrollArea) count too, and so do they for the note "sent, but
   no text field had the focus" after typed text. Return and Space still
-  count only a text field: a list or a sheet with the focus passes them on
-  to the default button of the window.
+  count only a text field: a list or a sheet with the focus passes Return on
+  to the default button of its window.
 - **You take over.** When the hands report that you moved the mouse or pressed
   a key, the worker pauses. Your next message goes on with it, and a stop
   stops it.
@@ -2588,6 +2598,13 @@ Not tested, and so not proven:
   text as code is not covered.
 - Return in a single-line text field can press the default button of a dialog.
   That case is not asked about.
+- The hands do not say which button is the default one. Outside Finder,
+  Return with the focus in a list still asks for a toolbar button such as
+  Share. In Finder, the default button of a dialog that shows no button that
+  closes it is not asked about.
+- A web view that shows no web area in the look (a page with no title)
+  counts as a list of the app: Space there asks for no button that has no
+  focus.
 - The worker does not judge where a link leads, or what a page does with a
   click on a plain name.
 - A hover in the page sends the events of a pointer. A menu that only a style
