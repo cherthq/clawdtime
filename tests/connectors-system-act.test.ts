@@ -141,6 +141,21 @@ describe("a force quit", () => {
     expect(host.signals).toEqual([{ pid: 4242, signal: "SIGKILL" }]);
   });
 
+  it("skips the question for losing the changes only for the process the owner named", async () => {
+    const { host, act } = desk();
+    const said = "force quit Stonepad without saving";
+    expect(await act("force_quit", { name: "Riverchat" }, said)).toMatch(
+      /^Not done yet: this needs the owner's yes/,
+    );
+    expect(await act("force_quit", { pid: 7000 }, said)).toMatch(
+      /^Not done yet: this needs the owner's yes/,
+    );
+    expect(host.signals).toEqual([]);
+    expect(
+      await act("force_quit", { pid: 7000 }, "force quit 7000 without saving"),
+    ).toBe("Force quit syncd (pid 7000). It no longer runs.");
+  });
+
   it("acts at once with the owner's trust on, and says so", async () => {
     const { host, act } = desk({ trust: true });
     expect(await act("force_quit", { name: "Stonepad" }, "kill Stonepad")).toBe(

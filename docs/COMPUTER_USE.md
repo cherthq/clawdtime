@@ -565,8 +565,10 @@ the Dock does, so the app can save or show its own save sheet. A restart is
 such a quit, a wait of up to 8 seconds, and an open; an app that does not
 quit is not started again, and the answer says so. Both act at once. A force
 quit, and a stop of a process that is no app, can lose what is not saved:
-they are the `unsaved` row. They ask first, unless the owner's words ask to
-lose the changes ("without saving") or the owner's trust is on. The question
+they are the `unsaved` row. They ask first, unless the owner's trust is on,
+or the owner's words ask to lose the changes ("without saving") and name that
+app or process ("force quit Stonepad without saving"). Such words skip one
+question only: a second force quit in the same message asks. The question
 is the result of the tool, and the chat says it: "Force quit Stonepad (pid
 4242)? Changes that are not saved are lost. Say yes or no." Only the owner's
 own clear yes in a newer message, by the strict reader of the chat, within 5

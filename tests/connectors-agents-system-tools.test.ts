@@ -240,6 +240,31 @@ describe("the process level in the chat", () => {
     expect(host.signals).toEqual([]);
   });
 
+  it('lets the owner\'s "without saving" skip one question, for an app that they named', async () => {
+    const model = scriptedModel([
+      {
+        calls: [
+          call("process_act", { action: "force_quit", name: "Stonepad" }),
+          call("process_act", { action: "force_quit", name: "Riverchat" }),
+          call("process_act", { action: "force_quit", pid: 7000 }),
+        ],
+      },
+      { text: "Stonepad is gone. The others need your yes." },
+    ]);
+    const { agent, host } = setup({ model });
+    await agent.answer(
+      [],
+      "force quit Stonepad and Riverchat without saving",
+      "chat",
+    );
+    expect(host.signals).toEqual([{ pid: 4242, signal: "SIGKILL" }]);
+    const results = model.requests[1]!.messages.filter(
+      (message) => message.role === "tool",
+    ).map((message) => message.content);
+    expect(results[1]).toMatch(/^Not done yet: this needs the owner's yes/);
+    expect(results[2]).toMatch(/^Not done yet: this needs the owner's yes/);
+  });
+
   it("starts nothing in a turn where the owner said stop", async () => {
     const model = scriptedModel([
       { calls: [call("process_act", { action: "quit", name: "Stonepad" })] },

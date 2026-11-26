@@ -8,7 +8,9 @@
  *   quit and an open.
  * - A force quit, and a stop of a process that is no app, lose what is not
  *   saved: the `unsaved` row. They ask first, unless the owner's own words
- *   ask to lose the changes ("without saving"), or the owner's trust is on.
+ *   ask to lose the changes ("without saving") and name this process, or
+ *   the owner's trust is on. Such words skip one question only: the caller
+ *   hears through `used` that they were spent.
  *   A yes counts only when it is the owner's own clear yes, by the strict
  *   reader of the chat, after the question, within five minutes, for the
  *   same process (its pid and its start time), and only when the caller
@@ -115,9 +117,24 @@ export interface OwnerWords {
 }
 
 export type ActVerdict =
-  | { kind: "act"; trusted: boolean }
+  | { kind: "act"; trusted: boolean; waived?: boolean }
   | { kind: "ask"; question: string }
   | { kind: "refuse"; reason: string };
+
+/** Words as a name is matched in them: lower case, letters and digits only. */
+const plainWords = (text: string) =>
+  ` ${text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()} `;
+/** True when the words name this process: its app, its name or its pid. */
+export function namesProcess(words: string, row: ProcessView): boolean {
+  const said = plainWords(words);
+  return [row.app, row.name, String(row.pid)].some((name) => {
+    const plain = name ? plainWords(name) : "";
+    return plain.trim() !== "" && said.includes(plain);
+  });
+}
 
 /** The ask policy for one action on one process that may be touched. */
 export function actVerdict(
@@ -138,7 +155,9 @@ export function actVerdict(
   if (row.isApp && action !== "force_quit")
     return { kind: "act", trusted: false };
   if (context.trust) return { kind: "act", trusted: true };
-  if (asksToLose(context.owner)) return { kind: "act", trusted: false };
+  // "Without saving" holds for the process that the same words name.
+  if (asksToLose(context.owner) && namesProcess(context.owner, row))
+    return { kind: "act", trusted: false, waived: true };
   const name = row.isApp ? row.app! : row.name;
   return {
     kind: "ask",
@@ -322,6 +341,8 @@ export class ProcessDesk {
       this.asks.delete(key);
       owner.used?.();
     }
+    // The owner's words skipped this question: they skip no other one.
+    if (verdict.kind === "act" && verdict.waived) owner.used?.();
     const done = await this.perform(action, row, options.background);
     return verdict.kind === "act" && verdict.trusted
       ? `${done} The owner's trust is on, so no question was asked.`
