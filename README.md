@@ -108,8 +108,8 @@ model changes. The evals open no window and touch nothing on your screen.
 On a real Mac, on the real screen:
 
 - 44 apps, one read-only task each (Calculator, Maps, System Settings, Safari,
-  LibreOffice and more): 37 of 44 right on a full run of the newest build. 2
-  of the misses were correct stops (a sign-in page, Mail with no account).
+  LibreOffice and more): 42 of 44 right on a full run of the newest build. The
+  other 2 were correct stops (a sign-in page, Mail with no account).
 - 14 tasks of real work (reading the news, YouTube and a social feed,
   comparing prices on a shop, writing and saving an essay and a blog draft,
   a research note across two apps, Terminal, Finder): 11 of 14 right; 2 of
