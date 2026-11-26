@@ -525,9 +525,12 @@ function doctorLine(ctx: Context): Step {
     interactive: false,
     cwd: ctx.lineDirectory,
   });
-  const record = records(run.stdout).find(
-    (r) => r.command === "doctor" || r.code === "doctor",
-  );
+  // chert can print a notice with the same command before its checks: the
+  // record that holds the checks is the one to read.
+  const found = records(run.stdout);
+  const record =
+    found.find((r) => Array.isArray(r.checks)) ??
+    found.find((r) => r.code === "doctor");
   const checks = Array.isArray(record?.checks)
     ? (record.checks as Record<string, unknown>[])
     : [];
