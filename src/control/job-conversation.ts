@@ -251,6 +251,20 @@ export class JobConversation {
             ...grant,
             state: "revoked",
           });
+      // A request that still waits for the owner on the Mac is revoked too, so a
+      // later local approval cannot activate it. The grant upkeep then revokes it
+      // on the Mac.
+      for (const request of this.service.store.all<
+        import("../contracts.js").TextControlGrant
+      >("text_grant_proposal"))
+        if (
+          request.sessionId === binding.sessionId &&
+          !this.service.store.get("text_control_grant", request.id)
+        )
+          this.service.store.put("text_control_grant", {
+            ...request,
+            state: "revoked",
+          });
       for (const job of this.broker.list(binding))
         if (
           job.kind === "desktop" &&
