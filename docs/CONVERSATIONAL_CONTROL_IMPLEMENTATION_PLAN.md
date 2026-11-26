@@ -364,7 +364,7 @@ and does not replay the outbox or resurrect old call sessions.
 Only the lead may handle secrets, install/restart components, deploy or own the
 live line. Never modify the source project or the sibling private repository, or copy their runtime data.
 Use the existing dedicated ClawdTime binding from protected configuration; older
-Liam/Lucas handoff prose is not a new instruction to transfer a line. Recheck idle
+Liam/line A handoff prose is not a new instruction to transfer a line. Recheck idle
 ownership and unknown effects before rollout. No new paid plan/account/line is
 implied. Existing authorization is not a reason to repeat confirmations, but a
 new call needs actual user readiness and applicable call authorization; prior

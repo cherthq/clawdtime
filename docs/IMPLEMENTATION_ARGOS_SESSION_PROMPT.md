@@ -57,7 +57,7 @@ HackPton is intentional; no replacement setup prompt is needed. The prior
 and a synthetic camera test on that assignment. That test did not create a
 ClawdTime pairing or establish compatibility with its strict message receipts.
 Preserve all older connections, databases, cursors, and uncertain outcomes.
-The older Liam/Mia/Noah handoff records are historical, not current instructions.
+The older Liam/line B/Noah handoff records are historical, not current instructions.
 See `IMPLEMENTATION_ARGOS_REVIEW.md` for current diagnostics and remaining work.
 
 First context yourself using the reading sequence below. Then implement and validate

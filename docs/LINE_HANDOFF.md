@@ -2,7 +2,7 @@
 
 ## Current ownership — November 11, 2026
 
-Lucas (the original pilot line, previously confirmed under the Liam Davis alias)
+line A (the original pilot line, previously confirmed under the another alias alias)
 has returned exclusively to the source project. ClawdTime stopped dispatch first, verified
 all five calls ended and all 23 leases released, and preserved its committed event
 boundary at sequence 539. The return handoff identified each ClawdTime-owned event
@@ -10,13 +10,13 @@ instead of skipping the entire interval. The source project subsequently reporte
 healthy restoration with its groups/history intact and no pending or unknown jobs.
 ClawdTime's separate historical unknown outcomes remain recorded as unknown.
 
-Mia is now assigned to a dedicated ClawdTime provider project. Exact native and
-logical identity checks pass. ClawdTime is deployed **live on Mia only**, with a
-separate database, encryption key and project credential. Mia's retained
-baseline is sequence 5. Existing Lucas pairings and receipts were not copied,
-revoked or relabeled; a new Mia setup must establish its own session binding.
+line B is now assigned to a dedicated ClawdTime provider project. Exact native and
+logical identity checks pass. ClawdTime is deployed **live on line B only**, with a
+separate database, encryption key and project credential. Line B's retained
+baseline is sequence 5. Existing line A pairings and receipts were not copied,
+revoked or relabeled; a new line B setup must establish its own session binding.
 
-Mia's installed Messages helper was updated to the reviewed `742b4068` candidate.
+Line B's installed Messages helper was updated to the reviewed `742b4068` candidate.
 The missing sender field was filled from the already-verified native identity,
 and an absent receipt journal was initialized with zero operation rows. Receipt
 lookup now returns the expected 404/found=false for an unused sentinel; status and
@@ -26,10 +26,10 @@ files and binaries are retained for rollback.
 
 The provider acknowledged activation generation 6; all transport preflight checks
 pass. Backend deployment `<deployment-id>` is SUCCESS and its
-prior standby deployment is REMOVED. Runtime inspection confirms the Mia-only
+prior standby deployment is REMOVED. Runtime inspection confirms the line B-only
 binding and database, live mode, cursor 5 and zero effects or calls. No test message
-or FaceTime call was sent. Fresh Mia onboarding and handset acceptance have not
-been performed; prior Lucas pairing/session grants were not transferred.
+or FaceTime call was sent. Fresh line B onboarding and handset acceptance have not
+been performed; prior line A pairing/session grants were not transferred.
 
 ### Isolation and recovery
 
@@ -38,12 +38,12 @@ historical cleanup and obsolete-notice audits depend on its original credentials
 and identity. Keep the original database/configuration together and offline.
 
 - Historical runtime: `/data/clawdtime.sqlite`; encrypted consistent backup and
-  protected configuration under `/data/operator-line-archives/20261111-lucas/`.
-- New runtime: `/data/clawdtime-mia.sqlite`; no migrated pairings, calls or effects.
+  protected configuration under `/data/operator-line-archives/20261111-line-a/`.
+- New runtime: `/data/clawdtime-line-b.sqlite`; no migrated pairings, calls or effects.
 - Private handoff records retain event IDs, fingerprints and exact provider IDs.
   They are not documentation fixtures or evidence that an unknown send failed.
-- To roll Mia back, stop its dispatcher and reconcile its own receipts/cursor.
-  Do not restore Lucas configuration while the source project owns Lucas.
+- To roll line B back, stop its dispatcher and reconcile its own receipts/cursor.
+  Do not restore line A configuration while the source project owns line A.
 - Provision an absent journal only while the exact account's sender/helper is
   stopped and admission drained. Preserve original absence evidence, use the
   reviewed production schema, create zero operation rows, and never replay a
@@ -60,7 +60,7 @@ Read-only provider queries using the source's protected configuration confirmed
 `/api/v1/whoami` healthy and an exact match of native provider line ID, phone number
 and instance. The project Calls inventory includes the configured logical line,
 currently labeled **iPhone control test**. No Liam/Davis label was found in those
-responses. This does not prove it is the user-requested Liam Davis line.
+responses. This does not prove it is the user-requested another alias line.
 
 ### Diagnosis correction — November 11, 2026
 
@@ -78,7 +78,7 @@ UUIDs are different ID domains and join through the existing inventory record.
 The Calls record has a null phone-number field, so direct comparison to that field
 cannot establish a mismatch. Its logical ID matches the transfer record. These
 checks establish consistent line identity in the source project, but the available scoped
-inventory still does not establish the user-supplied Liam Davis alias.
+inventory still does not establish the user-supplied another alias alias.
 
 Current source health is only a snapshot, not permission to start a competing
 owner. Recheck the idle window and review the recorded failed job immediately

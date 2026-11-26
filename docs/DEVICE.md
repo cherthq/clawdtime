@@ -41,7 +41,7 @@ subsequent authorized installation is recorded below.
 
 The coordinating lead installed version **0.4.0, build 5** at the stable
 `~/Applications/ClawdTime Companion.app` path. The existing private
-`~/Library/Application Support/ClawdTimeCompanion/mia-control-20261111`
+`~/Library/Application Support/ClawdTimeCompanion/line-b-control-20261111`
 configuration, helper/gateway keys and receipt state were preserved. The helper
 was explicitly relaunched with that directory's `helper.json`; its loaded ACL
 contains both viewer and controller access for the same retained member and display.

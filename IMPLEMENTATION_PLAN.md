@@ -372,9 +372,9 @@ If an adapter cannot establish that coordination, refuse the conflicting action 
 
 Keep the connector/gateway ready in the background after pairing. Screen capture/control stays gated by explicit local permissions and session authorization. Retain visible sharing/control indicators and a local kill switch. Lock, sleep, Stop, or revoked pairing must invalidate active control; resuming the app must not revive stopped leases.
 
-## Phase 5 — reuse the Liam Davis test number
+## Phase 5 — reuse the another alias test number
 
-The user explicitly requested the same Liam Davis number for testing. The previous session did not verify which private provider identity that label denotes. **Do not guess the number or equate a display name with a line binding.** Resolve the exact identity through existing private operator configuration and read-only provider evidence.
+The user explicitly requested the same another alias number for testing. The previous session did not verify which private provider identity that label denotes. **Do not guess the number or equate a display name with a line binding.** Resolve the exact identity through existing private operator configuration and read-only provider evidence.
 
 One application owns the line at a time. Do not start an independent ClawdTime poller/dispatcher while the source project still processes that line.
 

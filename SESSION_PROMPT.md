@@ -50,7 +50,7 @@ Each specialist reports files changed, verification, remaining gaps, and integra
 
 ## Test number and existing services
 
-The user wants to reuse the **Liam Davis** number for testing. Resolve its exact private provider and logical-line identity; do not guess or commit the phone number.
+The user wants to reuse the **another alias** number for testing. Resolve its exact private provider and logical-line identity; do not guess or commit the phone number.
 
 The source project and ClawdTime must not concurrently own, poll, dispatch, or answer on that line. Complete independent work first. Then follow `LINE_HANDOFF.md`: inspect current ownership/cursors/calls/jobs; use an idle window; drain/pause the source owner; establish a non-replaying event boundary; allowlist the tester; enable ClawdTime; verify; retain or roll back ownership with event reconciliation.
 

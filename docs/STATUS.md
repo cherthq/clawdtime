@@ -2871,7 +2871,7 @@ authorize another call.
 
 ## Service-number correction — November 11
 
-The user identified Mia's current number as different from the configured number.
+The user identified line B's current number as different from the configured number.
 Read-only checks confirmed that the provider inventory, running native API and
 ClawdTime binding still reported the previous number. The Mac account lists both
 aliases; that alone does not establish current Apple reachability. Earlier healthy
@@ -2886,7 +2886,7 @@ retained the installed binaries and original settings, and verified unchanged
 native state, operation journals and event head before leaving admission paused.
 The same provider inventory row and ClawdTime binding were then corrected; the
 logical line, account, credentials, database and exact cursor 5 remained intact.
-The original Lucas archive and historical hashes were also rechecked unchanged.
+The original line A archive and historical hashes were also rechecked unchanged.
 
 Deployment `<deployment-id>` succeeded using the existing
 `f6177c0` image; prior standby deployments are removed. The exact owned maintenance
@@ -2914,7 +2914,7 @@ Backend deployment `<deployment-id>` (code `f6177c0`) succeeded
 before the standby correction above. TypeScript/build and 376 tests pass, as do the
 built-app onboarding browser checks and 14 focused media checks. A live browser
 check before the pause confirmed four prefilled Messages links, no preview interception and no JS
-errors. Native Messages greeting prefill and the fresh Mia handset loop still
+errors. Native Messages greeting prefill and the fresh line B handset loop still
 require human observation; browser links alone are not delivery evidence.
 
 The README and setup skill now distinguish limitations: no automatic tapback,
@@ -2925,16 +2925,16 @@ The current test uses the existing approved companion and lead-managed gateway.
 
 ## Dedicated-line migration — November 11
 
-- The original Lucas line returned exclusively to the source project after ClawdTime's
+- The original line A line returned exclusively to the source project after ClawdTime's
   dispatcher stopped. All five calls ended, all 23 leases released, and original
   entities/effects/events hashes remained unchanged. Its cursor, unknown outcomes,
   private configuration and encrypted consistent backup are preserved.
-- Mia is assigned to an independent ClawdTime provider project with a scoped
+- line B is assigned to an independent ClawdTime provider project with a scoped
   credential. Native identity matches the assigned logical line. A fresh database
-  and encryption key isolate it from the historical Lucas runtime; event baseline
+  and encryption key isolate it from the historical line A runtime; event baseline
   5 was verified without replaying retained messages.
 - Backend deployment `<deployment-id>` is SUCCESS using the
-  existing `e08eca1` image, live on Mia's separate database. Prior standby deployment
+  existing `e08eca1` image, live on line B's separate database. Prior standby deployment
   `<deployment-id>` is REMOVED. Media and the installed local
   companion were unchanged. The provider acknowledged activation generation 6.
 - Fixed provider receipt 503: the old helper lacked a text journal and its launch
@@ -2946,9 +2946,9 @@ The current test uses the existing approved companion and lead-managed gateway.
 - Receipt status/whoami now report available and the unused-origin lookup returns
   404/found=false. All transport preflight checks pass. Live runtime inspection
   reports zero pending/unknown effects and active calls, with no migrated pairing.
-  No message, call or screen input was sent for this migration. Fresh Mia onboarding
+  No message, call or screen input was sent for this migration. Fresh line B onboarding
   and handset acceptance remain unperformed; prior permissions and Stop are intact.
-- Installation receipt: `FT-INSTALL-CLAWDTIME-MIA-REPAIR-20261111`. The reviewed
+- Installation receipt: `FT-INSTALL-CLAWDTIME-LINE-B-REPAIR-20261111`. The reviewed
   installer passed 52 offline recovery tests; the separate journal initializer
   passed seven tests. Existing journals, other account PIDs and unchanged ingress
   were verified after installation. Rollback preserves the initialized journal.
@@ -3132,7 +3132,7 @@ provider acting on a physical fixture remains unverified.
    download API after the in-app download UI stopped. The companion has both ACLs
    loaded; Codex and Claude Code connections were installed in the disposable project.
    Only native receipt recovery and explicit local Enable block live readiness.
-2. **Supervised handset loop.** The user confirmed the Liam Davis alias against
+2. **Supervised handset loop.** The user confirmed the another alias alias against
    the exact native/logical/inventory binding and selected a sole demo recipient.
    The private handoff record preserves the source cursor and pause evidence.
    Test call, visible screen, voice/text, click/type/scroll, bounded AI action,
