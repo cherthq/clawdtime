@@ -210,7 +210,9 @@ export function callsSettings(
   const lineId = env.CHERT_LINE_ID?.trim() || record?.lineId || "";
   if (!uuid.safeParse(lineId).success) return { missing: "line_id" };
   const { owner, problem } = readOwner(root);
-  if (problem || !owner) return { missing: "owner_number" };
+  // An owner.json that cannot be read places no call, and says so.
+  if (problem) return { missing: "owner_unreadable" };
+  if (!owner) return { missing: "owner_number" };
   if (owner.consent?.answer !== "yes") return { missing: "consent" };
   const lineDirectory =
     env.CLAWDTIME_LINE_DIRECTORY?.trim() || record?.lineDirectory || "";

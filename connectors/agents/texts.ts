@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { JobFacts } from "./jobs.js";
-import { storedTextValues } from "../shared/owner.js";
+import { ownerContact, storedTextValues } from "../shared/owner.js";
 
 /**
  * ClawdTime over text messages. The person texts the Chert line of their
@@ -57,15 +57,19 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * The settings from the environment, or the names of what is missing or wrong.
  * With the state folder, what `clawdtime connect` stored there fills what the
- * environment does not have: the owner's number, and the project API key
- * together with its own project. A variable of the environment wins.
+ * environment does not have: the project API key together with its own
+ * project. A variable of the environment wins. The owner's number comes from
+ * the one source of the reach (ownerContact): owner.json when it is there,
+ * else the environment. An owner.json that cannot be used gives no number,
+ * and its problem.
  */
 export function textSettings(
   env: Record<string, string | undefined>,
   root?: string,
-): { settings: TextSettings } | { missing: string[] } {
+): { settings: TextSettings } | { missing: string[]; problem?: string } {
   const missing: string[] = [];
   const stored = root ? storedTextValues(root) : {};
+  const contact = ownerContact(env, root);
   const envKey = env.CHERT_API_KEY?.trim() ?? "";
   const envProject = env.CHERT_PROJECT_ID?.trim() ?? "";
   // A stored key is used only with its own project, never with another one.
@@ -77,10 +81,7 @@ export function textSettings(
       : null;
   const key = envKey || pair?.apiKey || "";
   const project = envProject || pair?.projectId || "";
-  const owner =
-    (env.CLAWDTIME_OWNER_PHONE ?? "").replace(/[\s().-]/g, "") ||
-    stored.phone ||
-    "";
+  const owner = "phone" in contact ? contact.phone : "";
   const line = env.CHERT_LINE_ID?.trim() || null;
   const word = env.CLAWDTIME_TEXT_WORD?.trim().toLowerCase() || null;
   const base = (
@@ -95,7 +96,7 @@ export function textSettings(
   // The key travels in a header: only an encrypted address may receive it.
   if (!/^https:\/\/[^\s/]+/.test(base)) missing.push("CHERT_API_BASE");
   return missing.length
-    ? { missing }
+    ? { missing, ...("problem" in contact ? { problem: contact.problem } : {}) }
     : { settings: { base, key, project, owner, line, word } };
 }
 

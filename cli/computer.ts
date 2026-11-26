@@ -74,6 +74,8 @@ const callsPiece: Record<string, string> = {
     "a line of the project of the stored key: calls.json names a line of another project. Run clawdtime connect",
   line_id: "the line of the project. Run clawdtime connect (step 9)",
   owner_number: "your number. Run clawdtime connect (step 6)",
+  owner_unreadable:
+    "a readable owner.json in the state folder: it cannot be used now. Look at it, then run clawdtime connect",
   consent: "your yes to calls and texts. Run clawdtime connect --consent yes",
   line_directory:
     "the folder of the line agent. Run clawdtime connect (step 9)",
@@ -101,6 +103,8 @@ const reachReason = (reason: string) => {
   const plain: Record<string, string> = {
     no_consent:
       "you did not allow ClawdTime to call and text your number. To allow it: clawdtime connect --consent yes",
+    owner_unreadable:
+      "owner.json in the state folder cannot be used, so ClawdTime texts no number. Look at it, then run clawdtime connect",
     outbound_setup_missing:
       "the line is not set up for proactive calls: proactive.json of the desktop service has no outbound line",
     not_set_up:

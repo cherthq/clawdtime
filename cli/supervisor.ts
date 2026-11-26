@@ -1050,7 +1050,8 @@ export async function supervisorCli(
       const found = textSettings(system.env, root);
       if ("missing" in found)
         throw new Error(
-          `Text messages need these settings in the environment: ${found.missing.join(", ")}. Run clawdtime connect, or see SETUP_CLAWDTIME.md.`,
+          found.problem ??
+            `Text messages need these settings in the environment: ${found.missing.join(", ")}. Run clawdtime connect, or see SETUP_CLAWDTIME.md.`,
         );
       if (command === "check") {
         // One read of the messages. It writes nothing, runs no work and sends nothing.
