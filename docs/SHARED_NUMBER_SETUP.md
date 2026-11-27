@@ -98,6 +98,9 @@ process's lock.
   and only on a request from a loopback or private address. A client cannot
   choose that entry, because the proxy adds it after any value the client
   sent. Never set it when clients can reach the port directly.
+- One number gets at most 15 sign-in texts an hour. Clients that never signed
+  in to that number share 5 of them. A client that signed in to it before has
+  its own 10, so other clients cannot lock the member out on that client.
 - Turn off request and response body logging in the proxy.
 - Do not expose the local desktop API. Participant Macs connect outward.
 

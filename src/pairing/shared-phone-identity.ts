@@ -11,6 +11,8 @@ interface Challenge {
   client?: string;
   /** False when no text was sent: the number is not invited or a member. */
   eligible?: boolean;
+  /** True when this client signed in to this number before. */
+  known?: boolean;
   digest: string;
   createdAt: number;
   expiresAt: number;
@@ -28,16 +30,23 @@ const denied = () => new DomainError(403, "identity_refused");
 const challenges = "shared_identity_challenge";
 const minute = 60_000;
 // One client, and one number from one client, each have their own allowance,
-// so one abuser cannot spend a member's. The number and text ceilings bound
-// what many clients can do together. Only real texts count for the line.
+// so one abuser cannot spend a member's. Clients that never signed in to a
+// number share that number's allowance. A client that signed in to it before
+// has a separate one, which other clients cannot spend, so the member's own
+// client stays open. Together they bound the texts to one number to 15 an
+// hour. The text ceiling bounds the line. Only real texts count for the line.
 const limits = {
   numberFromClient: { count: 3, window: 10 * minute },
   client: { count: 10, window: 60 * minute },
-  number: { count: 15, window: 60 * minute },
+  number: { count: 5, window: 60 * minute },
+  knownNumber: { count: 10, window: 60 * minute },
   texts: { count: 100, window: 60 * minute },
 };
 // A challenge older than every window is expired and counts for nothing.
 const kept = 60 * minute;
+// A client that signed in to a number stays known to it for this long.
+const knownFor = 30 * 24 * 60 * minute;
+const knownClients = "shared_identity_known_client";
 
 const proxies = new BlockList();
 for (const [subnet, bits] of [
@@ -151,18 +160,29 @@ export class SharedPhoneIdentity {
            AND json_extract(body, '$.createdAt') <= ?`,
         )
         .run(now - kept);
+      this.store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind = '${knownClients}'
+           AND json_extract(body, '$.verifiedAt') <= ?`,
+        )
+        .run(now - knownFor);
       const from = this.digest("client", client);
       const eligible = this.eligible(recipient);
+      const known =
+        this.store.get(knownClients, this.digest("known", from, recipient)) !==
+        undefined;
       const used = this.store.db
         .prepare(
           `SELECT coalesce(sum(client = ?1), 0) AS client,
              coalesce(sum(client = ?1 AND recipient = ?2 AND createdAt > ?3), 0) AS numberFromClient,
-             coalesce(sum(recipient = ?2), 0) AS number,
+             coalesce(sum(recipient = ?2 AND known = 0), 0) AS number,
+             coalesce(sum(recipient = ?2 AND known = 1), 0) AS knownNumber,
              coalesce(sum(eligible), 0) AS texts
            FROM (SELECT json_extract(body, '$.client') AS client,
                json_extract(body, '$.recipient') AS recipient,
                json_extract(body, '$.createdAt') AS createdAt,
-               coalesce(json_extract(body, '$.eligible'), 1) AS eligible
+               coalesce(json_extract(body, '$.eligible'), 1) AS eligible,
+               coalesce(json_extract(body, '$.known'), 0) AS known
              FROM entities WHERE kind = '${challenges}'
              AND json_extract(body, '$.createdAt') > ?4)`,
         )
@@ -172,12 +192,13 @@ export class SharedPhoneIdentity {
           now - limits.numberFromClient.window,
           now - kept,
         ) as Record<keyof typeof limits, number>;
+      // A known client uses its own allowance for this number, never the
+      // allowance of the clients that share it.
+      const checked = (Object.keys(limits) as (keyof typeof limits)[]).filter(
+        (name) => name !== (known ? "number" : "knownNumber"),
+      );
       // The text ceiling refuses every start, so a stranger's answer matches.
-      if (
-        (Object.keys(limits) as (keyof typeof limits)[]).some(
-          (name) => used[name] >= limits[name].count,
-        )
-      )
+      if (checked.some((name) => used[name] >= limits[name].count))
         throw new DomainError(429, "identity_rate_limited");
       const id = token();
       return this.store.put<Challenge>(challenges, {
@@ -185,6 +206,7 @@ export class SharedPhoneIdentity {
         recipient,
         client: from,
         eligible,
+        ...(known ? { known } : {}),
         digest: this.digest(id, code),
         createdAt: now,
         expiresAt: now + 300_000,
@@ -244,6 +266,12 @@ export class SharedPhoneIdentity {
         state: valid || c.attempts >= 4 ? "consumed" : c.state,
       });
       if (!valid) return null;
+      // This client proved it receives this number's texts.
+      if (c.client)
+        this.store.put(knownClients, {
+          id: this.digest("known", c.client, c.recipient),
+          verifiedAt: this.now(),
+        });
       const secret = token();
       const session = this.store.put<Session>("shared_identity_session", {
         id: hash(secret),

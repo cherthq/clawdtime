@@ -226,6 +226,42 @@ describe("shared sign-in texts", () => {
     expect(typeof verified.body.token).toBe("string");
   });
 
+  it("keeps the member's own client open when other clients spend the number's allowance", async () => {
+    const store = new Store();
+    cleanup.push(() => store.close());
+    const f = await coordinator(store, [member]);
+    // The member signed in from this client before.
+    const first = await f.start(member, memberMac);
+    expect(
+      (
+        await f.post("/auth/verify", {
+          challengeId: first.body.challengeId,
+          code: f.codeFor(member),
+        })
+      ).status,
+    ).toBe(200);
+    // Five other addresses start three sign-ins each for the member's number.
+    // They share five starts an hour, and the member's first start, from a
+    // client that was not known yet, was one of them.
+    const answers: number[] = [];
+    for (let address = 1; address <= 5; address++)
+      for (let i = 0; i < 3; i++)
+        answers.push((await f.start(member, `203.0.113.${address}`)).status);
+    expect(answers.filter((status) => status === 200)).toHaveLength(4);
+    expect(f.texts.filter((t) => t.recipient === member)).toHaveLength(5);
+    // The member's own client still signs in.
+    const own = await f.start(member, memberMac);
+    expect(own.status).toBe(200);
+    expect(
+      (
+        await f.post("/auth/verify", {
+          challengeId: own.body.challengeId,
+          code: f.codeFor(member),
+        })
+      ).status,
+    ).toBe(200);
+  });
+
   it("ignores a forwarded address unless the coordinator is behind a proxy", async () => {
     const store = new Store();
     cleanup.push(() => store.close());
@@ -319,6 +355,42 @@ describe("shared sign-in limits and storage", () => {
     await expect(identity.start(strangers[0]!, "fresh")).rejects.toThrow(
       "identity_rate_limited",
     );
+  });
+
+  it("sends one number at most 15 texts an hour, whoever starts the sign-ins", async () => {
+    const store = new Store();
+    cleanup.push(() => store.close());
+    let now = 1_000_000;
+    const sent: string[] = [];
+    let code = "";
+    const identity = new SharedPhoneIdentity(store, {
+      lineId: "line",
+      key: "bb".repeat(32),
+      invited: [member],
+      now: () => now,
+      send: async (recipient, sentCode) => {
+        sent.push(recipient);
+        code = sentCode;
+        return true;
+      },
+    });
+    // The member's own client has signed in before.
+    identity.verify(
+      (await identity.start(member, memberMac)).challengeId,
+      code,
+    );
+    const start = (client: string) =>
+      identity.start(member, client).catch(() => undefined);
+    const hour = now + 60 * 60_000;
+    let address = 0;
+    for (; now < hour - 60_000; now += 60_000) {
+      // A new address every minute, and the member's own client too.
+      for (let i = 0; i < 3; i++) await start(`203.0.113.${address % 250}`);
+      address++;
+      await start(memberMac);
+    }
+    expect(sent.length).toBeLessThanOrEqual(15);
+    expect(sent.length).toBeGreaterThan(5);
   });
 
   it("prunes expired challenges and does not read every challenge to start", async () => {
