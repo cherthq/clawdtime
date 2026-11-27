@@ -76,14 +76,35 @@ mascot), or Command-comma. It has four pages.
   checks again every few seconds while it is open, and when you come back to
   it. **Open System Settings** opens the right list.
 - **General** has **Open ClawdTime when you log in**, **Run setup again**,
-  **Stop**, and the versions of the app and of its runtime, with the runtime
-  commit.
+  **Stop**, **Uninstall ClawdTime…**, and the versions of the app and of its
+  runtime, with the runtime commit.
 
 After you change a key or the model, the page says that the desktop restarts
 to use it. The desktop starts again by itself only while it is idle: no task
 runs and the phone connection is off. Otherwise the page shows **Restart
 now**, and the desktop keeps running until you choose it. A desktop that is
 not running uses the change when it starts.
+
+## Uninstall
+
+Open Settings, General, and choose **Uninstall ClawdTime…**. A sheet lists
+what goes to the Trash and what stays. Check **Keep my settings and keys** to
+keep your settings and model keys for a later install. Then choose
+**Uninstall**. ClawdTime:
+
+1. Stops setup, the phone connection and the desktop.
+2. Unpairs this Mac from the shared number, when it is paired and the
+   coordinator answers. When it does not answer, the pairing stays, and the
+   sheet says how to finish.
+3. Moves the runtime, the `clawdtime` command and, unless you keep them, the
+   settings to the Trash. It deletes nothing. Receipts of actions whose
+   outcome is unknown or pending stay where they are, and the sheet names
+   them. Your project folder stays.
+4. Takes out its login item.
+
+The sheet shows the result. Choose **Move ClawdTime to the Trash and Quit**:
+the app moves itself to the Trash and quits. To get it back, put it back from
+the Trash. Your files stay in the Trash until you empty it.
 
 ## How the app works
 
@@ -222,6 +243,7 @@ commands and its two helpers. It reads their JSON:
 | Model keys    | `clawdtime keys list --json`                                                                  | `clawdtime keys set PROVIDER` (the key on stdin), `clawdtime keys remove PROVIDER`          |
 | Planner model | `clawdtime computer model --json`                                                             | `clawdtime computer model PROVIDER/MODEL [--base-url URL]`, `clawdtime computer model auto` |
 | Permissions   | `app/native/ClawdTimeTaskPanel --check-access`, `app/native/ClawdTimeTaskCapture --preflight` | nothing: **Open System Settings** opens `x-apple.systempreferences:` on the right list      |
+| General       | `clawdtime uninstall --plan --json`                                                           | `clawdtime uninstall --yes [--keep-settings]`, after the app stopped what it owns           |
 
 - A key goes to `clawdtime keys set PROVIDER` on stdin, and nowhere else: not
   in an argument, the environment, a file or a log. The field lets go of the
