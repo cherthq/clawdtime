@@ -31,6 +31,7 @@ import {
   providers,
   type Provider,
 } from "../../connectors/computer/providers.js";
+import { DesktopStartError, type OtherInstall } from "../desktop-start.js";
 import { checkCoordinator, chooseCoordinator } from "./coordinator.js";
 import {
   acceptSharedInvitation,
@@ -96,6 +97,13 @@ export interface OnboardPorts {
      * earlier one) still runs, with no foreground owner. Optional.
      */
     setupStarted?(): Promise<boolean>;
+    /**
+     * Uses the desktop of another install that holds this desktop's port,
+     * from now on. Optional: without it setup offers only to try again.
+     */
+    useOther?(other: OtherInstall): Promise<void>;
+    /** Stops the desktop of another install, checked by its own files. Optional. */
+    stopOther?(other: OtherInstall): Promise<void>;
   };
   /** A fresh read-only check of the installed panel and capture helper. */
   permissions(): Promise<PermissionFacts>;
@@ -516,10 +524,16 @@ export class OnboardEngine {
     id: StepId,
     detail: string,
     recovery: Recovery = retry(),
+    details?: string[],
   ): Promise<"retry" | "skip"> {
     for (;;) {
       const question = this.newQuestion();
-      this.step(id, "failed", { detail, recovery, question });
+      this.step(id, "failed", {
+        detail,
+        recovery,
+        question,
+        ...(details?.length ? { details } : {}),
+      });
       const command = await this.answerTo(id, question);
       if (command.type === "action") {
         if (command.action !== "skip") return "retry";
@@ -787,13 +801,29 @@ export class OnboardEngine {
             this.stoppedWhileStarting = true;
             throw new Cancelled();
           }
+          const problem = started.error;
+          if (
+            problem instanceof DesktopStartError &&
+            problem.kind === "other_install" &&
+            problem.other
+          ) {
+            if ((await this.otherInstall(problem, problem.other)) === "skip")
+              return this.skipStep("desktop");
+            continue;
+          }
           if (
             (await this.failed(
               "desktop",
-              plain(
-                started.error,
-                "The desktop did not start. Nothing was replaced.",
-              ),
+              problem instanceof DesktopStartError
+                ? problem.reason
+                : plain(
+                    problem,
+                    "The desktop did not start. Nothing was replaced.",
+                  ),
+              retry(),
+              problem instanceof DesktopStartError
+                ? problem.details
+                : undefined,
             )) === "skip"
           ) {
             await this.endStartedDesktop();
@@ -847,6 +877,83 @@ export class OnboardEngine {
         return this.skipStep("desktop");
       }
     }
+  }
+
+  /**
+   * The port of this desktop is held by the ClawdTime desktop of another
+   * install. Setup never displaces it by itself: the person uses it, stops it
+   * (only when its own files confirm it) or tries again after quitting it.
+   */
+  private async otherInstall(
+    problem: DesktopStartError,
+    other: OtherInstall,
+  ): Promise<"again" | "skip"> {
+    const { useOther, stopOther } = this.ports.desktop;
+    if (!other.verified || !useOther || !stopOther)
+      return (await this.failed(
+        "desktop",
+        "ClawdTime is already running from another install, and setup cannot confirm which one. Quit it there (Stop ClawdTime in its menu, or Ctrl+C in its Terminal), then try again.",
+        retry(),
+        problem.details,
+      )) === "skip"
+        ? "skip"
+        : "again";
+    const answer = await this.ask(
+      "desktop",
+      {
+        kind: "choice",
+        prompt: "ClawdTime is already running from another install.",
+        options: [
+          {
+            id: "use",
+            label: "Use the running ClawdTime",
+            detail:
+              "Setup goes on with it. Its project, chat and work stay as they are.",
+          },
+          {
+            id: "stop",
+            label: "Stop it and try again",
+            detail:
+              "It closes its work and quits. Then setup starts this ClawdTime.",
+          },
+          {
+            id: "retry",
+            label: "Try again",
+            detail: "After you quit it yourself.",
+          },
+        ],
+      },
+      {
+        detail:
+          "It holds the port that this desktop uses, so this desktop did not start. Nothing was changed.",
+        details: problem.details,
+      },
+    );
+    if ("action" in answer) return answer.action === "skip" ? "skip" : "again";
+    if (answer.value !== "use" && answer.value !== "stop") return "again";
+    await this.proceed();
+    this.step("desktop", "in_progress", {
+      detail:
+        answer.value === "use"
+          ? "Using the ClawdTime that runs from another install."
+          : "Stopping the ClawdTime of the other install.",
+    });
+    try {
+      await (answer.value === "use" ? useOther(other) : stopOther(other));
+    } catch (error) {
+      return (await this.failed(
+        "desktop",
+        plain(
+          error,
+          answer.value === "use"
+            ? "Setup could not use that ClawdTime. Nothing was changed."
+            : "Setup could not stop that ClawdTime. Quit it there, then try again.",
+        ),
+      )) === "skip"
+        ? "skip"
+        : "again";
+    }
+    return "again";
   }
 
   private async computer() {

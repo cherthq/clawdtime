@@ -24,7 +24,11 @@ import { z } from "zod";
 import {
   desktopStateFolder,
   findDesktopService,
+  linkDesktopFolder,
+  unlinkDesktopFolder,
 } from "../../connectors/agents/desktop-chat.js";
+import { stateRoot } from "../../connectors/agents/hooks.js";
+import type { OtherInstall } from "../desktop-start.js";
 import { inspectDesktopReadiness } from "../../connectors/agents/desktop-readiness.js";
 import { readDesktopPrivateJSON } from "../control/task-desktop-config.js";
 import type { Provider } from "../../connectors/computer/providers.js";
@@ -368,6 +372,101 @@ export async function stopDesktopService(
   }
 }
 
+/** Plain words for a stop of another install that did not happen. */
+const otherStopProblems: Record<string, string> = {
+  desktop_owned_in_foreground:
+    "That ClawdTime is held by its app or by a Terminal that runs it in the foreground, so setup did not stop it. Quit it there, then try again.",
+  desktop_not_verified:
+    "That process could not be confirmed as a ClawdTime desktop, so setup did not stop it. Quit it yourself, then try again.",
+  desktop_did_not_stop:
+    "That ClawdTime did not stop in time. Wait a moment, then try again.",
+};
+
+/**
+ * Ends the desktop of another install that holds this desktop's port: its
+ * service, checked as `stopDesktopService` checks it (the owner lock of its
+ * folder, the start time and the command of its process), then the panels
+ * that run exactly its panel file. A link to its folder ends too, so this
+ * install starts its own desktop.
+ */
+export async function stopOtherInstall(
+  system: { env: Record<string, string | undefined>; home: string },
+  other: OtherInstall,
+  options: {
+    waitMs?: number;
+    panels?: (config: string) => Promise<number[]>;
+  } = {},
+) {
+  if (!other.verified || !other.state || !other.pid)
+    throw Error(otherStopProblems.desktop_not_verified);
+  // The owner lock of its folder must still name the process, or nothing
+  // of it gets a signal: not its service, not its panel.
+  let owner: number | null = null;
+  try {
+    owner = z
+      .object({ pid: z.number().int().positive() })
+      .passthrough()
+      .parse(readDesktopPrivateJSON(join(other.state, "owner.lock"))).pid;
+  } catch {
+    owner = null;
+  }
+  if (owner !== other.pid) throw Error(otherStopProblems.desktop_not_verified);
+  try {
+    await stopDesktopService(
+      {
+        env: { ...system.env, CLAWDTIME_DESKTOP_STATE: other.state },
+        home: system.home,
+      },
+      {
+        pid: other.pid,
+        ...(options.waitMs !== undefined ? { waitMs: options.waitMs } : {}),
+      },
+    );
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    throw Error(
+      otherStopProblems[code] ?? otherStopProblems.desktop_did_not_stop,
+    );
+  }
+  for (const pid of await (options.panels ?? panelProcesses)(
+    join(other.state, "desktop-panel.json"),
+  ))
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // It ended by itself.
+    }
+  unlinkDesktopFolder(stateRoot(system), other.state);
+}
+
+/** The panels of this user that run exactly this panel file. */
+function panelProcesses(config: string): Promise<number[]> {
+  return new Promise((done) =>
+    execFile(
+      "/bin/ps",
+      ["-U", String(process.getuid?.() ?? ""), "-ww", "-o", "pid=,command="],
+      { timeout: 5000, maxBuffer: 1024 * 1024, env: { LC_ALL: "C" } },
+      (error, stdout) => {
+        if (error) return done([]);
+        const found: number[] = [];
+        for (const line of stdout.split("\n")) {
+          const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+          if (!match) continue;
+          const command = match[2]!;
+          const at = command.indexOf("ClawdTimeTaskPanel --config ");
+          if (at < 0) continue;
+          const rest = command.slice(
+            at + "ClawdTimeTaskPanel --config ".length,
+          );
+          if (rest === config || rest.startsWith(`${config} --`))
+            found.push(Number(match[1]));
+        }
+        done(found);
+      },
+    ),
+  );
+}
+
 /**
  * The path of a file of a release runtime through the `current` link of its
  * folder of versions, when the file sits in the version that `current` names
@@ -547,6 +646,16 @@ export function macPorts(input: {
         await input.startDesktop(log, { tucked: true });
         if (record) await started.remember(record.app);
       },
+      // The desktop of another install, confirmed by its own files, is used
+      // from now on: every command of this install looks in its folder.
+      useOther: async (other) => {
+        if (!other.verified || !other.state)
+          throw Error(
+            "That ClawdTime could not be confirmed by its own files, so setup cannot use it. Quit it there, then try again.",
+          );
+        linkDesktopFolder(stateRoot(system), other.state);
+      },
+      stopOther: (other) => stopOtherInstall(system, other),
     },
     permissions: async (): Promise<PermissionFacts> => {
       const panelPath = panel();

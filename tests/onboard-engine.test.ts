@@ -39,6 +39,7 @@ import {
   type OnboardEvent,
   type StepEvent,
 } from "../src/onboard/protocol.js";
+import { DesktopStartError } from "../src/desktop-start.js";
 import { fakeCoordinator, member } from "./onboard-fixture.js";
 
 // Made-up values only. Nothing here texts, calls, captures or opens a pane.
@@ -90,6 +91,10 @@ function fakeMac(
     /** The desktop start fails, or takes this long. */
     startFails?: boolean;
     startMs?: number;
+    /** The errors of the next desktop starts, one for each start. */
+    startErrors?: Error[];
+    /** The ports can use or stop the desktop of another install. */
+    otherInstall?: { stopFails?: Error };
   } = {},
 ) {
   const call = (port: string) => options.onCall?.(port);
@@ -101,6 +106,8 @@ function fakeMac(
     connectionStarts: 0,
     connectionStops: 0,
     validated: 0,
+    otherUses: 0,
+    otherStops: 0,
   };
   let desktop = options.desktop ?? "absent";
   /** The desktop that an app setup started runs, and no owner holds it. */
@@ -156,6 +163,8 @@ function fakeMac(
         if (options.startMs)
           await new Promise((done) => setTimeout(done, options.startMs));
         if (options.startFails) throw Error("The desktop did not start.");
+        const refused = options.startErrors?.shift();
+        if (refused) throw refused;
         log("Desktop panel requested.");
         desktop = "connected";
         if (options.remembers) setupStarted = true;
@@ -173,6 +182,19 @@ function fakeMac(
       ...(options.remembers
         ? {
             setupStarted: async () => setupStarted && desktop === "connected",
+          }
+        : {}),
+      ...(options.otherInstall
+        ? {
+            useOther: async () => {
+              calls.otherUses++;
+              desktop = "connected";
+            },
+            stopOther: async () => {
+              calls.otherStops++;
+              if (options.otherInstall?.stopFails)
+                throw options.otherInstall.stopFails;
+            },
           }
         : {}),
     },
@@ -1619,5 +1641,220 @@ describe("how setup starts the desktop", () => {
     await expect(
       onboardCli(["--app"], { ports: fakeMac().ports }),
     ).rejects.toThrow("--app goes with --json");
+  });
+});
+
+describe("a desktop that does not start says why", () => {
+  const other = {
+    port: 13326,
+    pid: 52001,
+    state: "/Users/made-up/.local/share/clawdtime/other-desktop",
+    verified: true,
+  };
+  const otherError = (verified = true) =>
+    new DesktopStartError(
+      "other_install",
+      "ClawdTime is already running from another install, on the port that this desktop uses.",
+      [`It runs as process 52001, with the desktop folder ${other.state}.`],
+      { ...other, verified, state: verified ? other.state : null },
+    );
+  /** Answers the desktop step with this choice, and yes elsewhere. */
+  const choose =
+    (choice: string): Responder =>
+    (event) =>
+      event.id === "desktop" && event.input?.kind === "choice"
+        ? { type: "input", id: "desktop", value: choice }
+        : agree()(event);
+  const reportRow = (events: OnboardEvent[], id: string) =>
+    done(events).report.find((one) => one.id === id)!;
+  const desktopEvents = (events: OnboardEvent[]) =>
+    steps(events).filter((event) => event.id === "desktop");
+
+  it("offers to use, stop or try again when another install runs, and stops it on the person's choice", async () => {
+    const mac = fakeMac({ startErrors: [otherError()], otherInstall: {} });
+    const { events } = await runJson(
+      ["--local"],
+      folder(),
+      mac.ports,
+      choose("stop"),
+    );
+    const question = desktopEvents(events).find(
+      (event) => event.state === "needs_input",
+    )!;
+    expect(question.input?.prompt).toBe(
+      "ClawdTime is already running from another install.",
+    );
+    expect(question.input?.options?.map((option) => option.label)).toEqual([
+      "Use the running ClawdTime",
+      "Stop it and try again",
+      "Try again",
+    ]);
+    expect(question.details?.join(" ")).toContain(other.state);
+    // The detail names no path: the path is in the details.
+    expect(question.detail).not.toContain("/");
+    expect(mac.calls.otherStops).toBe(1);
+    expect(mac.calls.desktopStarts).toBe(2);
+    expect(reportRow(events, "desktop")).toMatchObject({ state: "ready" });
+  });
+
+  it("uses the running ClawdTime of another install when the person chooses it", async () => {
+    const mac = fakeMac({ startErrors: [otherError()], otherInstall: {} });
+    const { events } = await runJson(
+      ["--local"],
+      folder(),
+      mac.ports,
+      choose("use"),
+    );
+    expect(mac.calls.otherUses).toBe(1);
+    expect(mac.calls.otherStops).toBe(0);
+    expect(mac.calls.desktopStarts).toBe(1);
+    expect(reportRow(events, "desktop")).toEqual({
+      id: "desktop",
+      state: "ready",
+      detail: "The desktop runs already. Its project and work are kept.",
+    });
+  });
+
+  it("says plainly when a stop of the other install did not happen, and tries again on retry", async () => {
+    const mac = fakeMac({
+      startErrors: [otherError(), otherError()],
+      otherInstall: {
+        stopFails: Error(
+          "That ClawdTime is held by its app or by a Terminal that runs it in the foreground, so setup did not stop it. Quit it there, then try again.",
+        ),
+      },
+    });
+    let asked = 0;
+    const { events } = await runJson(
+      ["--local"],
+      folder(),
+      mac.ports,
+      (event) => {
+        if (event.id === "desktop" && event.input?.kind === "choice")
+          return {
+            type: "input",
+            id: "desktop",
+            value: asked++ === 0 ? "stop" : "use",
+          };
+        return agree()(event);
+      },
+    );
+    const failure = desktopEvents(events).find(
+      (event) => event.state === "failed",
+    )!;
+    expect(failure.detail).toBe(
+      "That ClawdTime is held by its app or by a Terminal that runs it in the foreground, so setup did not stop it. Quit it there, then try again.",
+    );
+    expect(failure.recovery).toEqual({ label: "Try again", action: "retry" });
+    expect(reportRow(events, "desktop").state).toBe("ready");
+  });
+
+  it("offers only Try again when the other install cannot be confirmed", async () => {
+    const mac = fakeMac({ startErrors: [otherError(false)], otherInstall: {} });
+    const { events } = await runJson(["--local"], folder(), mac.ports, agree());
+    const failure = desktopEvents(events).find(
+      (event) => event.state === "failed",
+    )!;
+    expect(failure.detail).toContain(
+      "ClawdTime is already running from another install, and setup cannot confirm which one.",
+    );
+    expect(failure.input).toBeUndefined();
+    expect(mac.calls.otherStops).toBe(0);
+    expect(reportRow(events, "desktop").state).toBe("ready");
+  });
+
+  it.each([
+    [
+      "a port that another program holds",
+      new DesktopStartError(
+        "port_in_use",
+        "Port 13326 is in use by another program (Stonepad), so the desktop cannot start there. Quit that program, then try again.",
+        ["That program runs as process 52004."],
+      ),
+    ],
+    [
+      "an expired session with open work",
+      new DesktopStartError(
+        "session_open_work",
+        "The task session of this desktop expired while a task, call or voice is still open, so it was not renewed and nothing was changed.",
+        [
+          'To keep that task\'s record and start a new desktop, move this desktop\'s folder aside: mv "/Users/made-up/desk" "/Users/made-up/desk-kept"',
+          "The service log is /Users/made-up/desk/desktop-start.log.",
+        ],
+      ),
+    ],
+    [
+      "a crash with a message",
+      new DesktopStartError(
+        "stopped",
+        "The desktop service stopped as it started: Cannot read the saved project",
+        ["The service log is /Users/made-up/desk/desktop-start.log."],
+      ),
+    ],
+  ])(
+    "shows the plain reason of %s and offers Try again",
+    async (_name, error) => {
+      const mac = fakeMac({ startErrors: [error] });
+      const { events } = await runJson(
+        ["--local"],
+        folder(),
+        mac.ports,
+        agree(),
+      );
+      const failure = desktopEvents(events).find(
+        (event) => event.state === "failed",
+      )!;
+      expect(failure.detail).toBe(error.reason);
+      expect(failure.details).toEqual(error.details);
+      expect(failure.recovery).toEqual({ label: "Try again", action: "retry" });
+      expect(JSON.stringify(events)).not.toContain(
+        "Desktop service startup failed",
+      );
+      // Try again starts the desktop again.
+      expect(mac.calls.desktopStarts).toBe(2);
+      expect(reportRow(events, "desktop").state).toBe("ready");
+    },
+  );
+
+  it("asks the same choice in Terminal, with the reason and the details", async () => {
+    const input = new PassThrough();
+    const shown: string[] = [];
+    const output = new Writable({
+      write(chunk, _encoding, done) {
+        const text = chunk.toString();
+        shown.push(text);
+        if (text.includes("Use the running ClawdTime"))
+          setImmediate(() => input.write("1\n"));
+        else if (text.includes("Type a number"))
+          setImmediate(() => input.write("1\n"));
+        else if (text.includes("API key (it is not shown)"))
+          setImmediate(() => input.write(`${key}\n`));
+        else if (text.includes("Turn on computer use?"))
+          setImmediate(() => input.write("no\n"));
+        done();
+      },
+    });
+    const wizard = new TerminalWizard({ input, output, close: () => {} });
+    const mac = fakeMac({ startErrors: [otherError()], otherInstall: {} });
+    const result = await new OnboardEngine(
+      wizard,
+      {
+        version: "0.4.0",
+        local: true,
+        env: {},
+        home: folder(),
+        root: folder(),
+        pollMs: 0,
+      },
+      mac.ports,
+    ).run();
+    const text = shown.join("");
+    expect(text).toContain(
+      "ClawdTime is already running from another install.",
+    );
+    expect(text).toContain("Stop it and try again");
+    expect(text).toContain(other.state);
+    expect(mac.calls.otherUses).toBe(1);
+    expect(result.ready).toBe(true);
   });
 });

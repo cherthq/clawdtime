@@ -10,8 +10,9 @@
  * of the panel.
  *
  * Where the service is looked for: the folder in `CLAWDTIME_DESKTOP_STATE`,
- * or else the folder `desktop` in the state folder of ClawdTime
- * (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`).
+ * else the desktop folder of another install that setup chose to use (the
+ * link file `desktop-link.json`), or else the folder `desktop` in the state
+ * folder of ClawdTime (`CLAWDTIME_CONFIG_HOME`, or `~/.local/share/clawdtime`).
  *
  * A service with no language model does not get the message of a command
  * that has one: it could only tell the state, and the command alone answers
@@ -29,9 +30,11 @@
  * The credential is read, sent to the loopback address of the service, and
  * nothing else. It is never printed and never part of an error.
  */
+import { existsSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { readDesktopPrivateJSON } from "../../src/control/task-desktop-config.js";
+import { readPrivateJSON, writePrivateJSON } from "../shared/private-file.js";
 import { stateRoot } from "./hooks.js";
 import type { System } from "./system.js";
 import { userMessageLimit, userMessageTooLong } from "./request-text.js";
@@ -87,7 +90,40 @@ export function desktopStateFolder(
   const named = system.env.CLAWDTIME_DESKTOP_STATE;
   if (named) return isAbsolute(named) ? named : null;
   if (system.env.VITEST) return null;
-  return join(stateRoot(system), "desktop");
+  const root = stateRoot(system);
+  return linkedDesktopFolder(root) ?? join(root, "desktop");
+}
+
+const linkName = "desktop-link.json";
+const linkSchema = z
+  .object({ version: z.literal(1), folder: z.string().min(1).max(4096) })
+  .strict();
+
+/**
+ * The desktop folder of another install that this one uses: setup's "Use
+ * the running ClawdTime" saves it. Null when no link is saved, when the file
+ * is not an owner-only file or when its folder is gone.
+ */
+export function linkedDesktopFolder(root: string): string | null {
+  const loaded = readPrivateJSON(join(root, linkName));
+  const link = linkSchema.safeParse(loaded.value);
+  if (loaded.problem || !link.success || !isAbsolute(link.data.folder))
+    return null;
+  return existsSync(link.data.folder) ? link.data.folder : null;
+}
+
+/** Uses the desktop of the folder `folder` from now on. */
+export function linkDesktopFolder(root: string, folder: string) {
+  if (!isAbsolute(folder)) throw Error("desktop_link_not_absolute");
+  writePrivateJSON(join(root, linkName), { version: 1, folder });
+}
+
+/** Ends the link to `folder`: this install uses its own desktop folder again. */
+export function unlinkDesktopFolder(root: string, folder: string) {
+  const loaded = readPrivateJSON(join(root, linkName));
+  const link = linkSchema.safeParse(loaded.value);
+  if (link.success && link.data.folder === folder)
+    rmSync(join(root, linkName), { force: true });
 }
 
 /** A desktop service that its own files describe and whose process is there. */
