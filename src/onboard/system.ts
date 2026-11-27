@@ -13,6 +13,8 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  rmSync,
+  statSync,
 } from "node:fs";
 import { release } from "node:os";
 import { join } from "node:path";
@@ -99,14 +101,23 @@ export async function checkProviderKey(
   }
 }
 
+/**
+ * The record of the managed connection. `processStart` and `command` are what
+ * `ps` said of the process right after it started: a process id is reused
+ * after its process ends, so a signal goes to the id only while `ps` still
+ * says the same of it.
+ */
 const recordSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     pid: z.number().int().positive(),
     instanceId: z.string().min(1).max(200),
     startedAt: z.number(),
+    processStart: z.string().min(1).max(100),
+    command: z.string().min(1).max(8192),
   })
   .strict();
+type ConnectionRecord = z.infer<typeof recordSchema>;
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -114,6 +125,76 @@ const alive = (pid: number) => {
   } catch {
     return false;
   }
+};
+
+/** One process as `ps` shows it: when it started, and its whole command line. */
+export interface ProcessIdentity {
+  start: string;
+  command: string;
+}
+
+/**
+ * What `ps` says of one process now, or null when it is gone or `ps` cannot
+ * tell. The start time is to the second, in a fixed format.
+ */
+export function processIdentity(pid: number): Promise<ProcessIdentity | null> {
+  return new Promise((done) =>
+    execFile(
+      "/bin/ps",
+      ["-ww", "-o", "lstart=", "-o", "command=", "-p", String(pid)],
+      {
+        timeout: 5000,
+        maxBuffer: 64 * 1024,
+        env: { LC_ALL: "C", PATH: "/usr/bin:/bin", TZ: "UTC" },
+      },
+      (error, stdout) => {
+        const found =
+          !error &&
+          /^(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4}) +(\S.*)$/.exec(
+            stdout.trim(),
+          );
+        done(found ? { start: found[1]!, command: found[2]! } : null);
+      },
+    ),
+  );
+}
+
+const months = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+/** The start time of `processIdentity` (in UTC) in milliseconds, or NaN. */
+export function processStartMs(start: string) {
+  const parts = /^\w{3} (\w{3}) +(\d{1,2}) (\d\d):(\d\d):(\d\d) (\d{4})$/.exec(
+    start,
+  );
+  const month = parts ? months.indexOf(parts[1]!) : -1;
+  if (!parts || month < 0) return Number.NaN;
+  return Date.UTC(
+    Number(parts[6]),
+    month,
+    Number(parts[2]),
+    Number(parts[3]),
+    Number(parts[4]),
+    Number(parts[5]),
+  );
+}
+
+const sameProcess = async (record: ConnectionRecord) => {
+  const now = await processIdentity(record.pid);
+  return (
+    !!now && now.start === record.processStart && now.command === record.command
+  );
 };
 
 /**
@@ -129,21 +210,31 @@ export function managedConnection(input: {
 }): OnboardPorts["connection"] {
   const { directory } = sharedPairingPaths(input.home);
   const file = join(directory, "onboard-connection.json");
-  const read = () => {
+  /**
+   * The record, only while its process runs: the same start time and the
+   * same command as when it started. A record of an earlier release, or of
+   * a process that has ended (its id may belong to another process now), is
+   * cleared without a signal. A file that is not private is left as it is.
+   */
+  const live = async (): Promise<ConnectionRecord | null> => {
     const loaded = readPrivateJSON(file);
+    if (loaded.problem || loaded.value === undefined || loaded.value === null)
+      return null;
     const parsed = recordSchema.safeParse(loaded.value);
-    return !loaded.problem && parsed.success ? parsed.data : null;
+    if (parsed.success && (await sameProcess(parsed.data))) return parsed.data;
+    rmSync(file, { force: true });
+    return null;
   };
   return {
     status: async (instanceId) => {
-      const record = read();
-      if (!record || !alive(record.pid)) return "stopped";
+      const record = await live();
+      if (!record) return "stopped";
       return record.instanceId === instanceId ? "running" : "stale";
     },
     holder: async () => {
       const held = processLockHolder(sharedConnectionLock(input.home));
       if (!held) return null;
-      const record = read();
+      const record = await live();
       return {
         instanceId:
           typeof held.instanceId === "string" ? held.instanceId : null,
@@ -151,15 +242,18 @@ export function managedConnection(input: {
       };
     },
     stop: async () => {
-      const record = read();
-      if (!record || !alive(record.pid)) return;
-      // Shared run closes its calls and its capture on SIGTERM.
+      const record = await live();
+      if (!record) return;
+      // Shared run closes its calls and its capture on SIGTERM. Only the
+      // moment between the check above and this signal is left: macOS hands
+      // out process ids in turn, so an id comes back only after the others.
       process.kill(record.pid, "SIGTERM");
       const deadline = Date.now() + 15_000;
-      while (alive(record.pid)) {
+      while (await sameProcess(record)) {
         if (Date.now() > deadline) throw Error("connection_did_not_stop");
         await new Promise((done) => setTimeout(done, 200));
       }
+      rmSync(file, { force: true });
     },
     start: async (instanceId) => {
       mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -187,12 +281,21 @@ export function managedConnection(input: {
           child.once("error", () => fail(Error("connection_did_not_start")));
         });
         child.unref();
+        // What ps says of it now is what a later stop compares before any
+        // signal. Without it the process could never be stopped safely.
+        const identity = await processIdentity(child.pid!);
+        if (!identity) {
+          child.kill("SIGTERM");
+          throw Error("connection_not_identified");
+        }
         writePrivateJSON(file, {
-          version: 1,
+          version: 2,
           pid: child.pid!,
           instanceId,
           startedAt: Date.now(),
-        });
+          processStart: identity.start,
+          command: identity.command,
+        } satisfies ConnectionRecord);
         // A connection that the coordinator refuses ends at once.
         await new Promise((done) => setTimeout(done, 2000));
         if (exited) throw Error("connection_ended");
@@ -229,7 +332,23 @@ export async function stopDesktopService(
   } catch {
     return;
   }
-  if (!alive(pid)) return;
+  // The service writes its lock once, as it starts. The process with that id
+  // is the service only when it began before the lock was written and runs
+  // the task server; else the id belongs to another process now, and it gets
+  // no signal. The lock is left to the person: setup never takes it.
+  const identity = await processIdentity(pid);
+  if (!identity) return;
+  let written: number;
+  try {
+    written = statSync(join(folder, "owner.lock")).mtimeMs;
+  } catch {
+    return;
+  }
+  if (
+    !(processStartMs(identity.start) <= written) ||
+    !/[/\\]task-server\.(?:ts|js)(?:\s|$)/.test(identity.command)
+  )
+    throw Error("desktop_not_verified");
   process.kill(pid, "SIGTERM");
   const deadline = Date.now() + (options.waitMs ?? 20_000);
   while (alive(pid) || existsSync(join(folder, "owner.lock"))) {

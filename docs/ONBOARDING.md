@@ -191,18 +191,26 @@ input is a cancel.
 
 Setup writes only what its steps make:
 
-| File                                                 | Step                                                               |
-| ---------------------------------------------------- | ------------------------------------------------------------------ |
-| `~/.local/share/clawdtime/computer/keys.json`        | `model`                                                            |
-| `~/.local/share/clawdtime/computer/model.json`       | `model`, only when the chosen provider would not plan by default   |
-| `~/.local/share/clawdtime/computer/config.json`      | `computer`                                                         |
-| `~/.config/clawdtime/shared/connection.json`         | `pairing`                                                          |
-| `~/.config/clawdtime/shared/onboard-connection.json` | `connection`, the process and the desktop it serves, no credential |
-| `~/.config/clawdtime/shared/connection.log`          | `connection`, the output of the connection                         |
-| `~/.config/clawdtime/shared/connection.lock`         | `clawdtime shared run`, the process that holds the one connection  |
+| File                                                 | Step                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `~/.local/share/clawdtime/computer/keys.json`        | `model`                                                                                    |
+| `~/.local/share/clawdtime/computer/model.json`       | `model`, only when the chosen provider would not plan by default                           |
+| `~/.local/share/clawdtime/computer/config.json`      | `computer`                                                                                 |
+| `~/.config/clawdtime/shared/connection.json`         | `pairing`                                                                                  |
+| `~/.config/clawdtime/shared/onboard-connection.json` | `connection`, the process, its start and command, and the desktop it serves, no credential |
+| `~/.config/clawdtime/shared/connection.log`          | `connection`, the output of the connection                                                 |
+| `~/.config/clawdtime/shared/connection.lock`         | `clawdtime shared run`, the process that holds the one connection                          |
 
 Every file is for its owner only. `CLAWDTIME_CONFIG_HOME` moves the first
 three.
+
+A process id comes back after its process ends, so a saved id alone never
+gets a signal. Setup stops the connection only when `ps` shows the start time
+and the command that it saved when the connection started. A record of a
+process that has ended, or of an earlier release, is cleared with no signal.
+Setup stops the desktop service only when its process began before the
+service wrote its owner lock and runs the task server. Otherwise it sends no
+signal and leaves the lock.
 
 ## Limits
 
