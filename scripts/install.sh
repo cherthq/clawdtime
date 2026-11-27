@@ -410,32 +410,58 @@ read_latest() {
 }
 
 # Checks every file of the runtime in $1 against its manifest, with the Node
-# of that runtime. It needs nothing else on the Mac.
+# of that runtime, and finds any file or link that the manifest does not
+# list. It needs nothing else on the Mac. On a difference it prints one line
+# that says what differs. With "remove" as $2, when every listed file checks
+# out, it removes the files and links that the manifest does not list and
+# prints them.
 # shellcheck disable=SC2016 # JavaScript, not shell.
 verify_js='
-const [dir, version, commit] = process.argv.slice(1);
+const [dir, version, commit, mode] = process.argv.slice(1);
 const { createHash } = require("node:crypto");
-const { lstatSync, readFileSync } = require("node:fs");
+const { lstatSync, readdirSync, readFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 const stop = (text) => { console.error(text); process.exit(1); };
 let manifest;
 try { manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")); }
-catch { stop("manifest.json cannot be read."); }
+catch { stop("manifest.json cannot be read"); }
 if (manifest.name !== "clawdtime" || manifest.version !== version ||
     manifest.commit !== commit || manifest.arch !== "arm64")
-  stop("manifest.json is for another release.");
+  stop("manifest.json is for another release");
 const files = Object.entries(manifest.files ?? {});
-if (!files.length) stop("manifest.json lists no files.");
+if (!files.length) stop("manifest.json lists no files");
 for (const [path, sha] of files) {
-  if (path.startsWith("/") || path.split("/").includes("..")) stop(`Bad path: ${path}`);
+  if (path.startsWith("/") || path.split("/").includes("..")) stop(`bad path: ${path}`);
   const stat = lstatSync(join(dir, path), { throwIfNoEntry: false });
-  if (!stat || !stat.isFile()) stop(`Missing: ${path}`);
+  if (!stat || !stat.isFile()) stop(`missing: ${path}`);
   if (createHash("sha256").update(readFileSync(join(dir, path))).digest("hex") !== sha)
-    stop(`Changed: ${path}`);
+    stop(`changed: ${path}`);
 }
+const listed = new Set(files.map(([path]) => path));
+const unlisted = [];
+const walk = (folder) => {
+  let entries;
+  try { entries = readdirSync(join(dir, folder), { withFileTypes: true }); }
+  catch { stop(`cannot be read: ${folder || "."}`); }
+  for (const entry of entries) {
+    const path = folder ? `${folder}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) walk(path);
+    else if (path !== "manifest.json" && !listed.has(path)) unlisted.push(path);
+  }
+};
+walk("");
+const named = unlisted.sort().slice(0, 5).join(", ") +
+  (unlisted.length > 5 ? ` and ${unlisted.length - 5} more` : "");
+if (unlisted.length && mode !== "remove") stop(`not in the manifest: ${named}`);
+for (const path of unlisted) rmSync(join(dir, path), { force: true });
+if (unlisted.length) console.log(named);
 '
 verify() {
-  [ -x "$1/node/bin/node" ] && "$1/node/bin/node" -e "$verify_js" "$1" "$version" "$commit" </dev/null
+  if [ ! -x "$1/node/bin/node" ]; then
+    echo "missing: node/bin/node" >&2
+    return 1
+  fi
+  "$1/node/bin/node" -e "$verify_js" "$1" "$version" "$commit" "${2:-}" </dev/null
 }
 
 take_lock() {
@@ -485,9 +511,22 @@ check_order() {
 }
 
 install_runtime() {
-  if [ -d "$runtimes/$version" ] && verify "$runtimes/$version" 2>/dev/null; then
-    say "ClawdTime $version is installed already, and every file checks out."
-    return
+  if [ -d "$runtimes/$version" ]; then
+    if problem=$(verify "$runtimes/$version" 2>&1 >/dev/null); then
+      say "ClawdTime $version is installed already, and every file checks out."
+      return
+    fi
+    # Every listed file checks out, and other files were added: remove them
+    # in place, so a process of this version keeps its files.
+    case $problem in
+      "not in the manifest: "*)
+        if removed=$(verify "$runtimes/$version" remove 2>/dev/null) && verify "$runtimes/$version" 2>/dev/null; then
+          say "ClawdTime $version is installed already. Removed what its manifest does not list: $removed. Every other file checks out."
+          return
+        fi
+        ;;
+    esac
+    say "ClawdTime $version is on this Mac, but its files differ from the release manifest: $problem. It is installed again from the release."
   fi
   step "Downloading ClawdTime $version"
   fetch "$archive_url" "$tmp/clawdtime.tar.gz" ||
@@ -501,15 +540,19 @@ install_runtime() {
   incoming=$(mktemp -d "$runtimes/.incoming.XXXXXX")
   tar -xzf "$tmp/clawdtime.tar.gz" -C "$incoming" </dev/null ||
     fail "the release did not unpack. Nothing changed."
-  verify "$incoming/runtime" || fail "the unpacked files do not match the release manifest. Nothing changed."
+  problem=$(verify "$incoming/runtime" 2>&1 >/dev/null) ||
+    fail "the unpacked files do not match the release manifest: $problem. Nothing changed."
   "$incoming/runtime/bin/clawdtime" --help </dev/null >/dev/null 2>&1 ||
     fail "the new runtime does not start on this Mac. Nothing changed."
-  if [ -e "$runtimes/$version" ]; then
-    # An earlier copy of this version that is damaged: set it aside, then remove it.
+  replaced=0
+  if [ -e "$runtimes/$version" ] || [ -L "$runtimes/$version" ]; then
+    # An earlier copy of this version that differs: set it aside, then remove it.
     mv "$runtimes/$version" "$incoming/replaced"
+    replaced=1
   fi
   mv "$incoming/runtime" "$runtimes/$version"
   say "Unpacked and checked every file of ClawdTime $version."
+  [ "$replaced" = 0 ] || say "Replaced the earlier copy of ClawdTime $version."
 }
 
 # The ID of one process that runs from the version folder $1, or nothing.

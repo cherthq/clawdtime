@@ -36,6 +36,8 @@ interface Release {
   commit?: string;
   onboard?: boolean;
   latest?: Record<string, unknown>;
+  /** Files put in the archive after the manifest, so it does not list them. */
+  unlisted?: Record<string, string>;
 }
 
 /**
@@ -90,6 +92,8 @@ console.log(JSON.stringify({ version, args, main: __filename }));
     { encoding: "utf8" },
   );
   expect(written.status, written.stderr).toBe(0);
+  for (const [path, text] of Object.entries(release.unlisted ?? {}))
+    file(path, text);
   const archive = `clawdtime-${release.version}-darwin-arm64.tar.gz`;
   mkdirSync(folder, { recursive: true });
   const packed = spawnSync(
@@ -410,6 +414,64 @@ describe("the release route of the installer", { timeout: 30_000 }, () => {
       "ClawdTime is updated from 0.4.1 to 0.4.2.",
     );
     expect(g.versions()).toEqual(["0.4.1", "0.4.2", "current"]);
+  });
+
+  it("accepts no file that the manifest does not list, and says so", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    expect((await f.install()).status).toBe(0);
+    // A file planted in the installed copy, where Node would find it.
+    const planted = join(
+      f.runtimes,
+      "0.4.1",
+      "app/dist/node_modules/made-up/index.js",
+    );
+    mkdirSync(join(planted, ".."), { recursive: true });
+    writeFileSync(planted, 'module.exports = "planted";\n');
+    symlinkSync("/made/up", join(f.runtimes, "0.4.1", "app", "made-up-link"));
+    // Every listed file checks out: it removes the others in place, with no
+    // download, so a process of this version keeps its files.
+    const archive = join(f.releases, "clawdtime-0.4.1-darwin-arm64.tar.gz");
+    const kept = readFileSync(archive);
+    rmSync(archive);
+    const rerun = await f.install();
+    expect(rerun.status, rerun.output).toBe(0);
+    expect(rerun.output).not.toContain("and every file checks out");
+    expect(rerun.output).toContain(
+      "ClawdTime 0.4.1 is installed already. Removed what its manifest does not list: app/dist/node_modules/made-up/index.js, app/made-up-link. Every other file checks out.",
+    );
+    expect(existsSync(planted)).toBe(false);
+    expect(existsSync(join(f.runtimes, "0.4.1", "app", "made-up-link"))).toBe(
+      false,
+    );
+    expect(f.current()).toBe("0.4.1");
+
+    // A planted file next to a changed one: a fresh copy replaces the folder.
+    writeFileSync(archive, kept);
+    writeFileSync(planted, 'module.exports = "planted";\n');
+    writeFileSync(join(f.runtimes, "0.4.1", "node", "LICENSE"), "changed\n");
+    const changed = await f.install();
+    expect(changed.status, changed.output).toBe(0);
+    expect(changed.output).toContain(
+      "ClawdTime 0.4.1 is on this Mac, but its files differ from the release manifest: changed: node/LICENSE. It is installed again from the release.",
+    );
+    expect(changed.output).toContain(
+      "Replaced the earlier copy of ClawdTime 0.4.1.",
+    );
+    expect(existsSync(planted)).toBe(false);
+
+    // A release whose archive holds a file that its manifest does not list.
+    publish(f.releases, {
+      version: "0.4.2",
+      unlisted: { "app/dist/made-up-extra.js": "extra\n" },
+    });
+    const fresh = await f.install();
+    expect(fresh.status, fresh.output).toBe(1);
+    expect(fresh.output).toContain(
+      "Stopped: the unpacked files do not match the release manifest: not in the manifest: app/dist/made-up-extra.js. Nothing changed.",
+    );
+    expect(f.current()).toBe("0.4.1");
+    expect(f.versions()).toEqual(["0.4.1", "current"]);
   });
 
   it("refuses an archive whose SHA-256 differs and switches nothing", async () => {
