@@ -84,7 +84,9 @@ final class SettingsScreenshotTests: XCTestCase {
       await shot.prepare(runtime, desktop, model)
       let setup = SetupCoordinator(makeEngine: { _ in ScriptedEngine() }, owner: RecordingOwner(), open: { _ in false }, answerDelay: 0)
       let owner = ProcessOwner(launcher: URL(fileURLWithPath: "/nonexistent/clawdtime"))
-      let view = SettingsRootView(model: model, owner: owner, setup: setup, loginItem: FakeLoginItem(),
+      let uninstall = UninstallModel(runner: runtime, launcher: nil, loginItem: FakeLoginItem(), stopApp: { $0() },
+                                     forgetSetup: {}, trashApp: {}, quit: {})
+      let view = SettingsRootView(model: model, owner: owner, setup: setup, loginItem: FakeLoginItem(), uninstall: uninstall,
                                   tab: shot.tab, editing: shot.editing, removing: shot.removing)
       for dark in [false, true] {
         let png = try picture(view, dark: dark)
