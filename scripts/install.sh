@@ -426,6 +426,15 @@ install_runtime() {
   say "Unpacked and checked every file of ClawdTime $version."
 }
 
+# The ID of one process that runs from the version folder $1, or nothing.
+# The launcher starts Node by the real path of its version folder, so that
+# folder is in the command line of the command, the desktop service, the panel
+# and a connection. ps runs alone: in a pipe with grep, it could list the grep.
+running_from() {
+  processes=$(ps -axww -o pid= -o args= 2>/dev/null || true)
+  printf '%s\n' "$processes" | grep -F -- "$physical/$1/" | sed -n '1s/^ *\([0-9][0-9]*\) .*/\1/p'
+}
+
 switch_current() {
   previous=$(readlink "$runtimes/current" 2>/dev/null || true)
   if [ "$previous" != "$version" ]; then
@@ -434,11 +443,18 @@ switch_current() {
     mv -fh "$runtimes/.current.$$" "$runtimes/current" ||
       fail "$runtimes/current cannot be switched. Move it away, then run this again."
   fi
-  # Keep the new version and the one before it; remove older copies.
+  # Keep the new version and the one before it. Remove older copies, but
+  # never one that still runs.
   for old in "$runtimes"/*; do
     name=${old##*/}
     valid_version "$name" && [ -d "$old" ] || continue
-    [ "$name" = "$version" ] || [ "$name" = "$previous" ] || rm -rf "$old"
+    [ "$name" != "$version" ] && [ "$name" != "$previous" ] || continue
+    pid=$(running_from "$name")
+    if [ -n "$pid" ]; then
+      say "Kept ClawdTime $name: it still runs (process $pid). A later update removes it after it stops."
+    else
+      rm -rf "$old"
+    fi
   done
   for old in "$runtimes"/.incoming.* "$runtimes"/.current.*; do
     [ -e "$old" ] || [ -L "$old" ] || continue
@@ -482,8 +498,9 @@ release_next_steps() {
   say ""
   if [ -n "$previous" ] && [ "$previous" != "$version" ]; then
     say "ClawdTime is updated from $previous to $version. Your settings, keys and pairing are kept."
-    if pgrep -f "/runtime/$previous/app/dist/scripts/task-server.js" >/dev/null 2>&1; then
-      say "The desktop of $previous still runs. It goes on until it stops. Then clawdtime start starts $version."
+    pid=$(running_from "$previous")
+    if [ -n "$pid" ]; then
+      say "ClawdTime $previous still runs (process $pid). It goes on until it stops. Then $command_name start starts $version."
     fi
   else
     say "ClawdTime $version is installed."
@@ -532,6 +549,8 @@ release_main() {
   check_mac
   runtimes="$HOME/Library/Application Support/ClawdTime/runtime"
   mkdir -p "$runtimes"
+  # The path that ps shows, with every link of the home folder followed.
+  physical=$(cd "$runtimes" && pwd -P)
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/clawdtime-install.XXXXXX")
   incoming="" lock=""
   trap cleanup EXIT

@@ -59,6 +59,8 @@ function publish(folder: string, release: Release) {
   );
   chmodSync(join(runtime, "bin/clawdtime"), 0o755);
   file("app/native/ClawdTimeTaskPanel", "made-up panel\n", 0o755);
+  // Stands in for the desktop service or a connection: it stays up.
+  file("app/dist/scripts/task-server.js", "setInterval(() => {}, 1e6);\n");
   file(
     "app/dist/cli/main.js",
     `const fs = require("node:fs");
@@ -289,6 +291,49 @@ describe("the release route of the installer", () => {
     expect((await f.install()).status).toBe(0);
     expect(f.versions()).toEqual(["0.4.2", "0.4.3", "current"]);
     expect(f.recorded()).toBe("");
+  });
+
+  it("never removes a version that still runs, and says what it kept", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    expect((await f.install()).status).toBe(0);
+    // A process of 0.4.1 that stays up, started from its own folder as the
+    // launcher starts it.
+    const version = join(f.runtimes, "0.4.1");
+    const live = spawn(
+      join(version, "node", "bin", "node"),
+      [join(version, "app", "dist", "scripts", "task-server.js")],
+      { stdio: "ignore" },
+    );
+    const stopped = new Promise((done) => live.on("exit", done));
+    try {
+      publish(f.releases, { version: "0.4.2" });
+      const second = await f.install();
+      expect(second.status, second.output).toBe(0);
+      expect(second.output).toContain(
+        `ClawdTime 0.4.1 still runs (process ${live.pid}). It goes on until it stops. Then clawdtime start starts 0.4.2.`,
+      );
+      // 0.4.1 is older than the version before, but it runs: it stays.
+      publish(f.releases, { version: "0.4.3" });
+      const third = await f.install();
+      expect(third.status, third.output).toBe(0);
+      expect(f.versions()).toEqual(["0.4.1", "0.4.2", "0.4.3", "current"]);
+      expect(third.output).toContain(
+        `Kept ClawdTime 0.4.1: it still runs (process ${live.pid}). A later update removes it after it stops.`,
+      );
+      expect(existsSync(join(version, "app", "dist", "cli", "main.js"))).toBe(
+        true,
+      );
+    } finally {
+      live.kill();
+      await stopped;
+    }
+    // Once it stops, the next update removes it.
+    publish(f.releases, { version: "0.4.4" });
+    const fourth = await f.install();
+    expect(fourth.status, fourth.output).toBe(0);
+    expect(f.versions()).toEqual(["0.4.3", "0.4.4", "current"]);
+    expect(fourth.output).not.toContain("still runs");
   });
 
   it("refuses an archive whose SHA-256 differs and switches nothing", async () => {

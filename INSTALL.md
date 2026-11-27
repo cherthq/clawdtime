@@ -36,7 +36,9 @@ paired.
 
 Run the same command again. It installs the newest release next to the one
 you have, then switches `current` to it. Your settings, keys and pairing stay
-where they are. The release before stays on the Mac, so you can go back to it:
+where they are. An older release that still runs stays until it stops, and
+the installer says so. The release before stays on the Mac, so you can go back
+to it:
 
 ```sh
 ln -sfh 0.4.0 ~/Library/Application\ Support/ClawdTime/runtime/current
