@@ -150,6 +150,39 @@ describe("clawdtime start", () => {
     expect(calls).toEqual([]);
   });
 
+  it("starts the panel of a release runtime, and says to install again when it is missing", async () => {
+    // A release runtime: the package root holds dist/ and native/, no mac/.
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "clawdtime-start-")));
+    roots.push(base);
+    const home = join(base, "home"),
+      root = join(base, "Application Support", "runtime", "app");
+    mkdirSync(home, { mode: 0o700 });
+    mkdirSync(join(root, "dist", "cli"), { recursive: true });
+    const calls: { args: string[]; root: string }[] = [];
+    const run = () =>
+      startCli([], {
+        env: {},
+        home,
+        root,
+        cwd: base,
+        print: () => {},
+        desktop: async (args, dependencies) => {
+          calls.push({ args, root: dependencies.root });
+        },
+      });
+    await expect(run()).rejects.toThrow(
+      `The panel is missing from ${join(root, "native")}. Install ClawdTime again: curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh`,
+    );
+    expect(calls).toEqual([]);
+    mkdirSync(join(root, "native"));
+    const panel = join(root, "native", "ClawdTimeTaskPanel");
+    writeFileSync(panel, "synthetic executable, never run", { mode: 0o700 });
+    await run();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.root).toBe(root);
+    expect(calls[0]!.args.slice(-2)).toEqual(["--panel-binary", panel]);
+  });
+
   it("uses the state folder of CLAWDTIME_DESKTOP_STATE and of CLAWDTIME_CONFIG_HOME", async () => {
     const first = setup();
     first.env.CLAWDTIME_DESKTOP_STATE = join(first.base, "elsewhere");

@@ -425,6 +425,23 @@ describe("independent desktop service launcher", () => {
       join(source.root, "scripts/task-server.ts"),
     ]);
   });
+  it("launches the compiled service of a release runtime from its package root", async () => {
+    // clawdtime start passes the package root (app/), which holds dist/ and
+    // node_modules but no scripts/ folder and no tsx.
+    const f = fixture();
+    mkdirSync(join(f.root, "dist", "scripts"), { recursive: true });
+    const entry = join(f.root, "dist/scripts/task-server.js");
+    writeFileSync(entry, "// compiled service fixture");
+    await f.run();
+    expect(f.spawnMock.mock.calls[0]![1].slice(0, 3)).toEqual([
+      entry,
+      "--state",
+      f.state,
+    ]);
+    expect(f.spawnMock.mock.calls[0]![1]).not.toContain("--import");
+    expect(f.spawnMock.mock.calls[0]![1]).not.toContain("tsx");
+    expect(f.spawnMock.mock.calls[0]![2]).toMatchObject({ cwd: f.root });
+  });
   it("starts simulation separately, then reopens against exactly the same service", async () => {
     const f = fixture();
     await f.run();

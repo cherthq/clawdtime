@@ -211,6 +211,24 @@ async function responseJSON(response: Response) {
   }
 }
 
+/**
+ * The arguments of node that start the desktop service. A source checkout
+ * keeps the TS loader. Installed artifacts hold dist JavaScript and production
+ * dependencies only, so they never need tsx: the compiled service sits in
+ * `scripts/` when root is the dist folder, and in `dist/scripts/` when root is
+ * the package root of a release runtime.
+ */
+export function serviceEntry(root: string): string[] {
+  const source = join(root, "scripts/task-server.ts");
+  if (!existsSync(source))
+    for (const compiled of [
+      join(root, "scripts/task-server.js"),
+      join(root, "dist/scripts/task-server.js"),
+    ])
+      if (existsSync(compiled)) return [compiled];
+  return ["--import", "tsx", source];
+}
+
 export async function desktopCli(
   args: string[],
   dependencies: {
@@ -377,16 +395,8 @@ export async function desktopCli(
     writeFileSync(launch, JSON.stringify({ pid: process.pid }));
     const attach = existsSync(ownerPath);
     if (!attach) {
-      // Installed artifacts contain dist JavaScript and production dependencies only.
-      // A source checkout keeps the TS loader; never require tsx in the artifact.
-      const compiledService = join(root, "scripts/task-server.js");
-      const sourceService = join(root, "scripts/task-server.ts");
-      const entry =
-        existsSync(compiledService) && !existsSync(sourceService)
-          ? [compiledService]
-          : ["--import", "tsx", sourceService];
       const serviceArgs = [
-        ...entry,
+        ...serviceEntry(root),
         "--state",
         state,
         "--project",

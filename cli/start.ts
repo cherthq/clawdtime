@@ -27,6 +27,9 @@ import { desktopCli } from "./task-desktop.js";
 import { findNativeHelper } from "../src/native-helpers.js";
 
 export const defaultProjectName = "clawdtime-work";
+/** The one command that installs the newest release, or updates to it. */
+export const installCommand =
+  "curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh";
 export const startHelp = `clawdtime start: start the ClawdTime desktop, the service and the panel with the mascot
   clawdtime start [--project PATH] [--tucked true]
   --project PATH   the folder where coding work runs. The first start chooses it and
@@ -42,7 +45,7 @@ export interface StartDependencies {
   env?: Record<string, string | undefined>;
   home?: string;
   cwd?: string;
-  /** The checkout: it holds scripts/, mac/ and node_modules. */
+  /** The checkout (scripts/, mac/, node_modules) or the app/ folder of a release runtime (dist/, native/). */
   root?: string;
   print?: (line: string) => void;
   /** Starts the desktop. Tests replace it, so that no test starts a service or a panel. */
@@ -149,7 +152,10 @@ export async function startCli(
   const panel = findNativeHelper("ClawdTimeTaskPanel", { root, env });
   if (!panel)
     throw new Error(
-      `Build the panel first: cd ${join(root, "mac")} && swift build --product ClawdTimeTaskPanel`,
+      // A release runtime has no mac/ folder to build in: it ships native/.
+      existsSync(join(root, "mac"))
+        ? `Build the panel first: cd ${join(root, "mac")} && swift build --product ClawdTimeTaskPanel`
+        : `The panel is missing from ${join(root, "native")}. Install ClawdTime again: ${installCommand}`,
     );
 
   const bound = boundProject(state);
