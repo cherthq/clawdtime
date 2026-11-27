@@ -457,9 +457,25 @@ cleanup() {
   [ -z "${lock:-}" ] || [ "$(cat "$lock/pid" 2>/dev/null)" != $$ ] || rm -rf "$lock"
 }
 
-# An older release than the installed one goes in only on request.
+# The newest version folder other than $1, or nothing.
+newest_folder() {
+  newest=""
+  for folder in "$runtimes"/*; do
+    name=${folder##*/}
+    valid_version "$name" && [ -d "$folder" ] && [ ! -L "$folder" ] && [ "$name" != "$1" ] || continue
+    [ -n "$newest" ] && ! older "$newest" "$name" || newest=$name
+  done
+  printf '%s\n' "$newest"
+}
+
+# An older release than the installed one goes in only on request. The
+# installed one is the version that "current" names. When that link is gone
+# or names no version folder, it is the newest version folder.
 check_order() {
   installed=$(readlink "$runtimes/current" 2>/dev/null || true)
+  if ! valid_version "$installed" || [ ! -d "$runtimes/$installed" ]; then
+    installed=$(newest_folder "")
+  fi
   downgrade=0
   valid_version "$installed" && older "$version" "$installed" || return 0
   [ "${CLAWDTIME_ALLOW_DOWNGRADE:-0}" = 1 ] ||
@@ -506,19 +522,25 @@ running_from() {
 }
 
 switch_current() {
-  previous=$(readlink "$runtimes/current" 2>/dev/null || true)
-  if [ "$previous" != "$version" ]; then
+  # The version that ran before this install (check_order found it).
+  previous=$installed
+  if [ "$(readlink "$runtimes/current" 2>/dev/null || true)" != "$version" ]; then
     ln -s "$version" "$runtimes/.current.$$"
     # One rename: "current" names the old version or the new one, never neither.
     mv -fh "$runtimes/.current.$$" "$runtimes/current" ||
       fail "$runtimes/current cannot be switched. Move it away, then run this again."
   fi
-  # Keep the new version and the one before it. Remove older copies, but
-  # never one that still runs.
+  # Keep the new version and the one before it: the version that ran before,
+  # or, on a rerun of the same version, the newest other one. Remove older
+  # copies, but never one that still runs.
+  before=$previous
+  if [ "$before" = "$version" ] || ! valid_version "$before"; then
+    before=$(newest_folder "$version")
+  fi
   for old in "$runtimes"/*; do
     name=${old##*/}
     valid_version "$name" && [ -d "$old" ] || continue
-    [ "$name" != "$version" ] && [ "$name" != "$previous" ] || continue
+    [ "$name" != "$version" ] && [ "$name" != "$before" ] || continue
     pid=$(running_from "$name")
     if [ -n "$pid" ]; then
       say "Kept ClawdTime $name: it still runs (process $pid). A later update removes it after it stops."

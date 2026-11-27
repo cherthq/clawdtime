@@ -40,15 +40,16 @@ paired.
 Run the same command again. It installs the newest release next to the one
 you have, then switches `current` to it. Your settings, keys and pairing stay
 where they are. An older release that still runs stays until it stops, and
-the installer says so. The release before stays on the Mac, so you can go back
-to it:
+the installer says so. The release before stays on the Mac, also when you run
+the command again for the same release, so you can go back to it:
 
 ```sh
 ln -sfh 0.4.0 ~/Library/Application\ Support/ClawdTime/runtime/current
 ```
 
 The installer does not install a release that is older than the one you have.
-It stops and says so. To install the older release on purpose, set
+It stops and says so. When the link `current` is gone, the one you have is the
+newest version folder in `runtime`. To install the older release on purpose, set
 `CLAWDTIME_ALLOW_DOWNGRADE=1`:
 
 ```sh

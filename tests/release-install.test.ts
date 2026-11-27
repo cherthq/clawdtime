@@ -202,7 +202,9 @@ function setup() {
   };
 }
 
-describe("the release route of the installer", () => {
+// Each install starts Node a few times; a test runs up to five installs, and
+// the whole suite runs at the same time.
+describe("the release route of the installer", { timeout: 30_000 }, () => {
   it("installs the newest release with no Node, Git or Xcode, and never sudo", async () => {
     const f = setup();
     publish(f.releases, { version: "0.4.1" });
@@ -286,6 +288,8 @@ describe("the release route of the installer", () => {
       "ClawdTime 0.4.2 is installed already, and every file checks out.",
     );
     expect(f.current()).toBe("0.4.2");
+    // The release before stays for a rollback, also after a rerun.
+    expect(f.versions()).toEqual(["0.4.1", "0.4.2", "current"]);
 
     // A third release: the oldest goes, the one before stays for a rollback.
     publish(f.releases, { version: "0.4.3" });
@@ -371,6 +375,41 @@ describe("the release route of the installer", () => {
       "ClawdTime is updated from 0.9.0 to 0.10.1.",
     );
     expect(f.current()).toBe("0.10.1");
+  });
+
+  it("finds the installed versions in the version folders when current is gone", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.10.0" });
+    expect((await f.install()).status).toBe(0);
+    rmSync(join(f.runtimes, "current"));
+    publish(f.releases, { version: "0.9.0" });
+    const older = await f.install();
+    expect(older.status, older.output).toBe(1);
+    expect(older.output).toContain(
+      "Stopped: ClawdTime 0.10.0 is installed, and the newest release, 0.9.0, is older. Nothing changed. To go back to 0.9.0, run this again with CLAWDTIME_ALLOW_DOWNGRADE=1.",
+    );
+    expect(f.versions()).toEqual(["0.10.0"]);
+
+    const back = await f.install({ env: { CLAWDTIME_ALLOW_DOWNGRADE: "1" } });
+    expect(back.status, back.output).toBe(0);
+    expect(back.output).toContain(
+      "ClawdTime is back on 0.9.0 from 0.10.0. Your settings, keys and pairing are kept.",
+    );
+    expect(f.current()).toBe("0.9.0");
+    expect(f.versions()).toEqual(["0.10.0", "0.9.0", "current"]);
+
+    // An older folder with no current: an update from it, and it stays.
+    const g = setup();
+    publish(g.releases, { version: "0.4.1" });
+    expect((await g.install()).status).toBe(0);
+    rmSync(join(g.runtimes, "current"));
+    publish(g.releases, { version: "0.4.2" });
+    const update = await g.install();
+    expect(update.status, update.output).toBe(0);
+    expect(update.output).toContain(
+      "ClawdTime is updated from 0.4.1 to 0.4.2.",
+    );
+    expect(g.versions()).toEqual(["0.4.1", "0.4.2", "current"]);
   });
 
   it("refuses an archive whose SHA-256 differs and switches nothing", async () => {
