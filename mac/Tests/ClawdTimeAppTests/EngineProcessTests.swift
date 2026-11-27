@@ -9,7 +9,7 @@ final class EngineProcessTests: XCTestCase {
     let folder = try temporaryFolder(self)
     let script = try writeScript(folder.appendingPathComponent("runtime/bin/clawdtime"), FakeEngine.fullFlow(folder))
     let engine = EngineProcess(executable: script, arguments: SetupProtocol.arguments(local: false))
-    let coordinator = SetupCoordinator(makeEngine: { _ in engine }, owner: nil, open: { _ in false })
+    let coordinator = SetupCoordinator(makeEngine: { _ in engine }, owner: nil, open: { _ in false }, answerDelay: 0)
     let modelAsked = expectation(description: "model asked")
     let phoneAsked = expectation(description: "phone asked")
     let done = expectation(description: "done")
@@ -27,9 +27,9 @@ final class EngineProcessTests: XCTestCase {
     wait(for: [modelAsked], timeout: 10)
     XCTAssertEqual(coordinator.state.state(of: .preflight), .ready)
     coordinator.submit(.string(madeUpKey))
-    XCTAssertEqual(coordinator.awaiting, .model)
+    XCTAssertEqual(coordinator.answered, "model-question-0001")
     wait(for: [phoneAsked], timeout: 10)
-    XCTAssertNil(coordinator.awaiting)
+    XCTAssertNil(coordinator.answered)
     coordinator.perform(.skip)
     wait(for: [done], timeout: 10)
 
@@ -64,7 +64,7 @@ final class EngineProcessTests: XCTestCase {
     let folder = try temporaryFolder(self)
     let script = try writeScript(folder.appendingPathComponent("clawdtime"), """
     trap '' TERM
-    echo '{"type":"hello","protocol":1,"version":"0.4.0"}'
+    echo '{"type":"hello","protocol":2,"version":"0.4.0"}'
     while :; do sleep 1; done
     """)
     let engine = EngineProcess(executable: script, arguments: ["onboard", "--json"])
@@ -82,7 +82,7 @@ final class EngineProcessTests: XCTestCase {
     let folder = try temporaryFolder(self)
     let script = try writeScript(folder.appendingPathComponent("clawdtime"), """
     echo 'Starting' 1>&2
-    echo '{"type":"hello","protocol":1,"version":"0.4.0"}'
+    echo '{"type":"hello","protocol":2,"version":"0.4.0"}'
     echo 'not json'
     echo 'The runtime is missing app/dist.' 1>&2
     exit 2

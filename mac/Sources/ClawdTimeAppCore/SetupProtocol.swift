@@ -3,8 +3,9 @@ import Foundation
 /// The setup protocol that `clawdtime onboard --json` speaks: one JSON object per
 /// line, events on its stdout and commands on its stdin.
 public enum SetupProtocol {
-  /// The protocol version this app speaks. `hello` must carry it.
-  public static let version = 1
+  /// The protocol version this app speaks. `hello` must carry it. In 2 each
+  /// question has a one-time id, and every answer names it.
+  public static let version = 2
   /// The engine is started with these arguments and no others. A secret never
   /// goes on a command line: the app writes every input to the engine's stdin.
   /// `--app` says that the app owns the long-lived processes: setup opens no
@@ -100,8 +101,10 @@ public struct StepInput: Codable, Equatable, Sendable {
   public var prompt: String?
   public var options: [InputOption]?
   public var multiple: Bool?
-  public init(kind: Kind, prompt: String? = nil, options: [InputOption]? = nil, multiple: Bool? = nil) {
-    self.kind = kind; self.prompt = prompt; self.options = options; self.multiple = multiple
+  /// The answer gives or refuses consent. Such a question has no default button.
+  public var consent: Bool?
+  public init(kind: Kind, prompt: String? = nil, options: [InputOption]? = nil, multiple: Bool? = nil, consent: Bool? = nil) {
+    self.kind = kind; self.prompt = prompt; self.options = options; self.multiple = multiple; self.consent = consent
   }
   public var allowsMany: Bool { multiple ?? false }
 }
@@ -110,11 +113,16 @@ public struct StepEvent: Codable, Equatable, Sendable {
   public var id: StepID
   public var state: StepState
   public var title: String?
+  /// Plain words for the person, with no file path.
   public var detail: String?
+  /// Lines shown only when the person opens Details, such as the full path of a binary.
+  public var details: [String]?
   public var recovery: Recovery?
   public var input: StepInput?
-  public init(id: StepID, state: StepState, title: String? = nil, detail: String? = nil, recovery: Recovery? = nil, input: StepInput? = nil) {
-    self.id = id; self.state = state; self.title = title; self.detail = detail; self.recovery = recovery; self.input = input
+  /// The one-time id of the question this event asks. An answer must name it.
+  public var question: String?
+  public init(id: StepID, state: StepState, title: String? = nil, detail: String? = nil, details: [String]? = nil, recovery: Recovery? = nil, input: StepInput? = nil, question: String? = nil) {
+    self.id = id; self.state = state; self.title = title; self.detail = detail; self.details = details; self.recovery = recovery; self.input = input; self.question = question
   }
   public var displayTitle: String { (title?.isEmpty == false ? title : nil) ?? id.fallbackTitle }
 }
@@ -184,9 +192,11 @@ public enum InputValue: Equatable, Sendable {
 
 /// One command to the engine. Its description never shows an input's value,
 /// so a command can never put a key in a log by accident.
+/// An input or an action names the question it answers: the engine refuses
+/// one for an earlier, repeated or unknown question.
 public enum EngineCommand: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
-  case input(id: StepID, value: InputValue)
-  case action(id: StepID, action: StepAction)
+  case input(id: StepID, question: String, value: InputValue)
+  case action(id: StepID, question: String, action: StepAction)
   case cancel
 
   /// The command as one line of JSON, with its newline. JSON escapes every
@@ -194,8 +204,8 @@ public enum EngineCommand: Equatable, Sendable, CustomStringConvertible, CustomD
   public func line() -> Data {
     let object: [String: Any]
     switch self {
-    case .input(let id, let value): object = ["type": "input", "id": id.rawValue, "value": value.json]
-    case .action(let id, let action): object = ["type": "action", "id": id.rawValue, "action": action.rawValue]
+    case .input(let id, let question, let value): object = ["type": "input", "id": id.rawValue, "question": question, "value": value.json]
+    case .action(let id, let question, let action): object = ["type": "action", "id": id.rawValue, "question": question, "action": action.rawValue]
     case .cancel: object = ["type": "cancel"]
     }
     var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{\"type\":\"cancel\"}".utf8)
@@ -205,8 +215,8 @@ public enum EngineCommand: Equatable, Sendable, CustomStringConvertible, CustomD
 
   public var description: String {
     switch self {
-    case .input(let id, _): "input(\(id.rawValue), <redacted>)"
-    case .action(let id, let action): "action(\(id.rawValue), \(action.rawValue))"
+    case .input(let id, _, _): "input(\(id.rawValue), <redacted>)"
+    case .action(let id, _, let action): "action(\(id.rawValue), \(action.rawValue))"
     case .cancel: "cancel"
     }
   }

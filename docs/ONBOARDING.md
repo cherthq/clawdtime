@@ -54,17 +54,17 @@ coordinator. Run the command again later to pair a phone.
 
 The step ids and their order are fixed.
 
-| Id            | What it does                                                                                                                                                                                                                 | Skip |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                                  | no   |
-| `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                        | no   |
-| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                 | no   |
-| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off. A desktop that started before the yes starts again while it is idle, so that it uses computer use now.             | yes  |
-| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each missing permission, offers its System Settings pane, and checks again.       | no   |
-| `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                          | yes  |
-| `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                               | yes  |
-| `connection`  | Starts one shared connection in the background, bound to the running desktop. It reuses a connection of the same desktop. A connection of an earlier desktop ends first. With `--app` it starts none: see [Owners](#owners). | yes  |
-| `ready`       | One readiness report. It never places a call or sends a text.                                                                                                                                                                | no   |
+| Id            | What it does                                                                                                                                                                                                                                                              | Skip |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                                                                               | no   |
+| `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                                                                     | no   |
+| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                                                              | no   |
+| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off. A desktop that started before the yes starts again while it is idle, so that it uses computer use now.                                                          | yes  |
+| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each list of System Settings and each binary as the person sees them there, offers the System Settings pane, and checks again. |
+| `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                                                                       | yes  |
+| `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                                                                            | yes  |
+| `connection`  | Starts one shared connection in the background, bound to the running desktop. It reuses a connection of the same desktop. A connection of an earlier desktop ends first. With `--app` it starts none: see [Owners](#owners).                                              | yes  |
+| `ready`       | One readiness report. It never places a call or sends a text.                                                                                                                                                                                                             | no   |
 
 In local mode, `phone`, `pairing` and `connection` are skipped. With computer
 use off in local mode, `permissions` is skipped too.
@@ -103,40 +103,67 @@ Nothing else goes to standard output. Human logs go to standard error. The
 interface writes one command per line on standard input. The end of standard
 input is a cancel.
 
+A cancel, or the end of standard input, stops setup before its next effect,
+at any step: while it checks the Mac or a key, starts the desktop, or waits
+for an answer. Setup checks for it before each effect (a key check, the key
+store, a desktop start or restart, the computer switch, a sign-in text, a
+code check, a pairing request, a connection start or stop), not only at a
+question. A command that came before the cancel and is not used yet is
+dropped. Only an outcome that an effect returned already is still saved, for
+example a pairing that the coordinator made.
+
 ### Events
 
 ```json
-{"type":"hello","protocol":1,"version":"0.4.0"}
-{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"Paste your OpenAI API key. It is not shown.","input":{"kind":"secret","prompt":"OpenAI API key"}}
+{"type":"hello","protocol":2,"version":"0.4.0"}
+{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"Paste your OpenAI API key. It is not shown.","question":"Wm3dQ0sJ9xVfK2aT","input":{"kind":"secret","prompt":"OpenAI API key"}}
 {"type":"log","level":"info","message":"The desktop runs already. It reads the new key the next time it starts."}
 {"type":"done","ready":true,"report":[{"id":"model","state":"ready","detail":"A key for OpenAI is in the protected key store."}]}
 ```
 
 - `hello` comes first. Then each step comes once as `pending`, in order.
 - `step` has `state`: `pending`, `in_progress`, `needs_input`, `ready`,
-  `failed` or `skipped`. It may have a `detail`, a `recovery` and an `input`.
+  `failed` or `skipped`. It may have a `detail`, `details`, a `recovery` and
+  an `input`. The `detail` is plain words with no file path. `details` holds
+  lines that an interface shows only when the person asks, such as the full
+  path of each binary that needs a permission.
 - `recovery` has a `label` and an `action`: `retry`, `open_settings` or
   `open_url`, with a `url` for the last two. The interface opens the URL.
+- `question` is the one-time id of the question that the step asks. A
+  `needs_input` step has one. A `failed` step that waits for a retry or a skip
+  has one too. Each question has a new id, also when the same question comes
+  again.
 - `input` has a `kind`: `secret`, `text`, `choice`, `confirm`, `phone` or
   `code`, a `prompt`, and for a choice its `options`, each with an `id`, a
-  `label` and an optional `detail`.
+  `label` and an optional `detail`. `consent: true` marks a question whose
+  answer gives or refuses consent: computer use, a sign-in text, view,
+  computer actions, reports, the pairing, a replacement and the connection.
+  An interface gives such a question no default answer.
 - `done` comes last, with `ready` and one report row for each step.
 
 ### Commands
 
 ```json
-{"type":"input","id":"model","value":"..."}
-{"type":"action","id":"permissions","action":"recheck"}
+{"type":"input","id":"model","question":"Wm3dQ0sJ9xVfK2aT","value":"..."}
+{"type":"action","id":"permissions","question":"pR7cLw0eYb4nHs1M","action":"recheck"}
 {"type":"cancel"}
 ```
 
-- `input` answers the step that waits. The value is a string, a boolean for
-  `confirm`, or an array of option ids for a choice with `multiple`.
+- `input` answers the question that is open. The value is a string, a
+  boolean for `confirm`, or an array of option ids for a choice with
+  `multiple`.
 - `action` is `retry`, `recheck` or `skip`. Only `computer`, `phone`,
   `pairing` and `connection` accept `skip`.
-- A command for another step, or a value that does not fit, is ignored with a
-  warning. A line that is not a command is ignored with a fixed warning that
-  never quotes the line.
+- Every `input` and `action` names the `question` it answers. A command for
+  an earlier question, a repeated answer, an unknown id or no id is ignored
+  with a warning and has no effect. So a double click or a second Return
+  never answers the next question.
+- Each question takes one answer. When the answer cannot be used (a value
+  that does not fit, or a skip that the step refuses), the step asks again
+  with a new id.
+- A command for another step is ignored with a warning. A line that is not a
+  command is ignored with a fixed warning that never quotes the line.
+- The terminal wizard uses the same ids.
 
 ### What each question waits for
 
@@ -162,8 +189,12 @@ input is a cancel.
 - **Expired code.** The step fails with `Send a new code`. A retry asks for a
   new yes before the next text.
 - **Wrong code.** The step asks again. After five tries it asks for a new code.
-- **Denied permission.** The step names the exact binary and its pane. It
-  checks again after the person acts.
+- **Denied permission.** The step says what the person sees in System
+  Settings: open Privacy & Security, then the list (Accessibility, and Screen
+  & System Audio Recording, or Screen Recording on macOS 14), then the name
+  of each binary in it (`ClawdTimeTaskPanel`, `ClawdTimeTaskCapture`). The
+  full path of each binary is in `details`. The step checks again after the
+  person acts.
 - **Coordinator unavailable or older.** Setup runs in local mode.
 - **Number already paired.** The step shows what a replacement does: the
   other Mac loses access at once, its open call ends, and its tasks get no
@@ -176,18 +207,26 @@ input is a cancel.
 
 Setup writes only what its steps make:
 
-| File                                                 | Step                                                               |
-| ---------------------------------------------------- | ------------------------------------------------------------------ |
-| `~/.local/share/clawdtime/computer/keys.json`        | `model`                                                            |
-| `~/.local/share/clawdtime/computer/model.json`       | `model`, only when the chosen provider would not plan by default   |
-| `~/.local/share/clawdtime/computer/config.json`      | `computer`                                                         |
-| `~/.config/clawdtime/shared/connection.json`         | `pairing`                                                          |
-| `~/.config/clawdtime/shared/onboard-connection.json` | `connection`, the process and the desktop it serves, no credential |
-| `~/.config/clawdtime/shared/connection.log`          | `connection`, the output of the connection                         |
-| `~/.config/clawdtime/shared/connection.lock`         | `clawdtime shared run`, the process that holds the one connection  |
+| File                                                 | Step                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `~/.local/share/clawdtime/computer/keys.json`        | `model`                                                                                    |
+| `~/.local/share/clawdtime/computer/model.json`       | `model`, only when the chosen provider would not plan by default                           |
+| `~/.local/share/clawdtime/computer/config.json`      | `computer`                                                                                 |
+| `~/.config/clawdtime/shared/connection.json`         | `pairing`                                                                                  |
+| `~/.config/clawdtime/shared/onboard-connection.json` | `connection`, the process, its start and command, and the desktop it serves, no credential |
+| `~/.config/clawdtime/shared/connection.log`          | `connection`, the output of the connection                                                 |
+| `~/.config/clawdtime/shared/connection.lock`         | `clawdtime shared run`, the process that holds the one connection                          |
 
 Every file is for its owner only. `CLAWDTIME_CONFIG_HOME` moves the first
 three.
+
+A process id comes back after its process ends, so a saved id alone never
+gets a signal. Setup stops the connection only when `ps` shows the start time
+and the command that it saved when the connection started. A record of a
+process that has ended, or of an earlier release, is cleared with no signal.
+Setup stops the desktop service only when its process began before the
+service wrote its owner lock and runs the task server. Otherwise it sends no
+signal and leaves the lock.
 
 ## Limits
 

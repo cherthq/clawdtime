@@ -25,7 +25,7 @@ final class SetupViewTests: XCTestCase {
 
   private func scripted() -> (SetupCoordinator, ScriptedEngine) {
     let engine = ScriptedEngine()
-    let setup = SetupCoordinator(makeEngine: { _ in engine }, owner: nil, open: { _ in false })
+    let setup = SetupCoordinator(makeEngine: { _ in engine }, owner: nil, open: { _ in false }, answerDelay: 0)
     return (setup, engine)
   }
 
@@ -36,13 +36,13 @@ final class SetupViewTests: XCTestCase {
     setup.begin()
     XCTAssertEqual(Screen(setup.state).key, "checking")
     _ = render(setup)
-    engine.emit(#"{"type":"hello","protocol":1,"version":"0.4.0"}"#)
+    engine.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
     let steps = [
       #"{"type":"step","id":"preflight","state":"in_progress","title":"Check this Mac"}"#,
       #"{"type":"step","id":"model","state":"needs_input","title":"Model key","input":{"kind":"secret","prompt":"Model key"}}"#,
       #"{"type":"step","id":"desktop","state":"needs_input","input":{"kind":"text","prompt":"Project folder"}}"#,
       #"{"type":"step","id":"computer","state":"needs_input","input":{"kind":"confirm","prompt":"Allow computer use?"}}"#,
-      #"{"type":"step","id":"permissions","state":"failed","detail":"Screen Recording is off.","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"}}"#,
+      #"{"type":"step","id":"permissions","state":"failed","detail":"Screen Recording is off.","details":["ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel"],"recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"}}"#,
       #"{"type":"step","id":"phone","state":"needs_input","input":{"kind":"phone","prompt":"Phone number"}}"#,
       #"{"type":"step","id":"phone","state":"needs_input","input":{"kind":"code","prompt":"Code"}}"#,
       #"{"type":"step","id":"pairing","state":"needs_input","input":{"kind":"choice","options":[{"id":"1","label":"Built-in display"},{"id":"2","label":"Studio display","detail":"Right"}],"multiple":true}}"#,
@@ -84,6 +84,41 @@ final class SetupViewTests: XCTestCase {
     XCTAssertNil(StepCard.retryLabel(try step(#"{"type":"step","id":"model","state":"needs_input","input":{"kind":"secret"}}"#)))
   }
 
+  func testEachQuestionHasItsOwnScreen() throws {
+    func step(_ line: String) throws -> StepEvent {
+      guard case .step(let step) = try EngineEvent.decode(line: line) else { throw CocoaError(.coderInvalidValue) }
+      return step
+    }
+    let view = try step(#"{"type":"step","id":"pairing","state":"needs_input","question":"view-question-0001","input":{"kind":"confirm","prompt":"Allow this display to be shown during your verified calls?"}}"#)
+    let control = try step(#"{"type":"step","id":"pairing","state":"needs_input","question":"control-question-01","input":{"kind":"confirm","prompt":"Allow your verified phone to ask for computer actions on this Mac?"}}"#)
+    XCTAssertNotEqual(Screen.step(view).key, Screen.step(control).key, "a new question is a new screen, with new buttons")
+  }
+
+  func testNoConsentQuestionHasADefaultButton() throws {
+    func step(_ line: String) throws -> StepEvent {
+      guard case .step(let step) = try EngineEvent.decode(line: line) else { throw CocoaError(.coderInvalidValue) }
+      return step
+    }
+    let consent = [
+      #"{"type":"step","id":"computer","state":"needs_input","question":"computer-question-01","input":{"kind":"confirm","prompt":"Turn on computer use?","consent":true}}"#,
+      #"{"type":"step","id":"pairing","state":"needs_input","question":"view-question-0001","input":{"kind":"confirm","prompt":"Allow this display to be shown during your verified calls?","consent":true}}"#,
+      #"{"type":"step","id":"phone","state":"needs_input","question":"phone-question-0001","input":{"kind":"confirm","prompt":"Send a sign-in code to this number now?","consent":true}}"#,
+      #"{"type":"step","id":"pairing","state":"needs_input","question":"replace-question-01","input":{"kind":"choice","prompt":"Your number already has a paired Mac.","consent":true,"options":[{"id":"replace","label":"Pair this Mac in its place"},{"id":"keep","label":"Keep the other Mac"}]}}"#,
+      // A yes or no question is consent even when the engine does not say so.
+      #"{"type":"step","id":"connection","state":"needs_input","question":"connect-question-01","input":{"kind":"confirm","prompt":"Connect this Mac to the shared number now?"}}"#,
+    ]
+    for line in consent {
+      let question = try step(line)
+      XCTAssertTrue(StepCard.isConsent(question), line)
+      XCTAssertNil(StepCard.defaultButton(question), "Return answers no consent question: \(line)")
+    }
+    let key = try step(#"{"type":"step","id":"model","state":"needs_input","question":"model-question-0001","input":{"kind":"secret","prompt":"OpenAI API key"}}"#)
+    XCTAssertEqual(StepCard.defaultButton(key), "Continue")
+    let settings = try step(#"{"type":"step","id":"permissions","state":"needs_input","question":"settings-question-01","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"}}"#)
+    XCTAssertFalse(StepCard.isConsent(settings))
+    XCTAssertEqual(StepCard.defaultButton(settings), "Check again")
+  }
+
   func testAFieldOfAnotherKindStartsEmpty() {
     XCTAssertTrue(StepCard.clearsField(shown: .phone, next: .code), "the number never carries into the code field")
     XCTAssertFalse(StepCard.clearsField(shown: .phone, next: nil), "a working state keeps the field")
@@ -101,7 +136,7 @@ final class SetupViewTests: XCTestCase {
   func testOpenAtLoginStaysOffUntilThePersonTurnsItOn() {
     let (setup, engine) = scripted()
     setup.begin()
-    engine.emit(#"{"type":"hello","protocol":1,"version":"0.4.0"}"#)
+    engine.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
     engine.emit(#"{"type":"done","ready":true,"report":[]}"#)
     let login = FakeLoginItem()
     _ = render(setup, login: login)

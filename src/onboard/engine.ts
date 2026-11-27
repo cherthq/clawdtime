@@ -12,6 +12,7 @@
  * phone number and a sign-in code go only to the coordinator. None of them is
  * put in an event, a log, an argument or an error.
  */
+import { randomBytes } from "node:crypto";
 import type { DesktopReadiness } from "../../connectors/agents/desktop-readiness.js";
 import { stateRoot } from "../../connectors/agents/hooks.js";
 import {
@@ -52,6 +53,7 @@ import {
   skippableSteps,
   stepIds,
   type InputRequest,
+  type OnboardCommand,
   type OnboardIO,
   type Recovery,
   type ReportRow,
@@ -189,6 +191,10 @@ export class OnboardEngine {
   private keepOther = false;
   private startedDesktop = false;
   private computerOn = false;
+  /** Every question id of this run. */
+  private asked = new Set<string>();
+  /** The Darwin major version that preflight read (24 is macOS 15). */
+  private darwin: number | null = null;
   private readonly now: () => number;
   private readonly root: string;
   private readonly pairingFiles: { directory: string; file: string };
@@ -213,14 +219,20 @@ export class OnboardEngine {
     for (const id of stepIds) this.step(id, "pending");
     let cancelled = false;
     try {
+      await this.proceed();
       if (await this.preflight()) {
-        await this.model();
-        await this.desktop();
-        await this.computer();
-        await this.permissions();
-        await this.phone();
-        await this.pairing();
-        await this.connection();
+        for (const step of [
+          () => this.model(),
+          () => this.desktop(),
+          () => this.computer(),
+          () => this.permissions(),
+          () => this.phone(),
+          () => this.pairing(),
+          () => this.connection(),
+        ]) {
+          await this.proceed();
+          await step();
+        }
       }
     } catch (error) {
       if (error instanceof Cancelled) cancelled = true;
@@ -256,29 +268,48 @@ export class OnboardEngine {
   private step(
     id: StepId,
     state: StepState,
-    more: { detail?: string; recovery?: Recovery; input?: InputRequest } = {},
+    more: {
+      detail?: string;
+      details?: string[];
+      recovery?: Recovery;
+      input?: InputRequest;
+      question?: string;
+    } = {},
   ) {
     this.rows.set(id, { id, state, detail: more.detail ?? "" });
     this.io.emit({ type: "step", id, state, title: titles[id], ...more });
   }
 
-  private log(level: "info" | "warn", message: string) {
-    this.io.emit({ type: "log", level, message });
+  /** A new question id: random, never used before in this run. */
+  private newQuestion() {
+    for (;;) {
+      const id = randomBytes(12).toString("base64url");
+      if (!this.asked.has(id)) {
+        this.asked.add(id);
+        return id;
+      }
+    }
   }
 
-  /** Asks one question and waits for its answer, or for an action. */
-  private async ask(
+  /**
+   * Waits for the one command that answers this question. A command that
+   * names no open question (an earlier one, a repeated one or an unknown
+   * one) is refused with no effect, and the question stays open.
+   */
+  private async answerTo(
     id: StepId,
-    input: InputRequest,
-    view: { detail?: string; recovery?: Recovery } = {},
-  ): Promise<
-    | { value: string | boolean | string[] }
-    | { action: "retry" | "recheck" | "skip" }
-  > {
-    this.step(id, "needs_input", { ...view, input });
+    question: string,
+  ): Promise<Exclude<OnboardCommand, { type: "cancel" }>> {
     for (;;) {
       const command = await this.io.next();
       if (command.type === "cancel") throw new Cancelled();
+      if (command.question !== question) {
+        this.log(
+          "warn",
+          "That answer is not for the question that is open now. It was ignored.",
+        );
+        continue;
+      }
       if (command.id !== id) {
         this.log(
           "warn",
@@ -286,6 +317,39 @@ export class OnboardEngine {
         );
         continue;
       }
+      return command;
+    }
+  }
+
+  private log(level: "info" | "warn", message: string) {
+    this.io.emit({ type: "log", level, message });
+  }
+
+  /**
+   * Goes on only while the person has not stopped setup. It runs before each
+   * effect and each step, not only at a question. It first lets the input
+   * that has come in be read, so a Stop that came before this moment counts.
+   */
+  private async proceed() {
+    await new Promise((done) => setImmediate(done));
+    if (this.io.cancelled()) throw new Cancelled();
+  }
+
+  /** Asks one question and waits for its answer, or for an action. */
+  private async ask(
+    id: StepId,
+    input: InputRequest,
+    view: { detail?: string; details?: string[]; recovery?: Recovery } = {},
+  ): Promise<
+    | { value: string | boolean | string[] }
+    | { action: "retry" | "recheck" | "skip" }
+  > {
+    // Every answer uses up its question: a question that must be answered
+    // again is asked again with a new id.
+    for (;;) {
+      const question = this.newQuestion();
+      this.step(id, "needs_input", { ...view, input, question });
+      const command = await this.answerTo(id, question);
       if (command.type === "action") {
         if (command.action === "skip" && !skippableSteps.has(id)) {
           this.log("warn", "This step cannot be skipped.");
@@ -329,11 +393,11 @@ export class OnboardEngine {
     detail: string,
     recovery: Recovery = retry(),
   ): Promise<"retry" | "skip"> {
-    this.step(id, "failed", { detail, recovery });
     for (;;) {
-      const command = await this.io.next();
-      if (command.type === "cancel") throw new Cancelled();
-      if (command.type === "action" && command.id === id) {
+      const question = this.newQuestion();
+      this.step(id, "failed", { detail, recovery, question });
+      const command = await this.answerTo(id, question);
+      if (command.type === "action") {
         if (command.action !== "skip") return "retry";
         if (skippableSteps.has(id)) return "skip";
         this.log("warn", "This step cannot be skipped.");
@@ -346,6 +410,7 @@ export class OnboardEngine {
   private async waitForDesktop(): Promise<DesktopReadiness> {
     const deadline = this.now() + (this.settings.desktopWaitMs ?? 30_000);
     for (;;) {
+      await this.proceed();
       const status = await this.ports.desktop.status();
       if (status.service === "connected" || this.now() >= deadline)
         return status;
@@ -358,6 +423,7 @@ export class OnboardEngine {
   private async preflight(): Promise<boolean> {
     this.step("preflight", "in_progress", { detail: "Checking this Mac." });
     const mac = await this.ports.mac();
+    this.darwin = mac.darwinMajor;
     if (mac.darwinMajor === null || mac.darwinMajor < 23) {
       this.step("preflight", "failed", {
         detail:
@@ -400,6 +466,7 @@ export class OnboardEngine {
         mode = `The coordinator in ${from} is not an https origin, so it is not used. ${local}`;
         this.log("warn", mode);
       } else {
+        await this.proceed();
         const health = await checkCoordinator(
           choice.origin,
           this.ports.request,
@@ -495,6 +562,7 @@ export class OnboardEngine {
         detail = plain(error, "That key cannot be used. Nothing was stored.");
         continue;
       }
+      await this.proceed();
       this.step("model", "in_progress", {
         detail: `Checking the key with ${provider.name}.`,
       });
@@ -510,6 +578,7 @@ export class OnboardEngine {
           "warn",
           `${provider.name} could not be reached to check the key. It is stored anyway.`,
         );
+      await this.proceed();
       try {
         storeKey(this.root, provider, key);
         // The chosen provider plans, even when a key of another one is set.
@@ -543,6 +612,7 @@ export class OnboardEngine {
     for (;;) {
       let status = await this.ports.desktop.status();
       if (status.service === "absent") {
+        await this.proceed();
         this.step("desktop", "in_progress", {
           detail: "Starting the desktop.",
         });
@@ -588,7 +658,7 @@ export class OnboardEngine {
       if (!chosen.enabled) {
         const answer = await this.ask(
           "computer",
-          { kind: "confirm", prompt: "Turn on computer use?" },
+          { kind: "confirm", prompt: "Turn on computer use?", consent: true },
           {
             detail:
               "ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.",
@@ -600,6 +670,7 @@ export class OnboardEngine {
             detail:
               "Computer use stays off. Turn it on later: clawdtime computer on",
           });
+        await this.proceed();
         setComputerSwitch(this.root, true, this.now());
         continue;
       }
@@ -617,6 +688,7 @@ export class OnboardEngine {
           status.taskAdmission !== "available" ||
           (await this.ports.connection.holder()) !== null;
         if (!busy && this.ports.desktop.restart) {
+          await this.proceed();
           this.step("computer", "in_progress", {
             detail: "Starting the desktop again, so that it can use this Mac.",
           });
@@ -625,7 +697,8 @@ export class OnboardEngine {
               this.log("info", message),
             );
             status = await this.waitForDesktop();
-          } catch {
+          } catch (error) {
+            if (error instanceof Cancelled) throw error;
             // The owner of a foreground desktop (the Mac app) keeps it: then
             // nothing was stopped. Otherwise say how to start it.
             status = await this.ports.desktop.status();
@@ -656,6 +729,7 @@ export class OnboardEngine {
         detail: "Computer use is off, so no permission is needed.",
       });
     for (;;) {
+      await this.proceed();
       this.step("permissions", "in_progress", {
         detail: "Checking Screen Recording and Accessibility.",
       });
@@ -669,27 +743,34 @@ export class OnboardEngine {
         );
         continue;
       }
-      // Each binary once, with every permission that it still needs.
-      const missing: { binary: string; needs: string[]; url: string }[] = [];
-      const need = (binary: string, permission: string, url: string) => {
-        const one = missing.find((entry) => entry.binary === binary);
-        if (one) one.needs.push(permission);
-        else missing.push({ binary, needs: [permission], url });
+      // Each list of System Settings once, as the person sees it there, with
+      // every binary that it still needs. The paths go only to the details.
+      const accessibility: string[] = [];
+      const screen: string[] = [];
+      const paths = new Map<string, string>();
+      const named = (name: string, path: string | undefined) => {
+        if (path) paths.set(name, path);
+        return name;
       };
-      const panel = `ClawdTimeTaskPanel${facts.panel.path ? ` (${facts.panel.path})` : ""}`;
-      const capture = `ClawdTimeTaskCapture${facts.capture.path ? ` (${facts.capture.path})` : ""}`;
+      const panel = named("ClawdTimeTaskPanel", facts.panel.path);
       if (this.computerOn) {
-        if (!facts.panel.accessibility)
-          need(panel, "Accessibility", accessibilityPane);
-        if (!facts.panel.screenRecording)
-          need(panel, "Screen Recording", screenPane);
+        if (!facts.panel.accessibility) accessibility.push(panel);
+        if (!facts.panel.screenRecording) screen.push(panel);
       }
       if (
         this.mode === "shared" &&
         facts.capture.path &&
         !facts.capture.screenRecording
       )
-        need(capture, "Screen Recording", screenPane);
+        screen.push(named("ClawdTimeTaskCapture", facts.capture.path));
+      const missing = [
+        {
+          list: "Accessibility",
+          binaries: accessibility,
+          url: accessibilityPane,
+        },
+        { list: this.screenList(), binaries: screen, url: screenPane },
+      ].filter((one) => one.binaries.length);
       if (!missing.length)
         return this.step("permissions", "ready", {
           detail: `${this.computerOn ? "Accessibility and Screen Recording are on for the panel." : "Computer use is off, so the panel needs no permission."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for the capture helper." : ""}`,
@@ -698,7 +779,10 @@ export class OnboardEngine {
         "permissions",
         { kind: "confirm", prompt: "Check again" },
         {
-          detail: `Turn on ${missing.map((one) => `${one.needs.join(" and ")} for ${one.binary}`).join(", and ")} in System Settings, Privacy & Security. Then check again.`,
+          detail: `In System Settings, open Privacy & Security. ${missing.map((one) => `In ${one.list}, turn on ${one.binaries.join(" and ")}.`).join(" ")} Then check again.`,
+          details: [...new Set(missing.flatMap((one) => one.binaries))].flatMap(
+            (name) => (paths.has(name) ? [`${name}: ${paths.get(name)}`] : []),
+          ),
           recovery: {
             label: "Open System Settings",
             action: "open_settings",
@@ -707,6 +791,13 @@ export class OnboardEngine {
         },
       );
     }
+  }
+
+  /** The name of the Screen Recording list in System Settings on this Mac. */
+  private screenList() {
+    return this.darwin !== null && this.darwin < 24
+      ? "Screen Recording"
+      : "Screen & System Audio Recording";
   }
 
   private localDetail() {
@@ -741,6 +832,7 @@ export class OnboardEngine {
         }
         const answer = await this.ask("phone", {
           kind: "choice",
+          consent: true,
           prompt: "This Mac is paired with another coordinator.",
           options: [
             {
@@ -796,7 +888,11 @@ export class OnboardEngine {
       }
       const consent = await this.ask(
         "phone",
-        { kind: "confirm", prompt: "Send a sign-in code to this number now?" },
+        {
+          kind: "confirm",
+          prompt: "Send a sign-in code to this number now?",
+          consent: true,
+        },
         {
           detail: `The coordinator at ${this.origin} texts one code to the number you gave. Nothing is sent before you say yes.`,
         },
@@ -811,6 +907,7 @@ export class OnboardEngine {
         return skipped(
           "No text was sent. To pair your phone later, run clawdtime onboard.",
         );
+      await this.proceed();
       this.step("phone", "in_progress", {
         detail: "Asking the coordinator to send the code.",
       });
@@ -868,6 +965,7 @@ export class OnboardEngine {
         continue;
       }
       if (expired()) return again("The code expired. Ask for a new one.");
+      await this.proceed();
       try {
         this.session = await verifySharedSignIn(
           this.post!,
@@ -889,10 +987,11 @@ export class OnboardEngine {
     }
   }
 
+  /** One consent question: yes, no, or a skip where the step allows it. */
   private async confirm(id: StepId, prompt: string, detail?: string) {
     const answer = await this.ask(
       id,
-      { kind: "confirm", prompt },
+      { kind: "confirm", prompt, consent: true },
       detail ? { detail } : {},
     );
     if ("action" in answer) return answer.action === "skip" ? "skip" : false;
@@ -1029,6 +1128,7 @@ export class OnboardEngine {
         await this.verifyPhone();
         if (!this.session) return skipped("This Mac is not paired.");
       }
+      await this.proceed();
       this.step("pairing", "in_progress", { detail: "Pairing this Mac." });
       let invitation: { invitation: string };
       try {
@@ -1042,6 +1142,7 @@ export class OnboardEngine {
         if (status === 409 && !replace) {
           const choice = await this.ask("pairing", {
             kind: "choice",
+            consent: true,
             prompt: "Your number already has a paired Mac.",
             options: [
               {
@@ -1087,6 +1188,9 @@ export class OnboardEngine {
           return skipped("This Mac is not paired.");
         continue;
       }
+      // The pairing that the coordinator makes next is saved even if the
+      // person stops right after it: its outcome is never lost.
+      await this.proceed();
       let accepted: Awaited<ReturnType<typeof acceptSharedInvitation>>;
       try {
         accepted = await acceptSharedInvitation(
@@ -1187,6 +1291,7 @@ export class OnboardEngine {
         return skipped(
           "This Mac is not connected. To connect it later, run clawdtime onboard.",
         );
+      await this.proceed();
       this.step("connection", "in_progress", {
         detail: app
           ? "Making way for the app's connection."
@@ -1202,8 +1307,10 @@ export class OnboardEngine {
           return connected(
             "ClawdTime connects this Mac to the shared number when setup ends.",
           );
+        await this.proceed();
         await this.ports.connection.start(instanceId);
-      } catch {
+      } catch (error) {
+        if (error instanceof Cancelled) throw error;
         if (
           (await this.failed(
             "connection",

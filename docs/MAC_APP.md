@@ -14,9 +14,11 @@ Requirements: macOS 14 or later on a Mac with Apple silicon.
 3. Choose **Set up ClawdTime**. Each screen shows one step: its title, what it
    needs and why, and one field or choice.
 4. Answer the step and choose **Continue**. A key goes in a secure field.
-5. When a step needs a macOS permission, choose **Open System Settings**,
-   allow ClawdTime there, and come back. The app checks the step again when
-   you return. **Check again** does the same.
+5. When a step needs a macOS permission, the screen names the list in
+   System Settings, Privacy & Security, and the item to turn on in it.
+   Choose **Open System Settings**, turn the item on, and come back. The app
+   checks the step again when you return. **Check again** does the same.
+   **Details** shows the full path of each item, when you need it.
 6. You can skip your phone, the pairing, the connection and computer use, and
    come back to them later. ClawdTime then works on this Mac only.
 7. The last screen shows what is ready. Choose **Finish**.
@@ -70,10 +72,18 @@ panel, and starts no background connection.
 - The app sends every answer on stdin. A key never goes on a command line, in
   the environment, in a file or in a log. A command prints as
   `input(model, <redacted>)`.
-- `hello` must say protocol 1. Another protocol stops setup before any step.
+- `hello` must say protocol 2. Another protocol stops setup before any step.
   With no `hello` in 30 seconds, setup stops with a Try again button.
 - The window shows the latest step that is not `pending`. Steps the app does
   not know are drawn from their event, after the known ones.
+- Each question is a screen of its own, keyed by its `question` id. Every
+  answer names that id. The buttons of a new question work 0.6 seconds after
+  it appears, or longer with a slow double-click setting in macOS, so the
+  second click of a double click never answers the next question. After one
+  answer they stay disabled until the engine asks the next question.
+- A consent question (computer use, a sign-in text, view, computer actions,
+  reports, the pairing, a replacement, the connection) has no default
+  button: Return does not answer it.
 - The app offers **Skip for now** only on `phone`, `pairing`, `connection` and
   `computer`.
 - A recovery may open only a System Settings pane (`x-apple.systempreferences:`)
@@ -82,7 +92,8 @@ panel, and starts no background connection.
   dropped.
 - If the engine ends before `done`, the window shows the last lines of its
   stderr and a Try again button. Stop sends `cancel`, closes stdin, and ends
-  the engine after 2 seconds if it is still there.
+  the engine after 2 seconds if it is still there. Setup stops before its
+  next effect as soon as it reads the cancel, also in the middle of a step.
 
 ### After setup: one owner
 
@@ -121,6 +132,14 @@ window. It checks the runtime layout and manifest, hashes every file the
 manifest lists, starts the engine, waits for `hello`, sends `cancel` and waits
 for the engine to leave. It prints one JSON line and exits 0 when all of it
 passes. `--runtime PATH` checks another runtime folder.
+
+The self-test runs on every build, often from a shell with a real home and a
+model key. So the engine runs as `onboard --json --app --local` in a new
+empty home, with its own temporary folder. It gets only `PATH`, `HOME` and
+`TMPDIR`: no key, no coordinator and no ClawdTime setting of the shell.
+It never contacts the coordinator and never starts a desktop. A home that is
+not empty after the engine left fails the self-test. The temporary folders
+are removed at the end.
 
 Signing puts a signature inside each Mach-O file, so those files no longer
 match the hashes of the unsigned runtime. The self-test counts them as

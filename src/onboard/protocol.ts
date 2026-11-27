@@ -7,7 +7,11 @@ import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 
-export const onboardProtocol = 1;
+/**
+ * 2: every question carries a one-time `question` id, and every input and
+ * action must name the question it answers.
+ */
+export const onboardProtocol = 2;
 
 /** The steps, in order. The ids are fixed. */
 export const stepIds = [
@@ -48,15 +52,33 @@ export interface InputRequest {
   prompt: string;
   options?: InputOption[];
   multiple?: boolean;
+  /**
+   * The answer gives or refuses consent: computer use, view, computer
+   * actions, reports, the pairing, a replacement, a sign-in text or the
+   * connection. An interface gives it no default answer.
+   */
+  consent?: boolean;
 }
 export interface StepEvent {
   type: "step";
   id: StepId;
   state: StepState;
   title: string;
+  /** Plain words for the person. It names no file path. */
   detail?: string;
+  /**
+   * Lines that an interface shows only when the person asks for them, such
+   * as the full path of each binary that needs a permission.
+   */
+  details?: string[];
   recovery?: Recovery;
   input?: InputRequest;
+  /**
+   * The one-time id of the question that this event asks: on `needs_input`,
+   * and on `failed` when the step waits for a retry or a skip. An answer
+   * names it. A new question always has a new id.
+   */
+  question?: string;
 }
 export interface ReportRow {
   id: StepId;
@@ -70,11 +92,15 @@ export type OnboardEvent =
   | { type: "done"; ready: boolean; report: ReportRow[] };
 
 const stepId = z.enum(stepIds);
+/** A question id: random, url-safe, used for one answer only. */
+export const questionIdPattern = /^[A-Za-z0-9_-]{16,64}$/;
+const questionId = z.string().regex(questionIdPattern);
 export const onboardCommandSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("input"),
       id: stepId,
+      question: questionId,
       value: z.union([
         z.string().max(8192),
         z.boolean(),
@@ -86,6 +112,7 @@ export const onboardCommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("action"),
       id: stepId,
+      question: questionId,
       action: z.enum(["retry", "recheck", "skip"]),
     })
     .strict(),
@@ -97,13 +124,20 @@ export type OnboardCommand = z.infer<typeof onboardCommandSchema>;
 export interface OnboardIO {
   emit(event: OnboardEvent): void;
   next(): Promise<OnboardCommand>;
+  /**
+   * True from the moment the person stops setup: a cancel came in, or the
+   * input ended. The engine checks it before each effect, not only at a
+   * question, and answers already queued behind it are not used.
+   */
+  cancelled(): boolean;
 }
 
 /**
  * The JSON protocol over a pair of streams: events go out as one JSON object
  * per line, commands come in the same way. A line that is not a command is
  * ignored with a fixed warning that never quotes it: it may hold a key. The
- * end of the input is a cancel.
+ * end of the input is a cancel. A cancel counts as soon as its line is read,
+ * ahead of any command that came before it and is not used yet.
  */
 export function jsonLinesIO(
   input: Readable,
@@ -112,7 +146,12 @@ export function jsonLinesIO(
   const queue: OnboardCommand[] = [];
   let waiting: ((command: OnboardCommand) => void) | null = null;
   let ended = false;
+  let stopped = false;
   const deliver = (command: OnboardCommand) => {
+    if (command.type === "cancel") {
+      stopped = true;
+      queue.length = 0;
+    }
     if (waiting) {
       const resolve = waiting;
       waiting = null;
@@ -145,11 +184,12 @@ export function jsonLinesIO(
   return {
     emit,
     next: () =>
-      queue.length
-        ? Promise.resolve(queue.shift()!)
-        : ended
-          ? Promise.resolve({ type: "cancel" })
+      stopped || ended
+        ? Promise.resolve({ type: "cancel" })
+        : queue.length
+          ? Promise.resolve(queue.shift()!)
           : new Promise((resolve) => (waiting = resolve)),
+    cancelled: () => stopped || ended,
     close: () => lines.close(),
   };
 }

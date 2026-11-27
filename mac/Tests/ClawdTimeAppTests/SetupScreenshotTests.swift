@@ -16,7 +16,7 @@ final class SetupScreenshotTests: XCTestCase {
     var after: ((SetupCoordinator) -> Void)? = nil
   }
 
-  private static let hello = #"{"type":"hello","protocol":1,"version":"0.4.0"}"#
+  private static let hello = #"{"type":"hello","protocol":2,"version":"0.4.0"}"#
   private static let pending = ["preflight", "model", "desktop", "computer", "permissions", "phone", "pairing", "connection", "ready"]
     .map { #"{"type":"step","id":"\#($0)","state":"pending","title":"\#(titles[$0]!)"}"# }
   private static func ready(_ ids: [String]) -> [String] {
@@ -34,52 +34,52 @@ final class SetupScreenshotTests: XCTestCase {
       #"{"type":"step","id":"preflight","state":"in_progress","title":"Check this Mac","detail":"Checking this Mac."}"#,
     ]),
     Shot(name: "04-model-provider", lines: [hello] + pending + ready(["preflight"]) + [
-      #"{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"ClawdTime plans each action with a language model. Your key stays on this Mac. For another provider, run clawdtime keys set PROVIDER, then run this again.","input":{"kind":"choice","prompt":"Which model provider do you use?","options":[{"id":"openai","label":"OpenAI","detail":"Plans with gpt-5.4."},{"id":"anthropic","label":"Anthropic","detail":"Plans with claude-opus-5-5."}]}}"#,
+      #"{"type":"step","id":"model","state":"needs_input","title":"Model key","question":"shot-question-0001","detail":"ClawdTime plans each action with a language model. Your key stays on this Mac. For another provider, run clawdtime keys set PROVIDER, then run this again.","input":{"kind":"choice","prompt":"Which model provider do you use?","options":[{"id":"openai","label":"OpenAI","detail":"Plans with gpt-5.4."},{"id":"anthropic","label":"Anthropic","detail":"Plans with claude-opus-5-5."}]}}"#,
     ]),
     Shot(name: "05-model-key", lines: [hello] + pending + ready(["preflight"]) + [
-      #"{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"Paste your OpenAI API key. It is not shown.","input":{"kind":"secret","prompt":"OpenAI API key"}}"#,
+      #"{"type":"step","id":"model","state":"needs_input","title":"Model key","question":"shot-question-0002","detail":"Paste your OpenAI API key. It is not shown.","input":{"kind":"secret","prompt":"OpenAI API key"}}"#,
     ]),
     Shot(name: "06-model-refused", lines: [hello] + pending + ready(["preflight"]) + [
-      #"{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"OpenAI refused this key. Nothing was stored. Paste another key.","input":{"kind":"secret","prompt":"OpenAI API key"}}"#,
+      #"{"type":"step","id":"model","state":"needs_input","title":"Model key","question":"shot-question-0003","detail":"OpenAI refused this key. Nothing was stored. Paste another key.","input":{"kind":"secret","prompt":"OpenAI API key"}}"#,
     ]),
     Shot(name: "07-desktop-starting", lines: [hello] + pending + ready(["preflight", "model"]) + [
       #"{"type":"step","id":"desktop","state":"in_progress","title":"Desktop","detail":"Starting the desktop."}"#,
     ]),
     Shot(name: "08-desktop-failed", lines: [hello] + pending + ready(["preflight", "model"]) + [
-      #"{"type":"step","id":"desktop","state":"failed","title":"Desktop","detail":"The desktop did not answer its readiness check. Nothing was replaced. Wait a moment, then try again.","recovery":{"label":"Try again","action":"retry"}}"#,
+      #"{"type":"step","id":"desktop","state":"failed","title":"Desktop","question":"shot-question-0004","detail":"The desktop did not answer its readiness check. Nothing was replaced. Wait a moment, then try again.","recovery":{"label":"Try again","action":"retry"}}"#,
     ]),
     Shot(name: "09-computer-consent", lines: [hello] + pending + ready(["preflight", "model", "desktop"]) + [
-      #"{"type":"step","id":"computer","state":"needs_input","title":"Computer use","detail":"ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.","input":{"kind":"confirm","prompt":"Turn on computer use?"}}"#,
+      #"{"type":"step","id":"computer","state":"needs_input","title":"Computer use","question":"shot-question-0005","detail":"ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.","input":{"kind":"confirm","prompt":"Turn on computer use?","consent":true}}"#,
     ]),
     Shot(name: "10-computer-restart", lines: [hello] + pending + ready(["preflight", "model", "desktop"]) + [
       #"{"type":"step","id":"computer","state":"in_progress","title":"Computer use","detail":"Starting the desktop again, so that it can use this Mac."}"#,
     ]),
     Shot(name: "11-permissions", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer"]) + [
-      #"{"type":"step","id":"permissions","state":"needs_input","title":"Permissions","detail":"Turn on Accessibility and Screen Recording for ClawdTimeTaskPanel (/Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel) in System Settings, Privacy & Security. Then check again.","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"}}"#,
+      #"{"type":"step","id":"permissions","state":"needs_input","title":"Permissions","question":"shot-question-0006","detail":"In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTimeTaskPanel. In Screen & System Audio Recording, turn on ClawdTimeTaskPanel and ClawdTimeTaskCapture. Then check again.","details":["ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel","ClawdTimeTaskCapture: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskCapture"],"recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"}}"#,
     ]),
     Shot(name: "12-phone-number", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions"]) + [
-      #"{"type":"step","id":"phone","state":"needs_input","title":"Your phone","detail":"ClawdTime checks that the phone is yours. Your number goes only to the coordinator.","input":{"kind":"phone","prompt":"Your own phone number, with country code"}}"#,
+      #"{"type":"step","id":"phone","state":"needs_input","title":"Your phone","question":"shot-question-0007","detail":"ClawdTime checks that the phone is yours. Your number goes only to the coordinator.","input":{"kind":"phone","prompt":"Your own phone number, with country code"}}"#,
     ]),
     Shot(name: "13-phone-consent", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions"]) + [
-      #"{"type":"step","id":"phone","state":"needs_input","title":"Your phone","detail":"The coordinator at https://coordinator.example texts one code to the number you gave. Nothing is sent before you say yes.","input":{"kind":"confirm","prompt":"Send a sign-in code to this number now?"}}"#,
+      #"{"type":"step","id":"phone","state":"needs_input","title":"Your phone","question":"shot-question-0008","detail":"The coordinator at https://coordinator.example texts one code to the number you gave. Nothing is sent before you say yes.","input":{"kind":"confirm","prompt":"Send a sign-in code to this number now?","consent":true}}"#,
     ]),
     Shot(name: "14-phone-code", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions"]) + [
-      #"{"type":"step","id":"phone","state":"needs_input","title":"Your phone","detail":"Enter the code from the text. If no text comes, this number may not be invited yet.","input":{"kind":"code","prompt":"Sign-in code"}}"#,
+      #"{"type":"step","id":"phone","state":"needs_input","title":"Your phone","question":"shot-question-0009","detail":"Enter the code from the text. If no text comes, this number may not be invited yet.","input":{"kind":"code","prompt":"Sign-in code"}}"#,
     ]),
     Shot(name: "15-phone-expired", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions"]) + [
-      #"{"type":"step","id":"phone","state":"failed","title":"Your phone","detail":"The code expired. Ask for a new one.","recovery":{"label":"Send a new code","action":"retry"}}"#,
+      #"{"type":"step","id":"phone","state":"failed","title":"Your phone","question":"shot-question-0010","detail":"The code expired. Ask for a new one.","recovery":{"label":"Send a new code","action":"retry"}}"#,
     ]),
     Shot(name: "16-pairing-display", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions", "phone"]) + [
-      #"{"type":"step","id":"pairing","state":"needs_input","title":"Pair this Mac","detail":"Choose the display first. Then you choose what calls may do with it.","input":{"kind":"choice","prompt":"Which display may your calls show?","options":[{"id":"1","label":"Main display","detail":"2560 by 1440"},{"id":"2","label":"Display 2","detail":"1920 by 1080"}]}}"#,
+      #"{"type":"step","id":"pairing","state":"needs_input","title":"Pair this Mac","question":"shot-question-0011","detail":"Choose the display first. Then you choose what calls may do with it.","input":{"kind":"choice","prompt":"Which display may your calls show?","options":[{"id":"1","label":"Main display","detail":"2560 by 1440"},{"id":"2","label":"Display 2","detail":"1920 by 1080"}]}}"#,
     ]),
     Shot(name: "17-pairing-view", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions", "phone"]) + [
-      #"{"type":"step","id":"pairing","state":"needs_input","title":"Pair this Mac","input":{"kind":"confirm","prompt":"Allow this display to be shown during your verified calls?"}}"#,
+      #"{"type":"step","id":"pairing","state":"needs_input","title":"Pair this Mac","question":"shot-question-0012","input":{"kind":"confirm","prompt":"Allow this display to be shown during your verified calls?","consent":true}}"#,
     ]),
     Shot(name: "18-pairing-replace", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions", "phone"]) + [
-      #"{"type":"step","id":"pairing","state":"needs_input","title":"Pair this Mac","input":{"kind":"choice","prompt":"Your number already has a paired Mac.","options":[{"id":"replace","label":"Pair this Mac in its place","detail":"The other Mac loses access at once. Its open call ends, and its tasks get no callback."},{"id":"keep","label":"Keep the other Mac","detail":"Nothing changes. This Mac works in local mode."}]}}"#,
+      #"{"type":"step","id":"pairing","state":"needs_input","title":"Pair this Mac","question":"shot-question-0013","input":{"kind":"choice","prompt":"Your number already has a paired Mac.","consent":true,"options":[{"id":"replace","label":"Pair this Mac in its place","detail":"The other Mac loses access at once. Its open call ends, and its tasks get no callback."},{"id":"keep","label":"Keep the other Mac","detail":"Nothing changes. This Mac works in local mode."}]}}"#,
     ]),
     Shot(name: "19-connection", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions", "phone", "pairing"]) + [
-      #"{"type":"step","id":"connection","state":"needs_input","title":"Shared connection","detail":"ClawdTime keeps the connection while the app runs. Calls from your verified phone can then reach this Mac.","input":{"kind":"confirm","prompt":"Connect this Mac to the shared number when setup ends?"}}"#,
+      #"{"type":"step","id":"connection","state":"needs_input","title":"Shared connection","question":"shot-question-0014","detail":"ClawdTime keeps the connection while the app runs. Calls from your verified phone can then reach this Mac.","input":{"kind":"confirm","prompt":"Connect this Mac to the shared number when setup ends?","consent":true}}"#,
     ]),
     Shot(name: "20-finished-ready", lines: [hello] + pending + finishedLines(ready: true)),
     Shot(name: "21-finished-not-ready", lines: [hello] + pending + finishedLines(ready: false)),
@@ -95,7 +95,7 @@ final class SetupScreenshotTests: XCTestCase {
       ("model", "ready", "A key for OpenAI is in the protected key store."),
       ("desktop", "ready", "The desktop started."),
       ("computer", "ready", "Computer use is on."),
-      ("permissions", ready ? "ready" : "failed", ready ? "Accessibility and Screen Recording are on for the panel. Screen Recording is on for the capture helper." : "Turn on Screen Recording for ClawdTimeTaskPanel in System Settings, Privacy & Security. Then check again."),
+      ("permissions", ready ? "ready" : "failed", ready ? "Accessibility and Screen Recording are on for the panel. Screen Recording is on for the capture helper." : "In System Settings, open Privacy & Security. In Screen & System Audio Recording, turn on ClawdTimeTaskPanel. Then check again."),
       ("phone", "ready", "Your phone is verified."),
       ("pairing", "ready", "This Mac is paired. View allowed. Computer actions declined. Reports allowed."),
       ("connection", "ready", "ClawdTime connects this Mac to the shared number when setup ends."),
@@ -127,7 +127,7 @@ final class SetupScreenshotTests: XCTestCase {
     if let folder { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
     for shot in Self.shots {
       let engine = ScriptedEngine()
-      let setup = SetupCoordinator(makeEngine: { _ in engine }, owner: RecordingOwner(), open: { _ in false })
+      let setup = SetupCoordinator(makeEngine: { _ in engine }, owner: RecordingOwner(), open: { _ in false }, answerDelay: 0)
       if !shot.lines.isEmpty || shot.name.hasSuffix("stopped") {
         setup.begin()
         for line in shot.lines { engine.emit(line) }

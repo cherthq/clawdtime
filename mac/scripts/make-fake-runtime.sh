@@ -33,10 +33,10 @@ mkdir -p "$root/bin" "$root/node/bin" "$root/app/dist/cli" "$root/app/native" \
 
 cat > "$root/bin/clawdtime" <<'ENGINE'
 #!/bin/sh
-# Fake engine for packaging checks: it speaks protocol 1 and stores nothing.
+# Fake engine for packaging checks: it speaks protocol 2 and stores nothing.
 case "$1 $2" in
   "onboard --json")
-    echo '{"type":"hello","protocol":1,"version":"0.4.0"}'
+    echo '{"type":"hello","protocol":2,"version":"0.4.0"}'
     while IFS= read -r line; do
       case "$line" in *'"type":"cancel"'*) exit 0 ;; esac
     done

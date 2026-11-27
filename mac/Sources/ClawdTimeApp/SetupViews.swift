@@ -2,7 +2,8 @@ import AppKit
 import ClawdTimeAppCore
 import SwiftUI
 
-/// What the window shows. Its key gives each screen its own transition.
+/// What the window shows. Its key gives each screen its own transition and
+/// its own fresh buttons: each question is a screen of its own.
 enum Screen: Equatable {
   case welcome, connecting, checking
   case step(StepEvent)
@@ -25,7 +26,7 @@ enum Screen: Equatable {
     switch self {
     case .welcome: "welcome"
     case .connecting, .checking: "checking"
-    case .step(let step): "step-\(step.id.rawValue)"
+    case .step(let step): step.question.map { "question-\($0)" } ?? "step-\(step.id.rawValue)"
     case .finished: "finished"
     case .failed: "failed"
     case .stopped: "stopped"
@@ -86,7 +87,7 @@ struct SetupRootView: View {
     case .welcome: WelcomeView(begin: { setup.begin() })
     case .connecting, .checking: WaitingView(title: "Checking this Mac", detail: "ClawdTime looks at what is set up already.")
     case .step(let step):
-      StepCard(step: step, awaiting: setup.awaiting == step.id,
+      StepCard(step: step, answered: setup.answered != nil && setup.answered == step.question, armDelay: setup.answerDelay,
                submit: { setup.submit($0) }, perform: { setup.perform($0) },
                recover: { setup.followRecovery() })
     case .finished(let ready):
@@ -268,10 +269,15 @@ struct StateBadge: View {
   }
 }
 
-/// One step: its title, detail, input, primary action and recovery.
+/// One question of a step: its title, detail, input, answer buttons and
+/// recovery. The window makes a new card for each question, so nothing
+/// carries from one question to the next. Its buttons work after the
+/// answer delay, and only once.
 struct StepCard: View {
   var step: StepEvent
-  var awaiting: Bool
+  /// An answer to this question went out: the card waits for the engine.
+  var answered: Bool
+  var armDelay: TimeInterval
   var submit: (InputValue) -> Void
   var perform: (StepAction) -> Void
   var recover: () -> Bool
@@ -280,6 +286,33 @@ struct StepCard: View {
   @State private var selection: Set<String> = []
   @State private var recoveryRefused = false
   @State private var shownKind: StepInput.Kind?
+  @State private var armed: Bool
+  @State private var showDetails = false
+
+  init(step: StepEvent, answered: Bool, armDelay: TimeInterval, submit: @escaping (InputValue) -> Void,
+       perform: @escaping (StepAction) -> Void, recover: @escaping () -> Bool) {
+    self.step = step; self.answered = answered; self.armDelay = armDelay
+    self.submit = submit; self.perform = perform; self.recover = recover
+    _armed = State(initialValue: armDelay <= 0)
+  }
+
+  /// Nothing on the card answers now: the answer went out, or the question just appeared.
+  private var locked: Bool { answered || !armed }
+
+  /// A question whose answer gives or refuses consent. Yes is never its
+  /// default: Return does not answer it.
+  static func isConsent(_ step: StepEvent) -> Bool {
+    guard step.state == .needsInput, let input = step.input else { return false }
+    return input.consent == true || (input.kind == .confirm && !checksSettings(step))
+  }
+
+  /// The label of the button that Return presses, or nil when Return answers nothing.
+  static func defaultButton(_ step: StepEvent) -> String? {
+    if step.state == .failed { return retryLabel(step) }
+    guard step.state == .needsInput, step.input != nil else { return nil }
+    if checksSettings(step) { return "Check again" }
+    return isConsent(step) ? nil : "Continue"
+  }
 
   /// A field of another kind starts empty: a phone number never carries into the code field.
   static func clearsField(shown: StepInput.Kind?, next: StepInput.Kind?) -> Bool {
@@ -302,15 +335,25 @@ struct StepCard: View {
   var body: some View {
     Card {
       HStack(alignment: .center, spacing: 12) {
-        StateBadge(state: awaiting ? .inProgress : step.state)
+        StateBadge(state: answered ? .inProgress : step.state)
         Text(step.displayTitle).font(.system(size: 22, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
       }
       if let detail = step.detail, !detail.isEmpty {
         Text(detail).font(.system(size: 14)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
       }
+      // Paths and other long lines stay here, closed until the person opens them.
+      if let details = step.details, !details.isEmpty {
+        DisclosureGroup("Details", isExpanded: $showDetails) {
+          Text(details.joined(separator: "\n"))
+            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.secondaryText)
+            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
+        }
+        .font(.system(size: 12))
+      }
       if step.state == .needsInput, let input = step.input, !Self.checksSettings(step) {
         InputField(input: input, text: $text, selection: $selection, submit: send)
-          .disabled(awaiting)
+          .disabled(answered)
       }
       if recoveryRefused {
         Text("That link cannot be opened from here.").font(.system(size: 12)).foregroundStyle(Theme.danger)
@@ -318,6 +361,11 @@ struct StepCard: View {
       actions.padding(.top, 6)
     }
     .onAppear { shownKind = step.input?.kind }
+    .task {
+      guard !armed else { return }
+      try? await Task.sleep(nanoseconds: UInt64(armDelay * 1_000_000_000))
+      armed = true
+    }
     .onChange(of: step.input?.kind) { _, next in
       if Self.clearsField(shown: shownKind, next: next) {
         text = ""
@@ -330,14 +378,14 @@ struct StepCard: View {
   private var actions: some View {
     HStack(spacing: 10) {
       if step.id.isSkippable && (step.state == .needsInput || step.state == .failed) {
-        Button("Skip for now") { perform(.skip) }.buttonStyle(PillStyle(kind: .secondary)).disabled(awaiting)
+        Button("Skip for now") { perform(.skip) }.buttonStyle(PillStyle(kind: .secondary)).disabled(locked)
       }
       // A retry is the primary button on the right; other recoveries sit here.
       if let recovery = step.recovery, recovery.action != .retry, step.state == .needsInput || step.state == .failed {
         Button(recovery.label) { recoveryRefused = !recover() }
-          .buttonStyle(PillStyle(kind: .secondary)).disabled(awaiting)
+          .buttonStyle(PillStyle(kind: .secondary)).disabled(answered)
         if recovery.action == .openSettings && !Self.checksSettings(step) {
-          Button("Check again") { perform(.recheck) }.buttonStyle(PillStyle(kind: .secondary)).disabled(awaiting)
+          Button("Check again") { perform(.recheck) }.buttonStyle(PillStyle(kind: .secondary)).disabled(locked)
         }
       }
       Spacer(minLength: 0)
@@ -345,32 +393,39 @@ struct StepCard: View {
     }
   }
 
+  /// Return presses this button only when it is the step's default.
+  private func shortcut(_ label: String) -> KeyboardShortcut? {
+    Self.defaultButton(step) == label ? .defaultAction : nil
+  }
+
   @ViewBuilder private var primary: some View {
-    if awaiting || step.state == .inProgress {
+    if answered || step.state == .inProgress {
       HStack(spacing: 8) {
         ProgressView().controlSize(.small)
         Text("Working").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.secondaryText)
       }
       .accessibilityElement(children: .combine)
     } else if Self.checksSettings(step) {
-      Button("Check again") { perform(.recheck) }.buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
+      Button("Check again") { perform(.recheck) }.buttonStyle(PillStyle(kind: .primary))
+        .keyboardShortcut(shortcut("Check again")).disabled(locked)
     } else if step.state == .needsInput, let input = step.input {
       if input.kind == .confirm {
-        Button("No") { submit(.bool(false)) }.buttonStyle(PillStyle(kind: .secondary))
-        Button("Yes") { submit(.bool(true)) }.buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
+        Button("No") { submit(.bool(false)) }.buttonStyle(PillStyle(kind: .secondary)).disabled(locked)
+        Button("Yes") { submit(.bool(true)) }.buttonStyle(PillStyle(kind: .primary)).disabled(locked)
       } else {
         Button("Continue", action: send)
           .buttonStyle(PillStyle(kind: .primary))
-          .keyboardShortcut(.defaultAction)
-          .disabled(InputRules.value(for: input, text: text, selection: selection) == nil)
+          .keyboardShortcut(shortcut("Continue"))
+          .disabled(locked || InputRules.value(for: input, text: text, selection: selection) == nil)
       }
     } else if let label = Self.retryLabel(step) {
-      Button(label) { perform(.retry) }.buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
+      Button(label) { perform(.retry) }.buttonStyle(PillStyle(kind: .primary))
+        .keyboardShortcut(shortcut(label)).disabled(locked)
     }
   }
 
   private func send() {
-    guard let input = step.input, let value = InputRules.value(for: input, text: text, selection: selection) else { return }
+    guard !locked, let input = step.input, let value = InputRules.value(for: input, text: text, selection: selection) else { return }
     // The field lets go of a secret as soon as it is sent.
     if input.kind == .secret { text = "" }
     submit(value)

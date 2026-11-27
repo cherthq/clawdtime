@@ -5,7 +5,7 @@ final class SetupStateTests: XCTestCase {
   private func running() -> SetupState {
     var state = SetupState()
     state.begin()
-    state.apply(.hello(protocol: 1, version: "0.4.0"))
+    state.apply(.hello(protocol: 2, version: "0.4.0"))
     return state
   }
 
@@ -13,13 +13,13 @@ final class SetupStateTests: XCTestCase {
     var state = SetupState()
     state.begin()
     XCTAssertEqual(state.phase, .connecting)
-    state.apply(.hello(protocol: 1, version: "0.4.0"))
+    state.apply(.hello(protocol: 2, version: "0.4.0"))
     XCTAssertEqual(state.phase, .running)
     XCTAssertEqual(state.engineVersion, "0.4.0")
 
     var newer = SetupState()
     newer.begin()
-    newer.apply(.hello(protocol: 2, version: "0.9.0"))
+    newer.apply(.hello(protocol: 3, version: "0.9.0"))
     guard case .failed(let failure) = newer.phase else { return XCTFail("\(newer.phase)") }
     XCTAssertEqual(failure.kind, .incompatible)
     newer.apply(.step(StepEvent(id: .model, state: .needsInput)))

@@ -7,8 +7,16 @@ import Foundation
 @MainActor
 public final class SetupCoordinator: ObservableObject {
   @Published public private(set) var state = SetupState()
-  /// The step an answer was sent for, until the engine speaks about it again.
-  @Published public private(set) var awaiting: StepID?
+  /// The question an answer was sent for, until the engine asks another one
+  /// or moves on. One answer goes out for each question.
+  @Published public private(set) var answered: String?
+  /// The buttons of each new question work only this long after it appears,
+  /// so that the second click of a double click never answers the next
+  /// question. The window uses the same time to show them disabled.
+  public let answerDelay: TimeInterval
+  private let now: () -> TimeInterval
+  /// The question on screen and when it appeared.
+  private var shown: (question: String, at: TimeInterval)?
   /// True from Finish until the next setup run: the owner holds the processes.
   @Published public private(set) var handedOff = false
 
@@ -24,11 +32,23 @@ public final class SetupCoordinator: ObservableObject {
   public var finishWhenReady = false
   public var onFinish: (() -> Void)?
 
-  public init(makeEngine: @escaping EngineFactory, owner: ProcessOwning?, open: @escaping (URL) -> Bool, helloTimeout: TimeInterval = 30) {
+  public init(makeEngine: @escaping EngineFactory, owner: ProcessOwning?, open: @escaping (URL) -> Bool, helloTimeout: TimeInterval = 30,
+              answerDelay: TimeInterval = SetupCoordinator.defaultAnswerDelay, now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
     self.makeEngine = makeEngine
     self.owner = owner
     self.open = open
     self.helloTimeout = helloTimeout
+    self.answerDelay = max(0, answerDelay)
+    self.now = now
+  }
+
+  /// Longer than the double-click time of macOS by default.
+  nonisolated public static let defaultAnswerDelay: TimeInterval = 0.6
+
+  /// The step on screen asks this question, and its buttons work now.
+  public func accepts(_ question: String) -> Bool {
+    guard let shown, shown.question == question, answered == nil else { return false }
+    return now() - shown.at >= answerDelay
   }
 
   public var engineIsRunning: Bool { engine != nil }
@@ -39,7 +59,8 @@ public final class SetupCoordinator: ObservableObject {
     run += 1
     let current = run
     state.begin()
-    awaiting = nil
+    answered = nil
+    shown = nil
     handedOff = false
     let engine: EngineControlling
     do { engine = try makeEngine(local) } catch {
@@ -57,7 +78,7 @@ public final class SetupCoordinator: ObservableObject {
     engine.onExit = { [weak self] code, details in
       guard let self, current == self.run else { return }
       self.engine = nil
-      self.awaiting = nil
+      self.answered = nil
       self.state.engineExited(code: code, details: details)
     }
     self.engine = engine
@@ -78,30 +99,34 @@ public final class SetupCoordinator: ObservableObject {
   private func receive(_ event: EngineEvent) {
     state.apply(event)
     switch event {
-    case .step(let step) where step.id == awaiting: awaiting = nil
+    case .step(let step):
+      // A new question, or any other news from the engine, ends the wait.
+      if step.question != answered { answered = nil }
+      if let question = step.question, question != shown?.question { shown = (question, now()) }
     case .hello where state.phase != .running:
       // A protocol this app does not speak: leave before any step runs.
       engine?.cancel(grace: 2)
     case .done(let ready, _):
-      awaiting = nil
+      answered = nil
       if ready && finishWhenReady { finish() }
     default: break
     }
   }
 
-  /// Sends the answer for the step on screen.
+  /// Sends the one answer to the question on screen.
   public func submit(_ value: InputValue) {
-    guard state.phase == .running, let step = state.current, step.state == .needsInput, step.input != nil, awaiting == nil else { return }
-    awaiting = step.id
-    engine?.send(.input(id: step.id, value: value))
+    guard state.phase == .running, let step = state.current, step.state == .needsInput, step.input != nil,
+      let question = step.question, accepts(question) else { return }
+    answered = question
+    engine?.send(.input(id: step.id, question: question, value: value))
   }
 
-  /// Retry, recheck or skip the step on screen. Only some steps may be skipped.
+  /// Retry, recheck or skip the question on screen. Only some steps may be skipped.
   public func perform(_ action: StepAction) {
-    guard state.phase == .running, let step = state.current else { return }
+    guard state.phase == .running, let step = state.current, let question = step.question, accepts(question) else { return }
     if action == .skip && !step.id.isSkippable { return }
-    awaiting = step.id
-    engine?.send(.action(id: step.id, action: action))
+    answered = question
+    engine?.send(.action(id: step.id, question: question, action: action))
   }
 
   /// Follows the step's recovery: Retry, or a System Settings pane or https page.
@@ -121,7 +146,7 @@ public final class SetupCoordinator: ObservableObject {
 
   /// The person came back to the app: check again a step that sent them to System Settings.
   public func applicationDidBecomeActive() {
-    guard let id = openedSettingsFor, state.phase == .running, state.focus == id, awaiting == nil,
+    guard let id = openedSettingsFor, state.phase == .running, state.focus == id, answered == nil,
       let step = state.current, step.state == .needsInput || step.state == .failed else { return }
     openedSettingsFor = nil
     perform(.recheck)
@@ -132,7 +157,7 @@ public final class SetupCoordinator: ObservableObject {
     run += 1
     engine?.cancel(grace: 2)
     engine = nil
-    awaiting = nil
+    answered = nil
     handedOff = false
     state.stopped()
     guard let owner else { done?(); return }

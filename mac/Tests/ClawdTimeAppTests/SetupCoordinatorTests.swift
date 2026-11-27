@@ -7,53 +7,92 @@ final class SetupCoordinatorTests: XCTestCase {
   private var engine: ScriptedEngine!
   private var owner: RecordingOwner!
   private var opened: [URL] = []
+  /// The coordinator's clock, moved by hand.
+  private var clock: TimeInterval = 1000
 
-  private func coordinator() -> SetupCoordinator {
+  private func coordinator(answerDelay: TimeInterval = 0) -> SetupCoordinator {
     engine = ScriptedEngine()
     owner = RecordingOwner()
     opened = []
-    let coordinator = SetupCoordinator(makeEngine: { [unowned self] _ in self.engine }, owner: owner, open: { [unowned self] url in self.opened.append(url); return true })
+    let coordinator = SetupCoordinator(makeEngine: { [unowned self] _ in self.engine }, owner: owner, open: { [unowned self] url in self.opened.append(url); return true },
+                                       answerDelay: answerDelay, now: { [unowned self] in self.clock })
     coordinator.begin()
-    engine.emit(#"{"type":"hello","protocol":1,"version":"0.4.0"}"#)
+    engine.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
     return coordinator
   }
 
-  func testAnAnswerGoesToTheStepOnScreenOnce() {
+  /// One question of a step, with its one-time id.
+  private func ask(_ id: String, _ question: String, _ more: String = #""input":{"kind":"confirm","consent":true}"#) {
+    engine.emit(#"{"type":"step","id":"\#(id)","state":"needs_input","question":"\#(question)",\#(more)}"#)
+  }
+
+  func testAnAnswerGoesToTheQuestionOnScreenOnce() {
     let setup = coordinator()
     XCTAssertTrue(engine.started)
     setup.submit(.string("too early"))
     XCTAssertTrue(engine.sent.isEmpty, "nothing is asked yet")
-    engine.emit(#"{"type":"step","id":"model","state":"needs_input","input":{"kind":"secret"}}"#)
+    ask("model", "model-question-0001", #""input":{"kind":"secret"}"#)
     setup.submit(.string(madeUpKey))
     setup.submit(.string(madeUpKey))
-    XCTAssertEqual(engine.sent, [.input(id: .model, value: .string(madeUpKey))], "a second press waits for the engine")
-    XCTAssertEqual(setup.awaiting, .model)
+    XCTAssertEqual(engine.sent, [.input(id: .model, question: "model-question-0001", value: .string(madeUpKey))], "a second press waits for the engine")
+    XCTAssertEqual(setup.answered, "model-question-0001")
     engine.emit(#"{"type":"step","id":"model","state":"in_progress"}"#)
-    XCTAssertNil(setup.awaiting)
+    XCTAssertNil(setup.answered)
+  }
+
+  func testTheSecondClickOfADoubleClickNeverAnswersTheNextQuestion() {
+    let setup = coordinator(answerDelay: 0.6)
+    ask("pairing", "view-question-0001", #""input":{"kind":"confirm","prompt":"Allow this display to be shown during your verified calls?","consent":true}"#)
+    setup.submit(.bool(true))
+    XCTAssertTrue(engine.sent.isEmpty, "a click as the question appears answers nothing")
+    clock += 1
+    setup.submit(.bool(true))
+    setup.submit(.bool(true))
+    // The engine asks the next question at once, before the second click lands.
+    ask("pairing", "control-question-01", #""input":{"kind":"confirm","prompt":"Allow your verified phone to ask for computer actions on this Mac?","consent":true}"#)
+    clock += 0.2
+    setup.submit(.bool(true))
+    XCTAssertEqual(engine.sent, [.input(id: .pairing, question: "view-question-0001", value: .bool(true))], "one answer, to the view question")
+    // The person reads the new question, then answers it.
+    clock += 1
+    setup.submit(.bool(false))
+    XCTAssertEqual(engine.sent.last, .input(id: .pairing, question: "control-question-01", value: .bool(false)))
+    XCTAssertEqual(engine.sent.count, 2)
+  }
+
+  func testAStepWithNoQuestionTakesNoAnswer() {
+    let setup = coordinator()
+    engine.emit(#"{"type":"step","id":"computer","state":"needs_input","input":{"kind":"confirm","consent":true}}"#)
+    setup.submit(.bool(true))
+    setup.perform(.skip)
+    engine.emit(#"{"type":"step","id":"phone","state":"failed","recovery":{"label":"Retry","action":"retry"}}"#)
+    setup.perform(.retry)
+    XCTAssertTrue(engine.sent.isEmpty)
   }
 
   func testOnlyPhonePairingConnectionAndComputerMayBeSkipped() {
     let setup = coordinator()
-    engine.emit(#"{"type":"step","id":"permissions","state":"needs_input","input":{"kind":"confirm"}}"#)
+    ask("permissions", "permissions-question-1", #""input":{"kind":"confirm"}"#)
     setup.perform(.skip)
     XCTAssertTrue(engine.sent.isEmpty)
     for id in ["phone", "pairing", "connection", "computer"] {
-      engine.emit(#"{"type":"step","id":"\#(id)","state":"needs_input","input":{"kind":"confirm"}}"#)
+      ask(id, "\(id)-question-000001", #""input":{"kind":"confirm"}"#)
       setup.perform(.skip)
-      XCTAssertEqual(engine.sent.last, .action(id: StepID(rawValue: id), action: .skip))
+      XCTAssertEqual(engine.sent.last, .action(id: StepID(rawValue: id), question: "\(id)-question-000001", action: .skip))
     }
   }
 
   func testOpenSettingsOpensOnlyASettingsPaneAndRechecksWhenThePersonComesBack() {
     let setup = coordinator()
-    engine.emit(#"{"type":"step","id":"permissions","state":"needs_input","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"}}"#)
+    let settings = #""recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"}"#
+    ask("permissions", "settings-question-01", settings)
     setup.applicationDidBecomeActive()
     XCTAssertTrue(engine.sent.isEmpty, "no recheck before the person went to System Settings")
     XCTAssertTrue(setup.followRecovery())
     XCTAssertEqual(opened.map(\.absoluteString), ["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
     setup.applicationDidBecomeActive()
-    XCTAssertEqual(engine.sent, [.action(id: .permissions, action: .recheck)])
-    engine.emit(#"{"type":"step","id":"permissions","state":"needs_input","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"}}"#)
+    XCTAssertEqual(engine.sent, [.action(id: .permissions, question: "settings-question-01", action: .recheck)])
+    ask("permissions", "settings-question-02", settings)
     setup.applicationDidBecomeActive()
     XCTAssertEqual(engine.sent.count, 1, "one recheck for each visit")
   }
@@ -61,15 +100,15 @@ final class SetupCoordinatorTests: XCTestCase {
   func testARecoveryLinkToAnythingElseIsRefused() {
     let setup = coordinator()
     for (action, url) in [("open_settings", "https://shop.example/settings"), ("open_url", "file:///etc/hosts"), ("open_url", "http://shop.example"), ("open_url", "x-apple.systempreferences:com.apple.preference.security"), ("open_url", "clawdtime://pair")] {
-      engine.emit(#"{"type":"step","id":"phone","state":"failed","recovery":{"label":"Open","action":"\#(action)","url":"\#(url)"}}"#)
+      engine.emit(#"{"type":"step","id":"phone","state":"failed","question":"phone-failed-000001","recovery":{"label":"Open","action":"\#(action)","url":"\#(url)"}}"#)
       XCTAssertFalse(setup.followRecovery(), url)
     }
-    engine.emit(#"{"type":"step","id":"phone","state":"failed","recovery":{"label":"Read more","action":"open_url","url":"https://shop.example/help"}}"#)
+    engine.emit(#"{"type":"step","id":"phone","state":"failed","question":"phone-failed-000002","recovery":{"label":"Read more","action":"open_url","url":"https://shop.example/help"}}"#)
     XCTAssertTrue(setup.followRecovery())
     XCTAssertEqual(opened.map(\.absoluteString), ["https://shop.example/help"])
-    engine.emit(#"{"type":"step","id":"phone","state":"failed","recovery":{"label":"Retry","action":"retry"}}"#)
+    engine.emit(#"{"type":"step","id":"phone","state":"failed","question":"phone-failed-000003","recovery":{"label":"Retry","action":"retry"}}"#)
     XCTAssertTrue(setup.followRecovery())
-    XCTAssertEqual(engine.sent, [.action(id: .phone, action: .retry)])
+    XCTAssertEqual(engine.sent, [.action(id: .phone, question: "phone-failed-000003", action: .retry)])
   }
 
   func testFinishStartsWhatTheReportSaysIsReady() {
@@ -107,7 +146,7 @@ final class SetupCoordinatorTests: XCTestCase {
 
   func testStopCancelsTheEngineStopsTheOwnerAndIgnoresLateEvents() {
     let setup = coordinator()
-    engine.emit(#"{"type":"step","id":"phone","state":"needs_input","input":{"kind":"phone"}}"#)
+    ask("phone", "phone-question-0001", #""input":{"kind":"phone"}"#)
     let stoppedEngine = engine!
     var done = false
     setup.stop { done = true }
@@ -125,7 +164,7 @@ final class SetupCoordinatorTests: XCTestCase {
     engine = ScriptedEngine()
     let setup = SetupCoordinator(makeEngine: { [unowned self] _ in self.engine }, owner: nil, open: { _ in false })
     setup.begin()
-    engine.emit(#"{"type":"hello","protocol":2,"version":"1.0.0"}"#)
+    engine.emit(#"{"type":"hello","protocol":3,"version":"1.0.0"}"#)
     XCTAssertTrue(engine.cancelled)
     guard case .failed(let failure) = setup.state.phase else { return XCTFail() }
     XCTAssertEqual(failure.kind, .incompatible)

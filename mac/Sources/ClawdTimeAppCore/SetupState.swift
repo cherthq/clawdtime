@@ -101,6 +101,7 @@ public struct SetupState: Equatable, Sendable {
         step.state = entry.state
         if let detail = entry.detail { step.detail = detail }
         step.input = nil
+        step.question = nil
         if !order.contains(entry.id) { order.append(entry.id) }
         steps[entry.id] = step
       }

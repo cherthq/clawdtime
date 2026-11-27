@@ -40,21 +40,21 @@ enum FakeEngine {
   /// The whole flow: hello, preflight, a secret model key, a skippable phone step, done.
   static func fullFlow(_ folder: URL) -> String {
     record(folder) + """
-    echo '{"type":"hello","protocol":1,"version":"0.4.0"}'
+    echo '{"type":"hello","protocol":2,"version":"0.4.0"}'
     echo '{"type":"step","id":"preflight","state":"in_progress","title":"Check this Mac"}'
     echo '{"type":"step","id":"preflight","state":"ready","title":"Check this Mac","detail":"Apple silicon, macOS 15"}'
-    echo '{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"Paste the key of your model provider.","input":{"kind":"secret","prompt":"Model key"}}'
+    echo '{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"Paste the key of your model provider.","question":"model-question-0001","input":{"kind":"secret","prompt":"Model key"}}'
     IFS= read -r line || exit 4
     case "$line" in
-      '{"id":"model","type":"input","value":"\(madeUpKey)"}') echo ok > "$record/key-arrived" ;;
+      '{"id":"model","question":"model-question-0001","type":"input","value":"\(madeUpKey)"}') echo ok > "$record/key-arrived" ;;
       *) echo '{"type":"step","id":"model","state":"failed","title":"Model key","detail":"wrong input"}'; exit 5 ;;
     esac
     echo '{"type":"log","level":"info","message":"Key stored in protected storage."}'
     echo '{"type":"step","id":"model","state":"ready","title":"Model key","detail":"Stored."}'
-    echo '{"type":"step","id":"phone","state":"needs_input","title":"Your phone","input":{"kind":"phone","prompt":"Phone number"}}'
+    echo '{"type":"step","id":"phone","state":"needs_input","title":"Your phone","question":"phone-question-0001","input":{"kind":"phone","prompt":"Phone number"}}'
     IFS= read -r line || exit 4
     case "$line" in
-      '{"action":"skip","id":"phone","type":"action"}') echo '{"type":"step","id":"phone","state":"skipped","title":"Your phone"}' ;;
+      '{"action":"skip","id":"phone","question":"phone-question-0001","type":"action"}') echo '{"type":"step","id":"phone","state":"skipped","title":"Your phone"}' ;;
       *) exit 6 ;;
     esac
     echo '{"type":"done","ready":true,"report":[{"id":"preflight","state":"ready"},{"id":"model","state":"ready"},{"id":"desktop","state":"ready"},{"id":"phone","state":"skipped"},{"id":"connection","state":"skipped"}]}'
@@ -63,7 +63,7 @@ enum FakeEngine {
   }
 
   /// Says hello, then waits for cancel; leaves 0 on cancel.
-  static func waitsForCancel(_ folder: URL, protocolVersion: Int = 1) -> String {
+  static func waitsForCancel(_ folder: URL, protocolVersion: Int = SetupProtocol.version) -> String {
     record(folder) + """
     echo '{"type":"hello","protocol":\(protocolVersion),"version":"0.4.0"}'
     while IFS= read -r line; do
