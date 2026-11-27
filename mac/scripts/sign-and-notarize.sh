@@ -69,13 +69,14 @@ sign() {
       codesign --force --timestamp --options runtime --sign "$identity" "$file"
     fi
   else
-    # Ad hoc code cannot pass library validation, so it runs without the
-    # hardened runtime. It is for checks on this Mac only. It gets the same
-    # entitlements, so the checks below see what a release gets.
+    # Ad hoc, with the hardened runtime and the same entitlements as a
+    # release: no DYLD_INSERT_LIBRARIES library loads into the app, Node or
+    # the helpers that a person grants Accessibility and Screen Recording.
+    # Node keeps disable-library-validation for its native addons.
     if [ -n "$plist" ]; then
-      codesign --force --entitlements "$work/$plist.plist" --sign - "$file"
+      codesign --force --options runtime --entitlements "$work/$plist.plist" --sign - "$file"
     else
-      codesign --force --sign - "$file"
+      codesign --force --options runtime --sign - "$file"
     fi
   fi
 }

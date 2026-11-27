@@ -61,6 +61,7 @@ class PackageAppTests(unittest.TestCase):
         self.assertTrue(link.is_symlink())
         self.assertEqual(os.readlink(link), "../example-cli/cli.js")
         self.assertEqual(run("codesign", "--verify", "--deep", "--strict", app).returncode, 0)
+        self.assertRegex(run("codesign", "-dv", app).stderr, r"flags=0x[0-9a-f]+\([^)]*runtime", "the app runs with the hardened runtime")
         addon = runtime / "app" / "node_modules" / "example-addon" / "build" / "Release" / "example.node"
         self.assertEqual(run("codesign", "--verify", "--strict", addon).returncode, 0, "the native addon is signed too")
 
@@ -86,6 +87,8 @@ class PackageAppTests(unittest.TestCase):
             self.assertEqual(shown.returncode, 0, path)
             # Signed by the app's signing, not left with the linker's own signature.
             self.assertNotIn("linker-signed", shown.stderr, path)
+            # The hardened runtime, also ad hoc, so no DYLD_INSERT_LIBRARIES library loads into it.
+            self.assertRegex(shown.stderr, r"flags=0x[0-9a-f]+\([^)]*runtime", path)
             self.assertEqual(run("codesign", "--verify", "--strict", runtime / path).returncode, 0, path)
         node = self.entitlements(runtime / "node" / "bin" / "node")
         for key in ["com.apple.security.cs.allow-jit", "com.apple.security.cs.allow-unsigned-executable-memory",
