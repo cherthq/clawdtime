@@ -135,6 +135,16 @@ export class SharedPhoneIdentity {
       throw Error("identity_invited_number_invalid");
     this.invited = new Set(invited);
     this.keys = new SharedNumberKeys(options.key, options.lineId);
+    for (const [name, path] of [
+      [challenges, "$.createdAt"],
+      [sessions, "$.expiresAt"],
+      [knownClients, "$.verifiedAt"],
+    ] as const)
+      store.db.exec(
+        `CREATE INDEX IF NOT EXISTS ${name}_${path.slice(2)}
+         ON entities(kind, json_extract(body, '${path}'))
+         WHERE kind = '${name}'`,
+      );
     this.migrate();
   }
   /** Rows from an earlier release kept the number in the clear. Keep only

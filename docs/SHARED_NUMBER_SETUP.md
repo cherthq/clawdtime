@@ -87,6 +87,11 @@ the sealed copy. A stranger's sign-in keeps only the digest. At startup, the
 coordinator moves rows from an earlier release that held numbers in the clear
 to this form.
 
+The coordinator keeps an ended, busy or declined call, its webhook receipt and
+its event receipts for 24 hours after the call ended, then removes them. It
+never removes a call that is open, released but not yet cleaned up, or
+unknown.
+
 ## Operations
 
 **Bind and TLS.**

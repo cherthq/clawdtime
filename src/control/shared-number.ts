@@ -16,6 +16,7 @@ import {
   type SharedCallbackOwnership,
   type SharedPairing,
 } from "../shared-number-contracts.js";
+import type { SQLInputValue } from "node:sqlite";
 import { Store } from "../storage/store.js";
 import { DomainError, equal, hash, id, token } from "../storage/security.js";
 import { SharedNumberKeys } from "../pairing/shared-number-keys.js";
@@ -41,6 +42,18 @@ const UNDIALED_TRIES = 5;
 /** One caller handle may hold the slot without verifying this many times in
  * the window. Someone who sends a member's number cannot hold the line. */
 const CALLER_LIMIT = { count: 5, windowMs: 60 * 60_000 };
+// Each query of a large kind reads one of these, never every record of it.
+const indexes: [name: string, path: string][] = [
+  ["call", "$.state"],
+  ["call", "$.roomId"],
+  ["call", "$.callerDigest"],
+  ["callback", "$.state"],
+  ["callback", "$.roomId"],
+  ["task", "$.callId"],
+  ["credential", "$.pairingId"],
+  ["member", "$.alias.recipientDigest"],
+  ["member", "$.alias.conversationDigest"],
+];
 const refused = () => new DomainError(403, "shared_number_unauthorized");
 const conflict = () => new DomainError(409, "shared_number_conflict");
 const notWaiting = () => new DomainError(409, "shared_call_not_waiting");
@@ -86,15 +99,34 @@ export class SharedNumber {
       throw new Error("Shared routing needs a separate 32-byte proof key.");
     this.keys = new SharedNumberKeys(options.identityKey, this.lineId);
     this.now = options.now ?? Date.now;
+    for (const [name, path] of indexes)
+      this.store.db.exec(
+        `CREATE INDEX IF NOT EXISTS ${kind(name)}_${path.replace(/\W/g, "_")}
+         ON entities(kind, json_extract(body, '${path}'))
+         WHERE kind = '${kind(name)}'`,
+      );
     this.migrate();
     // A restart cannot resume a desktop admission from an old connection.
     // Keep the slot reserved until exact provider cleanup is reconciled.
     this.store.transaction(() => {
-      for (const call of this.store.all<SharedCall>(kind("call"))) {
-        if (call.lineId === this.lineId && call.state === "admitted")
+      for (const call of this.select<SharedCall>(
+        "call",
+        "json_extract(body, '$.state') = 'admitted'",
+      )) {
+        if (call.lineId === this.lineId)
           this.store.put(kind("call"), { ...call, state: "outcome_unknown" });
       }
     });
+  }
+  /** Records of one kind that match a condition on an indexed field. */
+  private select<T>(name: string, where: string, ...values: SQLInputValue[]) {
+    return this.store.db
+      .prepare(
+        `SELECT body FROM entities WHERE kind = '${kind(name)}' AND ${where}
+         ORDER BY rowid`,
+      )
+      .all(...values)
+      .map((row) => JSON.parse(String(row.body)) as T);
   }
 
   /** Rows from an earlier release kept numbers in the clear. Keep their keyed
@@ -366,8 +398,10 @@ export class SharedNumber {
     if (pair) {
       if (pair.revokedAt === undefined)
         this.store.put(kind("pairing"), { ...pair, revokedAt: this.now() });
-      for (const c of this.store.all<SharedDeviceCredential>(
-        kind("credential"),
+      for (const c of this.select<SharedDeviceCredential>(
+        "credential",
+        "json_extract(body, '$.pairingId') = ?",
+        pair.id,
       ))
         if (c.pairingId === pair.id && c.revokedAt === undefined)
           this.store.put(kind("credential"), { ...c, revokedAt: this.now() });
@@ -424,7 +458,10 @@ export class SharedNumber {
   }
   private fenceDevice(deviceId: string) {
     this.connections.delete(deviceId);
-    for (const call of this.store.all<SharedCall>(kind("call")))
+    for (const call of this.select<SharedCall>(
+      "call",
+      "json_extract(body, '$.state') = 'admitted'",
+    ))
       if (call.scope?.deviceId === deviceId && call.state === "admitted")
         this.store.put(kind("call"), { ...call, state: "outcome_unknown" });
   }
@@ -620,6 +657,66 @@ export class SharedNumber {
   private waitingCall() {
     const call = this.slotCall();
     return call?.state === "unknown_identity" ? call : undefined;
+  }
+  /** The open call or callback of one room, for the trusted voice worker. */
+  room(roomId: string) {
+    return {
+      calls: this.select<SharedCall>(
+        "call",
+        `json_extract(body, '$.roomId') = ?
+         AND json_extract(body, '$.state') IN ('unknown_identity', 'admitted')`,
+        roomId,
+      ).filter((call) => call.lineId === this.lineId),
+      callbacks: this.select<SharedCallbackOwnership>(
+        "callback",
+        `json_extract(body, '$.roomId') = ?
+         AND json_extract(body, '$.state') IN ('preparing', 'dialing')`,
+        roomId,
+      ).filter((callback) => callback.lineId === this.lineId),
+    };
+  }
+  /** Ended, busy and declined calls leave no work. Ended before `before`,
+   * they go with their proof, their event receipts and their room's voice
+   * claim. Open, released and unknown calls always stay. */
+  prune(before: number, limit = 1000) {
+    return this.store.transaction(() => {
+      const slot = this.slot();
+      const rows = (
+        this.store.db
+          .prepare(
+            `SELECT id, json_extract(body, '$.roomId') AS roomId
+             FROM entities WHERE kind = '${kind("call")}'
+             AND json_extract(body, '$.state') IN ('ended', 'busy', 'declined')
+             AND coalesce(json_extract(body, '$.cleanupAt'),
+               json_extract(body, '$.createdAt')) <= ?
+             LIMIT ?`,
+          )
+          .all(before, limit) as { id: string; roomId: string }[]
+      ).filter((row) => row.id !== slot);
+      const ids = JSON.stringify(rows.map((row) => row.id));
+      this.store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind IN ('${kind("call")}', '${kind("proof")}')
+           AND id IN (SELECT value FROM json_each(?))`,
+        )
+        .run(ids);
+      this.store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind = 'shared_voice_claim'
+           AND id IN (SELECT value FROM json_each(?))`,
+        )
+        .run(JSON.stringify(rows.map((row) => row.roomId)));
+      // Only this router's receipts: provider events and proof turns.
+      this.store.db
+        .prepare(
+          `DELETE FROM events
+           WHERE ((id >= 'shared-provider:' AND id < 'shared-provider;')
+             OR (id >= 'shared-proof-turn:' AND id < 'shared-proof-turn;'))
+           AND json_extract(result, '$.callId') IN (SELECT value FROM json_each(?))`,
+        )
+        .run(ids);
+      return rows.map((row) => row.id);
+    });
   }
   /** The deadline for verification. A callback's window opens on answer. */
   verifyBy(call: SharedCall) {
@@ -866,12 +963,14 @@ export class SharedNumber {
         return existing;
       }
       if (
-        this.store
-          .all<SharedTaskOwnership>(kind("task"))
-          .some(
-            (task) =>
-              task.callId === call.id && task.userTurnId === parsed.userTurnId,
-          )
+        this.select<SharedTaskOwnership>(
+          "task",
+          "json_extract(body, '$.callId') = ?",
+          call.id,
+        ).some(
+          (task) =>
+            task.callId === call.id && task.userTurnId === parsed.userTurnId,
+        )
       )
         throw conflict();
       return this.store.put<SharedTaskOwnership>(kind("task"), {
@@ -943,22 +1042,24 @@ export class SharedNumber {
   hasQueuedCallback() {
     return (
       !this.slot() &&
-      this.store
-        .all<SharedCallbackOwnership>(kind("callback"))
-        .some(
-          (c) =>
-            c.state === "queued" &&
-            (c.notBefore ?? 0) <= this.now() &&
-            this.store.get<SharedTaskOwnership>(kind("task"), c.taskId)
-              ?.callbackRequested,
-        )
+      this.select<SharedCallbackOwnership>(
+        "callback",
+        "json_extract(body, '$.state') = 'queued'",
+      ).some(
+        (c) =>
+          c.state === "queued" &&
+          (c.notBefore ?? 0) <= this.now() &&
+          this.store.get<SharedTaskOwnership>(kind("task"), c.taskId)
+            ?.callbackRequested,
+      )
     );
   }
   claimCallback() {
     return this.store.transaction(() => {
       if (this.slot()) return null;
-      for (const callback of this.store.all<SharedCallbackOwnership>(
-        kind("callback"),
+      for (const callback of this.select<SharedCallbackOwnership>(
+        "callback",
+        "json_extract(body, '$.state') = 'queued'",
       )) {
         if (callback.state !== "queued") continue;
         if ((callback.notBefore ?? 0) > this.now()) continue;

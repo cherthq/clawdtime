@@ -58,8 +58,15 @@ export class SharedCallbacks {
     },
     private now: () => number = Date.now,
   ) {
+    store.db.exec(
+      `CREATE INDEX IF NOT EXISTS ${attempts}_phase
+       ON entities(kind, json_extract(body, '$.phase'))
+       WHERE kind = '${attempts}'`,
+    );
     // A restart before the dial sent nothing. From the dial on, it is unknown.
-    for (const attempt of store.all<Attempt>(attempts)) {
+    for (const attempt of this.select(
+      "'handoff', 'media', 'dial', 'cleanup', 'restore'",
+    )) {
       if (["handoff", "media"].includes(attempt.phase))
         store.put(attempts, { ...attempt, phase: "undialed" });
       else if (["dial", "cleanup", "restore"].includes(attempt.phase)) {
@@ -68,6 +75,17 @@ export class SharedCallbacks {
       }
     }
   }
+  /** Attempts in the given phases, read through the phase index. Ended and
+   * requeued attempts are never read again. */
+  private select(phases: string) {
+    return this.store.db
+      .prepare(
+        `SELECT body FROM entities WHERE kind = '${attempts}'
+         AND json_extract(body, '$.phase') IN (${phases}) ORDER BY rowid`,
+      )
+      .all()
+      .map((row) => JSON.parse(String(row.body)) as Attempt);
+  }
   private put(attempt: Attempt) {
     return this.store.put<Attempt>(attempts, attempt);
   }
@@ -75,7 +93,7 @@ export class SharedCallbacks {
     if (this.busy) return;
     this.busy = true;
     try {
-      const all = this.store.all<Attempt>(attempts);
+      const all = this.select("'active', 'undialed', 'unknown'");
       // Inspect known active calls before allowing any new allocation.
       const active = all.find((a) => a.phase === "active");
       if (active) return await this.inspect(active);

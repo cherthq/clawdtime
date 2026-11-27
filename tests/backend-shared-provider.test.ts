@@ -466,3 +466,108 @@ it("retries a room removal that did not take, without freeing the slot", async (
   expect(f.media.cleanup).toHaveBeenCalledTimes(2);
   expect(await f.send(f.next())).toEqual({ action: "decline" });
 });
+const hour = 60 * 60_000;
+it("prunes ended webhook records, calls and their receipts after a retention window", async () => {
+  let clock = Date.now();
+  const f = await setup({ now: () => clock });
+  const count = (kind: string) =>
+    (
+      f.store.db
+        .prepare("SELECT count(*) AS n FROM entities WHERE kind = ?")
+        .get(kind) as { n: number }
+    ).n;
+  const receipts = () =>
+    (
+      f.store.db
+        .prepare("SELECT count(*) AS n FROM events WHERE id LIKE 'shared-%'")
+        .get() as { n: number }
+    ).n;
+  // One call holds the slot. Strangers are declined and the member is busy.
+  const held = f.next();
+  expect(await f.send(held)).toEqual({ action: "accept", ...f.credentials });
+  for (let i = 0; i < 100; i++) {
+    const call = f.next();
+    call.data.from = stranger;
+    await f.send(call);
+  }
+  for (let i = 0; i < 20; i++) await f.send(f.next());
+  expect(count("shared_provider_incoming")).toBe(121);
+  expect(count("shared_number_call")).toBe(121);
+  // The held call ends and its room is removed.
+  f.api.observe.mockResolvedValue(cleaned);
+  await f.provider.pump();
+  expect(f.phase(held.data.call_id)).toBe("ended");
+  // Inside the window every record stays.
+  clock += 23 * hour;
+  await f.provider.pump();
+  expect(count("shared_provider_incoming")).toBe(121);
+  // After the window the ended records go, with their event receipts.
+  clock += 2 * hour;
+  await f.provider.pump();
+  expect(count("shared_provider_incoming")).toBe(0);
+  expect(count("shared_number_call")).toBe(0);
+  expect(receipts()).toBe(0);
+  // The line still admits a member's call, and keeps it while it is open.
+  const next = f.next();
+  expect(await f.send(next)).toEqual({ action: "accept", ...f.credentials });
+  f.api.observe.mockResolvedValue(live);
+  clock += 2 * hour;
+  await f.provider.pump();
+  expect(f.phase(next.data.call_id)).toBe("prepared");
+  expect(count("shared_number_call")).toBe(1);
+});
+it("reads only open records on each pass, and finds a call's room by an index", async () => {
+  const f = await setup();
+  for (let i = 0; i < 20; i++) {
+    const call = f.next();
+    call.data.from = stranger;
+    await f.send(call);
+  }
+  const held = f.next();
+  expect(await f.send(held)).toEqual({ action: "accept", ...f.credentials });
+  // Every statement on the records table during a pass, webhooks and a
+  // room lookup.
+  const statements: string[] = [];
+  const prepare = f.store.db.prepare.bind(f.store.db);
+  vi.spyOn(f.store.db, "prepare").mockImplementation((sql: string) => {
+    statements.push(sql);
+    return prepare(sql);
+  });
+  await f.provider.pump();
+  // Webhooks while the line is busy: a stranger and the member again.
+  const another = f.next();
+  another.data.from = stranger;
+  expect(await f.send(another)).toEqual({ action: "decline" });
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  const room = await f.service.app.fetch(
+    new Request("https://coordinator.example/line/room", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"t".repeat(32)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ roomId: f.room(held.data.call_id) }),
+    }),
+  );
+  expect(room.status).toBe(200);
+  vi.mocked(f.store.db.prepare).mockRestore();
+  const reads = statements.filter((sql) =>
+    /^\s*SELECT[\s\S]*FROM entities/i.test(sql),
+  );
+  expect(reads.length).toBeGreaterThan(0);
+  for (const sql of reads) {
+    const plan = f.store.db
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all()
+      .map((row) => String(row.detail));
+    // A full scan, or a read of every record of a kind, does not scale.
+    expect(
+      plan.some(
+        (step) =>
+          /^SCAN entities/.test(step) ||
+          /USING INDEX sqlite_autoindex_entities_1 \(kind=\?\)$/.test(step),
+      ),
+      `${sql}\n${plan.join("\n")}`,
+    ).toBe(false);
+  }
+});

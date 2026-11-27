@@ -27,9 +27,16 @@ interface Incoming {
   /** Reconciliation reads of an unknown call that did not end it. */
   retries?: number;
   retryAt?: number;
+  /** When the call ended here, for its retention window. */
+  endedAt?: number;
 }
+const incomingKind = "shared_provider_incoming";
 // Unknown calls are read again after 1, 2, 4, 8 and 16 s, then every 30 s.
 const retryCeilingMs = 30_000;
+/** Ended calls, their webhook receipts and their event receipts are kept this
+ * long after the call ended, then pruned. Unknown and open calls always stay. */
+export const SHARED_RETENTION_MS = 24 * 60 * 60_000;
+const pruneEveryMs = 60_000;
 /** The room removal of a call the router released, retried until it holds. */
 interface Release {
   id: string;
@@ -65,6 +72,7 @@ const eventSchema = z
 export class SharedProvider {
   readonly callbacks: SharedCallbacks;
   private busy = false;
+  private prunedAt = -Infinity;
   private preparing = new Set<string>();
   private pending = new Set<Promise<unknown>>();
   async drain() {
@@ -96,12 +104,13 @@ export class SharedProvider {
     },
   ) {
     this.now = options.now ?? Date.now;
-    for (const item of options.store.all<Incoming>("shared_provider_incoming"))
-      if (item.phase === "preparing")
-        options.store.put("shared_provider_incoming", {
-          ...item,
-          phase: "unknown",
-        });
+    options.store.db.exec(
+      `CREATE INDEX IF NOT EXISTS ${incomingKind}_phase
+       ON entities(kind, json_extract(body, '$.phase'))
+       WHERE kind = '${incomingKind}'`,
+    );
+    for (const item of this.incoming("'preparing'"))
+      options.store.put(incomingKind, { ...item, phase: "unknown" });
     this.callbacks = new SharedCallbacks(
       options.router,
       options.store,
@@ -189,6 +198,7 @@ export class SharedProvider {
       this.options.store.put("shared_provider_incoming", {
         ...record,
         phase: "ended",
+        endedAt: this.now(),
       });
       return { action: "decline" };
     }
@@ -252,9 +262,7 @@ export class SharedProvider {
     this.busy = true;
     try {
       await this.releaseUnverified();
-      for (const item of this.options.store.all<Incoming>(
-        "shared_provider_incoming",
-      )) {
+      for (const item of this.incoming("'unknown', 'prepared'")) {
         if (this.preparing.has(item.id)) continue;
         if (item.phase === "unknown") {
           await this.reconcile(item);
@@ -269,6 +277,7 @@ export class SharedProvider {
             this.options.store.put("shared_provider_incoming", {
               ...item,
               phase: "ended",
+              endedAt: this.now(),
             });
           } else if (state.answered && !state.terminal && !item.activated) {
             await this.options.media.activate(item.roomId);
@@ -282,8 +291,56 @@ export class SharedProvider {
         }
       }
       await this.callbacks.pump();
+      this.prune();
     } finally {
       this.busy = false;
+    }
+  }
+  /** Incoming calls in the given phases, read through the phase index. */
+  private incoming(phases: string) {
+    return this.options.store.db
+      .prepare(
+        `SELECT body FROM entities WHERE kind = '${incomingKind}'
+         AND json_extract(body, '$.phase') IN (${phases}) ORDER BY rowid`,
+      )
+      .all()
+      .map((row) => JSON.parse(String(row.body)) as Incoming);
+  }
+  /** At most once a minute, remove what ended before the retention window:
+   * the webhook receipts here, then the router's calls and receipts. */
+  private prune() {
+    const now = this.now();
+    if (now - this.prunedAt < pruneEveryMs) return;
+    this.prunedAt = now;
+    const before = now - SHARED_RETENTION_MS;
+    const { store, router } = this.options;
+    store.transaction(() => {
+      // A record from an earlier release has no end time: its window starts now.
+      store.db
+        .prepare(
+          `UPDATE entities SET body = json_set(body, '$.endedAt', ?)
+           WHERE kind = '${incomingKind}'
+           AND json_extract(body, '$.phase') = 'ended'
+           AND json_extract(body, '$.endedAt') IS NULL`,
+        )
+        .run(now);
+      store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind = '${incomingKind}'
+           AND json_extract(body, '$.phase') = 'ended'
+           AND json_extract(body, '$.endedAt') <= ?`,
+        )
+        .run(before);
+    });
+    for (let batch = 0; batch < 10; batch++) {
+      const pruned = router.prune(before);
+      store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind = 'shared_provider_release'
+           AND id IN (SELECT value FROM json_each(?))`,
+        )
+        .run(JSON.stringify(pruned));
+      if (pruned.length < 1000) break;
     }
   }
   /** End a call the router released: its caller did not verify in time, ran
@@ -325,6 +382,7 @@ export class SharedProvider {
           this.options.store.put("shared_provider_incoming", {
             ...item,
             phase: "ended",
+            endedAt: this.now(),
           });
           return;
         }
