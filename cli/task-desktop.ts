@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { findNativeHelper } from "../src/native-helpers.js";
 import { createHash } from "node:crypto";
 import {
   accessSync,
@@ -340,6 +341,7 @@ export async function desktopCli(
     dependencies.root ?? resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const panelBinary =
     options["--panel-binary"] ??
+    findNativeHelper("ClawdTimeTaskPanel", { root }) ??
     join(root, "mac/.build/debug/ClawdTimeTaskPanel");
   if (!isAbsolute(panelBinary))
     throw Error("Panel binary must be an absolute path.");

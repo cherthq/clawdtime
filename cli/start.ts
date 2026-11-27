@@ -24,6 +24,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { desktopCli } from "./task-desktop.js";
+import { findNativeHelper } from "../src/native-helpers.js";
 
 export const defaultProjectName = "clawdtime-work";
 export const startHelp = `clawdtime start: start the ClawdTime desktop, the service and the panel with the mascot
@@ -145,8 +146,8 @@ export async function startCli(
     throw new Error("CLAWDTIME_DESKTOP_STATE must be an absolute path.");
   const state = named || join(stateRoot({ env, home }), "desktop");
 
-  const panel = join(root, "mac", ".build", "debug", "ClawdTimeTaskPanel");
-  if (!existsSync(panel))
+  const panel = findNativeHelper("ClawdTimeTaskPanel", { root, env });
+  if (!panel)
     throw new Error(
       `Build the panel first: cd ${join(root, "mac")} && swift build --product ClawdTimeTaskPanel`,
     );
@@ -197,6 +198,8 @@ export async function startCli(
       "--project",
       project,
       ...(tucked ? ["--tucked", tucked] : []),
+      "--panel-binary",
+      panel,
     ],
     { root, print },
   );
