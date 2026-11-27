@@ -16,7 +16,7 @@ describe("public Messages entry point", () => {
     { simulation: false, dispatchEnabled: false, published: false },
     { simulation: true, dispatchEnabled: true, published: false },
   ])(
-    "publishes only on an explicitly enabled live instance: %j",
+    "keeps the installation landing page free of legacy SMS enrollment: %j",
     async (mode) => {
       const store = new Store();
       try {
@@ -37,17 +37,15 @@ describe("public Messages entry point", () => {
         expect(response.status).toBe(200);
         expect(
           html.includes('href="sms:+15550000001?body=Hey%20ClawdTime"'),
-        ).toBe(mode.published);
-        expect(html.includes("data-pilot-setup")).toBe(!mode.published);
+        ).toBe(false);
+        expect(html.includes("data-pilot-setup")).toBe(false);
         expect(html).toMatch(/href="#availability"/);
         expect(html).toContain(
           'data-availability="' +
             (mode.published ? "invited" : "preview") +
             '"',
         );
-        expect(html.includes('id="text-it" data-text-ready')).toBe(
-          mode.published,
-        );
+        expect(html.includes('id="text-it" data-text-ready')).toBe(false);
         expect(store.effects()).toHaveLength(0);
         expect(store.all("pairing")).toHaveLength(0);
       } finally {

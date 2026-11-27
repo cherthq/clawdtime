@@ -693,6 +693,12 @@ export function createApp(
       // Canonicalize only marketing HTML. Never redirect service APIs/callbacks.
       if (options.simulation || new URL(c.req.url).host !== canonicalHost)
         c.header("X-Robots-Tag", "noindex, follow");
+      // Only the landing page embeds the recorded demo; service routes stay isolated.
+      if (path === "/")
+        c.header(
+          "Content-Security-Policy",
+          "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://i.ytimg.com; frame-src https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'none'",
+        );
       c.header("Link", `<${websiteOrigin}${path}>; rel="canonical"`);
       return c.html(
         websitePage(
