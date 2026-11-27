@@ -64,6 +64,26 @@ final class SetupViewTests: XCTestCase {
     _ = render(setup)
   }
 
+  func testASettingsStepOffersSettingsAndCheckAgainNotYesOrNo() throws {
+    let permissions = try XCTUnwrap(EngineEvent.decode(line: #"{"type":"step","id":"permissions","state":"needs_input","title":"Permissions","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"}}"#))
+    guard case .step(let step) = permissions else { return XCTFail("a step") }
+    XCTAssertTrue(StepCard.checksSettings(step), "the answer is Check again, after the person acts in System Settings")
+    let consent = try XCTUnwrap(EngineEvent.decode(line: #"{"type":"step","id":"computer","state":"needs_input","input":{"kind":"confirm","prompt":"Turn on computer use?"}}"#))
+    guard case .step(let question) = consent else { return XCTFail("a step") }
+    XCTAssertFalse(StepCard.checksSettings(question), "a real question keeps Yes and No")
+  }
+
+  func testAFailedStepHasOnePrimaryRetryWithTheEnginesLabel() throws {
+    func step(_ line: String) throws -> StepEvent {
+      guard case .step(let step) = try EngineEvent.decode(line: line) else { throw CocoaError(.coderInvalidValue) }
+      return step
+    }
+    XCTAssertEqual(StepCard.retryLabel(try step(#"{"type":"step","id":"phone","state":"failed","recovery":{"label":"Send a new code","action":"retry"}}"#)), "Send a new code")
+    XCTAssertEqual(StepCard.retryLabel(try step(#"{"type":"step","id":"desktop","state":"failed"}"#)), "Try again")
+    XCTAssertEqual(StepCard.retryLabel(try step(#"{"type":"step","id":"permissions","state":"failed","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security"}}"#)), "Try again")
+    XCTAssertNil(StepCard.retryLabel(try step(#"{"type":"step","id":"model","state":"needs_input","input":{"kind":"secret"}}"#)))
+  }
+
   func testAFieldOfAnotherKindStartsEmpty() {
     XCTAssertTrue(StepCard.clearsField(shown: .phone, next: .code), "the number never carries into the code field")
     XCTAssertFalse(StepCard.clearsField(shown: .phone, next: nil), "a working state keeps the field")

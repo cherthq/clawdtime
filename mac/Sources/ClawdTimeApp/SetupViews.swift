@@ -287,6 +287,18 @@ struct StepCard: View {
     return shown != nil && shown != next
   }
 
+  /// The one primary button of a failed step: the engine's retry, with its own label.
+  static func retryLabel(_ step: StepEvent) -> String? {
+    guard step.state == .failed else { return nil }
+    return step.recovery?.action == .retry ? step.recovery?.label : "Try again"
+  }
+
+  /// A step that waits for the person to act in System Settings. Its only
+  /// answer is Check again, so it shows no Yes or No.
+  static func checksSettings(_ step: StepEvent) -> Bool {
+    step.state == .needsInput && step.recovery?.action == .openSettings && step.input?.kind == .confirm
+  }
+
   var body: some View {
     Card {
       HStack(alignment: .center, spacing: 12) {
@@ -296,7 +308,7 @@ struct StepCard: View {
       if let detail = step.detail, !detail.isEmpty {
         Text(detail).font(.system(size: 14)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
       }
-      if step.state == .needsInput, let input = step.input {
+      if step.state == .needsInput, let input = step.input, !Self.checksSettings(step) {
         InputField(input: input, text: $text, selection: $selection, submit: send)
           .disabled(awaiting)
       }
@@ -320,10 +332,11 @@ struct StepCard: View {
       if step.id.isSkippable && (step.state == .needsInput || step.state == .failed) {
         Button("Skip for now") { perform(.skip) }.buttonStyle(PillStyle(kind: .secondary)).disabled(awaiting)
       }
-      if let recovery = step.recovery, step.state == .needsInput || step.state == .failed {
+      // A retry is the primary button on the right; other recoveries sit here.
+      if let recovery = step.recovery, recovery.action != .retry, step.state == .needsInput || step.state == .failed {
         Button(recovery.label) { recoveryRefused = !recover() }
           .buttonStyle(PillStyle(kind: .secondary)).disabled(awaiting)
-        if recovery.action == .openSettings {
+        if recovery.action == .openSettings && !Self.checksSettings(step) {
           Button("Check again") { perform(.recheck) }.buttonStyle(PillStyle(kind: .secondary)).disabled(awaiting)
         }
       }
@@ -339,6 +352,8 @@ struct StepCard: View {
         Text("Working").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.secondaryText)
       }
       .accessibilityElement(children: .combine)
+    } else if Self.checksSettings(step) {
+      Button("Check again") { perform(.recheck) }.buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
     } else if step.state == .needsInput, let input = step.input {
       if input.kind == .confirm {
         Button("No") { submit(.bool(false)) }.buttonStyle(PillStyle(kind: .secondary))
@@ -349,8 +364,8 @@ struct StepCard: View {
           .keyboardShortcut(.defaultAction)
           .disabled(InputRules.value(for: input, text: text, selection: selection) == nil)
       }
-    } else if step.state == .failed && step.recovery?.action != .retry {
-      Button("Try again") { perform(.retry) }.buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
+    } else if let label = Self.retryLabel(step) {
+      Button(label) { perform(.retry) }.buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
     }
   }
 
@@ -473,12 +488,14 @@ struct FinishedView: View {
            ? "ClawdTime lives in the menu bar. Stop there ends sharing and control at any time."
            : "You can use what is ready now and finish the rest later.")
         .font(.system(size: 14)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
+      // The report takes the room the window has; a long one scrolls.
       ScrollView {
-        VStack(alignment: .leading, spacing: 10) {
-          ForEach(state.summary) { entry in
-            HStack(alignment: .top, spacing: 12) {
-              StateBadge(state: entry.state).scaleEffect(0.8)
-              VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 8) {
+          // The heading above says the result: the row of the ready step would repeat it.
+          ForEach(state.summary.filter { $0.id != .ready }) { entry in
+            HStack(alignment: .top, spacing: 10) {
+              StateBadge(state: entry.state).scaleEffect(0.72).frame(width: 22, height: 22)
+              VStack(alignment: .leading, spacing: 1) {
                 Text(state.steps[entry.id]?.displayTitle ?? entry.id.fallbackTitle).font(.system(size: 13, weight: .semibold))
                 if let detail = entry.detail, !detail.isEmpty {
                   Text(detail).font(.system(size: 12)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
@@ -488,8 +505,9 @@ struct FinishedView: View {
             }
           }
         }
+        .padding(.vertical, 2)
       }
-      .frame(maxHeight: 250)
+      .frame(maxHeight: .infinity)
       if handedOff {
         VStack(alignment: .leading, spacing: 4) {
           Text("Desktop: \(MenuText.status(owner.desktop))")
@@ -512,6 +530,7 @@ struct FinishedView: View {
         }
       }
     }
+    .padding(.bottom, 24)
     .onAppear {
       openAtLogin = loginItem.isEnabled
       loginNote = loginItem.needsApproval ? "Allow ClawdTime in System Settings, Login Items." : nil
