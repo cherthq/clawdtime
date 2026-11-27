@@ -30,7 +30,16 @@ const providerBinding = {
   expiresAt,
 };
 export const routingProviderEventSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("incoming"), ...providerBinding }).strict(),
+  z
+    .object({
+      kind: z.literal("incoming"),
+      ...providerBinding,
+      // The provider's observed caller handle, exactly as the member verified
+      // it (E.164 phone number or email). It only selects whose paired Mac may
+      // be shown the call code. It never authorizes a Mac by itself.
+      caller: z.string().min(1).max(320).optional(),
+    })
+    .strict(),
   z
     .object({ kind: z.literal("cleanup_complete"), ...providerBinding })
     .strict(),
@@ -123,6 +132,8 @@ export interface SharedCall {
   callbackTaskId?: string;
   activatedAt?: number;
   expectedMemberId?: string;
+  // Keyed digest of the observed caller handle; the handle is not stored.
+  callerDigest?: string;
 }
 export interface SharedCallProof {
   id: string;

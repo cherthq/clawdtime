@@ -352,6 +352,9 @@ export class SharedNumber {
           participantId: event.participantId,
           state: this.slot() ? "busy" : "unknown_identity",
           createdAt: this.now(),
+          ...(event.caller
+            ? { callerDigest: this.callerDigest(event.caller) }
+            : {}),
         };
         if (!old && call.state !== "busy")
           this.store.saveState(this.slotKey(), call.id);
@@ -388,6 +391,20 @@ export class SharedNumber {
     if (!call || call.lineId !== this.lineId) throw refused();
     return call;
   }
+  private callerDigest(handle: string) {
+    return createHmac("sha256", Buffer.from(this.options.proofKey, "hex"))
+      .update(JSON.stringify(["caller", this.lineId, handle]))
+      .digest("hex");
+  }
+  /** Only the member whose verified number placed the call may be shown its
+   * code. A callback is bound to its original member instead. Selection only:
+   * the code from the paired Mac still has to be spoken on this call. */
+  private callerIs(call: SharedCall, memberId: string) {
+    if (call.expectedMemberId) return call.expectedMemberId === memberId;
+    if (!call.callerDigest) return false;
+    const member = this.member(memberId);
+    return equal(call.callerDigest, this.callerDigest(member.alias.recipient));
+  }
   private proofDigest(callId: string, code: string) {
     return createHmac("sha256", Buffer.from(this.options.proofKey, "hex"))
       .update(JSON.stringify([this.lineId, callId, code]))
@@ -410,10 +427,14 @@ export class SharedNumber {
       )
         throw notWaiting();
       const call = this.waitingCall();
-      if (!call || (callId !== undefined && callId !== call.id))
+      // The same answer for no call and another member's call: one member
+      // can neither take, block nor detect another member's waiting call.
+      if (
+        !call ||
+        (callId !== undefined && callId !== call.id) ||
+        !this.callerIs(call, pair.memberId)
+      )
         throw notWaiting();
-      if (call.expectedMemberId && call.expectedMemberId !== pair.memberId)
-        throw refused();
       if (this.store.get(kind("proof"), call.id)) throw conflict();
       const code = randomInt(100_000_000).toString().padStart(8, "0");
       const proof = this.store.put<SharedCallProof>(kind("proof"), {

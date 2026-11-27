@@ -63,9 +63,13 @@ function fixture(path?: string) {
     now: () => now,
   };
   let router = new SharedNumber(store, options);
+  const numbers = { a: "+14155550100", b: "+12125550100" };
+  // The provider's observed caller handle. It selects whose Mac may be shown
+  // a code; it never authorizes a Mac by itself.
   const event = (
     call = "call-a",
     kind: "incoming" | "cleanup_complete" = "incoming",
+    caller: string | null = numbers.a,
   ) => ({
     verifiedFixture: {
       kind,
@@ -75,6 +79,7 @@ function fixture(path?: string) {
       roomId: `room:${call}`,
       participantId: `bridge:${call}`,
       expiresAt: now + 60_000,
+      ...(kind === "incoming" && caller ? { caller } : {}),
     },
   });
   let turn = 0;
@@ -96,7 +101,8 @@ function fixture(path?: string) {
     call: { providerCallId: string; roomId: string; participantId: string },
     code: string,
   ) => router.proveCall(proofTurn(call, code));
-  const incoming = (call = "call-a") => router.providerEvent(event(call));
+  const incoming = (call = "call-a", caller: string | null = numbers.a) =>
+    router.providerEvent(event(call, "incoming", caller));
   const cleanup = (call = "call-a") =>
     router.providerEvent(event(call, "cleanup_complete"));
   const pair = async (member = "a", allowControl = true) => {
@@ -116,7 +122,10 @@ function fixture(path?: string) {
   ) => {
     const device = await pair(member, allowControl);
     const connection = router.connect(device.credential, `instance-${member}`);
-    const call = await incoming(providerCall);
+    const call = await incoming(
+      providerCall,
+      (numbers as Record<string, string>)[member] ?? null,
+    );
     const proof = router.issueCallProof(device.credential, call.id);
     const result = await prove(call, proof.code);
     if (result.state !== "admitted") throw new Error("fixture not admitted");
@@ -221,6 +230,43 @@ describe("staged shared-number identity and ownership", () => {
     expect(await f.prove(next, nextProof.code)).toEqual({
       state: "unauthorized",
     });
+  });
+
+  it("gives the call code only to the member whose verified number is calling", async () => {
+    const f = fixture();
+    const a = await f.pair(),
+      b = await f.pair("b");
+    f.router.connect(a.credential, "instance-a");
+    f.router.connect(b.credential, "instance-b");
+    const call = await f.incoming("call-a", "+14155550100");
+    // Another member can neither take nor block this member's waiting call.
+    expect(() => f.router.issueCallProof(b.credential, call.id)).toThrow(
+      "shared_call_not_waiting",
+    );
+    expect(() => f.router.issueCallProof(b.credential)).toThrow(
+      "shared_call_not_waiting",
+    );
+    const proof = f.router.issueCallProof(a.credential);
+    const result = await f.prove(call, proof.code);
+    expect(result.state).toBe("admitted");
+    expect(result.state === "admitted" && result.call.scope?.deviceId).toBe(
+      a.pairing.deviceId,
+    );
+    await f.cleanup("call-a");
+    // A hidden or unknown caller handle gives no code to any member.
+    await f.incoming("call-hidden", null);
+    expect(() => f.router.issueCallProof(a.credential)).toThrow(
+      "shared_call_not_waiting",
+    );
+    await f.cleanup("call-hidden");
+    await f.incoming("call-other", "+13125550100");
+    expect(() => f.router.issueCallProof(a.credential)).toThrow(
+      "shared_call_not_waiting",
+    );
+    // A stranger's handle is kept only as a keyed digest.
+    expect(JSON.stringify(f.store.all("shared_number_call"))).not.toContain(
+      "+13125550100",
+    );
   });
 
   it("binds the proof to exact call, room and participant and consumes it once", async () => {
