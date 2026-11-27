@@ -149,13 +149,29 @@ export function createSharedNumberApp(options: {
       .parse(await c.req.json());
     return c.json(identity.verify(input.challengeId, input.code));
   });
+  // An empty body is an empty object. Bodies stay small and strict.
+  const body = async (c: Context) => {
+    const text = await c.req.text();
+    return text.trim() ? (JSON.parse(text) as unknown) : {};
+  };
   app.post("/account/invite", async (c) => {
     const proof = bearer(c.req.header("authorization"));
+    const { replace } = z
+      .object({ replace: z.boolean().optional() })
+      .strict()
+      .parse(await body(c));
     await router.enroll(proof, proof);
-    return c.json(await router.invite(proof));
+    return c.json(await router.invite(proof, { replace }));
   });
   app.post("/account/revoke", async (c) => {
-    await router.revoke(bearer(c.req.header("authorization")));
+    const options = z
+      .object({
+        permanent: z.boolean().optional(),
+        deviceCredential: z.string().max(512).optional(),
+      })
+      .strict()
+      .parse(await body(c));
+    await router.revoke(bearer(c.req.header("authorization")), options);
     return c.json({ ok: true });
   });
   app.post("/pair/accept", async (c) => {
@@ -184,6 +200,18 @@ export function createSharedNumberApp(options: {
     return c.json(
       router.issueCallProof(bearer(c.req.header("authorization")), callId),
     );
+  });
+  // The Mac replaces its own credential. A stolen credential is replaced
+  // through the signed-in account instead: /account/invite with replace.
+  app.post("/device/rotate", async (c) => {
+    z.object({})
+      .strict()
+      .parse(await body(c));
+    return c.json({
+      credential: router.rotateCredential(
+        bearer(c.req.header("authorization")),
+      ),
+    });
   });
   for (const action of ["heartbeat", "disconnect", "poll"] as const)
     app.post(`/device/${action}`, async (c) => {

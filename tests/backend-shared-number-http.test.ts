@@ -595,6 +595,49 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     ).toBe(403);
   });
 
+  it("rotates a device credential and re-pairs a Mac through authenticated routes", async () => {
+    const f = await fixture();
+    const a = await f.pair("+14155550100");
+    const rotated = await f.post("/device/rotate", {}, a.credential);
+    expect(rotated.status).toBe(200);
+    const fresh = rotated.body.credential as string;
+    expect(fresh).not.toBe(a.credential);
+    expect(
+      (await f.post("/device/connect", { instanceId: "mac" }, a.credential))
+        .status,
+    ).toBe(403);
+    expect(
+      (await f.post("/device/connect", { instanceId: "mac" }, fresh)).status,
+    ).toBe(200);
+    expect((await f.post("/device/rotate", {}, "forged.secret")).status).toBe(
+      403,
+    );
+    // A replacement Mac needs the signed-in account and an explicit replace.
+    expect((await f.post("/account/invite", {}, a.account)).status).toBe(409);
+    const invitation = await f.post(
+      "/account/invite",
+      { replace: true },
+      a.account,
+    );
+    expect(invitation.status).toBe(200);
+    const paired = await f.post("/pair/accept", {
+      invitation: invitation.body.invitation,
+      acceptance: {
+        localAccepted: true,
+        displayId: "display",
+        allowView: true,
+        allowControl: false,
+      },
+    });
+    expect(paired.status).toBe(200);
+    expect(
+      (await f.post("/device/connect", { instanceId: "mac" }, fresh)).status,
+    ).toBe(403);
+    // Revoking the pairing leaves the number free to pair again.
+    expect((await f.post("/account/revoke", {}, a.account)).status).toBe(200);
+    expect((await f.post("/account/invite", {}, a.account)).status).toBe(200);
+  });
+
   it("checks the device credential before reading a device body and keeps device bodies small", async () => {
     const f = await fixture();
     const a = await f.pair("+14155550100");

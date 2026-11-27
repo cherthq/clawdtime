@@ -24,6 +24,9 @@ interface Invitation {
   memberId: string;
   expiresAt: number;
   consumedAt?: number;
+  // An explicit replacement names the pairing it replaces.
+  replace?: boolean;
+  replacesPairingId?: string;
 }
 const kind = (name: string) => `shared_number_${name}`;
 /** A caller who has not verified within this time is released, so one
@@ -157,17 +160,22 @@ export class SharedNumber {
     });
   }
 
-  async invite(accountProof: unknown) {
+  /** One selected Mac per member, with no implicit replacement. A member who
+   * lost a Mac, or whose device credential was stolen, asks for an explicit
+   * replacement: accepting it on the new Mac revokes the old pairing. */
+  async invite(accountProof: unknown, options: { replace?: boolean } = {}) {
     const account = await this.account(accountProof);
     return this.store.transaction(() => {
       const member = this.member(account.memberId);
-      // First release has one selected Mac, with no implicit replacement.
-      if (member.pairingId) throw conflict();
+      if (member.pairingId && options.replace !== true) throw conflict();
       const secret = token();
       const invitation = this.store.put<Invitation>(kind("invite"), {
         id: hash(secret),
         memberId: member.id,
         expiresAt: this.now() + 300_000,
+        ...(member.pairingId
+          ? { replace: true, replacesPairingId: member.pairingId }
+          : {}),
       });
       return { invitation: secret, expiresAt: invitation.expiresAt };
     });
@@ -186,7 +194,9 @@ export class SharedNumber {
       )
         throw refused();
       const member = this.member(invite.memberId);
-      if (member.pairingId) throw conflict();
+      // The pairing must still be the one this invitation was issued against.
+      if (member.pairingId !== invite.replacesPairingId) throw conflict();
+      if (member.pairingId) this.unpair(member);
       const pair: Pairing = {
         id: id("pair"),
         memberId: member.id,
@@ -252,21 +262,45 @@ export class SharedNumber {
       return this.issueCredential(pair);
     });
   }
-  async revoke(accountProof: unknown) {
+  /** Revoke unpairs the Mac and revokes its credentials. The number stays
+   * enrolled and can pair again, so one sign-in code alone never bans it. A
+   * permanent ban is the member's own request: it needs the signed-in account
+   * and the current credential of the paired Mac together. */
+  async revoke(
+    accountProof: unknown,
+    options: { permanent?: boolean; deviceCredential?: string } = {},
+  ) {
     const account = await this.account(accountProof);
     this.store.transaction(() => {
       const member = this.member(account.memberId);
-      this.store.put(kind("member"), { ...member, revokedAt: this.now() });
-      if (!member.pairingId) return;
-      const pair = this.store.get<Pairing>(kind("pairing"), member.pairingId)!;
-      this.store.put(kind("pairing"), { ...pair, revokedAt: this.now() });
+      if (options.permanent) {
+        const { pair } = this.authenticate(options.deviceCredential ?? "");
+        if (pair.memberId !== member.id || pair.id !== member.pairingId)
+          throw refused();
+      }
+      const unpaired = this.unpair(member);
+      if (options.permanent)
+        this.store.put(kind("member"), {
+          ...unpaired,
+          revokedAt: this.now(),
+        });
+    });
+  }
+  private unpair(member: SharedMember) {
+    if (!member.pairingId) return member;
+    const pair = this.store.get<Pairing>(kind("pairing"), member.pairingId);
+    if (pair) {
+      if (pair.revokedAt === undefined)
+        this.store.put(kind("pairing"), { ...pair, revokedAt: this.now() });
       for (const c of this.store.all<SharedDeviceCredential>(
         kind("credential"),
       ))
         if (c.pairingId === pair.id && c.revokedAt === undefined)
           this.store.put(kind("credential"), { ...c, revokedAt: this.now() });
       this.fenceDevice(pair.deviceId);
-    });
+    }
+    const { pairingId: _pairingId, ...rest } = member;
+    return this.store.put<SharedMember>(kind("member"), rest);
   }
 
   /** Device IDs are derived from the credential, never from a header. A fresh

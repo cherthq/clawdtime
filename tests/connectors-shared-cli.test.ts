@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { sharedCallProof } from "../cli/shared.js";
+import { sharedCallProof, sharedRotate } from "../cli/shared.js";
 
 const credential = `credential_${"a".repeat(36)}.${"b".repeat(43)}`;
 
@@ -37,4 +37,20 @@ it("reports a refused call code without a code", async () => {
       request as unknown as typeof fetch,
     ),
   ).rejects.toThrow("shared_call_not_waiting");
+});
+
+it("rotates the device credential with the current device credential", async () => {
+  const next = `credential_${"c".repeat(36)}.${"d".repeat(43)}`;
+  const request = vi.fn(async () => Response.json({ credential: next }));
+  expect(
+    await sharedRotate(
+      { origin: "https://coordinator.example", credential },
+      request as unknown as typeof fetch,
+    ),
+  ).toBe(next);
+  const [url, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toBe("https://coordinator.example/device/rotate");
+  expect((init.headers as Record<string, string>).authorization).toBe(
+    `Bearer ${credential}`,
+  );
 });

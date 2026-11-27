@@ -431,6 +431,76 @@ describe("staged shared-number identity and ownership", () => {
     ).not.toContain(rotated.split(".")[1]);
   });
 
+  it("re-pairs a lost Mac through the signed-in account and fences the old Mac", async () => {
+    const f = fixture();
+    const a = await f.admitted();
+    // There is no implicit replacement of the paired Mac.
+    await expect(f.router.invite("account-a")).rejects.toThrow();
+    const stale = await f.router.invite("account-a", { replace: true });
+    const invite = await f.router.invite("account-a", { replace: true });
+    const acceptance = {
+      localAccepted: true,
+      displayId: "display-new",
+      allowView: true,
+      allowControl: true,
+    };
+    const replaced = f.router.acceptInvitation(invite.invitation, acceptance);
+    expect(replaced.pairing.deviceId).not.toBe(a.pairing.deviceId);
+    expect(() => f.router.connect(a.credential, "instance-a")).toThrow();
+    expect(() =>
+      f.router.authorizeCall(a.call.id, a.call.scope!.grantId, "view"),
+    ).toThrow();
+    // An invitation from before that replacement cannot replace it again.
+    expect(() =>
+      f.router.acceptInvitation(stale.invitation, acceptance),
+    ).toThrow();
+    await f.cleanup();
+    f.router.connect(replaced.credential, "instance-new");
+    const call = await f.incoming("call-new");
+    const proof = f.router.issueCallProof(replaced.credential);
+    const result = await f.prove(call, proof.code);
+    expect(result.state === "admitted" && result.call.scope?.deviceId).toBe(
+      replaced.pairing.deviceId,
+    );
+  });
+
+  it("revokes a pairing without banning the number; a ban needs the paired Mac too", async () => {
+    const f = fixture();
+    const a = await f.pair(),
+      b = await f.pair("b");
+    await f.router.revoke("account-a");
+    expect(() => f.router.connect(a.credential, "instance-a")).toThrow();
+    // One sign-in alone cannot ban the number: the member pairs again.
+    await f.router.enroll("account-a", "alias-a");
+    const again = f.router.acceptInvitation(
+      (await f.router.invite("account-a")).invitation,
+      {
+        localAccepted: true,
+        displayId: "display-a",
+        allowView: true,
+        allowControl: false,
+      },
+    );
+    await expect(
+      f.router.revoke("account-a", { permanent: true }),
+    ).rejects.toThrow();
+    await expect(
+      f.router.revoke("account-a", {
+        permanent: true,
+        deviceCredential: b.credential,
+      }),
+    ).rejects.toThrow();
+    f.router.connect(again.credential, "instance-a");
+    await f.router.revoke("account-a", {
+      permanent: true,
+      deviceCredential: again.credential,
+    });
+    await expect(f.router.enroll("account-a", "alias-a")).rejects.toThrow();
+    await expect(f.router.invite("account-a")).rejects.toThrow();
+    expect(() => f.router.connect(again.credential, "instance-a")).toThrow();
+    f.router.connect(b.credential, "instance-b");
+  });
+
   it("keeps view and control separate and rechecks revocation", async () => {
     const f = fixture();
     const a = await f.admitted("a", "call-a", false);

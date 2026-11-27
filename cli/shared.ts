@@ -78,13 +78,38 @@ export async function sharedCallProof(
     .parse(body);
 }
 
+/** The Mac replaces its own device credential. The old one stops working at
+ * once. If the answer is lost, pair again with --replace. */
+export async function sharedRotate(
+  config: { origin: string; credential: string },
+  request: typeof fetch = fetch,
+) {
+  const response = await request(
+    `${sharedOrigin(config.origin)}/device/rotate`,
+    {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.credential}`,
+      },
+      body: "{}",
+      signal: AbortSignal.timeout(20_000),
+    },
+  );
+  if (!response.ok) throw Error("shared_rotation_refused");
+  return z
+    .object({ credential: z.string().min(32).max(512) })
+    .parse(await response.json()).credential;
+}
+
 export async function sharedCli(args: string[]) {
   const directory = join(homedir(), ".config", "clawdtime", "shared");
   const file = join(directory, "connection.json");
   const system = { env: process.env, home: homedir() };
-  if (!["pair", "run", "prove", "doctor"].includes(args[0] ?? "")) {
+  if (!["pair", "run", "prove", "rotate", "doctor"].includes(args[0] ?? "")) {
     console.log(
-      "clawdtime shared pair HTTPS_ORIGIN\nclawdtime shared run\nclawdtime shared prove [CALL_ID]   (on the paired Mac, while shared run is open)\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
+      "clawdtime shared pair HTTPS_ORIGIN [--replace]   (--replace pairs this Mac in place of a lost one)\nclawdtime shared run\nclawdtime shared rotate   (replace this Mac's device credential)\nclawdtime shared prove [CALL_ID]   (on the paired Mac, while shared run is open)\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
     );
     return;
   }
@@ -246,9 +271,31 @@ export async function sharedCli(args: string[]) {
     }
     return;
   }
-  if (args[0] === "pair" && config)
-    throw Error("shared_pairing_already_exists");
-  const origin = sharedOrigin(args[1] ?? "");
+  if (args[0] === "rotate") {
+    if (!config) throw Error("shared_pairing_required");
+    let credential: string;
+    try {
+      credential = await sharedRotate(config);
+    } catch {
+      console.error(
+        "The credential was not replaced, or its answer was lost. If this Mac can no longer connect, run clawdtime shared pair HTTPS_ORIGIN --replace.",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    writePrivateJSON(file, { ...config, credential });
+    console.log(
+      "This Mac has a new device credential. The old one no longer works. Start clawdtime shared run again.",
+    );
+    return;
+  }
+  const replace = args.includes("--replace");
+  const pairArgs = args.slice(1).filter((arg) => arg !== "--replace");
+  if (config && !replace)
+    throw Error(
+      "shared_pairing_already_exists: to pair this Mac again, add --replace",
+    );
+  const origin = sharedOrigin(pairArgs[0] ?? "");
   if (!process.stdin.isTTY) throw Error("shared_setup_requires_terminal");
   const terminal = createInterface({
     input: process.stdin,
@@ -265,6 +312,10 @@ export async function sharedCli(args: string[]) {
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(20_000),
     });
+    if (response.status === 409 && path === "/account/invite" && !replace)
+      throw Error(
+        "shared_pairing_exists: this number already has a paired Mac. To pair this Mac in its place, add --replace",
+      );
     if (!response.ok) throw Error("shared_setup_refused");
     return response.json();
   };
@@ -323,9 +374,16 @@ export async function sharedCli(args: string[]) {
       ).trim() !== "yes"
     )
       return;
+    // A replacement revokes the old pairing of this number when it is accepted.
     const invitation = z
       .object({ invitation: z.string() })
-      .parse(await post("/account/invite", {}, session.token));
+      .parse(
+        await post(
+          "/account/invite",
+          replace ? { replace: true } : {},
+          session.token,
+        ),
+      );
     const accepted = z
       .object({
         credential: z.string(),
