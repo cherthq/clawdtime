@@ -234,6 +234,11 @@ export class SharedNumber {
       throw refused();
     return { record, pair };
   }
+  /** A cheap credential check that runs before a device request body is read. */
+  authenticateDevice(credential: string) {
+    if (credential.length > 512) throw refused();
+    this.authenticate(credential);
+  }
   rotateCredential(credential: string) {
     return this.store.transaction(() => {
       const { record, pair } = this.authenticate(credential);

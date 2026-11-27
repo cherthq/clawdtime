@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { SharedNumber } from "./control/shared-number.js";
@@ -18,6 +18,9 @@ import {
   sharedOperationSchema,
   sharedResultSchema,
 } from "./shared-relay-contracts.js";
+
+const tooLarge = (c: Context) =>
+  c.json({ ok: false, code: "request_too_large" }, 413);
 
 /** Separate coordinator. This factory does not claim a line or start polling.
  * The line token is a trusted server-to-server boundary, never a member token.
@@ -71,21 +74,23 @@ export function createSharedNumberApp(options: {
     options.relayTimeoutMs,
   );
   const app = new Hono();
-  app.use("*", bodyLimit({ maxSize: 8_100_000 }));
-  for (const path of [
-    "/auth/*",
-    "/account/*",
-    "/pair/*",
-    "/line/*",
-    "/provider/*",
-  ])
-    app.use(path, bodyLimit({ maxSize: 32_768 }));
+  const bearer = (header?: string) =>
+    header?.startsWith("Bearer ") ? header.slice(7) : "";
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     await next();
   });
-  const bearer = (header?: string) =>
-    header?.startsWith("Bearer ") ? header.slice(7) : "";
+  // Check the device credential before any byte of a device body is read.
+  app.use("/device/*", async (c, next) => {
+    router.authenticateDevice(bearer(c.req.header("authorization")));
+    await next();
+  });
+  // Every body is small. Only a device's screen frame result can be large.
+  const small = bodyLimit({ maxSize: 32_768, onError: tooLarge });
+  const frame = bodyLimit({ maxSize: 8_100_000, onError: tooLarge });
+  app.use("*", (c, next) =>
+    (c.req.path === "/device/result" ? frame : small)(c, next),
+  );
   app.use("/line/*", async (c, next) => {
     if (
       !equal(

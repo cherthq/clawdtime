@@ -503,6 +503,51 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     );
   });
 
+  it("checks the device credential before reading a device body and keeps device bodies small", async () => {
+    const f = await fixture();
+    const a = await f.pair("+14155550100");
+    const raw = async (path: string, body: string, token: string) =>
+      (
+        await fetch(`${f.origin}${path}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body,
+        })
+      ).status;
+    // A body from a missing or forged credential is refused, never parsed.
+    for (const path of ["/device/connect", "/device/poll", "/device/result"])
+      expect(await raw(path, "{not json", "forged.credential")).toBe(403);
+    expect(await raw("/device/result", "x".repeat(1_000_000), "")).toBe(403);
+    const connection = await f.post(
+      "/device/connect",
+      { instanceId: "instance-a" },
+      a.credential,
+    );
+    const padding = "x".repeat(64_000);
+    expect(
+      await raw(
+        "/device/heartbeat",
+        JSON.stringify({ connectionId: connection.body.id, padding }),
+        a.credential,
+      ),
+    ).toBe(413);
+    // Only a screen frame result may be large. It still meets its schema.
+    expect(
+      await raw(
+        "/device/result",
+        JSON.stringify({
+          connectionId: connection.body.id,
+          id: "missing",
+          result: { ok: true, padding },
+        }),
+        a.credential,
+      ),
+    ).toBe(400);
+  });
+
   it("rejects forged roles and cross-device replies, and never repeats an uncertain command", async () => {
     const f = await fixture(80);
     const a = await f.pair("+14155550100"),
