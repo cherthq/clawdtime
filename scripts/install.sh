@@ -410,32 +410,58 @@ read_latest() {
 }
 
 # Checks every file of the runtime in $1 against its manifest, with the Node
-# of that runtime. It needs nothing else on the Mac.
+# of that runtime, and finds any file or link that the manifest does not
+# list. It needs nothing else on the Mac. On a difference it prints one line
+# that says what differs. With "remove" as $2, when every listed file checks
+# out, it removes the files and links that the manifest does not list and
+# prints them.
 # shellcheck disable=SC2016 # JavaScript, not shell.
 verify_js='
-const [dir, version, commit] = process.argv.slice(1);
+const [dir, version, commit, mode] = process.argv.slice(1);
 const { createHash } = require("node:crypto");
-const { lstatSync, readFileSync } = require("node:fs");
+const { lstatSync, readdirSync, readFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 const stop = (text) => { console.error(text); process.exit(1); };
 let manifest;
 try { manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")); }
-catch { stop("manifest.json cannot be read."); }
+catch { stop("manifest.json cannot be read"); }
 if (manifest.name !== "clawdtime" || manifest.version !== version ||
     manifest.commit !== commit || manifest.arch !== "arm64")
-  stop("manifest.json is for another release.");
+  stop("manifest.json is for another release");
 const files = Object.entries(manifest.files ?? {});
-if (!files.length) stop("manifest.json lists no files.");
+if (!files.length) stop("manifest.json lists no files");
 for (const [path, sha] of files) {
-  if (path.startsWith("/") || path.split("/").includes("..")) stop(`Bad path: ${path}`);
+  if (path.startsWith("/") || path.split("/").includes("..")) stop(`bad path: ${path}`);
   const stat = lstatSync(join(dir, path), { throwIfNoEntry: false });
-  if (!stat || !stat.isFile()) stop(`Missing: ${path}`);
+  if (!stat || !stat.isFile()) stop(`missing: ${path}`);
   if (createHash("sha256").update(readFileSync(join(dir, path))).digest("hex") !== sha)
-    stop(`Changed: ${path}`);
+    stop(`changed: ${path}`);
 }
+const listed = new Set(files.map(([path]) => path));
+const unlisted = [];
+const walk = (folder) => {
+  let entries;
+  try { entries = readdirSync(join(dir, folder), { withFileTypes: true }); }
+  catch { stop(`cannot be read: ${folder || "."}`); }
+  for (const entry of entries) {
+    const path = folder ? `${folder}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) walk(path);
+    else if (path !== "manifest.json" && !listed.has(path)) unlisted.push(path);
+  }
+};
+walk("");
+const named = unlisted.sort().slice(0, 5).join(", ") +
+  (unlisted.length > 5 ? ` and ${unlisted.length - 5} more` : "");
+if (unlisted.length && mode !== "remove") stop(`not in the manifest: ${named}`);
+for (const path of unlisted) rmSync(join(dir, path), { force: true });
+if (unlisted.length) console.log(named);
 '
 verify() {
-  [ -x "$1/node/bin/node" ] && "$1/node/bin/node" -e "$verify_js" "$1" "$version" "$commit" </dev/null
+  if [ ! -x "$1/node/bin/node" ]; then
+    echo "missing: node/bin/node" >&2
+    return 1
+  fi
+  "$1/node/bin/node" -e "$verify_js" "$1" "$version" "$commit" "${2:-}" </dev/null
 }
 
 take_lock() {
@@ -457,9 +483,25 @@ cleanup() {
   [ -z "${lock:-}" ] || [ "$(cat "$lock/pid" 2>/dev/null)" != $$ ] || rm -rf "$lock"
 }
 
-# An older release than the installed one goes in only on request.
+# The newest version folder other than $1, or nothing.
+newest_folder() {
+  newest=""
+  for folder in "$runtimes"/*; do
+    name=${folder##*/}
+    valid_version "$name" && [ -d "$folder" ] && [ ! -L "$folder" ] && [ "$name" != "$1" ] || continue
+    [ -n "$newest" ] && ! older "$newest" "$name" || newest=$name
+  done
+  printf '%s\n' "$newest"
+}
+
+# An older release than the installed one goes in only on request. The
+# installed one is the version that "current" names. When that link is gone
+# or names no version folder, it is the newest version folder.
 check_order() {
   installed=$(readlink "$runtimes/current" 2>/dev/null || true)
+  if ! valid_version "$installed" || [ ! -d "$runtimes/$installed" ]; then
+    installed=$(newest_folder "")
+  fi
   downgrade=0
   valid_version "$installed" && older "$version" "$installed" || return 0
   [ "${CLAWDTIME_ALLOW_DOWNGRADE:-0}" = 1 ] ||
@@ -469,9 +511,22 @@ check_order() {
 }
 
 install_runtime() {
-  if [ -d "$runtimes/$version" ] && verify "$runtimes/$version" 2>/dev/null; then
-    say "ClawdTime $version is installed already, and every file checks out."
-    return
+  if [ -d "$runtimes/$version" ]; then
+    if problem=$(verify "$runtimes/$version" 2>&1 >/dev/null); then
+      say "ClawdTime $version is installed already, and every file checks out."
+      return
+    fi
+    # Every listed file checks out, and other files were added: remove them
+    # in place, so a process of this version keeps its files.
+    case $problem in
+      "not in the manifest: "*)
+        if removed=$(verify "$runtimes/$version" remove 2>/dev/null) && verify "$runtimes/$version" 2>/dev/null; then
+          say "ClawdTime $version is installed already. Removed what its manifest does not list: $removed. Every other file checks out."
+          return
+        fi
+        ;;
+    esac
+    say "ClawdTime $version is on this Mac, but its files differ from the release manifest: $problem. It is installed again from the release."
   fi
   step "Downloading ClawdTime $version"
   fetch "$archive_url" "$tmp/clawdtime.tar.gz" ||
@@ -485,15 +540,19 @@ install_runtime() {
   incoming=$(mktemp -d "$runtimes/.incoming.XXXXXX")
   tar -xzf "$tmp/clawdtime.tar.gz" -C "$incoming" </dev/null ||
     fail "the release did not unpack. Nothing changed."
-  verify "$incoming/runtime" || fail "the unpacked files do not match the release manifest. Nothing changed."
+  problem=$(verify "$incoming/runtime" 2>&1 >/dev/null) ||
+    fail "the unpacked files do not match the release manifest: $problem. Nothing changed."
   "$incoming/runtime/bin/clawdtime" --help </dev/null >/dev/null 2>&1 ||
     fail "the new runtime does not start on this Mac. Nothing changed."
-  if [ -e "$runtimes/$version" ]; then
-    # An earlier copy of this version that is damaged: set it aside, then remove it.
+  replaced=0
+  if [ -e "$runtimes/$version" ] || [ -L "$runtimes/$version" ]; then
+    # An earlier copy of this version that differs: set it aside, then remove it.
     mv "$runtimes/$version" "$incoming/replaced"
+    replaced=1
   fi
   mv "$incoming/runtime" "$runtimes/$version"
   say "Unpacked and checked every file of ClawdTime $version."
+  [ "$replaced" = 0 ] || say "Replaced the earlier copy of ClawdTime $version."
 }
 
 # The ID of one process that runs from the version folder $1, or nothing.
@@ -506,19 +565,25 @@ running_from() {
 }
 
 switch_current() {
-  previous=$(readlink "$runtimes/current" 2>/dev/null || true)
-  if [ "$previous" != "$version" ]; then
+  # The version that ran before this install (check_order found it).
+  previous=$installed
+  if [ "$(readlink "$runtimes/current" 2>/dev/null || true)" != "$version" ]; then
     ln -s "$version" "$runtimes/.current.$$"
     # One rename: "current" names the old version or the new one, never neither.
     mv -fh "$runtimes/.current.$$" "$runtimes/current" ||
       fail "$runtimes/current cannot be switched. Move it away, then run this again."
   fi
-  # Keep the new version and the one before it. Remove older copies, but
-  # never one that still runs.
+  # Keep the new version and the one before it: the version that ran before,
+  # or, on a rerun of the same version, the newest other one. Remove older
+  # copies, but never one that still runs.
+  before=$previous
+  if [ "$before" = "$version" ] || ! valid_version "$before"; then
+    before=$(newest_folder "$version")
+  fi
   for old in "$runtimes"/*; do
     name=${old##*/}
     valid_version "$name" && [ -d "$old" ] || continue
-    [ "$name" != "$version" ] && [ "$name" != "$previous" ] || continue
+    [ "$name" != "$version" ] && [ "$name" != "$before" ] || continue
     pid=$(running_from "$name")
     if [ -n "$pid" ]; then
       say "Kept ClawdTime $name: it still runs (process $pid). A later update removes it after it stops."
@@ -533,8 +598,9 @@ switch_current() {
   launcher=$runtimes/current/bin/clawdtime
 }
 
-# The real path of the file behind the link $1, through every link, or
-# nothing when it is gone. Plain shell: the Mac may have no Node.
+# The real path of the file behind the link $1, through every link. When
+# that file is gone, the path where the links end. Plain shell: the Mac may
+# have no Node.
 resolve() {
   file=$1 hops=0
   while [ -L "$file" ]; do
@@ -546,9 +612,11 @@ resolve() {
       *) file=$(dirname "$file")/$next ;;
     esac
   done
-  [ -e "$file" ] || return 0
-  folder=$(cd -P "$(dirname "$file")" 2>/dev/null && pwd -P) || return 0
-  printf '%s/%s\n' "$folder" "${file##*/}"
+  if [ -e "$file" ] && folder=$(cd -P "$(dirname "$file")" 2>/dev/null && pwd -P); then
+    printf '%s/%s\n' "$folder" "${file##*/}"
+  else
+    printf '%s\n' "$file"
+  fi
 }
 
 # The ClawdTime source checkout that holds the file $1, or nothing.
@@ -557,7 +625,7 @@ source_checkout() {
   folder=$(dirname "$1")
   while :; do
     if [ -f "$folder/cli/main.ts" ] && [ -f "$folder/scripts/install.sh" ]; then
-      printf '%s\n' "$folder"
+      (cd -P "$folder" 2>/dev/null && pwd -P) || printf '%s\n' "$folder"
       return 0
     fi
     [ "$folder" != / ] && [ "$folder" != . ] || return 0
@@ -582,15 +650,25 @@ link_release() {
   fi
   points_to=$(readlink "$link" 2>/dev/null || true)
   if [ -L "$link" ] && [ "$points_to" != "$launcher" ]; then
-    # A source build (sh install.sh --source) linked it: keep it unless asked.
-    checkout=$(source_checkout "$(resolve "$link")")
+    # A source build (sh install.sh --source) linked it: keep it unless asked,
+    # also when its checkout has no build now. Say what happens either way.
+    target=$(resolve "$link")
+    checkout=$(source_checkout "$target")
+    if [ -e "$target" ]; then
+      runs="runs the source build in $checkout" ran="ran the source build in $checkout"
+    else
+      runs="points at the source build in $checkout, which has no build now" ran="pointed at the source build in $checkout"
+    fi
     if [ -n "$checkout" ] && [ "${CLAWDTIME_REPLACE_SOURCE:-0}" != 1 ]; then
-      say "Kept $link: it runs the source build in $checkout. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is $launcher"
+      say "Kept $link: it $runs. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is $launcher"
       command_name=$launcher
       return
     fi
-    [ -z "$checkout" ] ||
-      say "Replaced $link, which ran the source build in $checkout: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd $checkout && npm link"
+    if [ -n "$checkout" ]; then
+      say "Replaced $link, which $ran: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd $checkout && npm link"
+    else
+      say "Replaced $link, which pointed to $points_to."
+    fi
   fi
   if [ "$points_to" != "$launcher" ]; then
     ln -s "$launcher" "$user_prefix/bin/.clawdtime.$$"

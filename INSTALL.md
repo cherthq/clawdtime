@@ -19,11 +19,14 @@ It does this, and it never uses sudo:
    download that does not match is not installed, and nothing changes.
 3. It unpacks the release in
    `~/Library/Application Support/ClawdTime/runtime/VERSION`, checks every
-   file, and switches the link `current` there to it in one step.
+   file, and switches the link `current` there to it in one step. A release
+   with a file that its manifest does not list is not installed, and nothing
+   changes.
 4. It links `~/.local/bin/clawdtime` to that release. When `~/.local/bin` is
    not on your PATH, it prints the one line that adds it. Run that line. When
-   that link runs a source build, it keeps the link and says so. To point it
-   at the release, run:
+   that link runs a source build, also one that has no build now, it keeps
+   the link and says so. When it replaces another link, it says so too. To
+   point it at the release, run:
    `curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | CLAWDTIME_REPLACE_SOURCE=1 sh`
 5. It starts the guided setup, `clawdtime onboard`, in the same Terminal
    window. When it runs with no Terminal, it says to run `clawdtime onboard`
@@ -40,15 +43,20 @@ paired.
 Run the same command again. It installs the newest release next to the one
 you have, then switches `current` to it. Your settings, keys and pairing stay
 where they are. An older release that still runs stays until it stops, and
-the installer says so. The release before stays on the Mac, so you can go back
-to it:
+the installer says so. The release before stays on the Mac, also when you run
+the command again for the same release, so you can go back to it:
 
 ```sh
 ln -sfh 0.4.0 ~/Library/Application\ Support/ClawdTime/runtime/current
 ```
 
+When you run it again for the release that you have, it checks every file.
+It removes a file that the release does not list, and it installs the release
+again when a file changed. It says what it did.
+
 The installer does not install a release that is older than the one you have.
-It stops and says so. To install the older release on purpose, set
+It stops and says so. When the link `current` is gone, the one you have is the
+newest version folder in `runtime`. To install the older release on purpose, set
 `CLAWDTIME_ALLOW_DOWNGRADE=1`:
 
 ```sh

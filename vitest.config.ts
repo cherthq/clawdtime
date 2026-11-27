@@ -28,6 +28,8 @@ export default defineConfig({
   test: {
     exclude: [
       ...configDefaults.exclude,
+      // Release builds stage a copy of the sources here; never test the copy.
+      "artifacts/**",
       ...(voiceLibrary ? [] : needVoiceLibrary),
     ],
   },

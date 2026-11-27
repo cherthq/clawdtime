@@ -36,6 +36,8 @@ interface Release {
   commit?: string;
   onboard?: boolean;
   latest?: Record<string, unknown>;
+  /** Files put in the archive after the manifest, so it does not list them. */
+  unlisted?: Record<string, string>;
 }
 
 /**
@@ -90,6 +92,8 @@ console.log(JSON.stringify({ version, args, main: __filename }));
     { encoding: "utf8" },
   );
   expect(written.status, written.stderr).toBe(0);
+  for (const [path, text] of Object.entries(release.unlisted ?? {}))
+    file(path, text);
   const archive = `clawdtime-${release.version}-darwin-arm64.tar.gz`;
   mkdirSync(folder, { recursive: true });
   const packed = spawnSync(
@@ -202,7 +206,9 @@ function setup() {
   };
 }
 
-describe("the release route of the installer", () => {
+// Each install starts Node a few times; a test runs up to five installs, and
+// the whole suite runs at the same time.
+describe("the release route of the installer", { timeout: 30_000 }, () => {
   it("installs the newest release with no Node, Git or Xcode, and never sudo", async () => {
     const f = setup();
     publish(f.releases, { version: "0.4.1" });
@@ -286,6 +292,8 @@ describe("the release route of the installer", () => {
       "ClawdTime 0.4.2 is installed already, and every file checks out.",
     );
     expect(f.current()).toBe("0.4.2");
+    // The release before stays for a rollback, also after a rerun.
+    expect(f.versions()).toEqual(["0.4.1", "0.4.2", "current"]);
 
     // A third release: the oldest goes, the one before stays for a rollback.
     publish(f.releases, { version: "0.4.3" });
@@ -371,6 +379,99 @@ describe("the release route of the installer", () => {
       "ClawdTime is updated from 0.9.0 to 0.10.1.",
     );
     expect(f.current()).toBe("0.10.1");
+  });
+
+  it("finds the installed versions in the version folders when current is gone", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.10.0" });
+    expect((await f.install()).status).toBe(0);
+    rmSync(join(f.runtimes, "current"));
+    publish(f.releases, { version: "0.9.0" });
+    const older = await f.install();
+    expect(older.status, older.output).toBe(1);
+    expect(older.output).toContain(
+      "Stopped: ClawdTime 0.10.0 is installed, and the newest release, 0.9.0, is older. Nothing changed. To go back to 0.9.0, run this again with CLAWDTIME_ALLOW_DOWNGRADE=1.",
+    );
+    expect(f.versions()).toEqual(["0.10.0"]);
+
+    const back = await f.install({ env: { CLAWDTIME_ALLOW_DOWNGRADE: "1" } });
+    expect(back.status, back.output).toBe(0);
+    expect(back.output).toContain(
+      "ClawdTime is back on 0.9.0 from 0.10.0. Your settings, keys and pairing are kept.",
+    );
+    expect(f.current()).toBe("0.9.0");
+    expect(f.versions()).toEqual(["0.10.0", "0.9.0", "current"]);
+
+    // An older folder with no current: an update from it, and it stays.
+    const g = setup();
+    publish(g.releases, { version: "0.4.1" });
+    expect((await g.install()).status).toBe(0);
+    rmSync(join(g.runtimes, "current"));
+    publish(g.releases, { version: "0.4.2" });
+    const update = await g.install();
+    expect(update.status, update.output).toBe(0);
+    expect(update.output).toContain(
+      "ClawdTime is updated from 0.4.1 to 0.4.2.",
+    );
+    expect(g.versions()).toEqual(["0.4.1", "0.4.2", "current"]);
+  });
+
+  it("accepts no file that the manifest does not list, and says so", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    expect((await f.install()).status).toBe(0);
+    // A file planted in the installed copy, where Node would find it.
+    const planted = join(
+      f.runtimes,
+      "0.4.1",
+      "app/dist/node_modules/made-up/index.js",
+    );
+    mkdirSync(join(planted, ".."), { recursive: true });
+    writeFileSync(planted, 'module.exports = "planted";\n');
+    symlinkSync("/made/up", join(f.runtimes, "0.4.1", "app", "made-up-link"));
+    // Every listed file checks out: it removes the others in place, with no
+    // download, so a process of this version keeps its files.
+    const archive = join(f.releases, "clawdtime-0.4.1-darwin-arm64.tar.gz");
+    const kept = readFileSync(archive);
+    rmSync(archive);
+    const rerun = await f.install();
+    expect(rerun.status, rerun.output).toBe(0);
+    expect(rerun.output).not.toContain("and every file checks out");
+    expect(rerun.output).toContain(
+      "ClawdTime 0.4.1 is installed already. Removed what its manifest does not list: app/dist/node_modules/made-up/index.js, app/made-up-link. Every other file checks out.",
+    );
+    expect(existsSync(planted)).toBe(false);
+    expect(existsSync(join(f.runtimes, "0.4.1", "app", "made-up-link"))).toBe(
+      false,
+    );
+    expect(f.current()).toBe("0.4.1");
+
+    // A planted file next to a changed one: a fresh copy replaces the folder.
+    writeFileSync(archive, kept);
+    writeFileSync(planted, 'module.exports = "planted";\n');
+    writeFileSync(join(f.runtimes, "0.4.1", "node", "LICENSE"), "changed\n");
+    const changed = await f.install();
+    expect(changed.status, changed.output).toBe(0);
+    expect(changed.output).toContain(
+      "ClawdTime 0.4.1 is on this Mac, but its files differ from the release manifest: changed: node/LICENSE. It is installed again from the release.",
+    );
+    expect(changed.output).toContain(
+      "Replaced the earlier copy of ClawdTime 0.4.1.",
+    );
+    expect(existsSync(planted)).toBe(false);
+
+    // A release whose archive holds a file that its manifest does not list.
+    publish(f.releases, {
+      version: "0.4.2",
+      unlisted: { "app/dist/made-up-extra.js": "extra\n" },
+    });
+    const fresh = await f.install();
+    expect(fresh.status, fresh.output).toBe(1);
+    expect(fresh.output).toContain(
+      "Stopped: the unpacked files do not match the release manifest: not in the manifest: app/dist/made-up-extra.js. Nothing changed.",
+    );
+    expect(f.current()).toBe("0.4.1");
+    expect(f.versions()).toEqual(["0.4.1", "current"]);
   });
 
   it("refuses an archive whose SHA-256 differs and switches nothing", async () => {
@@ -508,6 +609,35 @@ describe("the release route of the installer", () => {
     );
     expect(replaced.output).toContain(`Ready: ${link} runs ClawdTime 0.4.1.`);
     expect(f.recorded()).toBe("");
+
+    // A checkout with no dist/, as between a clean and a build: the same rule.
+    rmSync(link);
+    symlinkSync(npmLink, link);
+    rmSync(join(checkout, "dist"), { recursive: true });
+    const unbuilt = await f.install();
+    expect(unbuilt.status, unbuilt.output).toBe(0);
+    expect(readlinkSync(link)).toBe(npmLink);
+    expect(unbuilt.output).toContain(
+      `Kept ${link}: it points at the source build in ${checkout}, which has no build now. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is ${launcher}`,
+    );
+    const unbuiltReplaced = await f.install({
+      env: { CLAWDTIME_REPLACE_SOURCE: "1" },
+    });
+    expect(unbuiltReplaced.status, unbuiltReplaced.output).toBe(0);
+    expect(readlinkSync(link)).toBe(launcher);
+    expect(unbuiltReplaced.output).toContain(
+      `Replaced ${link}, which pointed at the source build in ${checkout}: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd ${checkout} && npm link`,
+    );
+
+    // Any other link: replaced, and the installer says what it pointed to.
+    rmSync(link);
+    symlinkSync("/made/up/clawdtime", link);
+    const other = await f.install();
+    expect(other.status, other.output).toBe(0);
+    expect(readlinkSync(link)).toBe(launcher);
+    expect(other.output).toContain(
+      `Replaced ${link}, which pointed to /made/up/clawdtime.`,
+    );
   });
 
   it("never runs as root", async () => {
