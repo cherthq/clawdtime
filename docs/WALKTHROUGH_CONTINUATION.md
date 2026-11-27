@@ -15,8 +15,6 @@ The callback repairs also cover:
   without ending audio. A failed capture process is joined before replacement.
 - Optional opening of an exact verified HTML result before screen sharing.
 - Protected verification plans for individual launched runs.
-- An explicit recovery operation for a refused review that never reserved a
-  dial. It requires different verification evidence and confirmed cleanup.
 - Bounded diagnostic codes for startup and cleanup, without saved speech,
   screen pixels, credentials or arbitrary worker output.
 - Forwarding the configured line identity and API base to the desktop service
