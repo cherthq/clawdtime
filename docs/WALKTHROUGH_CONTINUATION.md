@@ -104,8 +104,8 @@ A refusal before any effect is the answer of that turn: another call uses the
 computer, or this call's computer control has ended. It says that no action was
 sent, and the rest of the call goes on. When hiding sharing or a lost lease
 stops a request that is still running, the reply says that it stopped and that
-its last step is not confirmed. Only a request whose outcome is not known ends
-computer control for the rest of the call.
+its last step is not confirmed. Only a request whose outcome is not known
+makes the rest of the call unknown: nothing more is sent in it.
 
 Stop cancels only computer work owned by that call and leaves video on, also
 after computer control ended in that call. Hiding sharing, ending the call,
@@ -121,8 +121,15 @@ demo page, and both clicking and navigation during one walkthrough call without
 a new session. The completed coding job was reused rather than rerun.
 
 The TypeScript build, line JavaScript syntax checks and capture-helper build
-passed. Local test suites were not run at the operator's request. Phone
-acceptance covers the observed actions, not every application or long task.
+passed. Phone acceptance covers the observed actions, not every application or
+long task.
+
+Automated tests cover the grant of computer control, the computer port, the
+screen guard, Stop, the voice tools, the newest-question rule, refusals and
+same-call follow-ups on the real worker:
+`tests/backend-walkthrough-computer.test.ts`,
+`tests/backend-phone-desktop.test.ts`, `line/proactive-outbound.test.mjs` and
+`line/desktop-intent.test.mjs`. Tests are not physical acceptance.
 
 Automatic artifact discovery, resuming an idle coding chat, automatic redial,
 and extending call permissions are outside this change. Preserve journals,
