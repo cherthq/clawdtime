@@ -270,6 +270,12 @@ export function macPorts(input: {
       },
       start: (log) => input.startDesktop(log),
       stop: () => stopDesktopService(system),
+      // An open panel stays and finds the new service by itself; a new one
+      // opens tucked, so the restart takes no focus.
+      restart: async (log) => {
+        await stopDesktopService(system);
+        await input.startDesktop(log, { tucked: true });
+      },
     },
     permissions: async (): Promise<PermissionFacts> => {
       const panelPath = panel();

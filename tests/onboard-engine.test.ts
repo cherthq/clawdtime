@@ -703,6 +703,61 @@ describe("clawdtime onboard --json", () => {
     }
   });
 
+  it("starts an idle desktop again after the yes to computer use, in Terminal and in the app", async () => {
+    for (const args of [["--local"], ["--local", "--app"]]) {
+      const mac = fakeMac({
+        computer: { before: "not_configured", after: "configured" },
+      });
+      const { events } = await runJson(args, folder(), mac.ports, agree());
+      expect(mac.calls.desktopRestarts).toBe(1);
+      expect(
+        done(events).report.find((row) => row.id === "computer")!.detail,
+      ).toBe("Computer use is on.");
+    }
+  });
+
+  it("starts the desktop again on a rerun when computer use is on but the desktop has none", async () => {
+    const home = folder();
+    const first = fakeMac();
+    await runJson(["--local"], home, first.ports, agree());
+    const mac = fakeMac({
+      desktop: "connected",
+      computer: { before: "not_configured", after: "configured" },
+    });
+    const { events } = await runJson(["--local"], home, mac.ports, () => {
+      throw Error("no question expected on a rerun");
+    });
+    expect(mac.calls.desktopRestarts).toBe(1);
+    expect(stateOf(events, "computer")).toBe("ready");
+  });
+
+  it("never starts a busy desktop again: a task runs, or a connection serves it", async () => {
+    const busy = [
+      fakeMac({
+        computer: { before: "not_configured", after: "configured" },
+        taskAdmission: "blocked",
+      }),
+      fakeMac({
+        computer: { before: "not_configured", after: "configured" },
+        other: { instanceId: "desktop_1" },
+      }),
+    ];
+    for (const mac of busy) {
+      const { events } = await runJson(
+        ["--local"],
+        folder(),
+        mac.ports,
+        agree(),
+      );
+      expect(mac.calls.desktopRestarts).toBe(0);
+      expect(
+        done(events).report.find((row) => row.id === "computer")!.detail,
+      ).toBe(
+        "Computer use is on. The desktop is busy, so it uses computer use from its next start.",
+      );
+    }
+  });
+
   it("stops with a cancel and reports where it stopped", async () => {
     const { code, events } = await runJson(
       ["--local"],

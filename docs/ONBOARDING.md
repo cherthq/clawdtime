@@ -59,7 +59,7 @@ The step ids and their order are fixed.
 | `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                                  | no   |
 | `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                        | no   |
 | `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                 | no   |
-| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off.                                                                                                                    | yes  |
+| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off. A desktop that started before the yes starts again while it is idle, so that it uses computer use now.             | yes  |
 | `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each missing permission, offers its System Settings pane, and checks again.       | no   |
 | `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                          | yes  |
 | `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                               | yes  |
@@ -192,7 +192,11 @@ three.
 ## Limits
 
 - The desktop builds its computer worker when it starts. When computer use is
-  turned on after the desktop started, the step says that the desktop uses it
+  on and the running desktop has no worker, the `computer` step stops the
+  desktop service and starts it again, in both routes. It does so only while
+  the desktop is idle: no task runs, no action is unresolved and no shared
+  connection serves it. An open panel stays open and finds the new service.
+  A busy desktop keeps running, and the step says that it uses computer use
   from its next start.
 - Shared calls have passed automated checks only. The coordinator's `/health`
   reports `physicalAcceptance: false`.

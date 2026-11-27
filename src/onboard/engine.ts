@@ -585,56 +585,68 @@ export class OnboardEngine {
           });
         continue;
       }
-      if (chosen.enabled) {
-        this.computerOn = true;
-        const status = await this.ports.desktop.status();
-        this.step("computer", "ready", {
-          detail:
-            status.computer === "configured"
-              ? "Computer use is on."
-              : "Computer use is on. The desktop uses it from its next start.",
-        });
-        return;
+      if (!chosen.enabled) {
+        const answer = await this.ask(
+          "computer",
+          { kind: "confirm", prompt: "Turn on computer use?" },
+          {
+            detail:
+              "ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.",
+          },
+        );
+        if ("action" in answer && answer.action !== "skip") continue;
+        if ("action" in answer || answer.value !== true)
+          return this.step("computer", "skipped", {
+            detail:
+              "Computer use stays off. Turn it on later: clawdtime computer on",
+          });
+        setComputerSwitch(this.root, true, this.now());
+        continue;
       }
-      const answer = await this.ask(
-        "computer",
-        { kind: "confirm", prompt: "Turn on computer use?" },
-        {
-          detail:
-            "ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.",
-        },
-      );
-      if ("action" in answer && answer.action !== "skip") continue;
-      if ("action" in answer || answer.value !== true)
-        return this.step("computer", "skipped", {
-          detail:
-            "Computer use stays off. Turn it on later: clawdtime computer on",
-        });
-      setComputerSwitch(this.root, true, this.now());
-      // The desktop builds its computer worker when it starts.
-      const status = await this.ports.desktop.status();
+      this.computerOn = true;
+      let status = await this.ports.desktop.status();
+      let busy = false;
+      // The desktop builds its computer worker when it starts, so a desktop
+      // that started before the yes has none. It starts again, but only
+      // while it is idle: no task, no unresolved action, no connection.
       if (
-        status.computer !== "configured" &&
-        status.computer !== "uncertain" &&
-        status.taskSession !== "active" &&
-        this.startedDesktop &&
-        this.ports.desktop.restart
+        status.service === "connected" &&
+        status.computer === "not_configured"
       ) {
-        this.step("computer", "in_progress", {
-          detail: "Starting the desktop again, so that it can use this Mac.",
-        });
-        try {
-          await this.ports.desktop.restart((message) =>
-            this.log("info", message),
-          );
-          await this.waitForDesktop();
-        } catch {
-          this.log(
-            "warn",
-            "The desktop did not start again. Start it yourself: clawdtime start",
-          );
+        busy =
+          status.taskAdmission !== "available" ||
+          (await this.ports.connection.holder()) !== null;
+        if (!busy && this.ports.desktop.restart) {
+          this.step("computer", "in_progress", {
+            detail: "Starting the desktop again, so that it can use this Mac.",
+          });
+          try {
+            await this.ports.desktop.restart((message) =>
+              this.log("info", message),
+            );
+            status = await this.waitForDesktop();
+          } catch {
+            // The owner of a foreground desktop (the Mac app) keeps it: then
+            // nothing was stopped. Otherwise say how to start it.
+            status = await this.ports.desktop.status();
+            this.log(
+              "warn",
+              status.service === "connected"
+                ? "The desktop was not started again. It uses computer use from its next start."
+                : "The desktop did not start again. Start it yourself: clawdtime start",
+            );
+          }
         }
       }
+      this.step("computer", "ready", {
+        detail:
+          status.computer === "configured"
+            ? "Computer use is on."
+            : busy
+              ? "Computer use is on. The desktop is busy, so it uses computer use from its next start."
+              : "Computer use is on. The desktop uses it from its next start.",
+      });
+      return;
     }
   }
 
