@@ -21,6 +21,21 @@ import { desktopConfigurationFingerprint } from "../src/control/task-desktop-con
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import { validateVerificationPlan } from "../src/control/task-verification.js";
 import { plannerVariables } from "../connectors/computer/providers.js";
+import {
+  checkPort,
+  defaultDesktopPort,
+  descriptorPort,
+  DesktopStartError,
+  moveBindingPort,
+  nextFreePort,
+  openStartLog,
+  portTools,
+  readPortRecord,
+  readStartOutput,
+  startFailure,
+  writePortRecord,
+  type PortTools,
+} from "../src/desktop-start.js";
 
 const fingerprint = z.string().regex(/^[a-f0-9]{64}$/);
 const identity = z.string().min(1).max(200);
@@ -252,12 +267,14 @@ export async function desktopCli(
     panel?: boolean;
     /** The caller stays in the foreground and owns the panel: it stays in the caller's process group. */
     foreground?: boolean;
+    /** Who holds a port. Tests replace it, so that no test reads this Mac's ports. */
+    ports?: PortTools;
   } = {},
 ): Promise<DesktopLaunch | undefined> {
   const print = dependencies.print ?? console.log;
   if (!args.length || args[0] === "--help") {
     print(
-      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. A click on the mascot opens the chat. The panel lists no coding-agent sessions; its bubble names one that waits for you, and --agents false turns that reading off. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
+      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. A click on the mascot opens the chat. The panel lists no coding-agent sessions; its bubble names one that waits for you, and --agents false turns that reading off. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Without --port, a desktop whose port another program holds moves to a free port and keeps it. The service writes its output, masked, to desktop-start.log in the state folder. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
     );
     return undefined;
   }
@@ -296,8 +313,13 @@ export async function desktopCli(
   const state = resolve(options["--state"]);
   mkdirSync(state, { recursive: true, mode: 0o700 });
   privateDirectory(state, projectRoot);
-  const port = Number(options["--port"] ?? 13326);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535)
+  const explicitPort = options["--port"] !== undefined;
+  const requestedPort = Number(options["--port"] ?? defaultDesktopPort);
+  if (
+    !Number.isInteger(requestedPort) ||
+    requestedPort < 1024 ||
+    requestedPort > 65535
+  )
     throw Error("Invalid desktop port.");
   const worker = options["--worker"] ?? "simulation";
   if (
@@ -380,15 +402,15 @@ export async function desktopCli(
   if (!lstatSync(panelBinary).isFile())
     throw Error("Build the native ClawdTimeTaskPanel executable first.");
   accessSync(panelBinary, constants.X_OK);
-  const configurationFingerprint = desktopConfigurationFingerprint({
-    projectRoot,
-    worker: worker as "simulation" | "codex",
-    checksFingerprint,
-    port,
-    ...(sessionFingerprint ? { sessionFingerprint } : {}),
-    ...(callsFingerprint ? { callsFingerprint } : {}),
-  });
-  const origin = `http://127.0.0.1:${port}`;
+  const fingerprintAt = (port: number) =>
+    desktopConfigurationFingerprint({
+      projectRoot,
+      worker: worker as "simulation" | "codex",
+      checksFingerprint,
+      port,
+      ...(sessionFingerprint ? { sessionFingerprint } : {}),
+      ...(callsFingerprint ? { callsFingerprint } : {}),
+    });
   const panelPath = join(state, "desktop-panel.json");
   const descriptorPath = join(state, "desktop-service.json");
   const ownerPath = join(state, "owner.lock");
@@ -408,10 +430,28 @@ export async function desktopCli(
   const spawnProcess = dependencies.spawn ?? spawn;
   const request = dependencies.request ?? fetch;
   let serviceChild: ChildProcess | undefined;
-  let serviceFailed = false;
+  let serviceFailed: (() => DesktopStartError) | undefined;
   let servicePid = 0;
   try {
     const attach = existsSync(ownerPath);
+    // Without --port the desktop keeps the port that it chose before. A
+    // running one is reached on the port that its own descriptor names.
+    let port = explicitPort
+      ? requestedPort
+      : (readPortRecord(state) ??
+        (attach ? descriptorPort(state) : null) ??
+        defaultDesktopPort);
+    if (!attach)
+      port = await startPort({
+        port,
+        movable: !explicitPort,
+        state,
+        fingerprintAt,
+        tools: dependencies.ports ?? portTools,
+        print,
+      });
+    const configurationFingerprint = fingerprintAt(port);
+    const origin = `http://127.0.0.1:${port}`;
     if (!attach) {
       const serviceArgs = [
         ...serviceEntry(root),
@@ -430,27 +470,45 @@ export async function desktopCli(
       if (callsPath) serviceArgs.push("--calls-config", callsPath);
       if (options["--agents"])
         serviceArgs.push("--agents", options["--agents"]);
-      serviceChild = spawnProcess(process.execPath, serviceArgs, {
-        cwd: root,
-        detached: true,
-        stdio: "ignore",
-        env: childEnvironment(),
+      // The service writes to the startup log itself, masked, so the log
+      // outlives this launcher. What this start wrote says why it stopped.
+      const log = openStartLog(state);
+      const failure = (code?: number | null, signal?: string | null) =>
+        startFailure(readStartOutput(log.path, log.offset), {
+          port,
+          state,
+          log: log.path,
+          code,
+          signal,
+        });
+      try {
+        serviceChild = spawnProcess(process.execPath, serviceArgs, {
+          cwd: root,
+          detached: true,
+          stdio: ["ignore", log.fd, log.fd],
+          env: { ...childEnvironment(), CLAWDTIME_SERVICE_OUTPUT: "log" },
+        });
+      } finally {
+        closeSync(log.fd);
+      }
+      serviceChild.once("error", (error: NodeJS.ErrnoException) => {
+        serviceFailed = () =>
+          new DesktopStartError(
+            "stopped",
+            `The desktop service could not start${error.code ? ` (${error.code})` : ""}.`,
+            [`The service log is ${log.path}.`],
+          );
       });
-      serviceChild.once("error", () => {
-        serviceFailed = true;
-      });
-      serviceChild.once("exit", () => {
-        serviceFailed = true;
+      serviceChild.once("exit", (code, signal) => {
+        serviceFailed = () => failure(code, signal);
       });
       serviceChild.unref();
     }
     const deadline = Date.now() + (dependencies.startupMs ?? 10000);
     let ready = false;
     do {
-      if (serviceFailed)
-        throw Error(
-          "Desktop service startup failed. Private receipts and owner state are preserved.",
-        );
+      // The service stopped as it started: say why, from its own words.
+      if (serviceFailed) throw serviceFailed();
       try {
         const owner = z
           .object({ pid: z.number().int().positive() })
@@ -581,10 +639,69 @@ function isMainEntry() {
   }
 }
 
+/**
+ * The port where this start runs its service. A ClawdTime desktop of another
+ * install on it is named, never displaced. Another program on it moves a
+ * desktop that has no explicit --port to the next free port, which is kept
+ * for later starts, so two installs never fight over one port.
+ */
+async function startPort(input: {
+  port: number;
+  movable: boolean;
+  state: string;
+  fingerprintAt: (port: number) => string;
+  tools: PortTools;
+  print: (message: string) => void;
+}): Promise<number> {
+  const owner = await checkPort(input.port, input.tools);
+  if (owner.state === "free") return input.port;
+  if (owner.state === "clawdtime")
+    throw new DesktopStartError(
+      "other_install",
+      "ClawdTime is already running from another install, on the port that this desktop uses.",
+      [
+        owner.other.verified
+          ? `It runs as process ${owner.other.pid}, with the desktop folder ${owner.other.state}.`
+          : `It listens on port ${input.port}${owner.other.pid ? ` as process ${owner.other.pid}` : ""}, and its own files could not confirm it.`,
+        "To use it or stop it, run clawdtime onboard. Or quit it there, then start again.",
+      ],
+      owner.other,
+    );
+  const program = owner.name
+    ? `another program (${owner.name})`
+    : "another program";
+  const taken = () =>
+    new DesktopStartError(
+      "port_in_use",
+      `Port ${input.port} is in use by ${program}, so the desktop cannot start there. Quit that program, then try again.`,
+      owner.pid ? [`That program runs as process ${owner.pid}.`] : [],
+    );
+  if (!input.movable) throw taken();
+  const next = await nextFreePort(input.port, input.tools);
+  if (next === null) throw taken();
+  // A desktop that started before keeps its identity on the new port.
+  if (
+    existsSync(join(input.state, "desktop-binding.json")) &&
+    !moveBindingPort(
+      input.state,
+      input.fingerprintAt(input.port),
+      input.fingerprintAt(next),
+    )
+  )
+    throw taken();
+  writePortRecord(input.state, next);
+  input.print(
+    `Port ${input.port} is in use by ${program}. This desktop uses port ${next} from now on.`,
+  );
+  return next;
+}
+
 if (isMainEntry()) {
-  desktopCli(process.argv.slice(2)).catch(() => {
+  desktopCli(process.argv.slice(2)).catch((error: unknown) => {
     console.error(
-      "Desktop launch refused or unconfirmed. Preserve private state and ownership locks; check the explicit project, private configuration, service readiness and native panel build.",
+      error instanceof DesktopStartError
+        ? error.message
+        : "Desktop launch refused or unconfirmed. Preserve private state and ownership locks; check the explicit project, private configuration, service readiness and native panel build.",
     );
     process.exitCode = 1;
   });

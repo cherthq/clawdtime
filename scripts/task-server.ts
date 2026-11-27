@@ -1,3 +1,6 @@
+// First: the startup log of the desktop gets masked output and a marked
+// error line before any other module runs.
+import "../src/service-output.js";
 import { serve } from "@hono/node-server";
 import {
   mkdirSync,
