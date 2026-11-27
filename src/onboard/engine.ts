@@ -669,30 +669,27 @@ export class OnboardEngine {
         );
         continue;
       }
-      const missing: { name: string; url: string }[] = [];
+      // Each binary once, with every permission that it still needs.
+      const missing: { binary: string; needs: string[]; url: string }[] = [];
+      const need = (binary: string, permission: string, url: string) => {
+        const one = missing.find((entry) => entry.binary === binary);
+        if (one) one.needs.push(permission);
+        else missing.push({ binary, needs: [permission], url });
+      };
       const panel = `ClawdTimeTaskPanel${facts.panel.path ? ` (${facts.panel.path})` : ""}`;
       const capture = `ClawdTimeTaskCapture${facts.capture.path ? ` (${facts.capture.path})` : ""}`;
       if (this.computerOn) {
         if (!facts.panel.accessibility)
-          missing.push({
-            name: `Accessibility for ${panel}`,
-            url: accessibilityPane,
-          });
+          need(panel, "Accessibility", accessibilityPane);
         if (!facts.panel.screenRecording)
-          missing.push({
-            name: `Screen Recording for ${panel}`,
-            url: screenPane,
-          });
+          need(panel, "Screen Recording", screenPane);
       }
       if (
         this.mode === "shared" &&
         facts.capture.path &&
         !facts.capture.screenRecording
       )
-        missing.push({
-          name: `Screen Recording for ${capture}`,
-          url: screenPane,
-        });
+        need(capture, "Screen Recording", screenPane);
       if (!missing.length)
         return this.step("permissions", "ready", {
           detail: `${this.computerOn ? "Accessibility and Screen Recording are on for the panel." : "Computer use is off, so the panel needs no permission."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for the capture helper." : ""}`,
@@ -701,7 +698,7 @@ export class OnboardEngine {
         "permissions",
         { kind: "confirm", prompt: "Check again" },
         {
-          detail: `Turn on ${missing.map((one) => one.name).join(", and ")} in System Settings, Privacy & Security. Then check again.`,
+          detail: `Turn on ${missing.map((one) => `${one.needs.join(" and ")} for ${one.binary}`).join(", and ")} in System Settings, Privacy & Security. Then check again.`,
           recovery: {
             label: "Open System Settings",
             action: "open_settings",

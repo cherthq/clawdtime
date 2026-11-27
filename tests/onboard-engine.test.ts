@@ -501,6 +501,25 @@ describe("clawdtime onboard --json", () => {
     expect(stateOf(events, "permissions")).toBe("ready");
   });
 
+  it("names each binary once, with every permission that it needs", async () => {
+    const denied: PermissionFacts = {
+      panel: {
+        path: "/Applications/Made Up/ClawdTimeTaskPanel",
+        accessibility: false,
+        screenRecording: false,
+      },
+      capture: { screenRecording: true },
+    };
+    const mac = fakeMac({ permissions: [denied] });
+    const { events } = await runJson(["--local"], folder(), mac.ports, agree());
+    const asking = steps(events).find(
+      (event) => event.id === "permissions" && event.state === "needs_input",
+    )!;
+    expect(asking.detail).toBe(
+      "Turn on Accessibility and Screen Recording for ClawdTimeTaskPanel (/Applications/Made Up/ClawdTimeTaskPanel) in System Settings, Privacy & Security. Then check again.",
+    );
+  });
+
   it("falls back to local mode when the coordinator does not answer", async () => {
     const { code, events } = await runJson(
       ["--coordinator", "http://127.0.0.1:1"],
