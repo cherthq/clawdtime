@@ -320,6 +320,10 @@ sign-in code alone never bans a number. To ban your number for good, send
 `{"permanent": true, "deviceCredential": "..."}` with the current credential
 of your paired Mac. The coordinator then refuses that number from then on.
 
+**Unpair from the Mac.** `POST /device/unpair` with the Mac's own device
+credential unpairs that Mac and revokes its credentials, with no sign-in.
+`clawdtime uninstall` sends it. The number stays a member and can pair again.
+
 ## Demo and callback
 
 First say:

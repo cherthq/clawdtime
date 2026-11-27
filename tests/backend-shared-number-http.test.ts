@@ -1038,6 +1038,26 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     expect((await f.post("/account/invite", {}, a.account)).status).toBe(200);
   });
 
+  it("unpairs a Mac by its own device credential, once", async () => {
+    const f = await fixture();
+    const a = await f.pair("+14155550100");
+    expect((await f.post("/device/unpair", {}, "forged.secret")).status).toBe(
+      403,
+    );
+    expect(
+      (await f.post("/device/unpair", { extra: true }, a.credential)).status,
+    ).toBe(400);
+    const unpaired = await f.post("/device/unpair", {}, a.credential);
+    expect(unpaired).toEqual({ status: 200, body: { ok: true } });
+    expect(
+      (await f.post("/device/connect", { instanceId: "mac" }, a.credential))
+        .status,
+    ).toBe(403);
+    expect((await f.post("/device/unpair", {}, a.credential)).status).toBe(403);
+    // The number pairs again with no replace: the old pairing is gone.
+    expect((await f.post("/account/invite", {}, a.account)).status).toBe(200);
+  });
+
   it("checks the device credential before reading a device body and keeps device bodies small", async () => {
     const f = await fixture();
     const a = await f.pair("+14155550100");

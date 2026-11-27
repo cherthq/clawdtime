@@ -556,6 +556,31 @@ describe("staged shared-number identity and ownership", () => {
     f.router.connect(b.credential, "instance-b");
   });
 
+  it("lets a paired Mac unpair itself with its own credential, and nothing more", async () => {
+    const f = fixture();
+    const a = await f.pair(),
+      b = await f.pair("b");
+    f.router.connect(a.credential, "instance-a");
+    expect(() => f.router.unpairDevice("forged.secret")).toThrow();
+    f.router.unpairDevice(a.credential);
+    expect(() => f.router.connect(a.credential, "instance-a")).toThrow();
+    // The credential is gone: a second unpair is refused, as any other use.
+    expect(() => f.router.unpairDevice(a.credential)).toThrow();
+    // The number is not banned: it pairs again with no replace.
+    const again = f.router.acceptInvitation(
+      (await f.router.invite("account-a")).invitation,
+      {
+        localAccepted: true,
+        displayId: "display-a",
+        allowView: true,
+        allowControl: false,
+      },
+    );
+    f.router.connect(again.credential, "instance-a");
+    // Another member's Mac is not touched.
+    f.router.connect(b.credential, "instance-b");
+  });
+
   it("keeps view and control separate and rechecks revocation", async () => {
     const f = fixture();
     const a = await f.admitted("a", "call-a", false);

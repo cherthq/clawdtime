@@ -392,6 +392,16 @@ export class SharedNumber {
         });
     });
   }
+  /** The paired Mac unpairs itself with its own device credential, as when
+   * ClawdTime is uninstalled. It only ends access: the number stays enrolled
+   * and pairs again, as after an account revoke. A ban still needs the
+   * signed-in account. */
+  unpairDevice(credential: string) {
+    this.store.transaction(() => {
+      const { pair } = this.authenticate(credential);
+      this.unpair(this.member(pair.memberId));
+    });
+  }
   private unpair(member: SharedMember) {
     if (!member.pairingId) return member;
     const pair = this.store.get<Pairing>(kind("pairing"), member.pairingId);
