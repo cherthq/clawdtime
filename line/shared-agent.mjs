@@ -1,8 +1,10 @@
 import { cli, defineAgent, ServerOptions } from "@livekit/agents";
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
+import { RoomServiceClient } from "livekit-server-sdk";
 import { callEntry } from "./agent.mjs";
 import { makeSharedDesk } from "./shared-desk.mjs";
+import { sharedRooms } from "./shared-rooms.mjs";
 
 export async function sharedEntry(ctx) {
   const roomId = ctx.job?.room?.name;
@@ -24,7 +26,18 @@ if (
   const port = Number(process.env.CLAWDTIME_SHARED_WORKER_PORT ?? 3320);
   if (!Number.isInteger(port) || port < 1024 || port > 65535)
     throw Error("shared_worker_port_required");
-  const claimedRooms = new Set();
+  let roomService;
+  const claimedRooms = sharedRooms({
+    // The worker's own media server credentials; read only when the ledger is full.
+    live: async (names) => {
+      roomService ??= new RoomServiceClient(
+        process.env.LIVEKIT_URL,
+        process.env.LIVEKIT_API_KEY,
+        process.env.LIVEKIT_API_SECRET,
+      );
+      return (await roomService.listRooms(names)).map((room) => room.name);
+    },
+  });
   cli.runApp(
     new ServerOptions({
       agent: fileURLToPath(import.meta.url),
@@ -32,12 +45,10 @@ if (
       agentName: process.env.AGENT_NAME,
       requestFunc: async (job) => {
         // The coordinator's registered room is authoritative, not job metadata.
-        const room = job.room?.name;
-        if (!room || claimedRooms.has(room) || claimedRooms.size >= 10000) {
+        if (!(await claimedRooms.claim(job.room?.name))) {
           await job.reject();
           return;
         }
-        claimedRooms.add(room);
         try {
           await makeSharedDesk({
             origin: process.env.CLAWDTIME_SHARED_ORIGIN,
