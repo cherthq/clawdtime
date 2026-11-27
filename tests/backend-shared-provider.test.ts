@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../src/storage/store.js";
 import { createSharedNumberApp } from "../src/shared-number-app.js";
 import { SharedProvider } from "../src/control/shared-provider.js";
+import { UNVERIFIED_LIMIT_MS } from "../src/control/shared-number.js";
 import { SharedProviderAPI } from "../src/transport/shared-provider-api.js";
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -69,7 +70,7 @@ function setup(
       call_id: randomUUID(),
       line_id: lineId,
       media: { audio: true, video: true },
-      from: "untrusted caller",
+      from: "untrusted caller" as string | null,
     },
   };
   const send = (value = event) => {
@@ -267,11 +268,13 @@ it("bounds unknown reconciliation retries and keeps the slot until room cleanup 
   expect(f.api.observe.mock.calls.length).toBeGreaterThan(10);
   expect(f.api.observe.mock.calls.length).toBeLessThanOrEqual(30);
   expect(await f.send(f.next())).toEqual({ action: "decline" });
+  // The unverified call's room was removed once, after 90 s. The slot stayed.
+  expect(f.media.cleanup).toHaveBeenCalledOnce();
   f.api.observe.mockResolvedValue(cleaned);
   f.media.cleanup.mockResolvedValueOnce(false); // room still listed
   clock += 30_000;
   await f.provider.pump();
-  expect(f.media.cleanup).toHaveBeenCalledOnce();
+  expect(f.media.cleanup).toHaveBeenCalledTimes(2);
   expect(f.phase(first.data.call_id)).toBe("unknown");
   expect(await f.send(f.next())).toEqual({ action: "decline" });
   clock += 30_000;
@@ -360,4 +363,50 @@ it("checks the real provider response contract and does not confuse room connect
   expect((await api.observe(callId)).cleanupComplete).toBe(true);
   events.push(events[0]);
   await expect(api.observe(callId)).rejects.toThrow("event_conflict");
+});
+it("passes the observed caller to the router only as a digest, and ends an unverified call by removing its room", async () => {
+  let clock = Date.now();
+  const f = setup({ now: () => clock });
+  const first = f.next();
+  first.data.from = "+13125550100";
+  expect(await f.send(first)).toEqual({ action: "accept", ...f.credentials });
+  const calls = f.store.all<any>("shared_number_call");
+  expect(calls).toHaveLength(1);
+  expect(calls[0].callerDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect(JSON.stringify(f.store.all("shared_number_call"))).not.toContain(
+    "+13125550100",
+  );
+  f.api.observe.mockResolvedValue(live);
+  await f.provider.pump();
+  expect(f.media.cleanup).not.toHaveBeenCalled();
+  clock += UNVERIFIED_LIMIT_MS;
+  await f.provider.pump();
+  expect(f.media.cleanup).toHaveBeenCalledWith(f.room(first.data.call_id));
+  await f.provider.pump();
+  expect(f.media.cleanup).toHaveBeenCalledOnce();
+  // Fail closed: the provider has not reported the call ended yet.
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  f.api.observe.mockResolvedValue(cleaned);
+  clock += 1000;
+  await f.provider.pump();
+  expect(f.phase(first.data.call_id)).toBe("ended");
+  expect(await f.send(f.next())).toEqual({
+    action: "accept",
+    ...f.credentials,
+  });
+});
+it("retries a room removal that did not take, without freeing the slot", async () => {
+  let clock = Date.now();
+  const f = setup({ now: () => clock });
+  const first = f.next();
+  await f.send(first);
+  clock += UNVERIFIED_LIMIT_MS;
+  f.media.cleanup.mockRejectedValueOnce(Error("media unavailable"));
+  await f.provider.pump();
+  await f.provider.pump();
+  expect(f.media.cleanup).toHaveBeenCalledOnce();
+  clock += 5000;
+  await f.provider.pump();
+  expect(f.media.cleanup).toHaveBeenCalledTimes(2);
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
 });

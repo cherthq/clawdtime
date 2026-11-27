@@ -30,6 +30,14 @@ interface Incoming {
 }
 // Unknown calls are read again after 1, 2, 4, 8 and 16 s, then every 30 s.
 const retryCeilingMs = 30_000;
+/** The room removal of a call the router released, retried until it holds. */
+interface Release {
+  id: string;
+  roomId: string;
+  removed: boolean;
+  retryAt?: number;
+}
+const releaseRetryMs = 5000;
 const eventSchema = z
   .object({
     event_id: z.uuid(),
@@ -128,7 +136,14 @@ export class SharedProvider {
     const event = eventSchema.parse(JSON.parse(raw));
     if (event.data.line_id !== this.options.lineId)
       throw new DomainError(403, "shared_webhook_line");
-    // No caller metadata is persisted or used to authorize a device.
+    // The observed caller handle, exactly as the provider sent it, only selects
+    // whose paired Mac may be shown the call code. The router keeps a keyed
+    // digest of it. It is never persisted here or used to authorize a device.
+    const from = (event.data as { from?: unknown }).from;
+    const caller =
+      typeof from === "string" && from.length > 0 && from.length <= 320
+        ? from
+        : undefined;
     if (event.type !== "call.incoming") return { ok: true }; // poll authoritative provider cleanup below
     const fingerprint = hash(
       JSON.stringify([
@@ -160,9 +175,10 @@ export class SharedProvider {
       phase: "preparing",
     };
     this.options.store.put("shared_provider_incoming", record);
-    const incoming = (await this.options.event(
-      this.binding(record, "incoming"),
-    )) as { state: string };
+    const incoming = (await this.options.event({
+      ...this.binding(record, "incoming"),
+      ...(caller ? { caller } : {}),
+    })) as { state: string };
     if (incoming.state !== "unknown_identity") {
       this.options.store.put("shared_provider_incoming", {
         ...record,
@@ -229,6 +245,7 @@ export class SharedProvider {
     if (this.busy) return;
     this.busy = true;
     try {
+      await this.releaseUnverified();
       for (const item of this.options.store.all<Incoming>(
         "shared_provider_incoming",
       )) {
@@ -261,6 +278,31 @@ export class SharedProvider {
       await this.callbacks.pump();
     } finally {
       this.busy = false;
+    }
+  }
+  /** End a call the router released: its caller did not verify in time, ran
+   * out of attempts, or reached an offline Mac. Removing the room ends the
+   * provider call. The slot still frees only after the provider's terminal
+   * cleanup and an observed room absence, as for every other call. */
+  private async releaseUnverified() {
+    for (const call of this.options.router.releaseUnverified()) {
+      const prior = this.options.store.get<Release>(
+        "shared_provider_release",
+        call.callId,
+      );
+      if (prior?.removed || (prior?.retryAt ?? 0) > this.now()) continue;
+      let removed = false;
+      try {
+        removed = await this.options.media.cleanup(call.roomId);
+      } catch {
+        /* retried below; the slot stays held */
+      }
+      this.options.store.put<Release>("shared_provider_release", {
+        id: call.callId,
+        roomId: call.roomId,
+        removed,
+        ...(removed ? {} : { retryAt: this.now() + releaseRetryMs }),
+      });
     }
   }
   /** A failed preparation or a restart leaves no evidence of a room or of the
