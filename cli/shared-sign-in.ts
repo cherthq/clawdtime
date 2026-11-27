@@ -1,4 +1,8 @@
-import { z } from "zod";
+import {
+  startSharedSignIn,
+  verifySharedSignIn,
+  type CoordinatorPost,
+} from "../src/onboard/pairing.js";
 
 /** Signs in with a code texted to the person's own number, after consent.
  * Only pairing signs in. A call is proved by the paired Mac itself, so
@@ -6,7 +10,7 @@ import { z } from "zod";
 export async function sharedSignIn(options: {
   origin: string;
   ask(question: string): Promise<string>;
-  post(path: string, input: unknown, bearer?: string): Promise<unknown>;
+  post: CoordinatorPost;
 }): Promise<{ token: string } | null> {
   const recipient = (
     await options.ask("Your own phone number, with country code: ")
@@ -19,14 +23,14 @@ export async function sharedSignIn(options: {
     ).trim() !== "yes"
   )
     return null;
-  const challenge = z
-    .object({ challengeId: z.string() })
-    .parse(await options.post("/auth/start", { recipient }));
+  const challenge = await startSharedSignIn(options.post, recipient);
   const code = (
     await options.ask("Enter the sign-in code from your phone: ")
   ).trim();
-  const session = z
-    .object({ token: z.string(), expiresAt: z.number().optional() })
-    .parse(await options.post("/auth/verify", { ...challenge, code }));
+  const session = await verifySharedSignIn(
+    options.post,
+    challenge.challengeId,
+    code,
+  );
   return { token: session.token };
 }

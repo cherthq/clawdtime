@@ -9,7 +9,6 @@ import { join, isAbsolute } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { z } from "zod";
 import {
-  privateFolder,
   readPrivateJSON,
   writePrivateJSON,
 } from "../connectors/shared/private-file.js";
@@ -22,52 +21,25 @@ import { callPhoneDesktop } from "../connectors/agents/phone-desktop.js";
 import { Store } from "../src/storage/store.js";
 import { routingId } from "../src/shared-number-contracts.js";
 import { SharedDisplay } from "../connectors/shared/shared-display.js";
-import { sharedDisplayTargetSchema } from "../src/control/proactive-display-views.js";
-import { oneJSON } from "../src/control/proactive-views.js";
 import { sharedSignIn } from "./shared-sign-in.js";
+import {
+  acceptSharedInvitation,
+  coordinatorPost,
+  CoordinatorError,
+  requestSharedInvitation,
+  resolveSharedDisplay,
+  saveSharedPairing,
+  sharedAcceptance,
+  sharedConnectionSchema,
+  sharedPairingPaths,
+} from "../src/onboard/pairing.js";
 import type {
   SharedOperation,
   SharedResult,
 } from "../src/shared-relay-contracts.js";
 
-/** The private connection file of a paired Mac. It keeps the person's own
- * view and control answers, and this Mac enforces them whatever the
- * coordinator sends. A file without the answers allows neither. */
-export const sharedConnectionSchema = z
-  .object({
-    origin: z.string(),
-    credential: z.string().min(32),
-    deviceId: routingId,
-    displayId: routingId,
-    allowView: z.boolean().default(false),
-    allowControl: z.boolean().default(false),
-    walkthroughReports: z.boolean().default(false),
-    capture: z
-      .object({
-        binary: z.string().refine(isAbsolute),
-        target: sharedDisplayTargetSchema,
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
+export { sharedAcceptance, sharedConnectionSchema };
 const configuration = sharedConnectionSchema;
-
-/** The acceptance that pairing sends: the person's real answers. Viewing is
- * allowed only when they agreed to share the display. Computer actions need
- * viewing, as on the coordinator. */
-export function sharedAcceptance(answers: {
-  displayId: string;
-  shareScreen: boolean;
-  control: boolean;
-}) {
-  return {
-    localAccepted: true as const,
-    displayId: routingId.parse(answers.displayId),
-    allowView: answers.shareScreen,
-    allowControl: answers.shareScreen && answers.control,
-  };
-}
 
 /** The Mac's own answers decide what it runs, whatever the coordinator
  * sends. Computer actions need both answers. Every other operation that
@@ -148,8 +120,7 @@ export async function sharedRotate(
 }
 
 export async function sharedCli(args: string[]) {
-  const directory = join(homedir(), ".config", "clawdtime", "shared");
-  const file = join(directory, "connection.json");
+  const { directory, file } = sharedPairingPaths(homedir());
   const system = { env: process.env, home: homedir() };
   if (!["pair", "run", "prove", "rotate", "doctor"].includes(args[0] ?? "")) {
     console.log(
@@ -347,23 +318,22 @@ export async function sharedCli(args: string[]) {
     input: process.stdin,
     output: process.stdout,
   });
+  const send = coordinatorPost(origin);
   const post = async (path: string, input: unknown, bearer?: string) => {
-    const response = await fetch(`${origin}${path}`, {
-      method: "POST",
-      redirect: "error",
-      headers: {
-        "content-type": "application/json",
-        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
-      },
-      body: JSON.stringify(input),
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (response.status === 409 && path === "/account/invite" && !replace)
-      throw Error(
-        "shared_pairing_exists: this number already has a paired Mac. To pair this Mac in its place, add --replace",
-      );
-    if (!response.ok) throw Error("shared_setup_refused");
-    return response.json();
+    try {
+      return await send(path, input, bearer);
+    } catch (error) {
+      if (
+        error instanceof CoordinatorError &&
+        error.status === 409 &&
+        path === "/account/invite" &&
+        !replace
+      )
+        throw Error(
+          "shared_pairing_exists: this number already has a paired Mac. To pair this Mac in its place, add --replace",
+        );
+      throw Error("shared_setup_refused");
+    }
   };
   try {
     // Only pairing signs in. A call is proved by the paired Mac itself.
@@ -386,11 +356,7 @@ export async function sharedCli(args: string[]) {
     if (binary) {
       if (!isAbsolute(binary))
         throw Error("capture_binary_absolute_path_required");
-      const target = sharedDisplayTargetSchema.parse(
-        await oneJSON(binary, ["--resolve-display", displayId], true).result,
-      );
-      if (String(target.displayId) !== displayId)
-        throw Error("display_selection_changed");
+      const target = await resolveSharedDisplay(binary, displayId);
       if (
         (
           await terminal.question(
@@ -430,23 +396,13 @@ export async function sharedCli(args: string[]) {
     )
       return;
     // A replacement revokes the old pairing of this number when it is accepted.
-    const invitation = z
-      .object({ invitation: z.string() })
-      .parse(
-        await post(
-          "/account/invite",
-          replace ? { replace: true } : {},
-          session.token,
-        ),
-      );
-    const accepted = z
-      .object({
-        credential: z.string(),
-        pairing: z.object({ deviceId: routingId }),
-      })
-      .parse(await post("/pair/accept", { ...invitation, acceptance }));
-    privateFolder(directory);
-    writePrivateJSON(file, {
+    const invitation = await requestSharedInvitation(
+      post,
+      session.token,
+      replace,
+    );
+    const accepted = await acceptSharedInvitation(post, invitation, acceptance);
+    saveSharedPairing(directory, file, {
       origin,
       credential: accepted.credential,
       deviceId: accepted.pairing.deviceId,
