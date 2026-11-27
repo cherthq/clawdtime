@@ -530,6 +530,35 @@ describe("public browser measurement", () => {
       keepalive: true,
     });
   });
+  it.each(["download", "install_command", "copy_prompt"])(
+    "sends %s clicks from links and buttons to the collector",
+    async (action) => {
+      const { requests, listeners } = browserFixture();
+      const button = {
+        dataset: { metricAction: action },
+        closest: (selector: string) => selector === ".hero",
+      };
+      listeners.get("click")?.({
+        target: {
+          closest: (selector: string) =>
+            selector.includes("button[data-metric-action]") ? button : null,
+        },
+      });
+      expect(requests).toHaveLength(2);
+      const input = JSON.parse(requests[1]!.options.body);
+      expect(input).toMatchObject({
+        event: "pilot_cta_clicked",
+        action,
+        placement: "hero",
+      });
+      const runtime = fixture();
+      expect((await post(runtime, input)).status).toBe(202);
+      const data = await (await report(runtime)).json();
+      expect(data.rows).toEqual([
+        expect.objectContaining({ action, count: 1 }),
+      ]);
+    },
+  );
   it("never instruments operational paths, disabled pages, privacy opt-outs or automation", () => {
     for (const config of [
       { path: "/pair" },
