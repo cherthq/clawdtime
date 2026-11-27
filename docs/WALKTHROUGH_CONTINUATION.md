@@ -80,6 +80,15 @@ work may still be running when it replies. Acknowledgement alone is never
 completion. Turn receipts prevent repeated input after delivery becomes
 uncertain.
 
+A new request while this call's own computer task runs does not start a second
+task. The worker takes it as the caller's words for the running task: "no, the
+other tab" or "open Messages instead" steers that task, as words in the chat
+do (see "Words while a task runs" in [computer use](COMPUTER_USE.md)). The
+reply says where the words went, for example "Got it. I take that into the
+task that runs." It never says that something was done. Words from another
+call or from the chat do not steer this call's task: they get the busy reply.
+The same rule holds on an ordinary call to the line.
+
 Stop cancels only computer work owned by that call and leaves video on.
 Hiding sharing, ending the call, revoking permission or losing the call lease
 also stops its computer work. Independent coding jobs keep their own lifecycle.
