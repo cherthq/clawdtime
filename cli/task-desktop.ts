@@ -229,6 +229,14 @@ export function serviceEntry(root: string): string[] {
   return ["--import", "tsx", source];
 }
 
+/** What a launch leaves running: the service, and the panel it started. */
+export interface DesktopLaunch {
+  /** The service process; `child` only when this launch started it. */
+  service: { pid: number; child?: ChildProcess };
+  /** The panel that this launch started, if it started one. */
+  panel?: ChildProcess;
+}
+
 export async function desktopCli(
   args: string[],
   dependencies: {
@@ -238,14 +246,18 @@ export async function desktopCli(
     print?: (message: string) => void;
     startupMs?: number;
     pollMs?: number;
+    /** False: start or check the service alone, with no panel. */
+    panel?: boolean;
+    /** The caller stays in the foreground and owns the panel: it stays in the caller's process group. */
+    foreground?: boolean;
   } = {},
-) {
+): Promise<DesktopLaunch | undefined> {
   const print = dependencies.print ?? console.log;
   if (!args.length || args[0] === "--help") {
     print(
       "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. A click on the mascot opens the chat. The panel lists no coding-agent sessions; its bubble names one that waits for you, and --agents false turns that reading off. Closing the panel leaves the service and task running. Startup does not call, capture, or renew authorization. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
     );
-    return;
+    return undefined;
   }
   const options: Record<string, string> = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -391,6 +403,7 @@ export async function desktopCli(
   const request = dependencies.request ?? fetch;
   let serviceChild: ChildProcess | undefined;
   let serviceFailed = false;
+  let servicePid = 0;
   try {
     writeFileSync(launch, JSON.stringify({ pid: process.pid }));
     const attach = existsSync(ownerPath);
@@ -486,6 +499,7 @@ export async function desktopCli(
           .parse(privateJSON(ownerPath, projectRoot));
         if (ownerAfter.pid !== owner.pid)
           throw Error("Desktop service ownership changed during readiness.");
+        servicePid = owner.pid;
         ready = true;
       } catch {
         if (attach)
@@ -502,12 +516,25 @@ export async function desktopCli(
       throw Error(
         "Desktop service startup is unconfirmed. Preserve its owner lock and state; no replacement was started.",
       );
+    const service = {
+      pid: servicePid,
+      ...(serviceChild ? { child: serviceChild } : {}),
+    };
+    if (dependencies.panel === false) {
+      print(
+        `Desktop service ready for ${projectRoot} at ${origin}. No panel was opened. Simulation: ${worker === "simulation"}.`,
+      );
+      return { service };
+    }
     // Tucked: the panel starts as the mascot and takes no focus.
     const panelArgs = ["--config", panelPath];
     if (options["--tucked"] === "true") panelArgs.push("--tucked");
     const panel = spawnProcess(panelBinary, panelArgs, {
       cwd: root,
-      detached: true,
+      // A foreground owner keeps the panel in its own process group, so that
+      // ending the group ends the panel. The service always has a session of
+      // its own: a kill of the group never cuts its shutdown short.
+      detached: dependencies.foreground !== true,
       stdio: "ignore",
       // Only the native panel consumes the operator's explicit Space mappings.
       // Preserve absence: the launcher must never invent shortcut defaults.
@@ -527,6 +554,7 @@ export async function desktopCli(
     print(
       `Desktop panel requested for ${projectRoot}. Task service remains running at ${origin} when the panel closes. Simulation: ${worker === "simulation"}.`,
     );
+    return { service, panel };
   } finally {
     const owned = fstatSync(launch);
     closeSync(launch);
