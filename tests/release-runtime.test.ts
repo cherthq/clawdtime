@@ -73,6 +73,145 @@ describe("the launcher of a release runtime", () => {
       options: null,
     });
   });
+
+  // The variables that make Node or OpenSSL load code, options or data from
+  // another folder. The runtime's Node may load a library of any signer (it
+  // loads the native addons), so none of them may reach it.
+  const loaders = [
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "NODE_REPL_EXTERNAL_MODULE",
+    "NODE_COMPILE_CACHE",
+    "NODE_ICU_DATA",
+    "NODE_PRESERVE_SYMLINKS",
+    "OPENSSL_CONF",
+    "OPENSSL_CONF_INCLUDE",
+    "OPENSSL_ENGINES",
+    "OPENSSL_MODULES",
+    "OPENSSL_armcap",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+  ];
+
+  it("starts Node with no library, option or tool from the environment or the PATH", () => {
+    const base = temporary();
+    const runtime = join(base, "Made Up", "runtime", "0.4.1");
+    mkdirSync(join(runtime, "bin"), { recursive: true });
+    mkdirSync(join(runtime, "node", "bin"), { recursive: true });
+    mkdirSync(join(runtime, "app", "dist", "cli"), { recursive: true });
+    copyFileSync(
+      join(root, "scripts/release/launcher.sh"),
+      join(runtime, "bin/clawdtime"),
+    );
+    spawnSync("chmod", ["755", join(runtime, "bin/clawdtime")]);
+    // A real Node: it reads OPENSSL_CONF as it starts.
+    writeFileSync(
+      join(runtime, "node/bin/node"),
+      `#!/bin/sh\nexec '${process.execPath}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(runtime, "app/dist/cli/main.js"),
+      `const names = ${JSON.stringify([...loaders, "NODE_EXTRA_CA_CERTS"])};
+console.log(JSON.stringify(Object.fromEntries(names.map((name) => [name, process.env[name] ?? null]))));
+`,
+    );
+    const link = join(base, "home", ".local", "bin", "clawdtime");
+    mkdirSync(join(link, ".."), { recursive: true });
+    symlinkSync(join(runtime, "bin", "clawdtime"), link);
+    // Tools of the same names as the system tools, first on the PATH.
+    const tools = join(base, "tools");
+    const called = join(base, "called.log");
+    mkdirSync(tools);
+    for (const name of ["dirname", "readlink", "basename", "cd", "pwd"])
+      writeFileSync(
+        join(tools, name),
+        `#!/bin/sh\necho ${name} >> '${called}'\nexec /usr/bin/${name} "$@"\n`,
+        { mode: 0o755 },
+      );
+    // An OpenSSL configuration that names a library: Node loads it as it starts.
+    const config = join(base, "made-up.cnf");
+    const module = (path: string) =>
+      `nodejs_conf = nc\n[nc]\nproviders = prov\n[prov]\ndefault = def\nx = xs\n[def]\nactivate = 1\n[xs]\nmodule = ${path}\nactivate = 1\n`;
+    writeFileSync(config, module(join(base, "missing.dylib")));
+    const env = {
+      ...Object.fromEntries(loaders.map((name) => [name, join(base, name)])),
+      NODE_OPTIONS: `--require ${join(base, "hook.js")}`,
+      OPENSSL_CONF: config,
+      NODE_EXTRA_CA_CERTS: join(base, "made-up-ca.pem"),
+      PATH: `${tools}:/usr/bin:/bin`,
+    };
+    const ran = spawnSync(link, [], { encoding: "utf8", env });
+    expect(ran.status, ran.stderr).toBe(0);
+    expect.soft(JSON.parse(ran.stdout)).toEqual({
+      ...Object.fromEntries(loaders.map((name) => [name, null])),
+      // Certificates are data, not code: a company proxy may need them.
+      NODE_EXTRA_CA_CERTS: join(base, "made-up-ca.pem"),
+    });
+    expect
+      .soft(existsSync(called) ? readFileSync(called, "utf8") : "")
+      .toBe("");
+
+    // Shell functions of the same names, and a CDPATH with a made-up runtime:
+    // /bin/sh takes both from the environment.
+    const decoy = join(base, "decoy");
+    mkdirSync(join(decoy, "bin", "node", "bin"), { recursive: true });
+    writeFileSync(
+      join(decoy, "bin", "node", "bin", "node"),
+      "#!/bin/sh\necho decoy node\n",
+      { mode: 0o755 },
+    );
+    const functions = Object.fromEntries(
+      ["cd", "pwd", "test", "["].map((name) => [
+        `BASH_FUNC_${name}%%`,
+        `() { echo function ${name} >> '${called}'; }`,
+      ]),
+    );
+    const relative = spawnSync("/bin/sh", ["bin/clawdtime"], {
+      cwd: runtime,
+      encoding: "utf8",
+      env: { ...env, ...functions, CDPATH: decoy },
+    });
+    expect.soft(relative.status, relative.stderr).toBe(0);
+    expect.soft(relative.stdout).toContain('"NODE_OPTIONS":null');
+    expect
+      .soft(existsSync(called) ? readFileSync(called, "utf8") : "")
+      .toBe("");
+
+    // A library that a configuration names would run inside Node.
+    if (!canCompile) return;
+    writeFileSync(
+      join(base, "probe.c"),
+      `#include <stdio.h>
+__attribute__((constructor)) static void probe(void) { fprintf(stderr, "LOADED from a writable folder\\n"); }
+`,
+    );
+    const library = join(base, "probe.dylib");
+    const built = spawnSync(
+      "xcrun",
+      [
+        "clang",
+        "-arch",
+        "arm64",
+        "-dynamiclib",
+        "-o",
+        library,
+        join(base, "probe.c"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(built.status, built.stderr).toBe(0);
+    writeFileSync(config, module(library));
+    const direct = spawnSync(process.execPath, ["-e", ""], {
+      encoding: "utf8",
+      env: { PATH: "/usr/bin:/bin", OPENSSL_CONF: config },
+    });
+    expect(direct.stderr).toContain("LOADED from a writable folder");
+    const launched = spawnSync(link, [], { encoding: "utf8", env });
+    expect(launched.status, launched.stderr).toBe(0);
+    expect.soft(launched.stderr).not.toContain("LOADED");
+  });
 });
 
 describe("the manifest of a release runtime", () => {

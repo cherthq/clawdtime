@@ -16,7 +16,10 @@
 #                                    it compiles JavaScript as it runs.
 #                                    disable-library-validation: it loads the
 #                                    native addons of app/node_modules, which
-#                                    are signed ad hoc
+#                                    are signed ad hoc. So bin/clawdtime
+#                                    (launcher.sh) clears OPENSSL_CONF and
+#                                    each other variable that could make Node
+#                                    load a library from another folder
 # Node gets no allow-dyld-environment-variables and no get-task-allow.
 # Each .node and .dylib file is signed ad hoc. Any other Mach-O file stops it,
 # so each piece of code in the runtime has a signature that this file chose.

@@ -8,7 +8,8 @@
 # system folders only, where node, npm, npx and tsx are absent and git, swift,
 # xcrun, python3 and the compilers are stand-ins that record any call. Then:
 #   - clawdtime --help, clawdtime start --help, clawdtime keys list and
-#     clawdtime computer doctor answer
+#     clawdtime computer doctor answer, and clawdtime --help answers with a
+#     NODE_OPTIONS and an OPENSSL_CONF that would stop Node if they reached it
 #   - the capture helper answers --preflight (it reads the permission, never asks)
 #   - the compiled desktop service starts from the package root, as clawdtime
 #     start starts it, with no tsx, on a free port and with a stand-in panel,
@@ -95,6 +96,12 @@ expect "clawdtime --help" "start [--project PATH]" clawdtime --help
 expect "clawdtime start --help" "clawdtime start: start the ClawdTime desktop" clawdtime start --help
 expect "clawdtime keys list" "" clawdtime keys list
 expect "clawdtime computer doctor" "desktop service" clawdtime computer doctor
+# Options and an OpenSSL configuration from the environment never reach the
+# runtime's Node: this configuration names a library that does not exist and
+# no default provider, so a Node that reads it stops as it starts.
+printf 'nodejs_conf = nc\n[nc]\nproviders = prov\n[prov]\nx = xs\n[xs]\nmodule = %s/missing.dylib\nactivate = 1\n' "$tmp" >"$tmp/made-up.cnf"
+expect "clawdtime --help with NODE_OPTIONS and OPENSSL_CONF set" "start [--project PATH]" \
+  env NODE_OPTIONS="--require $tmp/missing-hook.js" OPENSSL_CONF="$tmp/made-up.cnf" clawdtime --help
 expect "ClawdTimeTaskCapture --preflight" '"screenPermission"' "$runtime/app/native/ClawdTimeTaskCapture" --preflight
 
 for file in "$runtime/app/native/ClawdTimeTaskPanel" "$runtime/app/native/ClawdTimeTaskCapture" "$runtime/node/bin/node"; do
