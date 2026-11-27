@@ -479,6 +479,54 @@ describe("independent desktop service launcher", () => {
     expect(f.spawnMock.mock.calls[2]![0]).toBe(f.binary);
     for (const child of f.children) expect(child.kill).not.toHaveBeenCalled();
   });
+  it("says which service and panel it left running, and keeps a foreground panel in the caller's group", async () => {
+    const f = fixture();
+    const launch = await desktopCli(f.args, {
+      root: f.root,
+      spawn: f.spawnMock as unknown as typeof spawn,
+      request: f.request,
+      print: f.print,
+      startupMs: 25,
+      pollMs: 1,
+      foreground: true,
+    });
+    expect(launch?.service.pid).toBe(f.descriptor.pid);
+    expect(launch?.service.child).toBe(f.children[0]);
+    expect(launch?.panel).toBe(f.children[1]);
+    // The service keeps a session of its own; the panel stays with its owner.
+    expect(f.spawnMock.mock.calls[0]![2]).toMatchObject({ detached: true });
+    expect(f.spawnMock.mock.calls[1]![2]).toMatchObject({ detached: false });
+    // A second launch attaches: it names the running service and starts none.
+    const attached = await desktopCli(f.args, {
+      root: f.root,
+      spawn: f.spawnMock as unknown as typeof spawn,
+      request: f.request,
+      print: f.print,
+      startupMs: 25,
+      pollMs: 1,
+      panel: false,
+    });
+    expect(attached).toEqual({ service: { pid: f.descriptor.pid } });
+    expect(f.spawnMock).toHaveBeenCalledTimes(2);
+  });
+  it("starts the service alone when no panel is asked for", async () => {
+    const f = fixture();
+    const launch = await desktopCli(f.args, {
+      root: f.root,
+      spawn: f.spawnMock as unknown as typeof spawn,
+      request: f.request,
+      print: f.print,
+      startupMs: 25,
+      pollMs: 1,
+      panel: false,
+    });
+    expect(f.spawnMock).toHaveBeenCalledTimes(1);
+    expect(f.spawnMock.mock.calls[0]![0]).toBe(process.execPath);
+    expect(launch?.panel).toBeUndefined();
+    expect(f.print.mock.calls.flat().join(" ")).toContain(
+      "No panel was opened",
+    );
+  });
   it("panel exit never closes the service or removes its ownership", async () => {
     const f = fixture();
     await f.run();

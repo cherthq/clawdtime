@@ -7,10 +7,12 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startCli, startHelp } from "../cli/start.js";
+import { startCli, startHelp, type StartDependencies } from "../cli/start.js";
 import { main } from "../cli/main.js";
 
 const roots: string[] = [];
@@ -240,5 +242,178 @@ describe("clawdtime start", () => {
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+/** A fake desktop for --foreground: a service process that the test ends,
+ * a panel child, and the signals of the process. Nothing starts. */
+function foregroundSetup() {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "clawdtime-start-")));
+  roots.push(base);
+  const home = join(base, "home"),
+    root = join(base, "checkout");
+  mkdirSync(home, { mode: 0o700 });
+  mkdirSync(join(root, "mac", ".build", "debug"), { recursive: true });
+  writeFileSync(
+    join(root, "mac", ".build", "debug", "ClawdTimeTaskPanel"),
+    "synthetic executable, never run",
+    { mode: 0o700 },
+  );
+  const signals = new EventEmitter();
+  const alive = new Set<number>([4101]);
+  const kills: [number, string][] = [];
+  const panel = Object.assign(new EventEmitter(), {
+    pid: 4102,
+    exitCode: null as number | null,
+    kill: vi.fn(() => true),
+  });
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const launches: { args: string[]; foreground?: boolean; panel?: boolean }[] =
+    [];
+  let orphaned = false;
+  const run = (args: string[], extra: Partial<StartDependencies> = {}) =>
+    startCli(args, {
+      env: {},
+      home,
+      root,
+      cwd: base,
+      print: (line) => stderr.push(line),
+      desktop: async (desktopArgs, dependencies) => {
+        launches.push({
+          args: desktopArgs,
+          ...(dependencies.foreground !== undefined
+            ? { foreground: dependencies.foreground }
+            : {}),
+          ...(dependencies.panel !== undefined
+            ? { panel: dependencies.panel }
+            : {}),
+        });
+        return {
+          service: { pid: 4101 },
+          panel: panel as unknown as ChildProcess,
+        };
+      },
+      foreground: {
+        signals,
+        alive: (pid) => alive.has(pid),
+        kill: (pid, signal) => {
+          kills.push([pid, signal]);
+          // The service ends a moment after its SIGTERM.
+          if (signal === "SIGTERM") setTimeout(() => alive.delete(pid), 5);
+        },
+        orphaned: () => orphaned,
+        write: (line) => stdout.push(line),
+        pollMs: 2,
+      },
+      ...extra,
+    });
+  return {
+    home,
+    signals,
+    alive,
+    kills,
+    panel,
+    stdout,
+    stderr,
+    launches,
+    run,
+    orphan: () => {
+      orphaned = true;
+    },
+  };
+}
+
+const until = async (check: () => boolean) => {
+  for (let i = 0; i < 500 && !check(); i++)
+    await new Promise((done) => setTimeout(done, 2));
+  expect(check()).toBe(true);
+};
+
+describe("clawdtime start --foreground", () => {
+  it("stays, says ready on standard output, and stops the panel and the service on SIGTERM", async () => {
+    const f = foregroundSetup();
+    const running = f.run(["--tucked", "true", "--foreground"]);
+    await until(() => f.stdout.length > 0);
+    expect(f.stdout).toEqual(['{"type":"ready"}']);
+    expect(f.launches).toEqual([expect.objectContaining({ foreground: true })]);
+    expect(f.launches[0]!.args).toContain("--tucked");
+    // Standing by: nothing is stopped until the signal comes.
+    await new Promise((done) => setTimeout(done, 20));
+    expect(f.kills).toEqual([]);
+    f.signals.emit("SIGTERM");
+    await running;
+    expect(f.kills).toEqual([[4101, "SIGTERM"]]);
+    expect(f.panel.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(f.alive.has(4101)).toBe(false);
+    // Only the ready line goes to standard output; the rest goes to standard error.
+    expect(f.stdout).toEqual(['{"type":"ready"}']);
+    expect(f.stderr.join("\n")).toContain("Click the mascot");
+    expect(f.signals.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("ends with an error, and closes the panel, when the service ends by itself", async () => {
+    const f = foregroundSetup();
+    const running = f.run(["--foreground"]);
+    await until(() => f.stdout.length > 0);
+    f.alive.delete(4101);
+    await expect(running).rejects.toThrow("The desktop service ended.");
+    expect(f.panel.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(f.kills).toEqual([]);
+  });
+
+  it("stops the desktop when the program that started it is gone", async () => {
+    const f = foregroundSetup();
+    const running = f.run(["--foreground"]);
+    await until(() => f.stdout.length > 0);
+    f.orphan();
+    await running;
+    expect(f.kills).toEqual([[4101, "SIGTERM"]]);
+  });
+
+  it("stops at once after a SIGTERM that comes while the desktop starts", async () => {
+    const f = foregroundSetup();
+    const running = f.run(["--foreground"], {
+      desktop: async () => {
+        f.signals.emit("SIGTERM");
+        return { service: { pid: 4101 } };
+      },
+    });
+    await running;
+    expect(f.stdout).toEqual([]);
+    expect(f.kills).toEqual([[4101, "SIGTERM"]]);
+  });
+
+  it("lets one foreground owner hold a desktop at a time", async () => {
+    const f = foregroundSetup();
+    const first = f.run(["--foreground"]);
+    await until(() => f.stdout.length > 0);
+    await expect(f.run(["--foreground"])).rejects.toThrow(
+      "Another ClawdTime runs this desktop in the foreground.",
+    );
+    expect(f.launches).toHaveLength(1);
+    f.signals.emit("SIGTERM");
+    await first;
+    // Once the first one ends, the desktop can have an owner again.
+    f.alive.add(4101);
+    const second = f.run(["--foreground"]);
+    await until(() => f.stdout.length === 2);
+    f.signals.emit("SIGTERM");
+    await second;
+  });
+
+  it("starts the service without a panel when the caller asks for none", async () => {
+    const f = foregroundSetup();
+    await f.run([], { panel: false });
+    expect(f.launches).toEqual([expect.objectContaining({ panel: false })]);
+    expect(f.stdout).toEqual([]);
+  });
+
+  it("refuses a value after --foreground", async () => {
+    const f = foregroundSetup();
+    await expect(f.run(["--foreground", "true"])).rejects.toThrow(
+      "Use: clawdtime start",
+    );
+    expect(f.launches).toEqual([]);
   });
 });

@@ -13,7 +13,7 @@ final class SelfTestTests: XCTestCase {
     XCTAssertEqual(report.filesVerified, 5)
     XCTAssertEqual(report.runtimeVersion, "0.4.0")
     XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("cancelled").path))
-    XCTAssertEqual(try String(contentsOf: folder.appendingPathComponent("args"), encoding: .utf8), "onboard\n--json\n")
+    XCTAssertEqual(try String(contentsOf: folder.appendingPathComponent("args"), encoding: .utf8), "onboard\n--json\n--app\n")
     let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(report.json().utf8)) as? [String: Any])
     XCTAssertEqual(json["ok"] as? Bool, true)
   }

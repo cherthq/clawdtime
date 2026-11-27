@@ -148,7 +148,9 @@ CLAWDTIME_CHAT=agent npm run task:desktop -- \
 `clawdtime start` runs this command for you, with the same state folder. With
 no `--project`, the first start uses `~/clawdtime-work`, and later starts keep
 the project of the first one. `clawdtime start --tucked true` starts the
-mascot alone.
+mascot alone. `clawdtime start --foreground` stays in the foreground and owns
+the desktop: it prints `{"type":"ready"}` when the desktop is ready, and
+Ctrl+C or SIGTERM closes the panel and stops the service.
 
 The mascot appears on your desktop. Click it to open the chat. The bar under
 the mascot has two buttons: **Chat** and **Talk**. The mascot's menu picks its

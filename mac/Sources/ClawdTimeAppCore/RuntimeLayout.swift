@@ -79,10 +79,13 @@ public struct RuntimeLayout: Equatable, Sendable {
     return RuntimeLayout(root: root, manifest: manifest)
   }
 
-  /// Three numbers, as an app version needs.
+  /// Three numbers, as an app version needs: each with no leading zero and at
+  /// most four digits, the rule of the runtime builder and package-app.sh.
   public static func isReleaseVersion(_ version: String) -> Bool {
     let parts = version.split(separator: ".", omittingEmptySubsequences: false)
-    return parts.count == 3 && parts.allSatisfy { !$0.isEmpty && $0.count <= 4 && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }
+    return parts.count == 3 && parts.allSatisfy { part in
+      !part.isEmpty && part.count <= 4 && part.allSatisfy { ("0"..."9").contains($0) } && (part == "0" || part.first != "0")
+    }
   }
 
   static func checkRelative(_ path: String) throws {

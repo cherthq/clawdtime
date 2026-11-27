@@ -28,7 +28,8 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 mkdir -p "$root/bin" "$root/node/bin" "$root/app/dist/cli" "$root/app/native" \
-  "$root/app/node_modules/example-addon/build/Release" "$root/app/node_modules/.bin" "$root/app/node_modules/example-cli"
+  "$root/app/node_modules/example-addon/build/Release" "$root/app/node_modules/.bin" "$root/app/node_modules/example-cli" \
+  "$root/app/node_modules/example-sdk" "$root/app/native/ClawdTimeCompanion_ClawdTimeTaskPanel.bundle/Fonts"
 
 cat > "$root/bin/clawdtime" <<'ENGINE'
 #!/bin/sh
@@ -52,6 +53,9 @@ cc -arch arm64 -mmacosx-version-min=14.0 -o "$root/node/bin/node" "$work/stub.c"
 cc -arch arm64 -mmacosx-version-min=14.0 -o "$root/app/native/ClawdTimeTaskPanel" "$work/stub.c"
 cc -arch arm64 -mmacosx-version-min=14.0 -o "$root/app/native/ClawdTimeTaskCapture" "$work/stub.c"
 cc -arch arm64 -mmacosx-version-min=14.0 -bundle -o "$root/app/node_modules/example-addon/build/Release/example.node" "$work/addon.c"
+cc -arch arm64 -mmacosx-version-min=14.0 -dynamiclib -o "$root/app/node_modules/example-sdk/libexample.dylib" "$work/addon.c"
+# The panel's fonts sit next to it, where Bundle.module looks first.
+printf 'Made-up font bytes.\n' > "$root/app/native/ClawdTimeCompanion_ClawdTimeTaskPanel.bundle/Fonts/MadeUp.ttf"
 printf 'Made-up license text for the fake node.\n' > "$root/node/LICENSE"
 printf '{"name":"clawdtime","version":"%s","type":"module"}\n' "$version" > "$root/app/package.json"
 printf '{"version":"%s","commit":"0000000000000000000000000000000000000000"}\n' "$version" > "$root/app/release.json"

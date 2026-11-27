@@ -22,16 +22,19 @@ import {
   findDesktopService,
 } from "../../connectors/agents/desktop-chat.js";
 import { inspectDesktopReadiness } from "../../connectors/agents/desktop-readiness.js";
+import { readDesktopPrivateJSON } from "../control/task-desktop-config.js";
 import type { Provider } from "../../connectors/computer/providers.js";
 import {
   readPrivateJSON,
   writePrivateJSON,
 } from "../../connectors/shared/private-file.js";
 import { findNativeHelper } from "../native-helpers.js";
+import { processLockHolder } from "../process-lock.js";
 import type { OnboardPorts, PermissionFacts } from "./engine.js";
 import {
   listSharedDisplays,
   resolveSharedDisplay,
+  sharedConnectionLock,
   sharedPairingPaths,
 } from "./pairing.js";
 
@@ -137,6 +140,16 @@ export function managedConnection(input: {
       if (!record || !alive(record.pid)) return "stopped";
       return record.instanceId === instanceId ? "running" : "stale";
     },
+    holder: async () => {
+      const held = processLockHolder(sharedConnectionLock(input.home));
+      if (!held) return null;
+      const record = read();
+      return {
+        instanceId:
+          typeof held.instanceId === "string" ? held.instanceId : null,
+        managed: !!record && held.pid === record.pid,
+      };
+    },
     stop: async () => {
       const record = read();
       if (!record || !alive(record.pid)) return;
@@ -190,13 +203,52 @@ export function managedConnection(input: {
   };
 }
 
+/** The lock of a `clawdtime start --foreground` that owns the desktop. */
+const foregroundLock = "desktop-owner.lock";
+
+/**
+ * Ends the desktop service of this Mac with SIGTERM and waits until it has
+ * left and removed its owner lock. The panel stays: it finds the next service
+ * of the same desktop by itself. A desktop that a foreground owner runs (the
+ * Mac app) is left to that owner.
+ */
+export async function stopDesktopService(
+  system: { env: Record<string, string | undefined>; home: string },
+  options: { waitMs?: number } = {},
+) {
+  const folder = desktopStateFolder(system);
+  if (!folder) return;
+  if (processLockHolder(join(folder, foregroundLock)))
+    throw Error("desktop_owned_in_foreground");
+  let pid: number;
+  try {
+    pid = z
+      .object({ pid: z.number().int().positive() })
+      .strict()
+      .parse(readDesktopPrivateJSON(join(folder, "owner.lock"))).pid;
+  } catch {
+    return;
+  }
+  if (!alive(pid)) return;
+  process.kill(pid, "SIGTERM");
+  const deadline = Date.now() + (options.waitMs ?? 20_000);
+  while (alive(pid) || existsSync(join(folder, "owner.lock"))) {
+    if (Date.now() > deadline) throw Error("desktop_did_not_stop");
+    await new Promise((done) => setTimeout(done, 200));
+  }
+}
+
 /** The ports of the real Mac. */
 export function macPorts(input: {
   env: Record<string, string | undefined>;
   home: string;
   root: string;
   command: { executable: string; args: string[] };
-  startDesktop: (log: (message: string) => void) => Promise<void>;
+  /** Starts the desktop. `tucked`: the panel, when one opens, takes no focus. */
+  startDesktop: (
+    log: (message: string) => void,
+    options?: { tucked?: boolean },
+  ) => Promise<void>;
   request?: typeof fetch;
 }): OnboardPorts {
   const request = input.request ?? fetch;
@@ -216,7 +268,14 @@ export function macPorts(input: {
         const folder = desktopStateFolder(system);
         return (folder ? findDesktopService(folder) : null)?.instanceId ?? null;
       },
-      start: input.startDesktop,
+      start: (log) => input.startDesktop(log),
+      stop: () => stopDesktopService(system),
+      // An open panel stays and finds the new service by itself; a new one
+      // opens tucked, so the restart takes no focus.
+      restart: async (log) => {
+        await stopDesktopService(system);
+        await input.startDesktop(log, { tucked: true });
+      },
     },
     permissions: async (): Promise<PermissionFacts> => {
       const panelPath = panel();

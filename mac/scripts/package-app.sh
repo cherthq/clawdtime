@@ -35,6 +35,10 @@ done
 for file in app/package.json app/release.json manifest.json; do
   [ -f "$runtime/$file" ] || fail "The runtime has no $file."
 done
+# The panel draws with its own fonts. Bundle.module finds them next to the
+# panel, so the bundle stays in app/native/ beside it.
+fonts=("$runtime"/app/native/*_ClawdTimeTaskPanel.bundle)
+[ -d "${fonts[0]}" ] || fail "The runtime has no font bundle next to the panel (app/native/*_ClawdTimeTaskPanel.bundle)."
 read -r version commit < <(/usr/bin/python3 -I - "$runtime" <<'PY'
 import hashlib, json, os, re, sys
 root = sys.argv[1]

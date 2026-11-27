@@ -7,8 +7,11 @@ public enum SetupProtocol {
   public static let version = 1
   /// The engine is started with these arguments and no others. A secret never
   /// goes on a command line: the app writes every input to the engine's stdin.
+  /// `--app` says that the app owns the long-lived processes: setup opens no
+  /// panel and starts no background connection, and the app starts the one
+  /// desktop and the one connection when setup ends.
   public static func arguments(local: Bool) -> [String] {
-    local ? ["onboard", "--json", "--local"] : ["onboard", "--json"]
+    local ? ["onboard", "--json", "--app", "--local"] : ["onboard", "--json", "--app"]
   }
 }
 

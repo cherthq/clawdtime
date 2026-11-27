@@ -47,6 +47,14 @@ export function sharedPairingPaths(home = homedir()) {
   return { directory, file: join(directory, "connection.json") };
 }
 
+/**
+ * The lock of the one `clawdtime shared run` of this Mac. The connection
+ * holds it for its whole life; the kernel ends it with the process.
+ */
+export function sharedConnectionLock(home = homedir()) {
+  return join(sharedPairingPaths(home).directory, "connection.lock");
+}
+
 /** The saved pairing: none, one, or a file that cannot be used. */
 export function readSharedPairing(
   file: string,

@@ -117,6 +117,49 @@ describe("the manifest of a release runtime", () => {
   });
 });
 
+describe("the manifest and the app's runtime check", () => {
+  const write = (runtime: string, version: string, commit = "b".repeat(40)) =>
+    spawnSync(
+      process.execPath,
+      [
+        join(root, "scripts/release/manifest.mjs"),
+        runtime,
+        version,
+        commit,
+        "v24.22.3",
+      ],
+      { encoding: "utf8" },
+    );
+
+  it("writes only what the app takes: three numbers, relative paths and lowercase SHA-256", () => {
+    const runtime = join(temporary(), "runtime");
+    mkdirSync(join(runtime, "app", "dist"), { recursive: true });
+    writeFileSync(join(runtime, "app", "dist", "read me.txt"), "spaces");
+    expect(write(runtime, "0.4.1").status).toBe(0);
+    const manifest = JSON.parse(
+      readFileSync(join(runtime, "manifest.json"), "utf8"),
+    ) as { files: Record<string, string>; arch: string };
+    expect(manifest.arch).toBe("arm64");
+    for (const [path, sha] of Object.entries(manifest.files)) {
+      expect(path).not.toMatch(/^\/|(^|\/)\.{0,2}(\/|$)/);
+      expect(sha).toMatch(/^[0-9a-f]{64}$/);
+    }
+    // The versions that the app refuses are refused here, before any archive.
+    for (const version of [
+      "0.4.1-beta.1",
+      "01.4.1",
+      "0.4",
+      "10000.0.0",
+      "v0.4.1",
+    ]) {
+      const refused = write(runtime, version);
+      expect(refused.status, version).toBe(2);
+      expect(refused.stderr).toContain("three numbers");
+    }
+    expect(write(runtime, "0.4.1", "ABC").status).toBe(2);
+  });
+});
+
 describe("the runtime builder", () => {
   it("checks its options before it downloads or builds anything", () => {
     const base = temporary();

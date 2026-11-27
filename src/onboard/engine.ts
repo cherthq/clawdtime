@@ -83,6 +83,8 @@ export interface OnboardPorts {
     start(log: (message: string) => void): Promise<void>;
     /** Starts an idle desktop again, so that it reads a new setting. Optional. */
     restart?(log: (message: string) => void): Promise<void>;
+    /** Ends the desktop service. Optional: setup in the Mac app ends the desktop it started when the person stops setup. */
+    stop?(): Promise<void>;
   };
   /** A fresh read-only check of the installed panel and capture helper. */
   permissions(): Promise<PermissionFacts>;
@@ -93,7 +95,14 @@ export interface OnboardPorts {
     capture(): string | undefined;
   };
   connection: {
+    /** The background connection that Terminal setup started. */
     status(instanceId: string): Promise<"running" | "stale" | "stopped">;
+    /**
+     * The one `clawdtime shared run` that holds the connection lock of this
+     * Mac, whoever started it, or null. `managed` says that it is the one of
+     * `status`.
+     */
+    holder(): Promise<{ instanceId: string | null; managed: boolean } | null>;
     start(instanceId: string): Promise<void>;
     stop(): Promise<void>;
   };
@@ -109,6 +118,11 @@ export interface OnboardPorts {
 export interface OnboardSettings {
   version: string;
   local: boolean;
+  /**
+   * The Mac app drives setup and owns the long-lived processes: setup starts
+   * no background connection, and the app connects after setup.
+   */
+  appOwned?: boolean;
   /** The --coordinator option. */
   coordinator?: string;
   env: Record<string, string | undefined>;
@@ -225,6 +239,11 @@ export class OnboardEngine {
           });
       }
     }
+    // The app's Stop ends every process that its setup started.
+    if (cancelled && this.settings.appOwned && this.startedDesktop)
+      await this.ports.desktop.stop?.().catch(() => {
+        this.log("warn", "The desktop that setup started did not stop.");
+      });
     const ready = !cancelled && this.finish();
     this.io.emit({
       type: "done",
@@ -566,56 +585,68 @@ export class OnboardEngine {
           });
         continue;
       }
-      if (chosen.enabled) {
-        this.computerOn = true;
-        const status = await this.ports.desktop.status();
-        this.step("computer", "ready", {
-          detail:
-            status.computer === "configured"
-              ? "Computer use is on."
-              : "Computer use is on. The desktop uses it from its next start.",
-        });
-        return;
+      if (!chosen.enabled) {
+        const answer = await this.ask(
+          "computer",
+          { kind: "confirm", prompt: "Turn on computer use?" },
+          {
+            detail:
+              "ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.",
+          },
+        );
+        if ("action" in answer && answer.action !== "skip") continue;
+        if ("action" in answer || answer.value !== true)
+          return this.step("computer", "skipped", {
+            detail:
+              "Computer use stays off. Turn it on later: clawdtime computer on",
+          });
+        setComputerSwitch(this.root, true, this.now());
+        continue;
       }
-      const answer = await this.ask(
-        "computer",
-        { kind: "confirm", prompt: "Turn on computer use?" },
-        {
-          detail:
-            "ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.",
-        },
-      );
-      if ("action" in answer && answer.action !== "skip") continue;
-      if ("action" in answer || answer.value !== true)
-        return this.step("computer", "skipped", {
-          detail:
-            "Computer use stays off. Turn it on later: clawdtime computer on",
-        });
-      setComputerSwitch(this.root, true, this.now());
-      // The desktop builds its computer worker when it starts.
-      const status = await this.ports.desktop.status();
+      this.computerOn = true;
+      let status = await this.ports.desktop.status();
+      let busy = false;
+      // The desktop builds its computer worker when it starts, so a desktop
+      // that started before the yes has none. It starts again, but only
+      // while it is idle: no task, no unresolved action, no connection.
       if (
-        status.computer !== "configured" &&
-        status.computer !== "uncertain" &&
-        status.taskSession !== "active" &&
-        this.startedDesktop &&
-        this.ports.desktop.restart
+        status.service === "connected" &&
+        status.computer === "not_configured"
       ) {
-        this.step("computer", "in_progress", {
-          detail: "Starting the desktop again, so that it can use this Mac.",
-        });
-        try {
-          await this.ports.desktop.restart((message) =>
-            this.log("info", message),
-          );
-          await this.waitForDesktop();
-        } catch {
-          this.log(
-            "warn",
-            "The desktop did not start again. Start it yourself: clawdtime start",
-          );
+        busy =
+          status.taskAdmission !== "available" ||
+          (await this.ports.connection.holder()) !== null;
+        if (!busy && this.ports.desktop.restart) {
+          this.step("computer", "in_progress", {
+            detail: "Starting the desktop again, so that it can use this Mac.",
+          });
+          try {
+            await this.ports.desktop.restart((message) =>
+              this.log("info", message),
+            );
+            status = await this.waitForDesktop();
+          } catch {
+            // The owner of a foreground desktop (the Mac app) keeps it: then
+            // nothing was stopped. Otherwise say how to start it.
+            status = await this.ports.desktop.status();
+            this.log(
+              "warn",
+              status.service === "connected"
+                ? "The desktop was not started again. It uses computer use from its next start."
+                : "The desktop did not start again. Start it yourself: clawdtime start",
+            );
+          }
         }
       }
+      this.step("computer", "ready", {
+        detail:
+          status.computer === "configured"
+            ? "Computer use is on."
+            : busy
+              ? "Computer use is on. The desktop is busy, so it uses computer use from its next start."
+              : "Computer use is on. The desktop uses it from its next start.",
+      });
+      return;
     }
   }
 
@@ -638,30 +669,27 @@ export class OnboardEngine {
         );
         continue;
       }
-      const missing: { name: string; url: string }[] = [];
+      // Each binary once, with every permission that it still needs.
+      const missing: { binary: string; needs: string[]; url: string }[] = [];
+      const need = (binary: string, permission: string, url: string) => {
+        const one = missing.find((entry) => entry.binary === binary);
+        if (one) one.needs.push(permission);
+        else missing.push({ binary, needs: [permission], url });
+      };
       const panel = `ClawdTimeTaskPanel${facts.panel.path ? ` (${facts.panel.path})` : ""}`;
       const capture = `ClawdTimeTaskCapture${facts.capture.path ? ` (${facts.capture.path})` : ""}`;
       if (this.computerOn) {
         if (!facts.panel.accessibility)
-          missing.push({
-            name: `Accessibility for ${panel}`,
-            url: accessibilityPane,
-          });
+          need(panel, "Accessibility", accessibilityPane);
         if (!facts.panel.screenRecording)
-          missing.push({
-            name: `Screen Recording for ${panel}`,
-            url: screenPane,
-          });
+          need(panel, "Screen Recording", screenPane);
       }
       if (
         this.mode === "shared" &&
         facts.capture.path &&
         !facts.capture.screenRecording
       )
-        missing.push({
-          name: `Screen Recording for ${capture}`,
-          url: screenPane,
-        });
+        need(capture, "Screen Recording", screenPane);
       if (!missing.length)
         return this.step("permissions", "ready", {
           detail: `${this.computerOn ? "Accessibility and Screen Recording are on for the panel." : "Computer use is off, so the panel needs no permission."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for the capture helper." : ""}`,
@@ -670,7 +698,7 @@ export class OnboardEngine {
         "permissions",
         { kind: "confirm", prompt: "Check again" },
         {
-          detail: `Turn on ${missing.map((one) => one.name).join(", and ")} in System Settings, Privacy & Security. Then check again.`,
+          detail: `Turn on ${missing.map((one) => `${one.needs.join(" and ")} for ${one.binary}`).join(", and ")} in System Settings, Privacy & Security. Then check again.`,
           recovery: {
             label: "Open System Settings",
             action: "open_settings",
@@ -1107,6 +1135,10 @@ export class OnboardEngine {
   private async connection() {
     const skipped = (detail: string) =>
       this.step("connection", "skipped", { detail });
+    const connected = (
+      detail = "This Mac is connected to the shared number.",
+    ) => this.step("connection", "ready", { detail });
+    const app = this.settings.appOwned === true;
     if (this.mode !== "shared") return skipped(this.localDetail());
     if (!this.paired || this.keepOther)
       return skipped("This Mac is not paired with this coordinator.");
@@ -1126,26 +1158,50 @@ export class OnboardEngine {
           return skipped("This Mac is not connected.");
         continue;
       }
+      // One connection per Mac: `shared run` holds a lock, and setup never
+      // starts a second one next to the holder.
+      const holder = await this.ports.connection.holder();
+      if (holder && !holder.managed) {
+        if (holder.instanceId === instanceId) return connected();
+        if (
+          (await this.failed(
+            "connection",
+            "Another connection to the shared number runs on this Mac, for an earlier desktop. End that clawdtime shared run, then try again.",
+          )) === "skip"
+        )
+          return skipped("This Mac is not connected.");
+        continue;
+      }
       const state = await this.ports.connection.status(instanceId);
-      if (state === "running")
-        return this.step("connection", "ready", {
-          detail: "This Mac is connected to the shared number.",
-        });
+      if (!app && state === "running") return connected();
       const go = await this.confirm(
         "connection",
-        "Connect this Mac to the shared number now?",
-        "It stays connected in the background while the desktop runs. Calls from your verified phone can then reach this Mac.",
+        app
+          ? "Connect this Mac to the shared number when setup ends?"
+          : "Connect this Mac to the shared number now?",
+        app
+          ? "ClawdTime keeps the connection while the app runs. Calls from your verified phone can then reach this Mac."
+          : "It stays connected in the background while the desktop runs. Calls from your verified phone can then reach this Mac.",
       );
       if (go !== true)
         return skipped(
           "This Mac is not connected. To connect it later, run clawdtime onboard.",
         );
       this.step("connection", "in_progress", {
-        detail: "Connecting this Mac.",
+        detail: app
+          ? "Making way for the app's connection."
+          : "Connecting this Mac.",
       });
       try {
-        // A connection of an earlier desktop lifetime ends first.
-        if (state === "stale") await this.ports.connection.stop();
+        // The app runs the one connection itself: a background one that
+        // Terminal setup started ends first. In Terminal, a connection of an
+        // earlier desktop lifetime ends first.
+        if (state !== "stopped" && (app || state === "stale"))
+          await this.ports.connection.stop();
+        if (app)
+          return connected(
+            "ClawdTime connects this Mac to the shared number when setup ends.",
+          );
         await this.ports.connection.start(instanceId);
       } catch {
         if (
@@ -1157,9 +1213,7 @@ export class OnboardEngine {
           return skipped("This Mac is not connected.");
         continue;
       }
-      return this.step("connection", "ready", {
-        detail: "This Mac is connected to the shared number.",
-      });
+      return connected();
     }
   }
 
