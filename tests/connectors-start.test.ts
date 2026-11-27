@@ -352,6 +352,40 @@ describe("clawdtime start --foreground", () => {
     expect(f.signals.listenerCount("SIGTERM")).toBe(0);
   });
 
+  it("says on standard output when the panel closes while the desktop runs, and keeps the desktop", async () => {
+    const f = foregroundSetup();
+    const running = f.run(["--tucked", "true", "--foreground"]);
+    await until(() => f.stdout.length > 0);
+    f.panel.exitCode = 0;
+    f.panel.emit("exit", 0, null);
+    await until(() => f.stdout.length > 1);
+    expect(f.stdout).toEqual([
+      '{"type":"ready"}',
+      '{"type":"panel","state":"closed"}',
+    ]);
+    // The service and its work keep running until the owner stops them.
+    await new Promise((done) => setTimeout(done, 20));
+    expect(f.kills).toEqual([]);
+    f.signals.emit("SIGTERM");
+    await running;
+    expect(f.kills).toEqual([[4101, "SIGTERM"]]);
+    expect(f.panel.kill).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about the panel that a stop closes", async () => {
+    const f = foregroundSetup();
+    f.panel.kill.mockImplementation(() => {
+      f.panel.emit("exit", null, "SIGTERM");
+      return true;
+    });
+    const running = f.run(["--foreground"]);
+    await until(() => f.stdout.length > 0);
+    f.signals.emit("SIGTERM");
+    await running;
+    expect(f.panel.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(f.stdout).toEqual(['{"type":"ready"}']);
+  });
+
   it("ends with an error, and closes the panel, when the service ends by itself", async () => {
     const f = foregroundSetup();
     const running = f.run(["--foreground"]);
