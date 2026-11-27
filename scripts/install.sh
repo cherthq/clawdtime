@@ -11,10 +11,15 @@
 # starts the guided setup: clawdtime onboard.
 #
 # Settings of the release, all optional:
-#   CLAWDTIME_RELEASE_BASE  the folder of latest.json and the archive. Default:
+#   CLAWDTIME_RELEASE_BASE  the folder of latest.json and the archive: an https
+#                           URL with no user name or password. Default:
 #                           https://github.com/cherthq/clawdtime/releases/latest/download
 #   CLAWDTIME_NO_GLOBAL     1: no link in ~/.local/bin
 #   CLAWDTIME_NO_ONBOARD    1: no guided setup after the install
+#   CLAWDTIME_ALLOW_DOWNGRADE  1: install the newest release even when it is
+#                           older than the installed one
+#   CLAWDTIME_REPLACE_SOURCE   1: point ~/.local/bin/clawdtime at the release
+#                           even when it runs a source build now
 #
 # To build from the source instead, as before (it needs Node 24, Git and Swift 6):
 #   curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh -s -- --source
@@ -292,6 +297,40 @@ source_main() {
 
 release_base=https://github.com/cherthq/clawdtime/releases/latest/download
 
+# Letters and digits, listed one by one: in some locales a range such as a-z
+# also matches other letters.
+alnum=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+
+# Prints the kind of a URL that the installer may download from, or fails:
+#   https  a host name and an optional port: no user name, no password
+#   http   127.0.0.1 and an optional port, for a local test release
+#   file   an absolute path, for a local test release
+# A URL has no space, query, fragment or backslash.
+url_kind() {
+  case $1 in '' | *[!"$alnum._~:/%+@-"]*) return 1 ;; esac
+  case $1 in
+    https://*) kind=https rest=${1#https://} ;;
+    http://*) kind=http rest=${1#http://} ;;
+    file:///*)
+      echo file
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+  authority=${rest%%/*}
+  host=${authority%%:*}
+  case $host in '' | *[!"$alnum.-"]* | [.-]* | *[.-]) return 1 ;; esac
+  case $authority in
+    *:*)
+      port=${authority#*:}
+      case $port in '' | *[!0-9]* | ??????*) return 1 ;; esac
+      [ "$port" -le 65535 ] || return 1
+      ;;
+  esac
+  [ "$kind" = https ] || [ "$host" = 127.0.0.1 ] || return 1
+  echo "$kind"
+}
+
 check_mac() {
   step "Checking this Mac"
   [ "$(uname -s)" = Darwin ] || fail "ClawdTime runs on a Mac with macOS 14 or later."
@@ -320,9 +359,25 @@ fetch() {
 # A field of latest.json, or nothing.
 field() { plutil -extract "$1" raw -o - "$tmp/latest.json" 2>/dev/null </dev/null || true; }
 
+# MAJOR.MINOR.PATCH, each part a number of at most 9 digits.
 valid_version() {
-  case $1 in '' | *[!0-9.]* | .* | *. | *..*) return 1 ;; esac
+  case $1 in '' | *[!0-9.]* | .* | *. | *..* | *[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*) return 1 ;; esac
   [ "$(printf '%s' "$1" | tr -cd . | wc -c | tr -d ' ')" = 2 ]
+}
+
+# True when the valid version $1 is older than the valid version $2, part by
+# part as numbers: 0.9.0 is older than 0.10.0.
+older() {
+  a=$1. b=$2.
+  while [ -n "$a" ]; do
+    x=${a%%.*} y=${b%%.*}
+    [ "$x" -eq "$y" ] || {
+      [ "$x" -lt "$y" ]
+      return
+    }
+    a=${a#*.} b=${b#*.}
+  done
+  return 1
 }
 
 read_latest() {
@@ -342,9 +397,13 @@ read_latest() {
   [ "$(field arch)" = arm64 ] || fail "the newest release is not for Apple silicon."
   [ "$(number "${minimum%%.*}")" -le "$macos_major" ] ||
     fail "ClawdTime $version needs macOS $minimum or later. This Mac has $macos. Update it in System Settings, General, Software Update."
+  # An absolute url of the same kind as the base, or a file name next to latest.json.
   case $url in
-    https://* | file:///* | http://127.0.0.1[:/]*) archive_url=$url ;;
-    */* | .* | '') fail "latest.json has no valid url." ;;
+    *://*)
+      [ "$(url_kind "$url" || true)" = "$base_kind" ] || fail "latest.json has no valid url."
+      archive_url=$url
+      ;;
+    '' | .* | *[!"$alnum._-"]*) fail "latest.json has no valid url." ;;
     *) archive_url=$base/$url ;;
   esac
   say "ClawdTime $version ($(printf '%s' "$commit" | cut -c 1-7))."
@@ -398,6 +457,17 @@ cleanup() {
   [ -z "${lock:-}" ] || [ "$(cat "$lock/pid" 2>/dev/null)" != $$ ] || rm -rf "$lock"
 }
 
+# An older release than the installed one goes in only on request.
+check_order() {
+  installed=$(readlink "$runtimes/current" 2>/dev/null || true)
+  downgrade=0
+  valid_version "$installed" && older "$version" "$installed" || return 0
+  [ "${CLAWDTIME_ALLOW_DOWNGRADE:-0}" = 1 ] ||
+    fail "ClawdTime $installed is installed, and the newest release, $version, is older. Nothing changed. To go back to $version, run this again with CLAWDTIME_ALLOW_DOWNGRADE=1."
+  downgrade=1
+  say "Going back from ClawdTime $installed to $version: CLAWDTIME_ALLOW_DOWNGRADE=1."
+}
+
 install_runtime() {
   if [ -d "$runtimes/$version" ] && verify "$runtimes/$version" 2>/dev/null; then
     say "ClawdTime $version is installed already, and every file checks out."
@@ -426,6 +496,15 @@ install_runtime() {
   say "Unpacked and checked every file of ClawdTime $version."
 }
 
+# The ID of one process that runs from the version folder $1, or nothing.
+# The launcher starts Node by the real path of its version folder, so that
+# folder is in the command line of the command, the desktop service, the panel
+# and a connection. ps runs alone: in a pipe with grep, it could list the grep.
+running_from() {
+  processes=$(ps -axww -o pid= -o args= 2>/dev/null || true)
+  printf '%s\n' "$processes" | grep -F -- "$physical/$1/" | sed -n '1s/^ *\([0-9][0-9]*\) .*/\1/p'
+}
+
 switch_current() {
   previous=$(readlink "$runtimes/current" 2>/dev/null || true)
   if [ "$previous" != "$version" ]; then
@@ -434,17 +513,56 @@ switch_current() {
     mv -fh "$runtimes/.current.$$" "$runtimes/current" ||
       fail "$runtimes/current cannot be switched. Move it away, then run this again."
   fi
-  # Keep the new version and the one before it; remove older copies.
+  # Keep the new version and the one before it. Remove older copies, but
+  # never one that still runs.
   for old in "$runtimes"/*; do
     name=${old##*/}
     valid_version "$name" && [ -d "$old" ] || continue
-    [ "$name" = "$version" ] || [ "$name" = "$previous" ] || rm -rf "$old"
+    [ "$name" != "$version" ] && [ "$name" != "$previous" ] || continue
+    pid=$(running_from "$name")
+    if [ -n "$pid" ]; then
+      say "Kept ClawdTime $name: it still runs (process $pid). A later update removes it after it stops."
+    else
+      rm -rf "$old"
+    fi
   done
   for old in "$runtimes"/.incoming.* "$runtimes"/.current.*; do
     [ -e "$old" ] || [ -L "$old" ] || continue
     [ "$old" = "${incoming:-}" ] || rm -rf "$old"
   done
   launcher=$runtimes/current/bin/clawdtime
+}
+
+# The real path of the file behind the link $1, through every link, or
+# nothing when it is gone. Plain shell: the Mac may have no Node.
+resolve() {
+  file=$1 hops=0
+  while [ -L "$file" ]; do
+    hops=$((hops + 1))
+    [ "$hops" -le 40 ] || return 0
+    next=$(readlink "$file")
+    case $next in
+      /*) file=$next ;;
+      *) file=$(dirname "$file")/$next ;;
+    esac
+  done
+  [ -e "$file" ] || return 0
+  folder=$(cd -P "$(dirname "$file")" 2>/dev/null && pwd -P) || return 0
+  printf '%s/%s\n' "$folder" "${file##*/}"
+}
+
+# The ClawdTime source checkout that holds the file $1, or nothing.
+source_checkout() {
+  [ -n "$1" ] || return 0
+  folder=$(dirname "$1")
+  while :; do
+    if [ -f "$folder/cli/main.ts" ] && [ -f "$folder/scripts/install.sh" ]; then
+      printf '%s\n' "$folder"
+      return 0
+    fi
+    [ "$folder" != / ] && [ "$folder" != . ] || return 0
+    folder=$(dirname "$folder")
+  done
 }
 
 link_release() {
@@ -462,7 +580,19 @@ link_release() {
     command_name=$launcher
     return
   fi
-  if [ "$(readlink "$link" 2>/dev/null || true)" != "$launcher" ]; then
+  points_to=$(readlink "$link" 2>/dev/null || true)
+  if [ -L "$link" ] && [ "$points_to" != "$launcher" ]; then
+    # A source build (sh install.sh --source) linked it: keep it unless asked.
+    checkout=$(source_checkout "$(resolve "$link")")
+    if [ -n "$checkout" ] && [ "${CLAWDTIME_REPLACE_SOURCE:-0}" != 1 ]; then
+      say "Kept $link: it runs the source build in $checkout. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is $launcher"
+      command_name=$launcher
+      return
+    fi
+    [ -z "$checkout" ] ||
+      say "Replaced $link, which ran the source build in $checkout: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd $checkout && npm link"
+  fi
+  if [ "$points_to" != "$launcher" ]; then
     ln -s "$launcher" "$user_prefix/bin/.clawdtime.$$"
     mv -fh "$user_prefix/bin/.clawdtime.$$" "$link"
   fi
@@ -481,9 +611,14 @@ link_release() {
 release_next_steps() {
   say ""
   if [ -n "$previous" ] && [ "$previous" != "$version" ]; then
-    say "ClawdTime is updated from $previous to $version. Your settings, keys and pairing are kept."
-    if pgrep -f "/runtime/$previous/app/dist/scripts/task-server.js" >/dev/null 2>&1; then
-      say "The desktop of $previous still runs. It goes on until it stops. Then clawdtime start starts $version."
+    if [ "$downgrade" = 1 ]; then
+      say "ClawdTime is back on $version from $previous. Your settings, keys and pairing are kept."
+    else
+      say "ClawdTime is updated from $previous to $version. Your settings, keys and pairing are kept."
+    fi
+    pid=$(running_from "$previous")
+    if [ -n "$pid" ]; then
+      say "ClawdTime $previous still runs (process $pid). It goes on until it stops. Then $command_name start starts $version."
     fi
   else
     say "ClawdTime $version is installed."
@@ -523,21 +658,22 @@ release_next_steps() {
 release_main() {
   base=${CLAWDTIME_RELEASE_BASE:-$release_base}
   base=${base%/}
-  case $base in
-    https://*) protocols='=https' ;;
-    file:///*) protocols='=file' ;;
-    http://127.0.0.1 | http://127.0.0.1[:/]*) protocols='=http' ;;
-    *) fail "CLAWDTIME_RELEASE_BASE must be an https URL." ;;
-  esac
+  base_kind=$(url_kind "$base") ||
+    fail "CLAWDTIME_RELEASE_BASE must be an https URL with no user name or password, such as https://downloads.example/clawdtime. A local test may use http://127.0.0.1:PORT or file:///PATH."
+  # curl takes this kind alone, also for each redirect.
+  protocols="=$base_kind"
   check_mac
   runtimes="$HOME/Library/Application Support/ClawdTime/runtime"
   mkdir -p "$runtimes"
+  # The path that ps shows, with every link of the home folder followed.
+  physical=$(cd "$runtimes" && pwd -P)
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/clawdtime-install.XXXXXX")
   incoming="" lock=""
   trap cleanup EXIT
   trap 'exit 130' INT TERM
   read_latest
   take_lock
+  check_order
   install_runtime
   switch_current
   link_release
@@ -550,8 +686,11 @@ main() {
     case $argument in
       --source) from_source=1 ;;
       -h | --help)
-        sed -n '2,31p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' ||
-          say "See https://github.com/cherthq/clawdtime/blob/main/INSTALL.md"
+        # The comment at the top of this file. Under "curl | sh" there is no file.
+        case $0 in
+          *install.sh) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' ;;
+          *) say "See https://github.com/cherthq/clawdtime/blob/main/INSTALL.md" ;;
+        esac
         return
         ;;
       *) fail "unknown option $argument. Use --source to build from the source." ;;

@@ -21,7 +21,10 @@ It does this, and it never uses sudo:
    `~/Library/Application Support/ClawdTime/runtime/VERSION`, checks every
    file, and switches the link `current` there to it in one step.
 4. It links `~/.local/bin/clawdtime` to that release. When `~/.local/bin` is
-   not on your PATH, it prints the one line that adds it. Run that line.
+   not on your PATH, it prints the one line that adds it. Run that line. When
+   that link runs a source build, it keeps the link and says so. To point it
+   at the release, run:
+   `curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | CLAWDTIME_REPLACE_SOURCE=1 sh`
 5. It starts the guided setup, `clawdtime onboard`, in the same Terminal
    window. When it runs with no Terminal, it says to run `clawdtime onboard`
    in Terminal to finish setup.
@@ -36,10 +39,20 @@ paired.
 
 Run the same command again. It installs the newest release next to the one
 you have, then switches `current` to it. Your settings, keys and pairing stay
-where they are. The release before stays on the Mac, so you can go back to it:
+where they are. An older release that still runs stays until it stops, and
+the installer says so. The release before stays on the Mac, so you can go back
+to it:
 
 ```sh
 ln -sfh 0.4.0 ~/Library/Application\ Support/ClawdTime/runtime/current
+```
+
+The installer does not install a release that is older than the one you have.
+It stops and says so. To install the older release on purpose, set
+`CLAWDTIME_ALLOW_DOWNGRADE=1`:
+
+```sh
+curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | CLAWDTIME_ALLOW_DOWNGRADE=1 sh
 ```
 
 macOS gives each panel build its own permissions. After an update, give the

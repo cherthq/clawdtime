@@ -12,6 +12,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -59,6 +60,8 @@ function publish(folder: string, release: Release) {
   );
   chmodSync(join(runtime, "bin/clawdtime"), 0o755);
   file("app/native/ClawdTimeTaskPanel", "made-up panel\n", 0o755);
+  // Stands in for the desktop service or a connection: it stays up.
+  file("app/dist/scripts/task-server.js", "setInterval(() => {}, 1e6);\n");
   file(
     "app/dist/cli/main.js",
     `const fs = require("node:fs");
@@ -291,6 +294,85 @@ describe("the release route of the installer", () => {
     expect(f.recorded()).toBe("");
   });
 
+  it("never removes a version that still runs, and says what it kept", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    expect((await f.install()).status).toBe(0);
+    // A process of 0.4.1 that stays up, started from its own folder as the
+    // launcher starts it.
+    const version = join(f.runtimes, "0.4.1");
+    const live = spawn(
+      join(version, "node", "bin", "node"),
+      [join(version, "app", "dist", "scripts", "task-server.js")],
+      { stdio: "ignore" },
+    );
+    const stopped = new Promise((done) => live.on("exit", done));
+    try {
+      publish(f.releases, { version: "0.4.2" });
+      const second = await f.install();
+      expect(second.status, second.output).toBe(0);
+      expect(second.output).toContain(
+        `ClawdTime 0.4.1 still runs (process ${live.pid}). It goes on until it stops. Then clawdtime start starts 0.4.2.`,
+      );
+      // 0.4.1 is older than the version before, but it runs: it stays.
+      publish(f.releases, { version: "0.4.3" });
+      const third = await f.install();
+      expect(third.status, third.output).toBe(0);
+      expect(f.versions()).toEqual(["0.4.1", "0.4.2", "0.4.3", "current"]);
+      expect(third.output).toContain(
+        `Kept ClawdTime 0.4.1: it still runs (process ${live.pid}). A later update removes it after it stops.`,
+      );
+      expect(existsSync(join(version, "app", "dist", "cli", "main.js"))).toBe(
+        true,
+      );
+    } finally {
+      live.kill();
+      await stopped;
+    }
+    // Once it stops, the next update removes it.
+    publish(f.releases, { version: "0.4.4" });
+    const fourth = await f.install();
+    expect(fourth.status, fourth.output).toBe(0);
+    expect(f.versions()).toEqual(["0.4.3", "0.4.4", "current"]);
+    expect(fourth.output).not.toContain("still runs");
+  });
+
+  it("refuses a release older than the installed one, unless CLAWDTIME_ALLOW_DOWNGRADE=1", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.10.0" });
+    expect((await f.install()).status).toBe(0);
+    // 0.9.0 is older than 0.10.0: the versions compare as numbers, not as text.
+    publish(f.releases, { version: "0.9.0" });
+    const older = await f.install();
+    expect(older.status, older.output).toBe(1);
+    expect(older.output).toContain(
+      "Stopped: ClawdTime 0.10.0 is installed, and the newest release, 0.9.0, is older. Nothing changed. To go back to 0.9.0, run this again with CLAWDTIME_ALLOW_DOWNGRADE=1.",
+    );
+    expect(older.output).not.toContain("Downloading");
+    expect(f.current()).toBe("0.10.0");
+    expect(f.versions()).toEqual(["0.10.0", "current"]);
+
+    const back = await f.install({ env: { CLAWDTIME_ALLOW_DOWNGRADE: "1" } });
+    expect(back.status, back.output).toBe(0);
+    expect(back.output).toContain(
+      "Going back from ClawdTime 0.10.0 to 0.9.0: CLAWDTIME_ALLOW_DOWNGRADE=1.",
+    );
+    expect(back.output).toContain(
+      "ClawdTime is back on 0.9.0 from 0.10.0. Your settings, keys and pairing are kept.",
+    );
+    expect(f.current()).toBe("0.9.0");
+    expect(f.versions()).toEqual(["0.10.0", "0.9.0", "current"]);
+
+    // A newer release needs no setting.
+    publish(f.releases, { version: "0.10.1" });
+    const forward = await f.install();
+    expect(forward.status, forward.output).toBe(0);
+    expect(forward.output).toContain(
+      "ClawdTime is updated from 0.9.0 to 0.10.1.",
+    );
+    expect(f.current()).toBe("0.10.1");
+  });
+
   it("refuses an archive whose SHA-256 differs and switches nothing", async () => {
     const f = setup();
     publish(f.releases, { version: "0.4.1" });
@@ -340,9 +422,92 @@ describe("the release route of the installer", () => {
     const plain = await f.install({ base: "http://shop.example/releases" });
     expect(plain.status).toBe(1);
     expect(plain.output).toContain(
-      "Stopped: CLAWDTIME_RELEASE_BASE must be an https URL.",
+      "Stopped: CLAWDTIME_RELEASE_BASE must be an https URL with no user name or password",
     );
     expect(existsSync(join(f.runtimes, "current"))).toBe(false);
+  });
+
+  it("parses each URL strictly: https with no user name or password, and 127.0.0.1 alone for a local test", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    for (const base of [
+      "http://127.0.0.1:80@shop.example/releases",
+      "http://127.0.0.1@shop.example/releases",
+      "http://127.0.0.1.shop.example/releases",
+      "http://localhost:8080/releases",
+      "https://made-up:secret@shop.example/releases",
+      "https://shop.example:443@other.example/releases",
+      "https://shop.example\\@other.example/releases",
+      "https://shop.example/rel eases",
+      "https:///releases",
+      "https://shop.example:99999/releases",
+      "https://-shop.example/releases",
+      "ftp://shop.example/releases",
+    ]) {
+      const result = await f.install({ base });
+      expect(result.status, base).toBe(1);
+      expect(result.output, base).toContain(
+        "Stopped: CLAWDTIME_RELEASE_BASE must be an https URL with no user name or password, such as https://downloads.example/clawdtime. A local test may use http://127.0.0.1:PORT or file:///PATH.",
+      );
+    }
+    for (const url of [
+      "http://127.0.0.1:80@shop.example/clawdtime-0.4.1-darwin-arm64.tar.gz",
+      "https://made-up@shop.example/clawdtime-0.4.1-darwin-arm64.tar.gz",
+      // An https archive for a release on file:///: another kind of URL.
+      "https://shop.example/clawdtime-0.4.1-darwin-arm64.tar.gz",
+      "clawdtime 0.4.1.tar.gz",
+      "@shop.example",
+    ]) {
+      publish(f.releases, { version: "0.4.1", latest: { url } });
+      const result = await f.install();
+      expect(result.status, url).toBe(1);
+      expect(result.output, url).toContain(
+        "Stopped: latest.json has no valid url.",
+      );
+    }
+    expect(existsSync(join(f.runtimes, "current"))).toBe(false);
+    expect(f.recorded()).toBe("");
+  });
+
+  it("keeps the link of a source build unless CLAWDTIME_REPLACE_SOURCE=1, and says so either way", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    // A source build, linked by npm link in ~/.local as the source route links it.
+    const checkout = join(f.base, "clawdtime");
+    for (const path of ["cli/main.ts", "scripts/install.sh", "package.json"]) {
+      mkdirSync(join(checkout, path, ".."), { recursive: true });
+      writeFileSync(join(checkout, path), "made-up source\n");
+    }
+    mkdirSync(join(checkout, "dist", "cli"), { recursive: true });
+    writeFileSync(join(checkout, "dist", "cli", "main.js"), "made-up build\n");
+    const local = join(f.home, ".local");
+    mkdirSync(join(local, "lib", "node_modules"), { recursive: true });
+    symlinkSync(checkout, join(local, "lib", "node_modules", "clawdtime"));
+    mkdirSync(join(local, "bin"));
+    const link = join(local, "bin", "clawdtime");
+    const npmLink = "../lib/node_modules/clawdtime/dist/cli/main.js";
+    symlinkSync(npmLink, link);
+    const launcher = join(f.runtimes, "current", "bin", "clawdtime");
+
+    const kept = await f.install();
+    expect(kept.status, kept.output).toBe(0);
+    expect(readlinkSync(link)).toBe(npmLink);
+    expect(kept.output).toContain(
+      `Kept ${link}: it runs the source build in ${checkout}. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is ${launcher}`,
+    );
+    expect(kept.output).toContain(`Start it: ${launcher} start`);
+    expect(kept.output).not.toContain(`Ready: ${link}`);
+
+    const replaced = await f.install({
+      env: { CLAWDTIME_REPLACE_SOURCE: "1" },
+    });
+    expect(replaced.status, replaced.output).toBe(0);
+    expect(readlinkSync(link)).toBe(launcher);
+    expect(replaced.output).toContain(
+      `Replaced ${link}, which ran the source build in ${checkout}: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd ${checkout} && npm link`,
+    );
+    expect(replaced.output).toContain(`Ready: ${link} runs ClawdTime 0.4.1.`);
+    expect(f.recorded()).toBe("");
   });
 
   it("never runs as root", async () => {
@@ -430,6 +595,17 @@ describe("the source route of the installer", () => {
       );
       expect(existsSync(f.runtimes)).toBe(false);
     }
+    // --help prints the whole comment at the top, with every setting.
+    const help = await f.install({ args: ["--help"] });
+    expect(help.status).toBe(0);
+    for (const line of [
+      "Installs ClawdTime on this Mac, or updates it.",
+      "CLAWDTIME_ALLOW_DOWNGRADE",
+      "CLAWDTIME_REPLACE_SOURCE",
+      "uses sudo. The steps that need you come at the end.",
+    ])
+      expect(help.output).toContain(line);
+    expect(help.output).not.toContain("set -eu");
     const unknown = await f.install({ args: ["--sauce"] });
     expect(unknown.status).toBe(1);
     expect(unknown.output).toContain("unknown option --sauce");

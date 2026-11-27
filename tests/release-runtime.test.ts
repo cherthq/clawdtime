@@ -160,6 +160,185 @@ describe("the manifest and the app's runtime check", () => {
   });
 });
 
+// The signer needs codesign and a C compiler. xcode-select -p only reads the
+// setting: it never asks macOS to install the command line tools.
+const canCompile =
+  process.platform === "darwin" &&
+  spawnSync("xcode-select", ["-p"]).status === 0 &&
+  spawnSync("xcrun", ["--find", "clang"]).status === 0;
+
+describe("the runtime signer", () => {
+  const entitlements = (file: string) =>
+    [
+      ...spawnSync("codesign", ["-d", "--entitlements", "-", "--xml", file], {
+        encoding: "utf8",
+      }).stdout.matchAll(/<key>([^<]+)<\/key>/g),
+    ]
+      .map((match) => match[1])
+      .sort();
+  const flags = (file: string) =>
+    /flags=0x[0-9a-f]+\(([^)]*)\)/.exec(
+      spawnSync("codesign", ["-dv", file], { encoding: "utf8" }).stderr,
+    )?.[1];
+
+  it.skipIf(!canCompile)(
+    "signs the helpers and Node with the hardened runtime, so an injected library no longer runs in them",
+    () => {
+      const base = temporary();
+      const compile = (name: string, source: string, ...options: string[]) => {
+        writeFileSync(join(base, `${name}.c`), source);
+        const built = spawnSync(
+          "xcrun",
+          [
+            "clang",
+            "-arch",
+            "arm64",
+            ...options,
+            "-o",
+            join(base, name),
+            join(base, `${name}.c`),
+          ],
+          { encoding: "utf8" },
+        );
+        expect(built.status, built.stderr).toBe(0);
+        return join(base, name);
+      };
+      // The library of the injection probe: it speaks before main and ends the process.
+      const inject = compile(
+        "inject.dylib",
+        `#include <stdio.h>
+#include <unistd.h>
+__attribute__((constructor)) static void probe(void) { printf("INJECTED before main\\n"); fflush(stdout); _exit(0); }
+`,
+        "-dynamiclib",
+      );
+      // Stands in for each executable: it says that main ran, or loads the library it is given.
+      const probe = compile(
+        "probe",
+        `#include <dlfcn.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  if (argc > 1) { void *h = dlopen(argv[1], RTLD_NOW); printf(h ? "loaded\\n" : "refused\\n"); return 0; }
+  printf("main ran\\n"); return 0;
+}
+`,
+      );
+      const addon = compile(
+        "addon",
+        "int made_up_addon(void) { return 1; }\n",
+        "-dynamiclib",
+      );
+      const runtime = join(base, "Made Up", "runtime");
+      const executables = [
+        "node/bin/node",
+        "app/native/ClawdTimeTaskPanel",
+        "app/native/ClawdTimeTaskCapture",
+      ];
+      const libraries = [
+        "app/node_modules/made-up-addon/build/addon.node",
+        "app/node_modules/made-up-addon/lib/libmadeup.dylib",
+      ];
+      for (const [path, from] of [
+        ...executables.map((path) => [path, probe] as const),
+        ...libraries.map((path) => [path, addon] as const),
+      ]) {
+        mkdirSync(join(runtime, path, ".."), { recursive: true });
+        copyFileSync(from, join(runtime, path));
+      }
+      writeFileSync(join(runtime, "app", "package.json"), "{}\n");
+      const run = (path: string, ...args: string[]) =>
+        spawnSync(join(runtime, path), args, {
+          encoding: "utf8",
+          env: { PATH: "/usr/bin:/bin", DYLD_INSERT_LIBRARIES: inject },
+        }).stdout.trim();
+
+      // The linker's ad hoc signature: the injected library runs before main.
+      for (const path of executables)
+        expect(run(path), path).toBe("INJECTED before main");
+
+      const signed = spawnSync(
+        join(root, "scripts/release/sign-runtime.sh"),
+        [runtime],
+        { encoding: "utf8" },
+      );
+      expect(signed.status, signed.stderr).toBe(0);
+
+      for (const path of executables) {
+        expect(run(path), path).toBe("main ran");
+        expect(flags(join(runtime, path)), path).toBe("adhoc,runtime");
+        const verified = spawnSync("codesign", [
+          "--verify",
+          "--strict",
+          join(runtime, path),
+        ]);
+        expect(verified.status, path).toBe(0);
+      }
+      expect(entitlements(join(runtime, "node/bin/node"))).toEqual([
+        "com.apple.security.cs.allow-jit",
+        "com.apple.security.cs.allow-unsigned-executable-memory",
+        "com.apple.security.cs.disable-library-validation",
+      ]);
+      expect(
+        entitlements(join(runtime, "app/native/ClawdTimeTaskPanel")),
+      ).toEqual(["com.apple.security.device.audio-input"]);
+      expect(
+        entitlements(join(runtime, "app/native/ClawdTimeTaskCapture")),
+      ).toEqual([]);
+      // Node loads its native addons; the panel loads no library of another signer.
+      for (const path of libraries) {
+        expect(flags(join(runtime, path)), path).toBe("adhoc");
+        expect(run("node/bin/node", join(runtime, path)), path).toBe("loaded");
+        expect(
+          run("app/native/ClawdTimeTaskPanel", join(runtime, path)),
+          path,
+        ).toBe("refused");
+      }
+      expect(signed.stdout).toContain(
+        "Signed ad hoc with the hardened runtime: node/bin/node, app/native/ClawdTimeTaskPanel, app/native/ClawdTimeTaskCapture.",
+      );
+      expect(signed.stdout).toContain("Signed ad hoc: 2 native libraries.");
+    },
+    // It compiles three small programs and runs codesign about twenty times.
+    60_000,
+  );
+
+  it.skipIf(!canCompile)(
+    "stops at a Mach-O file that it has no rule for",
+    () => {
+      const runtime = join(temporary(), "runtime");
+      mkdirSync(join(runtime, "app", "node_modules", "made-up"), {
+        recursive: true,
+      });
+      copyFileSync(
+        "/usr/bin/true",
+        join(runtime, "app/node_modules/made-up/tool"),
+      );
+      const signed = spawnSync(
+        join(root, "scripts/release/sign-runtime.sh"),
+        [runtime],
+        { encoding: "utf8" },
+      );
+      expect(signed.status).toBe(1);
+      expect(signed.stderr).toContain(
+        "an executable with no signing rule: app/node_modules/made-up/tool",
+      );
+    },
+  );
+
+  it("runs in the builder after the audit and before the manifest", () => {
+    const builder = readFileSync(
+      join(root, "scripts/release/build-runtime.sh"),
+      "utf8",
+    );
+    const audit = builder.indexOf('step "Audit of the launch paths"');
+    const sign = builder.indexOf('scripts/release/sign-runtime.sh" "$runtime"');
+    const manifest = builder.indexOf("scripts/release/manifest.mjs");
+    expect(audit).toBeGreaterThan(0);
+    expect(sign).toBeGreaterThan(audit);
+    expect(manifest).toBeGreaterThan(sign);
+  });
+});
+
 describe("the runtime builder", () => {
   it("checks its options before it downloads or builds anything", () => {
     const base = temporary();
@@ -182,6 +361,17 @@ describe("the runtime builder", () => {
         "https://coordinator.example/path",
       ).stderr,
     ).toContain("--coordinator must be an https origin with no path");
+    for (const downloadBase of [
+      "https://made-up@downloads.example/clawdtime",
+      "https://downloads.example:443@other.example/clawdtime",
+      "http://downloads.example/clawdtime",
+    ])
+      expect(
+        build("--out", join(base, "a"), "--download-base", downloadBase).stderr,
+        downloadBase,
+      ).toContain(
+        "--download-base must be an https URL with no user name or password",
+      );
     mkdirSync(join(base, "full"));
     writeFileSync(join(base, "full", "kept.txt"), "kept");
     const full = build("--out", join(base, "full"));
