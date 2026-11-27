@@ -26,6 +26,7 @@ async function fixture(timeout = 2000, callbacksEnabled = false) {
     lineToken,
     relayTimeoutMs: timeout,
     callbacksEnabled,
+    invited: ["+14155550100", "+12125550100"],
     sendCode: async (phone, code) => {
       codes.set(phone, code);
       return true;
@@ -586,6 +587,7 @@ describe("phone possession verification", () => {
     const identity = new SharedPhoneIdentity(store, {
       lineId: "line",
       key: "bb".repeat(32),
+      invited: ["+14155550100"],
       send: async (_phone, code) => {
         sent.push(code);
         return true;

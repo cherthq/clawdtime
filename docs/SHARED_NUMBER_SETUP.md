@@ -33,27 +33,28 @@ replicas. Keep the host awake and connected to the internet.
 Create an owner-only JSON file in an owner-only directory. Set
 `CLAWDTIME_SHARED_CONFIG` to its absolute path. Keep it outside the checkout.
 
-| Field                             | Value                                                                |
-| --------------------------------- | -------------------------------------------------------------------- |
-| `enabled`                         | `false` for standby, `true` after provider configuration and handoff |
-| `database`                        | Absolute private SQLite file path                                    |
-| `lineId`                          | Exact provider line UUID                                             |
-| `proofKey`                        | 32 random bytes encoded as 64 hex characters                         |
-| `identityKey`                     | A different persistent 32-byte hex key                               |
-| `lineToken`                       | A separate random server credential, at least 32 characters          |
-| `host`                            | `127.0.0.1` (the default). See [Operations](#operations)             |
-| `port`                            | Local port, default 3318                                             |
-| `messaging.origin`                | Exact HTTPS provider API origin                                      |
-| `messaging.projectId`             | Exact project UUID                                                   |
-| `messaging.key`                   | Private project API key, at least 32 characters                      |
-| `provider.integrationId`          | Exact signed webhook integration UUID                                |
-| `provider.endpoint`               | Public HTTPS origin followed by `/provider/webhook`                  |
-| `provider.webhookSecret`          | The integration's signing secret, at least 32 characters             |
-| `provider.controlCredentialsFile` | Absolute protected Chert CLI credential file path                    |
-| `provider.media.url`              | WSS URL for the LiveKit project                                      |
-| `provider.media.key`              | Private LiveKit API key                                              |
-| `provider.media.secret`           | Private LiveKit API secret                                           |
-| `provider.media.agentName`        | Unique named shared voice worker                                     |
+| Field                             | Value                                                                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                         | `false` for standby, `true` after provider configuration and handoff                                                          |
+| `database`                        | Absolute private SQLite file path                                                                                             |
+| `lineId`                          | Exact provider line UUID                                                                                                      |
+| `invited`                         | Phone numbers, with country code, that may get a sign-in text before they are members. Others get the same answer and no text |
+| `proofKey`                        | 32 random bytes encoded as 64 hex characters                                                                                  |
+| `identityKey`                     | A different persistent 32-byte hex key                                                                                        |
+| `lineToken`                       | A separate random server credential, at least 32 characters                                                                   |
+| `host`                            | `127.0.0.1` (the default). See [Operations](#operations)                                                                      |
+| `port`                            | Local port, default 3318                                                                                                      |
+| `messaging.origin`                | Exact HTTPS provider API origin                                                                                               |
+| `messaging.projectId`             | Exact project UUID                                                                                                            |
+| `messaging.key`                   | Private project API key, at least 32 characters                                                                               |
+| `provider.integrationId`          | Exact signed webhook integration UUID                                                                                         |
+| `provider.endpoint`               | Public HTTPS origin followed by `/provider/webhook`                                                                           |
+| `provider.webhookSecret`          | The integration's signing secret, at least 32 characters                                                                      |
+| `provider.controlCredentialsFile` | Absolute protected Chert CLI credential file path                                                                             |
+| `provider.media.url`              | WSS URL for the LiveKit project                                                                                               |
+| `provider.media.key`              | Private LiveKit API key                                                                                                       |
+| `provider.media.secret`           | Private LiveKit API secret                                                                                                    |
+| `provider.media.agentName`        | Unique named shared voice worker                                                                                              |
 
 The coordinator checks the file at startup. It refuses to start when a field
 is missing, unknown or malformed, for example a `lineId` or
