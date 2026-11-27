@@ -14,7 +14,11 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 const lineToken = "test-line-token-".repeat(4);
-async function fixture(timeout = 2000, callbacksEnabled = false) {
+async function fixture(
+  timeout = 2000,
+  callbacksEnabled = false,
+  now?: () => number,
+) {
   const store = new Store();
   cleanup.push(() => store.close());
   const codes = new Map<string, string>();
@@ -26,6 +30,7 @@ async function fixture(timeout = 2000, callbacksEnabled = false) {
     lineToken,
     relayTimeoutMs: timeout,
     callbacksEnabled,
+    now,
     invited: ["+14155550100", "+12125550100"],
     sendCode: async (phone, code) => {
       codes.set(phone, code);
@@ -99,7 +104,7 @@ async function fixture(timeout = 2000, callbacksEnabled = false) {
     providerCallId,
     roomId: `room:${providerCallId}`,
     participantId: `participant:${providerCallId}`,
-    expiresAt: Date.now() + 60_000,
+    expiresAt: (now ?? Date.now)() + 60_000,
     ...(caller ? { caller } : {}),
   });
   // The member calls from their verified number. Their paired Mac asks for
@@ -361,6 +366,232 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     await provider.pump();
     expect(f.service.router.callback(callback.id).state).toBe("ended");
   });
+  // A callback whose task finished, ready to claim. The Mac stays connected.
+  const queuedCallback = async (clock: { now: number }) => {
+    const f = await fixture(2000, true, () => clock.now);
+    const a = await f.pair("+14155550100"),
+      b = await f.pair("+12125550100");
+    const connect = async () =>
+      (
+        await f.post(
+          "/device/connect",
+          { instanceId: "instance-a" },
+          a.credential,
+        )
+      ).body.id as string;
+    const connectionId = await connect();
+    const call = await f.admit(a, "call-a");
+    f.service.router.createTask(call.id, call.scope.grantId, {
+      taskId: "task-a",
+      userTurnId: "turn-a",
+      requestDigest: "a".repeat(64),
+    });
+    f.service.router.requestCallback(call.id, call.scope.grantId, "task-a");
+    f.service.router.completeTask(
+      a.credential,
+      connectionId,
+      "task-a",
+      "result-a",
+    );
+    await f.post(
+      "/line/event",
+      f.event("call-a", "cleanup_complete"),
+      lineToken,
+    );
+    const credentials = {
+      livekit_url: "wss://media.example",
+      participant_token: "transient",
+      remote_participant_identity: "shared-agent",
+    };
+    const media = {
+      prepare: vi.fn(async (_input: { roomId: string }) => credentials),
+      activate: vi.fn(async () => {}),
+      cleanup: vi.fn(async (_roomId: string) => true),
+    };
+    const api = {
+      ready: vi.fn(async () => true),
+      observe: vi.fn(async () => ({
+        answered: false,
+        terminal: false,
+        cleanupComplete: false,
+      })),
+      dial: vi.fn(async () => ({ providerCallId: "callback-call" })),
+    };
+    const provider = (store = f.store) =>
+      new SharedProvider({
+        store,
+        router: f.service.router,
+        lineId: "line",
+        webhookSecret: "s".repeat(32),
+        media,
+        api,
+        event: f.service.providerEvent,
+        now: () => clock.now,
+      });
+    const callback = () => f.store.all<any>("shared_number_callback")[0];
+    const slot = () => f.store.state<string | null>("shared-number-slot:line");
+    // Another member calls. Only a free slot lets that call wait for a code.
+    const memberBCalls = async (providerCallId: string) =>
+      (
+        await f.post(
+          "/line/event",
+          f.event(providerCallId, "incoming", b.recipient),
+          lineToken,
+        )
+      ).body.state as string;
+    return {
+      f,
+      a,
+      connect,
+      media,
+      api,
+      provider,
+      callback,
+      slot,
+      memberBCalls,
+    };
+  };
+
+  it("frees the slot when a callback fails before any dial, and dials it later", async () => {
+    for (const failure of ["mac_left", "not_ready", "media_late"] as const) {
+      const clock = { now: Date.now() };
+      const t = await queuedCallback(clock);
+      const provider = t.provider();
+      let reads = 0;
+      if (failure === "mac_left")
+        t.media.prepare.mockImplementationOnce(async () => {
+          // The member quits shared run while the room is prepared.
+          t.f.service.router.disconnect(
+            t.a.credential,
+            t.f.service.router.deviceConnection(
+              t.a.credential,
+              (await t.connect()) as string,
+            ).id,
+          );
+          return {
+            livekit_url: "wss://media.example",
+            participant_token: "transient",
+            remote_participant_identity: "shared-agent",
+          };
+        });
+      if (failure === "not_ready")
+        // Ready, acquired and verified; the read after media preparation is false.
+        t.api.ready.mockImplementation(async () => ++reads !== 4);
+      if (failure === "media_late")
+        t.media.prepare.mockRejectedValueOnce(Error("shared_media_deadline"));
+      await provider.pump();
+      const first = t.callback();
+      expect(t.api.dial, failure).not.toHaveBeenCalled();
+      expect(first.state, failure).toBe("queued");
+      expect(t.media.cleanup, failure).toHaveBeenCalledWith(first.roomId);
+      expect(t.slot(), failure).toBeNull();
+      expect(await t.memberBCalls(`call-b-${failure}`), failure).toBe(
+        "unknown_identity",
+      );
+      await t.f.post(
+        "/line/event",
+        t.f.event(`call-b-${failure}`, "cleanup_complete"),
+        lineToken,
+      );
+      // The callback waits, then dials once, in a new room, when all is well.
+      t.api.ready.mockImplementation(async () => true);
+      await provider.pump();
+      expect(t.api.dial, failure).not.toHaveBeenCalled();
+      clock.now += 60_000;
+      await t.connect();
+      await provider.pump();
+      expect(t.api.dial, failure).toHaveBeenCalledOnce();
+      expect(t.callback().state, failure).toBe("active");
+      expect(t.callback().roomId, failure).not.toBe(first.roomId);
+    }
+  });
+
+  it("cancels a callback after five tries that all failed before the dial", async () => {
+    const clock = { now: Date.now() };
+    const t = await queuedCallback(clock);
+    const provider = t.provider();
+    t.media.prepare.mockRejectedValue(Error("shared_media_not_ready"));
+    for (let i = 0; i < 5; i++) {
+      await t.connect();
+      await provider.pump();
+      expect(t.slot()).toBeNull();
+      clock.now += 30_000 * 2 ** i;
+    }
+    expect(t.media.prepare).toHaveBeenCalledTimes(5);
+    expect(new Set(t.media.cleanup.mock.calls.map(([room]) => room)).size).toBe(
+      5,
+    );
+    expect(t.callback().state).toBe("canceled");
+    expect(t.api.dial).not.toHaveBeenCalled();
+  });
+
+  it("finishes a requeue that a stop interrupted, and dials the callback later", async () => {
+    const clock = { now: Date.now() };
+    const t = await queuedCallback(clock);
+    t.media.prepare.mockRejectedValueOnce(Error("shared_media_deadline"));
+    await t.provider().pump();
+    expect(t.callback().state).toBe("queued");
+    // The process stopped after the requeue, before it saved the attempt.
+    const attempt = t.f.store.all<any>("shared_callback_attempt")[0];
+    t.f.store.put("shared_callback_attempt", {
+      ...attempt,
+      phase: "undialed",
+    });
+    const provider = t.provider();
+    await provider.pump();
+    expect(t.f.store.all<any>("shared_callback_attempt")[0].phase).toBe(
+      "requeued",
+    );
+    expect(t.slot()).toBeNull();
+    clock.now += 60_000;
+    await t.connect();
+    await provider.pump();
+    expect(t.api.dial).toHaveBeenCalledOnce();
+  });
+
+  it("frees the slot after a restart while a callback room was prepared", async () => {
+    const clock = { now: Date.now() };
+    const t = await queuedCallback(clock);
+    t.media.prepare.mockImplementationOnce(() => new Promise(() => {}));
+    void t.provider().pump();
+    await vi.waitFor(() =>
+      expect(t.f.store.all<any>("shared_callback_attempt")[0]?.phase).toBe(
+        "media",
+      ),
+    );
+    // The process stops here. A new coordinator opens the same database.
+    await t.provider().pump();
+    expect(t.api.dial).not.toHaveBeenCalled();
+    expect(t.callback().state).toBe("queued");
+    expect(t.slot()).toBeNull();
+    expect(await t.memberBCalls("call-b")).toBe("unknown_identity");
+  });
+
+  it("frees the slot of an unknown callback only after its provider call is read as ended and cleaned up", async () => {
+    const clock = { now: Date.now() };
+    const t = await queuedCallback(clock);
+    const provider = t.provider();
+    await provider.pump();
+    expect(t.api.dial).toHaveBeenCalledOnce();
+    // The call ends, but the room removal does not take: the outcome is unknown.
+    t.api.observe.mockResolvedValue({
+      answered: true,
+      terminal: true,
+      cleanupComplete: true,
+    });
+    t.media.cleanup.mockResolvedValueOnce(false);
+    await provider.pump();
+    expect(t.callback().state).toBe("unknown");
+    expect(await t.memberBCalls("call-b-busy")).toBe("busy");
+    // The reconciler reads the exact provider call again and frees the slot.
+    clock.now += 1000;
+    await provider.pump();
+    expect(t.callback().state).toBe("ended");
+    expect(t.slot()).toBeNull();
+    expect(t.api.dial).toHaveBeenCalledOnce();
+    expect(await t.memberBCalls("call-b")).toBe("unknown_identity");
+  });
+
   it("retains an uncertain callback dial across restart and never repeats it", async () => {
     const f = await fixture();
     const a = await f.pair("+14155550100");
@@ -424,6 +655,15 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       "unknown",
     );
     expect(f.service.router.claimCallback()).toBeNull();
+    // A dial that may have gone out, with no call ID to read, keeps the slot.
+    for (let i = 0; i < 5; i++)
+      await new SharedCallbacks(f.service.router, f.store, ports).pump();
+    expect(
+      f.store
+        .state<string>("shared-number-slot:line")
+        ?.startsWith("shared_callback_"),
+    ).toBe(true);
+    expect(dial).toHaveBeenCalledOnce();
   });
 
   it("routes two paired Macs independently, accepts same-call turns, and preserves completion owners", async () => {

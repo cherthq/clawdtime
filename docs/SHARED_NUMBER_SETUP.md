@@ -316,9 +316,18 @@ Mac and requests screen sharing. The report is not a claim that the generated
 artifact works. Ask to open that artifact or perform further computer actions
 in the same call. A different task or replacement Mac is never substituted.
 
-Missed calls and unknown dials are not automatically retried. If provider
-cleanup, room removal or route restoration is uncertain, preserve the private
-receipts and reconcile the exact recorded call before freeing the slot.
+A callback that fails before its dial sent nothing: the Mac left, a
+readiness read failed or the room was not ready in time. The coordinator
+removes its room, frees the slot and tries the callback again after 30
+seconds, then after a pause that doubles each time. After five such tries it
+cancels the callback.
+
+Missed calls and unknown dials are not automatically retried. A dial that may
+have gone out keeps the slot. When the provider returned its call ID, the
+coordinator reads that call again and frees the slot only after it is terminal,
+cleaned up and its room is gone. A dial with no call ID cannot be read: preserve
+the private receipts and reconcile the exact recorded call before freeing the
+slot.
 
 ## Verification and rollback
 

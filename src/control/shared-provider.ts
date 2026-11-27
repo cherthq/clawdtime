@@ -101,33 +101,38 @@ export class SharedProvider {
           ...item,
           phase: "unknown",
         });
-    this.callbacks = new SharedCallbacks(options.router, options.store, {
-      ready: () => options.api.ready(),
-      acquire: async () => {
-        if (!(await options.api.ready()))
-          throw Error("shared_webhook_route_unavailable");
+    this.callbacks = new SharedCallbacks(
+      options.router,
+      options.store,
+      {
+        ready: () => options.api.ready(),
+        acquire: async () => {
+          if (!(await options.api.ready()))
+            throw Error("shared_webhook_route_unavailable");
+        },
+        verify: () => options.api.ready(),
+        prepare: (callback) =>
+          options.media.prepare({
+            roomId: callback.roomId!,
+            expiresAt: this.now() + 3600000,
+            deadlineAt: this.now() + 20000,
+            video: true,
+          }),
+        dial: (callback, media) =>
+          options.api.dial(callback, media as TaskAudioCredentials),
+        inspect: async (callback, id, activate = true) => {
+          const observed = await options.api.observe(id);
+          if (activate && observed.answered && !observed.terminal) {
+            options.router.activateCallback(callback.id);
+            await options.media.activate(callback.roomId!);
+          }
+          return observed;
+        },
+        closeMedia: (callback) => options.media.cleanup(callback.roomId!),
+        restore: () => options.api.ready(),
       },
-      verify: () => options.api.ready(),
-      prepare: (callback) =>
-        options.media.prepare({
-          roomId: callback.roomId!,
-          expiresAt: this.now() + 3600000,
-          deadlineAt: this.now() + 20000,
-          video: true,
-        }),
-      dial: (callback, media) =>
-        options.api.dial(callback, media as TaskAudioCredentials),
-      inspect: async (callback, id) => {
-        const observed = await options.api.observe(id);
-        if (observed.answered && !observed.terminal) {
-          options.router.activateCallback(callback.id);
-          await options.media.activate(callback.roomId!);
-        }
-        return observed;
-      },
-      closeMedia: (callback) => options.media.cleanup(callback.roomId!),
-      restore: () => options.api.ready(),
-    });
+      this.now,
+    );
   }
   async webhook(raw: string, signature: string) {
     const expected = `sha256=${createHmac("sha256", this.options.webhookSecret).update(raw).digest("hex")}`;

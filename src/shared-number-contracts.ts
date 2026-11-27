@@ -181,4 +181,8 @@ export interface SharedCallbackOwnership {
   providerCallId?: string;
   outboundCallId?: string;
   createdAt: number;
+  /** Claims that ended before any dial: nothing reached the provider. */
+  undialed?: number;
+  /** A callback put back in the queue waits until this time. */
+  notBefore?: number;
 }

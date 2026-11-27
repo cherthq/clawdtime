@@ -32,6 +32,9 @@ const kind = (name: string) => `shared_number_${name}`;
 /** A caller who has not verified within this time is released, so one
  * unverified call cannot hold the single line slot. */
 export const UNVERIFIED_LIMIT_MS = 90_000;
+/** A callback whose claim ended before any dial is tried again this many
+ * times in all, after a pause that doubles from 30 s, then canceled. */
+const UNDIALED_TRIES = 5;
 const refused = () => new DomainError(403, "shared_number_unauthorized");
 const conflict = () => new DomainError(409, "shared_number_conflict");
 const notWaiting = () => new DomainError(409, "shared_call_not_waiting");
@@ -829,6 +832,7 @@ export class SharedNumber {
         .some(
           (c) =>
             c.state === "queued" &&
+            (c.notBefore ?? 0) <= this.now() &&
             this.store.get<SharedTaskOwnership>(kind("task"), c.taskId)
               ?.callbackRequested,
         )
@@ -841,6 +845,7 @@ export class SharedNumber {
         kind("callback"),
       )) {
         if (callback.state !== "queued") continue;
+        if ((callback.notBefore ?? 0) > this.now()) continue;
         const task = this.store.get<SharedTaskOwnership>(
           kind("task"),
           callback.taskId,
@@ -867,10 +872,16 @@ export class SharedNumber {
           connection.desktopInstanceId !== callback.scope.desktopInstanceId
         )
           continue;
+        // A new room for each try: the voice worker of an earlier try may
+        // still hold the earlier room.
         const claimed: SharedCallbackOwnership = {
           ...callback,
           state: "preparing",
-          roomId: `callback_${hash(callback.id)}`,
+          roomId: `callback_${hash(
+            callback.undialed
+              ? JSON.stringify([callback.id, callback.undialed])
+              : callback.id,
+          )}`,
         };
         this.store.put(kind("callback"), claimed);
         this.store.saveState(this.slotKey(), callback.id);
@@ -968,6 +979,26 @@ export class SharedNumber {
     )
       throw refused();
     return { taskId: task.id, resultId: task.resultId };
+  }
+  /** The claim ended before any dial, and its room is gone: nothing reached
+   * the provider. The callback goes back in the queue after a pause, or is
+   * canceled after its last try, and the slot frees. */
+  callbackUndialed(id: string) {
+    return this.store.transaction(() => {
+      const callback = this.callback(id);
+      // A stop after the requeue, before its attempt was saved, repeats it.
+      if (["queued", "canceled"].includes(callback.state)) return callback;
+      if (!["preparing", "dialing"].includes(callback.state)) throw conflict();
+      const undialed = (callback.undialed ?? 0) + 1;
+      if (this.slot() === callback.id)
+        this.store.saveState(this.slotKey(), null);
+      return this.store.put<SharedCallbackOwnership>(kind("callback"), {
+        ...callback,
+        state: undialed >= UNDIALED_TRIES ? "canceled" : "queued",
+        undialed,
+        notBefore: this.now() + 30_000 * 2 ** (undialed - 1),
+      });
+    });
   }
   callbackUnknown(id: string) {
     const callback = this.callback(id);
