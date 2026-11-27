@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
+import type { Context } from "hono";
 import { publicPage } from "./public-page.js";
 
 export const websiteOrigin = "https://www.clawdtime.com";
+/** The one install command. The website serves the script that it pipes to sh. */
+export const installCommand = `curl -fsSL ${websiteOrigin}/install.sh | sh`;
+/** The disk image of the newest release, under a name that every release keeps. */
+export const macDownloadUrl =
+  "https://github.com/cherthq/clawdtime/releases/latest/download/ClawdTime-arm64.dmg";
 export const websitePages = {
   "/": {
     file: "index.html",
@@ -136,3 +142,30 @@ Disallow: /health
 # Operational HTML uses noindex. Crawlers must fetch it to see that directive.
 Sitemap: ${websiteOrigin}/sitemap.xml
 `;
+
+/**
+ * The install script, read again on each request so that a new release is
+ * served at once. Plain text, never cached and never indexed.
+ */
+export function websiteInstallScript(c: Context) {
+  let script: string;
+  try {
+    script = readFileSync(
+      new URL("../scripts/install.sh", import.meta.url),
+      "utf8",
+    );
+  } catch {
+    return c.notFound();
+  }
+  c.header("Content-Type", "text/plain; charset=utf-8");
+  c.header("Cache-Control", "no-store");
+  c.header("X-Robots-Tag", "noindex");
+  return c.body(script);
+}
+
+/** Download for Mac. A temporary redirect, so no browser keeps an old target. */
+export function websiteDownload(c: Context) {
+  c.header("Cache-Control", "no-store");
+  c.header("X-Robots-Tag", "noindex");
+  return c.redirect(macDownloadUrl, 302);
+}

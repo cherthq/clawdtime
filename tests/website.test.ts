@@ -10,7 +10,12 @@ import {
   ControlCoordinator,
   SimulatedDevice,
 } from "../src/control/coordinator.js";
-import { websiteOrigin, websitePages } from "../src/website.js";
+import {
+  installCommand,
+  macDownloadUrl,
+  websiteOrigin,
+  websitePages,
+} from "../src/website.js";
 import { WEBSITE_PUBLIC_PATHS } from "../src/storage/website-metrics.js";
 
 const operator = "website-test-operator-not-a-real-secret";
@@ -92,6 +97,10 @@ describe("public website discovery and isolation", () => {
         /(?:href|src)="(\/[^"#]*)(?:#[^"]*)?"/g,
       )) {
         const target = await runtime.app.request(match[1]!);
+        if (match[1] === "/download") {
+          expect(target.status).toBe(302);
+          continue;
+        }
         expect(target.status, `${path} links to ${match[1]}`).toBe(200);
       }
     }
@@ -151,6 +160,92 @@ describe("public website discovery and isolation", () => {
       expect(xml).not.toContain(`<loc>${websiteOrigin}${path}</loc>`);
     }
     expect(runtime.store.effects()).toHaveLength(0);
+  });
+});
+
+describe("install routes", () => {
+  it("serves the install script as plain text that no cache keeps", async () => {
+    const runtime = fixture();
+    const response = await runtime.app.request("/install.sh");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "text/plain; charset=utf-8",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
+    expect(await response.text()).toBe(
+      readFileSync(new URL("../scripts/install.sh", import.meta.url), "utf8"),
+    );
+    const head = await runtime.app.request("/install.sh", { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(installCommand).toBe(
+      "curl -fsSL https://www.clawdtime.com/install.sh | sh",
+    );
+  });
+
+  it("sends Download for Mac to the disk image of the latest release", async () => {
+    const runtime = fixture();
+    const response = await runtime.app.request("/download");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(macDownloadUrl);
+    expect(macDownloadUrl).toBe(
+      "https://github.com/cherthq/clawdtime/releases/latest/download/ClawdTime-arm64.dmg",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
+    const sitemap = await (await runtime.app.request("/sitemap.xml")).text();
+    expect(sitemap).not.toContain("/download");
+    expect(sitemap).not.toContain("/install.sh");
+  });
+});
+
+describe("homepage install routes", () => {
+  it("leads the homepage with both routes and a prompt for a coding agent", async () => {
+    // A word break hint changes the line breaks, never the copied text.
+    const html = (await (await fixture().app.request("/")).text()).replace(
+      /<wbr \/>/g,
+      "",
+    );
+    const hero = html.slice(
+      html.indexOf('<section class="hero'),
+      html.indexOf("</section>", html.indexOf('<section class="hero')),
+    );
+    expect(hero).toContain('href="/download"');
+    expect(hero).toContain(installCommand);
+    expect(hero).toContain("macOS 14 or later, Apple silicon.");
+    expect(hero).not.toMatch(/invited|invitation/i);
+    const routes = html.slice(html.indexOf('id="get-clawdtime"'));
+    expect(routes).toContain('href="/download"');
+    expect(routes).toContain(installCommand);
+    // Each copy button copies an element that exists on the page.
+    const targets = [...html.matchAll(/data-copy-target="([^"]+)"/g)].map(
+      (match) => match[1]!,
+    );
+    expect(targets.length).toBeGreaterThanOrEqual(3);
+    for (const id of targets) expect(html).toContain(`id="${id}"`);
+    // A copy button copies the exact command: one line, nothing around it.
+    for (const id of ["hero-command", "route-command"])
+      expect(html).toContain(`id="${id}">\n${installCommand}</pre>`);
+    const prompt = html.match(/<pre id="agent-prompt">([\s\S]*?)<\/pre>/)![1]!;
+    expect(prompt).toContain(installCommand);
+    expect(prompt).toContain("clawdtime onboard");
+    // The pricing copy no longer says the product is invitation only.
+    const pricing = html.slice(html.indexOf('id="pricing"'));
+    expect(pricing.slice(0, pricing.indexOf("</h2>"))).not.toMatch(/invited/i);
+  });
+
+  it("keeps em and en dashes and contact instructions out of the changed pages", async () => {
+    const runtime = fixture();
+    for (const path of ["/", "/pricing", "/guides/getting-started"]) {
+      const html = await (await runtime.app.request(path)).text();
+      expect(html, path).not.toMatch(/[\u2013\u2014]/);
+      expect(html, path).not.toMatch(/pilot contact|contact that person/i);
+    }
+    expect(
+      readFileSync(new URL("../public/landing.js", import.meta.url), "utf8"),
+    ).not.toMatch(/[\u2013\u2014]/);
   });
 });
 

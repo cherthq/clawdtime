@@ -41,6 +41,8 @@ import {
   websitePage,
   websiteSitemap,
   websiteRobots,
+  websiteInstallScript,
+  websiteDownload,
   type WebsitePath,
 } from "./website.js";
 import {
@@ -712,6 +714,8 @@ export function createApp(
     c.header("Content-Type", "application/xml; charset=utf-8");
     return c.body(websiteSitemap());
   });
+  app.get("/install.sh", websiteInstallScript);
+  app.get("/download", websiteDownload);
   app.post("/api/website/events", async (c) => {
     // Same-origin JSON only; no cookies or cross-site collection.
     if (
