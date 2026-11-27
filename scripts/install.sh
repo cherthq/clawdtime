@@ -598,8 +598,9 @@ switch_current() {
   launcher=$runtimes/current/bin/clawdtime
 }
 
-# The real path of the file behind the link $1, through every link, or
-# nothing when it is gone. Plain shell: the Mac may have no Node.
+# The real path of the file behind the link $1, through every link. When
+# that file is gone, the path where the links end. Plain shell: the Mac may
+# have no Node.
 resolve() {
   file=$1 hops=0
   while [ -L "$file" ]; do
@@ -611,9 +612,11 @@ resolve() {
       *) file=$(dirname "$file")/$next ;;
     esac
   done
-  [ -e "$file" ] || return 0
-  folder=$(cd -P "$(dirname "$file")" 2>/dev/null && pwd -P) || return 0
-  printf '%s/%s\n' "$folder" "${file##*/}"
+  if [ -e "$file" ] && folder=$(cd -P "$(dirname "$file")" 2>/dev/null && pwd -P); then
+    printf '%s/%s\n' "$folder" "${file##*/}"
+  else
+    printf '%s\n' "$file"
+  fi
 }
 
 # The ClawdTime source checkout that holds the file $1, or nothing.
@@ -622,7 +625,7 @@ source_checkout() {
   folder=$(dirname "$1")
   while :; do
     if [ -f "$folder/cli/main.ts" ] && [ -f "$folder/scripts/install.sh" ]; then
-      printf '%s\n' "$folder"
+      (cd -P "$folder" 2>/dev/null && pwd -P) || printf '%s\n' "$folder"
       return 0
     fi
     [ "$folder" != / ] && [ "$folder" != . ] || return 0
@@ -647,15 +650,25 @@ link_release() {
   fi
   points_to=$(readlink "$link" 2>/dev/null || true)
   if [ -L "$link" ] && [ "$points_to" != "$launcher" ]; then
-    # A source build (sh install.sh --source) linked it: keep it unless asked.
-    checkout=$(source_checkout "$(resolve "$link")")
+    # A source build (sh install.sh --source) linked it: keep it unless asked,
+    # also when its checkout has no build now. Say what happens either way.
+    target=$(resolve "$link")
+    checkout=$(source_checkout "$target")
+    if [ -e "$target" ]; then
+      runs="runs the source build in $checkout" ran="ran the source build in $checkout"
+    else
+      runs="points at the source build in $checkout, which has no build now" ran="pointed at the source build in $checkout"
+    fi
     if [ -n "$checkout" ] && [ "${CLAWDTIME_REPLACE_SOURCE:-0}" != 1 ]; then
-      say "Kept $link: it runs the source build in $checkout. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is $launcher"
+      say "Kept $link: it $runs. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is $launcher"
       command_name=$launcher
       return
     fi
-    [ -z "$checkout" ] ||
-      say "Replaced $link, which ran the source build in $checkout: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd $checkout && npm link"
+    if [ -n "$checkout" ]; then
+      say "Replaced $link, which $ran: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd $checkout && npm link"
+    else
+      say "Replaced $link, which pointed to $points_to."
+    fi
   fi
   if [ "$points_to" != "$launcher" ]; then
     ln -s "$launcher" "$user_prefix/bin/.clawdtime.$$"

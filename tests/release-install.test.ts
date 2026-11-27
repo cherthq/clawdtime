@@ -609,6 +609,35 @@ describe("the release route of the installer", { timeout: 30_000 }, () => {
     );
     expect(replaced.output).toContain(`Ready: ${link} runs ClawdTime 0.4.1.`);
     expect(f.recorded()).toBe("");
+
+    // A checkout with no dist/, as between a clean and a build: the same rule.
+    rmSync(link);
+    symlinkSync(npmLink, link);
+    rmSync(join(checkout, "dist"), { recursive: true });
+    const unbuilt = await f.install();
+    expect(unbuilt.status, unbuilt.output).toBe(0);
+    expect(readlinkSync(link)).toBe(npmLink);
+    expect(unbuilt.output).toContain(
+      `Kept ${link}: it points at the source build in ${checkout}, which has no build now. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is ${launcher}`,
+    );
+    const unbuiltReplaced = await f.install({
+      env: { CLAWDTIME_REPLACE_SOURCE: "1" },
+    });
+    expect(unbuiltReplaced.status, unbuiltReplaced.output).toBe(0);
+    expect(readlinkSync(link)).toBe(launcher);
+    expect(unbuiltReplaced.output).toContain(
+      `Replaced ${link}, which pointed at the source build in ${checkout}: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd ${checkout} && npm link`,
+    );
+
+    // Any other link: replaced, and the installer says what it pointed to.
+    rmSync(link);
+    symlinkSync("/made/up/clawdtime", link);
+    const other = await f.install();
+    expect(other.status, other.output).toBe(0);
+    expect(readlinkSync(link)).toBe(launcher);
+    expect(other.output).toContain(
+      `Replaced ${link}, which pointed to /made/up/clawdtime.`,
+    );
   });
 
   it("never runs as root", async () => {

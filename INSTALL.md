@@ -24,8 +24,9 @@ It does this, and it never uses sudo:
    changes.
 4. It links `~/.local/bin/clawdtime` to that release. When `~/.local/bin` is
    not on your PATH, it prints the one line that adds it. Run that line. When
-   that link runs a source build, it keeps the link and says so. To point it
-   at the release, run:
+   that link runs a source build, also one that has no build now, it keeps
+   the link and says so. When it replaces another link, it says so too. To
+   point it at the release, run:
    `curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | CLAWDTIME_REPLACE_SOURCE=1 sh`
 5. It starts the guided setup, `clawdtime onboard`, in the same Terminal
    window. When it runs with no Terminal, it says to run `clawdtime onboard`
