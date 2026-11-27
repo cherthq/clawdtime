@@ -43,7 +43,7 @@ public final class SetupCoordinator: ObservableObject {
   }
 
   /// Longer than the double-click time of macOS by default.
-  public static let defaultAnswerDelay: TimeInterval = 0.6
+  nonisolated public static let defaultAnswerDelay: TimeInterval = 0.6
 
   /// The step on screen asks this question, and its buttons work now.
   public func accepts(_ question: String) -> Bool {
