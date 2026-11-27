@@ -1,6 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -242,4 +249,55 @@ it("starts with a list of invited numbers, and refuses one that is not a phone n
   );
   expect(output).toContain("Shared coordinator standby");
   refuses(configFile(await freePort(), { invited: ["555-0100"] }));
+}, 60_000);
+
+// A coordinator that crashed leaves its owner lock next to the database. A new
+// coordinator takes over only a lock whose process is gone; it never runs
+// beside a live owner.
+const lockWith = (file: string, owner: object | undefined, ageMs = 0) => {
+  const config = JSON.parse(readFileSync(file, "utf8"));
+  const lock = `${config.database}.owner`;
+  mkdirSync(lock, { recursive: true, mode: 0o700 });
+  if (owner)
+    writeFileSync(join(lock, "owner.json"), JSON.stringify(owner), {
+      mode: 0o600,
+    });
+  if (ageMs) {
+    const then = new Date(Date.now() - ageMs);
+    utimesSync(lock, then, then);
+  }
+  return lock;
+};
+
+const endedProcess = () => {
+  const ended = spawnSync(process.execPath, ["-e", "0"]);
+  expect(ended.status).toBe(0);
+  return ended.pid;
+};
+
+it("takes over the owner lock of a coordinator that is gone", async () => {
+  const file = configFile(await freePort());
+  lockWith(file, { pid: endedProcess(), startedAt: Date.now() - 60_000 });
+  const output = await startsInStandby(file);
+  expect(output).toContain("Shared coordinator standby");
+}, 30_000);
+
+it("refuses to start while the owner lock belongs to a live process", async () => {
+  const file = configFile(await freePort());
+  const lock = lockWith(file, { pid: process.pid, startedAt: Date.now() });
+  refuses(file);
+  expect(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).pid).toBe(
+    process.pid,
+  );
+}, 30_000);
+
+it("refuses a fresh lock without an owner, and takes over an old one", async () => {
+  const fresh = configFile(await freePort());
+  const lock = lockWith(fresh, undefined);
+  refuses(fresh);
+  rmSync(lock, { recursive: true, force: true });
+  const old = configFile(await freePort());
+  lockWith(old, undefined, 5 * 60_000);
+  const output = await startsInStandby(old);
+  expect(output).toContain("Shared coordinator standby");
 }, 60_000);
