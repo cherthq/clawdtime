@@ -7,7 +7,10 @@ import type {
   CallAttemptGrant,
   ProactiveCallIntent,
 } from "../attention/proactive-contracts.js";
-import type { ProactivePolicyAuthority } from "../attention/proactive-policy.js";
+import {
+  computerControlSubject,
+  type ProactivePolicyAuthority,
+} from "../attention/proactive-policy.js";
 import type { ProactiveReviewPacket } from "./proactive-preparation.js";
 
 const bindingSchema = z
@@ -189,6 +192,8 @@ export class ProactiveLineSessions {
       !!call &&
       !!this.ports.computer &&
       call.grant.inputAllowed &&
+      // Also for a grant issued before decision calls lost computer control.
+      computerControlSubject(call.grant.source, call.intent.trigger) &&
       call.grant.channel === "phone_walkthrough" &&
       call.grant.viewScope.includes("selected-display") &&
       call.prepared &&

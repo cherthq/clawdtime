@@ -1,6 +1,18 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ComputerJournal } from "../connectors/computer/journal.js";
+import { ComputerWorker } from "../connectors/computer/worker.js";
 import { PhoneDesktop } from "../src/control/phone-desktop.js";
 import type { DesktopExecutionSnapshot } from "../src/control/desktop-executor.js";
+import {
+  element,
+  FakeHands,
+  observation,
+  ScriptedPlanner,
+  until,
+} from "./connectors-computer-fixture.js";
 
 const active = (requestId: string): DesktopExecutionSnapshot => ({
   configured: true,
@@ -27,8 +39,12 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const adapters: PhoneDesktop[] = [];
+const homes: string[] = [];
 afterEach(() => {
   adapters.splice(0).forEach((adapter) => adapter.shutdown());
+  homes
+    .splice(0)
+    .forEach((home) => rmSync(home, { recursive: true, force: true }));
   vi.useRealTimers();
 });
 function fixture(
@@ -162,21 +178,60 @@ describe("phone desktop execution ownership", () => {
     expect(runtime.stop).toHaveBeenCalledOnce();
   });
 
-  it("allows a same-call follow-up and retains control of its new request", async () => {
-    const { adapter, runtime } = fixture();
+  it("gives a same-call request to the call's running task as its words, not as a second request", async () => {
+    const home = mkdtempSync(join(tmpdir(), "clawdtime-phone-steer-"));
+    homes.push(home);
+    let release = () => {};
+    const gate = new Promise<void>((open) => (release = open));
+    const planner = new ScriptedPlanner([
+      async () => {
+        await gate;
+        return { kind: "done", summary: "TextEdit is open." };
+      },
+    ]);
+    const journal = new ComputerJournal(home, () => 1_000_000);
+    const worker = new ComputerWorker({
+      hands: new FakeHands([observation([element(1, { title: "Save" })])]),
+      planner,
+      journal,
+      now: () => 1_000_000,
+      notify: () => {},
+      settleMs: 1,
+      transientMs: 1,
+    });
+    const adapter = new PhoneDesktop(worker);
+    adapters.push(adapter);
     adapter.open("call-a");
     await adapter.run("call-a", "request-a", "Open TextEdit", () =>
       adapter.execution.submit("ignored", "Open TextEdit"),
     );
-    const prior = runtime.snapshot().requestId;
-    await adapter.run("call-a", "request-b", "Open Messages", () =>
-      adapter.execution.submit("ignored", "Open Messages"),
+    await until(() => planner.inputs.length === 1);
+    const task = worker.snapshot().requestId!;
+    const followUp = await adapter.run(
+      "call-a",
+      "request-b",
+      "Open Messages",
+      () => adapter.execution.submit("ignored", "Open Messages"),
     );
-    expect(runtime.submit).toHaveBeenCalledTimes(2);
-    expect(runtime.snapshot().requestId).not.toBe(prior);
-    expect(runtime.snapshot().requestId).toBe(runtime.submit.mock.calls[1]![0]);
+    // The worker keeps the running task and takes the words into it.
+    expect(followUp.message).toBe(
+      "Got it. I take that into the task that runs.",
+    );
+    expect(worker.snapshot().requestId).toBe(task);
+    expect(journal.guidance(task)).toMatchObject([{ text: "Open Messages" }]);
+    expect(journal.all()).toHaveLength(1);
+    // Words from outside the call do not steer it.
+    expect(
+      (await adapter.execution.submit("local", "Open Notes")).message,
+    ).toMatch(/already running/);
+    expect(journal.guidance(task)).toHaveLength(1);
+    // The call still owns the task: closing the call stops it.
     adapter.close("call-a");
-    expect(runtime.stop).toHaveBeenCalledOnce();
+    expect(worker.snapshot().state).toBe("stopping");
+    release();
+    await worker.idle();
+    expect(worker.snapshot().state).not.toBe("completed");
+    expect(journal.all()).toHaveLength(1);
   });
 
   it("expires and stops exact phone work without a further request", async () => {

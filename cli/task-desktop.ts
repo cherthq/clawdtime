@@ -130,6 +130,7 @@ export function childEnvironment(panel = false): NodeJS.ProcessEnv {
           "CLAWDTIME_CONFIG_HOME",
           // Route owner texts to the explicitly configured production line.
           // The project key and recipient stay in the protected state files.
+          // Calls keep the line that `clawdtime connect` saved.
           "CHERT_LINE_ID",
           "CHERT_API_BASE",
           // The language model and speech of the ClawdTime agent.

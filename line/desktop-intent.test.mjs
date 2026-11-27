@@ -7,7 +7,7 @@ import {
 } from "./desktop-intent.mjs";
 import { makeCallerTools } from "./caller-tools.mjs";
 import { bindCallEnd } from "./call-end.mjs";
-import { syncCallView } from "./agent.mjs";
+import { proactiveInstructions, syncCallView } from "./agent.mjs";
 import { RoomEvent } from "@livekit/rtc-node";
 const { test } = process.env.VITEST
   ? await import("vitest")
@@ -76,6 +76,7 @@ function runtime(options = {}) {
       requests.push({ text, context });
       return options.ask ? options.ask(text, context) : "accepted";
     },
+    ...(options.computer ? { computer: options.computer } : {}),
     stop: async () => {
       calls.push("stop");
       return "Stopped owned work.";
@@ -1187,4 +1188,83 @@ test("syncCallView prefers /desktop/view over CLI fallback and uses clearManual 
     0,
   );
   assert.equal(actions.length, 2);
+});
+
+test("use_computer exists only when the call has computer control", () => {
+  assert.equal(
+    runtime().tools.some((tool) => tool.name === "use_computer"),
+    false,
+  );
+  const r = runtime({ computer: async () => "done" });
+  assert.equal(
+    r.tools.some((tool) => tool.name === "use_computer"),
+    true,
+  );
+});
+
+test("use_computer forwards the caller's complete original words once and takes no model argument", async () => {
+  const sent = [];
+  const r = runtime({
+    computer: async (text, context) => {
+      sent.push({ text, context });
+      return "Requested on the Mac; not verified.";
+    },
+  });
+  const words = "Open the Stonepad page and click Save, please.";
+  r.turn(words);
+  assert.equal(
+    await r.invoke("use_computer"),
+    "Requested on the Mac; not verified.",
+  );
+  await r.invoke("use_computer");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, words);
+  assert.match(sent[0].context.requestId, /\S/);
+  // The supervisor receives nothing of a computer request.
+  assert.deepEqual(r.calls, []);
+});
+
+test("use_computer reports an unknown outcome and never resends a lost request", async () => {
+  let sent = 0;
+  const r = runtime({
+    computer: async () => {
+      sent++;
+      throw Error("lost response");
+    },
+  });
+  r.turn("Click the Riverchat tab.");
+  assert.equal(
+    await r.invoke("use_computer"),
+    "The computer request has an unknown outcome. It was not sent again.",
+  );
+  assert.equal(sent, 1);
+});
+
+test("use_computer and stop_computer do nothing after the call ended", async () => {
+  let sent = 0;
+  const r = runtime({
+    computer: async () => {
+      sent++;
+      return "done";
+    },
+  });
+  r.turn("Click Save.");
+  r.end();
+  assert.equal(await r.invoke("use_computer"), "The call has ended.");
+  assert.equal(await r.invoke("stop_computer"), "The call has ended.");
+  assert.equal(sent, 0);
+  assert.deepEqual(r.calls, []);
+});
+
+test("the words for stop_computer match what it does on the call", () => {
+  const withComputer = proactiveInstructions({ computer: true });
+  assert.match(withComputer, /use_computer/);
+  assert.match(
+    withComputer,
+    /stop_computer stops only computer work owned by this call and leaves sharing on/,
+  );
+  const without = proactiveInstructions({ computer: false });
+  assert.doesNotMatch(without, /use_computer/);
+  assert.doesNotMatch(without, /leaves sharing on/);
+  assert.match(without, /stop_computer stops sharing only/);
 });

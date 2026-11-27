@@ -15,12 +15,11 @@ The callback repairs also cover:
   without ending audio. A failed capture process is joined before replacement.
 - Optional opening of an exact verified HTML result before screen sharing.
 - Protected verification plans for individual launched runs.
-- An explicit recovery operation for a refused review that never reserved a
-  dial. It requires different verification evidence and confirmed cleanup.
 - Bounded diagnostic codes for startup and cleanup, without saved speech,
   screen pixels, credentials or arbitrary worker output.
 - Forwarding the configured line identity and API base to the desktop service
-  so outbound texts use its selected line.
+  so outbound texts use its selected line. Calls keep the line that
+  `clawdtime connect` saved: a `CHERT_LINE_ID` in the shell does not move them.
 
 ## Enable continuation
 
@@ -35,6 +34,11 @@ Register a new calling policy with explicit consent and
 device, expiry and remaining attempt budget. Retire the superseded project
 policy so new jobs have one unambiguous policy to use. Existing enrollments
 bound to a retired policy need a deliberate new enrollment.
+
+Only a call about a result gets computer control: a job or a session that
+finished. A call about a decision, a task review or a question of the computer
+worker asks the caller its own question. It takes no computer input under any
+policy, so a spoken yes there can only answer that question.
 
 Policy identities and issued grants are immutable. Changing a configuration
 field does not upgrade an existing policy or a running call. Install at an idle
@@ -80,9 +84,34 @@ work may still be running when it replies. Acknowledgement alone is never
 completion. Turn receipts prevent repeated input after delivery becomes
 uncertain.
 
-Stop cancels only computer work owned by that call and leaves video on.
-Hiding sharing, ending the call, revoking permission or losing the call lease
-also stops its computer work. Independent coding jobs keep their own lifecycle.
+A new request while this call's own computer task runs does not start a second
+task. The worker takes it as the caller's words for the running task: "no, the
+other tab" or "open Messages instead" steers that task, as words in the chat
+do (see "Words while a task runs" in [computer use](COMPUTER_USE.md)). The
+reply says where the words went, for example "Got it. I take that into the
+task that runs." It never says that something was done. Words from another
+call or from the chat do not steer this call's task: they get the busy reply.
+The same rule holds on an ordinary call to the line.
+
+A spoken yes or no answers only the newest question that this call told the
+caller, as a plain yes in the chat answers only the newest question the owner
+saw. When the computer task asks a question after the caller's last words, for
+example after a reply that said the request was still running, the next reply
+tells that question, and those words answer nothing. A question that comes
+again after an answer is told again before a yes can answer it.
+
+A refusal before any effect is the answer of that turn: another call uses the
+computer, or this call's computer control has ended. It says that no action was
+sent, and the rest of the call goes on. When hiding sharing or a lost lease
+stops a request that is still running, the reply says that it stopped and that
+its last step is not confirmed. Only a request whose outcome is not known
+makes the rest of the call unknown: nothing more is sent in it.
+
+Stop cancels only computer work owned by that call and leaves video on, also
+after computer control ended in that call. Hiding sharing, ending the call,
+revoking permission or losing the call lease also stops its computer work.
+On a walkthrough without computer control, Stop hides sharing and cancels no
+work. Independent coding jobs keep their own lifecycle.
 The configured call deadline still applies; continuation does not extend it.
 
 ## Verification and remaining limits
@@ -92,8 +121,15 @@ demo page, and both clicking and navigation during one walkthrough call without
 a new session. The completed coding job was reused rather than rerun.
 
 The TypeScript build, line JavaScript syntax checks and capture-helper build
-passed. Local test suites were not run at the operator's request. Phone
-acceptance covers the observed actions, not every application or long task.
+passed. Phone acceptance covers the observed actions, not every application or
+long task.
+
+Automated tests cover the grant of computer control, the computer port, the
+screen guard, Stop, the voice tools, the newest-question rule, refusals and
+same-call follow-ups on the real worker:
+`tests/backend-walkthrough-computer.test.ts`,
+`tests/backend-phone-desktop.test.ts`, `line/proactive-outbound.test.mjs` and
+`line/desktop-intent.test.mjs`. Tests are not physical acceptance.
 
 Automatic artifact discovery, resuming an idle coding chat, automatic redial,
 and extending call permissions are outside this change. Preserve journals,

@@ -191,7 +191,10 @@ export function lineLiveKit(lineDirectory: string):
 
 /**
  * The settings of this path, or the first piece that is missing, as a fixed
- * code. A variable of the environment wins over a stored value, as for texts.
+ * code. A variable of the environment wins over a stored value, as for texts,
+ * except for the line: the line that `clawdtime connect` saved for calls wins
+ * over `CHERT_LINE_ID`, which the desktop service also gets for its texts.
+ * The variable names the line of a call only when nothing is saved.
  */
 export function callsSettings(
   env: Record<string, string | undefined>,
@@ -212,7 +215,7 @@ export function callsSettings(
     return { missing: "project_api_key" };
   if (record && record.projectId !== projectId)
     return { missing: "line_of_this_project" };
-  const lineId = env.CHERT_LINE_ID?.trim() || record?.lineId || "";
+  const lineId = record?.lineId || env.CHERT_LINE_ID?.trim() || "";
   if (!uuid.safeParse(lineId).success) return { missing: "line_id" };
   const { owner, problem } = readOwner(root);
   // An owner.json that cannot be read places no call, and says so.

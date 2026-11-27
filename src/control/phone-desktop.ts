@@ -372,6 +372,10 @@ export class PhoneDesktop {
       return context.submitted.result;
     }
     const current = this.runtime.snapshot();
+    // Work of another surface, or work that stops or is uncertain, gets the
+    // state as the reply. A request while this call's own task runs goes to
+    // the worker, which takes it as the caller's words for that task: it
+    // steers the task and starts no second request.
     if (
       (current.canStop || blocked.has(current.state)) &&
       (!current.requestId ||

@@ -112,7 +112,9 @@ export function createProactiveCallClient(
     revoked = false,
     caller = null,
     unknownTurn = null,
-    sharingStopped = false;
+    sharingStopped = false,
+    // Once this call had computer control, its stop never hides sharing.
+    computerGranted = false;
   const turns = new Map();
   let closeFlight;
   const retire = () => {
@@ -141,6 +143,7 @@ export function createProactiveCallClient(
       throw Error("proactive_authority_retired");
     }
     state = parsed;
+    if (parsed.computerAllowed) computerGranted = true;
     return parsed;
   };
   const command = async (action, fields = {}, closing = false) => {
@@ -246,7 +249,7 @@ export function createProactiveCallClient(
       return client.answer(text, { ...context, action: "computer" });
     },
     async stopComputer() {
-      if (!state?.computerAllowed) return client.stopSharing();
+      if (!computerGranted) return client.stopSharing();
       const value = await command("stop_computer");
       return value.message ?? "Stop requested for this call's computer work.";
     },
