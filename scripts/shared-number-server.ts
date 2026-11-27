@@ -26,6 +26,9 @@ const schema = z
     identityKey: z.string().regex(/^[a-f0-9]{64}$/i),
     lineToken: z.string().min(32),
     host: z.enum(["127.0.0.1", "0.0.0.0"]).default("127.0.0.1"),
+    /** True only when every request comes through a proxy on this host that
+     * appends the client address to X-Forwarded-For. */
+    behindProxy: z.boolean().default(false),
     port: z.number().int().min(1024).max(65535).default(3318),
     provider: z
       .object({
@@ -65,6 +68,13 @@ const schema = z
       config.proofKey.toLowerCase() !== config.identityKey.toLowerCase(),
     "separate_keys_required",
   );
+/** A module of the voice worker in `line/`, from the compiled entry in
+ * `dist/scripts/` or from this source file in `scripts/`. */
+const lineModule = (name: string) => {
+  const here = new URL(".", import.meta.url);
+  const root = here.pathname.endsWith("/dist/scripts/") ? "../../" : "../";
+  return new URL(`${root}line/${name}`, here).href;
+};
 async function main() {
   const path = process.env.CLAWDTIME_SHARED_CONFIG;
   if (!path || !isAbsolute(path)) throw Error("shared_config_required");
@@ -96,14 +106,10 @@ async function main() {
     });
     let provider: SharedProvider | undefined;
     if (config.provider) {
-      const modulePath = new URL("../../line/shared-media.mjs", import.meta.url)
-        .href;
-      const readinessPath = new URL(
-        "../../line/local-readiness.mjs",
-        import.meta.url,
-      ).href;
-      const { sharedMedia } = await import(modulePath);
-      const { transportReadiness } = await import(readinessPath);
+      const { sharedMedia } = await import(lineModule("shared-media.mjs"));
+      const { transportReadiness } = await import(
+        lineModule("local-readiness.mjs")
+      );
       const api = new SharedProviderAPI({
         callsOrigin: config.messaging.origin,
         projectId: config.messaging.projectId,
@@ -161,7 +167,8 @@ async function main() {
       {
         hostname: config.host,
         port: config.port,
-        fetch: (request) =>
+        // The second argument carries the socket, which sign-in limits read.
+        fetch: (request, connection) =>
           new URL(request.url).pathname === "/health"
             ? Response.json(
                 {
@@ -177,7 +184,7 @@ async function main() {
                   JSON.stringify({ ok: false, code: "shared_standby" }),
                   { status: 503 },
                 )
-              : service.app.fetch(request),
+              : service.app.fetch(request, connection),
       },
       () =>
         console.log(

@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -120,6 +122,119 @@ it("refuses a project ID that is not a UUID", async () => {
     }),
   );
 }, 30_000);
+
+// An enabled coordinator with a made-up provider. Nothing here sends a text:
+// every number is a stranger, so no sign-in text leaves the process.
+const enabled = (port: number, change: Record<string, unknown> = {}) =>
+  configFile(port, {
+    enabled: true,
+    provider: {
+      integrationId: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      endpoint: "https://coordinator.example/provider/webhook",
+      webhookSecret: "w".repeat(32),
+      controlCredentialsFile: join(directory, "control.json"),
+      media: {
+        url: "wss://media.example",
+        key: "media-key",
+        secret: "m".repeat(16),
+        agentName: "shared-test",
+      },
+    },
+    ...change,
+  });
+
+const running = (file: string) =>
+  new Promise<{ stop(): Promise<void> }>((done, fail) => {
+    const child = spawn(process.execPath, ["--import", "tsx", entry], {
+      cwd: process.cwd(),
+      env: environment(file),
+    });
+    let output = "";
+    const exited = new Promise<void>((resolve) => child.once("exit", resolve));
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      fail(Error(`not_available: ${output}`));
+    }, 20_000);
+    const read = (chunk: Buffer) => {
+      output += chunk.toString();
+      if (output.includes("refused startup")) {
+        clearTimeout(timer);
+        fail(Error(`refused: ${output}`));
+      }
+      if (output.includes("Shared coordinator available")) {
+        clearTimeout(timer);
+        done({
+          stop: async () => {
+            child.kill("SIGTERM");
+            await exited;
+          },
+        });
+      }
+    };
+    child.stdout.on("data", read);
+    child.stderr.on("data", read);
+  });
+
+const startFrom = async (port: number, recipient: string, forwarded = "") =>
+  (
+    await fetch(`http://127.0.0.1:${port}/auth/start`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(forwarded ? { "x-forwarded-for": forwarded } : {}),
+      },
+      body: JSON.stringify({ recipient }),
+    })
+  ).status;
+const strangers = Array.from(
+  { length: 12 },
+  (_, i) => `+1312555${String(1000 + i)}`,
+);
+
+it("counts sign-in starts by the client address that the real server sees", async () => {
+  const port = await freePort();
+  const server = await running(enabled(port));
+  try {
+    // A forwarded header is not trusted without the proxy flag.
+    for (const number of strangers.slice(0, 10))
+      expect(await startFrom(port, number, "203.0.113.9")).toBe(200);
+    expect(await startFrom(port, strangers[10]!, "198.51.100.7")).toBe(429);
+  } finally {
+    await server.stop();
+  }
+  // Each start was counted by the socket address, not as one unknown client.
+  const db = new DatabaseSync(join(directory, "data", "shared.sqlite"));
+  const clients = db
+    .prepare(
+      "SELECT DISTINCT json_extract(body, '$.client') AS client FROM entities WHERE kind = 'shared_identity_challenge'",
+    )
+    .all()
+    .map((row) => row.client);
+  db.close();
+  const digest = (client: string) =>
+    createHmac("sha256", Buffer.from("b".repeat(64), "hex"))
+      .update(JSON.stringify(["client", client]))
+      .digest("hex");
+  expect(clients).toEqual([digest("127.0.0.1")]);
+}, 60_000);
+
+it("counts each client behind a proxy by the last forwarded address", async () => {
+  const port = await freePort();
+  const server = await running(enabled(port, { behindProxy: true }));
+  try {
+    for (const number of strangers.slice(0, 10))
+      expect(await startFrom(port, number, "203.0.113.9")).toBe(200);
+    expect(await startFrom(port, strangers[10]!, "203.0.113.9")).toBe(429);
+    // A client cannot pick its address: the proxy appends the real one last.
+    expect(
+      await startFrom(port, strangers[10]!, "198.51.100.7, 203.0.113.9"),
+    ).toBe(429);
+    // Another client keeps its own allowance.
+    expect(await startFrom(port, strangers[10]!, "198.51.100.7")).toBe(200);
+  } finally {
+    await server.stop();
+  }
+}, 60_000);
 
 it("starts with a list of invited numbers, and refuses one that is not a phone number", async () => {
   const output = await startsInStandby(

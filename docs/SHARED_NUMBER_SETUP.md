@@ -44,6 +44,7 @@ Create an owner-only JSON file in an owner-only directory. Set
 | `identityKey`                     | A different persistent 32-byte hex key                                                                                        |
 | `lineToken`                       | A separate random server credential, at least 32 characters                                                                   |
 | `host`                            | `127.0.0.1` (the default). See [Operations](#operations)                                                                      |
+| `behindProxy`                     | `true` only when a proxy or tunnel on this host appends the client address to `X-Forwarded-For`. Default `false`              |
 | `port`                            | Local port, default 3318                                                                                                      |
 | `messaging.origin`                | Exact HTTPS provider API origin                                                                                               |
 | `messaging.projectId`             | Exact project UUID                                                                                                            |
@@ -70,11 +71,26 @@ node dist/scripts/shared-number-server.js
 
 Health shows the mode and whether the provider is configured, not secrets.
 All other routes return 503 in standby. Back up the database and persistent
-keys together. Changing the identity key changes account subjects. A second
+keys together. Changing the identity key changes account subjects and number
+digests, and the coordinator can no longer open the sealed numbers. A second
 process refuses the database's `.owner` lock. After an unclean exit,
 reconcile pending provider and media effects before you remove a stale lock.
 Its `owner.json` identifies the process that created it. Never remove a live
 process's lock.
+
+The database keeps phone numbers and caller handles only as keyed digests
+under `identityKey`. A number is kept sealed, with a key derived from
+`identityKey`, only where the coordinator must use it again: a texted sign-in
+code until it is used or expires, a sign-in session for its hour, and a
+member's own record, to dial that member's callbacks. A permanent ban drops
+the sealed copy. A stranger's sign-in keeps only the digest. At startup, the
+coordinator moves rows from an earlier release that held numbers in the clear
+to this form.
+
+The coordinator keeps an ended, busy or declined call, its webhook receipt and
+its event receipts for 24 hours after the call ended, then removes them. It
+never removes a call that is open, released but not yet cleaned up, or
+unknown.
 
 ## Operations
 
@@ -87,6 +103,19 @@ process's lock.
   the port.
 - The tunnel or proxy must allow ten-second device polls and 125-second chat
   responses.
+- Sign-in limits count each client by its address. With `behindProxy` at
+  `false`, the coordinator ignores `X-Forwarded-For` and uses the socket
+  address. Behind a tunnel or proxy on the same host, that address is the
+  proxy's, so every person shares one allowance.
+- Set `behindProxy` to `true` when the coordinator listens on `127.0.0.1`
+  behind a tunnel or reverse proxy that appends the client address to
+  `X-Forwarded-For`. The coordinator then uses the last entry of that header,
+  and only on a request from a loopback or private address. A client cannot
+  choose that entry, because the proxy adds it after any value the client
+  sent. Never set it when clients can reach the port directly.
+- One number gets at most 15 sign-in texts an hour. Clients that never signed
+  in to that number share 5 of them. A client that signed in to it before has
+  its own 10, so other clients cannot lock the member out on that client.
 - Turn off request and response body logging in the proxy.
 - Do not expose the local desktop API. Participant Macs connect outward.
 
@@ -155,8 +184,14 @@ The coordinator passes the webhook's `data.from` to the router as the
 caller. The provider must send it in the same form that the member verified
 at sign-in, for example `+14155550100`. The router keeps only a keyed digest
 of it. The caller handle never authorizes a Mac. It only selects whose paired
-Mac may be shown the call code. A call with no caller handle, or a handle that
-matches no member, gives no code to any Mac.
+Mac may be shown the call code.
+
+The coordinator declines a call at once when no Mac could ever be shown its
+code: the call has no caller handle, or the handle is not the verified number
+of a member with a paired Mac. Such a call gets no room and does not hold the
+slot. One caller handle may hold the slot without verifying five times an
+hour. The coordinator declines its further calls in that hour, so someone who
+sends a member's number cannot keep the line busy.
 
 A caller who does not verify within 90 seconds is released. The voice worker
 removes the call's room, and the coordinator removes it on its next pass as
@@ -305,9 +340,18 @@ Mac and requests screen sharing. The report is not a claim that the generated
 artifact works. Ask to open that artifact or perform further computer actions
 in the same call. A different task or replacement Mac is never substituted.
 
-Missed calls and unknown dials are not automatically retried. If provider
-cleanup, room removal or route restoration is uncertain, preserve the private
-receipts and reconcile the exact recorded call before freeing the slot.
+A callback that fails before its dial sent nothing: the Mac left, a
+readiness read failed or the room was not ready in time. The coordinator
+removes its room, frees the slot and tries the callback again after 30
+seconds, then after a pause that doubles each time. After five such tries it
+cancels the callback.
+
+Missed calls and unknown dials are not automatically retried. A dial that may
+have gone out keeps the slot. When the provider returned its call ID, the
+coordinator reads that call again and frees the slot only after it is terminal,
+cleaned up and its room is gone. A dial with no call ID cannot be read: preserve
+the private receipts and reconcile the exact recorded call before freeing the
+slot.
 
 ## Verification and rollback
 
@@ -316,8 +360,9 @@ provider events and fake provider effects. They cover replay and identity
 rejection, answer gating, callback cleanup, exact result ownership, report
 escaping, expired leases and same-call actions. One end-to-end test sends a
 signed incoming call from a member's number. That member's Mac gets the code
-and the call opens only on it, another member's Mac gets no code, and a
-stranger is released after 90 seconds and its room removed. They send no real texts,
+and the call opens only on it, another member's Mac gets no code, a stranger
+is declined at once, and a member's call that nobody proves is released after
+90 seconds and its room removed. They send no real texts,
 place no calls and capture no screens. They do not prove handset audio,
 picture or native input.
 

@@ -13,20 +13,28 @@ afterEach(() => {
     .forEach((fn) => fn());
   vi.useRealTimers();
 });
-function setup(
+// Made-up numbers. The member has a paired Mac; the stranger is no member.
+const member = "+14155550100";
+const stranger = "+13125550100";
+async function setup(
   options: { now?: () => number; store?: Store; lineId?: string } = {},
 ) {
   // Passing a prior store and line restarts the coordinator on that database.
   const store = options.store ?? new Store();
   const lineId = options.lineId ?? randomUUID(),
     secret = "s".repeat(32);
+  const codes = new Map<string, string>();
   const service = createSharedNumberApp({
     store,
     lineId,
     proofKey: "aa".repeat(32),
     identityKey: "bb".repeat(32),
     lineToken: "t".repeat(32),
-    sendCode: async () => true,
+    invited: [member],
+    sendCode: async (recipient, code) => {
+      codes.set(recipient, code);
+      return true;
+    },
     now: options.now,
   });
   cleanup.push(() => {
@@ -70,9 +78,41 @@ function setup(
       call_id: randomUUID(),
       line_id: lineId,
       media: { audio: true, video: true },
-      from: "untrusted caller" as string | null,
+      from: member as string | null,
     },
   };
+  // The member signs in and pairs a Mac, so a call from the member's number
+  // can wait for a code. A restart reuses the earlier pairing.
+  if (!options.store) {
+    const post = async (path: string, body: unknown, token = "") =>
+      (await (
+        await service.app.fetch(
+          new Request(`https://coordinator.example${path}`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              ...(token ? { authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(body),
+          }),
+        )
+      ).json()) as any;
+    const challenge = await post("/auth/start", { recipient: member });
+    const { token } = await post("/auth/verify", {
+      challengeId: challenge.challengeId,
+      code: codes.get(member),
+    });
+    const { invitation } = await post("/account/invite", {}, token);
+    await post("/pair/accept", {
+      invitation,
+      acceptance: {
+        localAccepted: true,
+        displayId: "display",
+        allowView: true,
+        allowControl: true,
+      },
+    });
+  }
   const send = (value = event) => {
     const raw = JSON.stringify(value);
     return provider.webhook(
@@ -110,7 +150,7 @@ const live = { answered: true, terminal: false, cleanupComplete: false };
 const terminal = { answered: true, terminal: true, cleanupComplete: false };
 const cleaned = { answered: true, terminal: true, cleanupComplete: true };
 it("requires exact signed raw bytes, pins the line, and never persists or replays bearer media credentials", async () => {
-  const f = setup();
+  const f = await setup();
   await expect(
     f.provider.webhook(JSON.stringify(f.event), "sha256=bad"),
   ).rejects.toThrow();
@@ -122,7 +162,7 @@ it("requires exact signed raw bytes, pins the line, and never persists or replay
   expect(await f.send()).toEqual({ action: "decline" });
   expect(f.media.prepare).toHaveBeenCalledOnce();
   expect(JSON.stringify(f.store.all("shared_provider_incoming"))).not.toMatch(
-    /transient-token|untrusted caller/,
+    new RegExp(`transient-token|\\${member}`),
   );
   await f.provider.pump();
   expect(f.media.activate).not.toHaveBeenCalled();
@@ -153,7 +193,7 @@ it("requires exact signed raw bytes, pins the line, and never persists or replay
 });
 it("declines missed incoming deadlines while retaining and draining a late media allocation", async () => {
   vi.useFakeTimers();
-  const f = setup();
+  const f = await setup();
   let finish!: (value: typeof f.credentials) => void;
   f.media.prepare.mockImplementation(
     () =>
@@ -183,7 +223,7 @@ it("declines missed incoming deadlines while retaining and draining a late media
   expect(f.media.prepare).toHaveBeenCalledOnce();
 });
 it("retains unknown room creation and declines stale events without allocation", async () => {
-  const f = setup();
+  const f = await setup();
   expect(
     await f.send({
       ...f.event,
@@ -198,7 +238,7 @@ it("retains unknown room creation and declines stale events without allocation",
 });
 it("frees the slot of a failed media preparation only after the provider reports the call ended and cleaned up", async () => {
   let clock = Date.now();
-  const f = setup({ now: () => clock });
+  const f = await setup({ now: () => clock });
   const first = f.next();
   f.media.prepare.mockRejectedValueOnce(Error("lost response"));
   expect(await f.send(first)).toEqual({ action: "decline" });
@@ -228,7 +268,7 @@ it("frees the slot of a failed media preparation only after the provider reports
 });
 it("reconciles a call left preparing by a coordinator restart before admitting the next call", async () => {
   vi.useFakeTimers();
-  const f = setup();
+  const f = await setup();
   f.media.prepare.mockImplementation(() => new Promise(() => {}));
   const first = f.next();
   const answer = f.send(first);
@@ -236,7 +276,7 @@ it("reconciles a call left preparing by a coordinator restart before admitting t
   expect(await answer).toEqual({ action: "decline" });
   expect(f.phase(first.data.call_id)).toBe("preparing");
   // The process stops here. A new coordinator opens the same database.
-  const g = setup({ store: f.store, lineId: f.lineId });
+  const g = await setup({ store: f.store, lineId: f.lineId });
   expect(g.phase(first.data.call_id)).toBe("unknown");
   expect(await g.send(g.next())).toEqual({ action: "decline" });
   await g.provider.pump();
@@ -253,7 +293,7 @@ it("reconciles a call left preparing by a coordinator restart before admitting t
 });
 it("bounds unknown reconciliation retries and keeps the slot until room cleanup is verified", async () => {
   let clock = Date.now();
-  const f = setup({ now: () => clock });
+  const f = await setup({ now: () => clock });
   const first = f.next();
   f.media.prepare.mockRejectedValueOnce(Error("lost response"));
   await f.send(first);
@@ -364,17 +404,33 @@ it("checks the real provider response contract and does not confuse room connect
   events.push(events[0]);
   await expect(api.observe(callId)).rejects.toThrow("event_conflict");
 });
+it("declines a call that no Mac can verify at once, without preparing a room or holding the slot", async () => {
+  const f = await setup();
+  for (const from of [stranger, null]) {
+    const call = f.next();
+    call.data.from = from;
+    expect(await f.send(call)).toEqual({ action: "decline" });
+    expect(f.phase(call.data.call_id)).toBe("ended");
+  }
+  expect(f.media.prepare).not.toHaveBeenCalled();
+  expect(await f.send(f.next())).toEqual({
+    action: "accept",
+    ...f.credentials,
+  });
+  expect(JSON.stringify(f.store.all("shared_number_call"))).not.toContain(
+    stranger,
+  );
+});
 it("passes the observed caller to the router only as a digest, and ends an unverified call by removing its room", async () => {
   let clock = Date.now();
-  const f = setup({ now: () => clock });
+  const f = await setup({ now: () => clock });
   const first = f.next();
-  first.data.from = "+13125550100";
   expect(await f.send(first)).toEqual({ action: "accept", ...f.credentials });
   const calls = f.store.all<any>("shared_number_call");
   expect(calls).toHaveLength(1);
   expect(calls[0].callerDigest).toMatch(/^[a-f0-9]{64}$/);
   expect(JSON.stringify(f.store.all("shared_number_call"))).not.toContain(
-    "+13125550100",
+    member,
   );
   f.api.observe.mockResolvedValue(live);
   await f.provider.pump();
@@ -397,7 +453,7 @@ it("passes the observed caller to the router only as a digest, and ends an unver
 });
 it("retries a room removal that did not take, without freeing the slot", async () => {
   let clock = Date.now();
-  const f = setup({ now: () => clock });
+  const f = await setup({ now: () => clock });
   const first = f.next();
   await f.send(first);
   clock += UNVERIFIED_LIMIT_MS;
@@ -409,4 +465,109 @@ it("retries a room removal that did not take, without freeing the slot", async (
   await f.provider.pump();
   expect(f.media.cleanup).toHaveBeenCalledTimes(2);
   expect(await f.send(f.next())).toEqual({ action: "decline" });
+});
+const hour = 60 * 60_000;
+it("prunes ended webhook records, calls and their receipts after a retention window", async () => {
+  let clock = Date.now();
+  const f = await setup({ now: () => clock });
+  const count = (kind: string) =>
+    (
+      f.store.db
+        .prepare("SELECT count(*) AS n FROM entities WHERE kind = ?")
+        .get(kind) as { n: number }
+    ).n;
+  const receipts = () =>
+    (
+      f.store.db
+        .prepare("SELECT count(*) AS n FROM events WHERE id LIKE 'shared-%'")
+        .get() as { n: number }
+    ).n;
+  // One call holds the slot. Strangers are declined and the member is busy.
+  const held = f.next();
+  expect(await f.send(held)).toEqual({ action: "accept", ...f.credentials });
+  for (let i = 0; i < 100; i++) {
+    const call = f.next();
+    call.data.from = stranger;
+    await f.send(call);
+  }
+  for (let i = 0; i < 20; i++) await f.send(f.next());
+  expect(count("shared_provider_incoming")).toBe(121);
+  expect(count("shared_number_call")).toBe(121);
+  // The held call ends and its room is removed.
+  f.api.observe.mockResolvedValue(cleaned);
+  await f.provider.pump();
+  expect(f.phase(held.data.call_id)).toBe("ended");
+  // Inside the window every record stays.
+  clock += 23 * hour;
+  await f.provider.pump();
+  expect(count("shared_provider_incoming")).toBe(121);
+  // After the window the ended records go, with their event receipts.
+  clock += 2 * hour;
+  await f.provider.pump();
+  expect(count("shared_provider_incoming")).toBe(0);
+  expect(count("shared_number_call")).toBe(0);
+  expect(receipts()).toBe(0);
+  // The line still admits a member's call, and keeps it while it is open.
+  const next = f.next();
+  expect(await f.send(next)).toEqual({ action: "accept", ...f.credentials });
+  f.api.observe.mockResolvedValue(live);
+  clock += 2 * hour;
+  await f.provider.pump();
+  expect(f.phase(next.data.call_id)).toBe("prepared");
+  expect(count("shared_number_call")).toBe(1);
+});
+it("reads only open records on each pass, and finds a call's room by an index", async () => {
+  const f = await setup();
+  for (let i = 0; i < 20; i++) {
+    const call = f.next();
+    call.data.from = stranger;
+    await f.send(call);
+  }
+  const held = f.next();
+  expect(await f.send(held)).toEqual({ action: "accept", ...f.credentials });
+  // Every statement on the records table during a pass, webhooks and a
+  // room lookup.
+  const statements: string[] = [];
+  const prepare = f.store.db.prepare.bind(f.store.db);
+  vi.spyOn(f.store.db, "prepare").mockImplementation((sql: string) => {
+    statements.push(sql);
+    return prepare(sql);
+  });
+  await f.provider.pump();
+  // Webhooks while the line is busy: a stranger and the member again.
+  const another = f.next();
+  another.data.from = stranger;
+  expect(await f.send(another)).toEqual({ action: "decline" });
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  const room = await f.service.app.fetch(
+    new Request("https://coordinator.example/line/room", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${"t".repeat(32)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ roomId: f.room(held.data.call_id) }),
+    }),
+  );
+  expect(room.status).toBe(200);
+  vi.mocked(f.store.db.prepare).mockRestore();
+  const reads = statements.filter((sql) =>
+    /^\s*SELECT[\s\S]*FROM entities/i.test(sql),
+  );
+  expect(reads.length).toBeGreaterThan(0);
+  for (const sql of reads) {
+    const plan = f.store.db
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all()
+      .map((row) => String(row.detail));
+    // A full scan, or a read of every record of a kind, does not scale.
+    expect(
+      plan.some(
+        (step) =>
+          /^SCAN entities/.test(step) ||
+          /USING INDEX sqlite_autoindex_entities_1 \(kind=\?\)$/.test(step),
+      ),
+      `${sql}\n${plan.join("\n")}`,
+    ).toBe(false);
+  }
 });

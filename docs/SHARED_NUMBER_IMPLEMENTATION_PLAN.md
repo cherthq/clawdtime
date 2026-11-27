@@ -80,7 +80,10 @@ their credentials.
 - Enrollment requires separate trusted account and alias verifier outputs.
   Exact aliases are exclusive to an account. Caller handles, hashes, masked
   digits and model-selected member IDs are not accepted as proof.
-- Verified incoming events reserve the one line slot without granting a Mac.
+- Verified incoming events reserve the one line slot without granting a Mac,
+  and only when the caller handle is the verified number of a member with a
+  paired Mac. Other calls, and a caller over its limit of unverified calls,
+  are declined at once without the slot.
   A trusted adapter must supply the exact provider call, room and expected
   participant. Duplicate event IDs retain their original binding.
 - The paired Mac of the member whose verified number is calling receives

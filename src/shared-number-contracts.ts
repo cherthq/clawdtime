@@ -72,11 +72,30 @@ export interface SharedNumberVerifiers {
   callProofTurn(proof: unknown): Promise<CallProofTurn>;
 }
 
+/** A member's verified alias as stored: keyed digests, never the number. */
+export interface SharedAlias {
+  memberId: string;
+  lineId: string;
+  recipientDigest: string;
+  conversationDigest: string;
+  expiresAt: number;
+}
 export interface SharedMember {
   id: string;
-  alias: VerifiedAlias;
+  alias: SharedAlias;
+  /** The number, sealed, kept only to dial this member's callbacks. A
+   * permanent ban drops it. */
+  sealedRecipient?: string;
   pairingId?: string;
   revokedAt?: number;
+}
+/** A shared pairing names the member's number only by its keyed digests. */
+export interface SharedPairing extends Omit<
+  Pairing,
+  "recipient" | "conversationId"
+> {
+  recipientDigest: string;
+  conversationDigest: string;
 }
 export interface SharedDeviceCredential {
   id: string;
@@ -106,11 +125,15 @@ export interface SharedCallScope {
   grantId: string;
   allowView: boolean;
   allowControl: boolean;
-  // Reply destinations come from this persisted pairing snapshot only.
-  recipient: string;
-  conversationId: string;
+  // Reply destinations come from this persisted pairing snapshot only, as
+  // keyed digests. A callback opens the member's sealed number to dial it.
+  recipientDigest: string;
+  conversationDigest: string;
 }
 export type SharedCallState =
+  // Declined at once: no Mac could verify the caller, or the caller is over
+  // its limit of unverified calls. It never holds the slot.
+  | "declined"
   | "unknown_identity"
   | "unauthorized"
   | "offline"
@@ -132,7 +155,8 @@ export interface SharedCall {
   callbackTaskId?: string;
   activatedAt?: number;
   expectedMemberId?: string;
-  // Keyed digest of the observed caller handle; the handle is not stored.
+  // Keyed digest of the observed caller handle, comparable with a member's
+  // recipientDigest; the handle is not stored.
   callerDigest?: string;
   // Set when an unverified call is released for the line to end it.
   releasedAt?: number;
@@ -141,7 +165,7 @@ export interface SharedCallProof {
   id: string;
   callId: string;
   memberId: string;
-  pairing: Pairing;
+  pairing: SharedPairing;
   // The code was shown on this paired Mac, over this live device connection.
   credentialId: string;
   connectionId: string;
@@ -181,4 +205,8 @@ export interface SharedCallbackOwnership {
   providerCallId?: string;
   outboundCallId?: string;
   createdAt: number;
+  /** Claims that ended before any dial: nothing reached the provider. */
+  undialed?: number;
+  /** A callback put back in the queue waits until this time. */
+  notBefore?: number;
 }

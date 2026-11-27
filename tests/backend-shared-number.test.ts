@@ -62,6 +62,7 @@ function fixture(path?: string) {
   const options = {
     lineId: "line",
     proofKey: "ab".repeat(32),
+    identityKey: "cd".repeat(32),
     verifiers,
     now: () => now,
   };
@@ -145,6 +146,7 @@ function fixture(path?: string) {
       now += ms;
     },
     event,
+    numbers,
     incoming,
     cleanup,
     pair,
@@ -170,6 +172,7 @@ describe("staged shared-number identity and ownership", () => {
     await expect(
       f.router.providerEvent({ from: "+14155550100" }),
     ).rejects.toThrow();
+    await f.pair();
     const call = await f.incoming();
     expect(call).toMatchObject({ state: "unknown_identity" });
     expect(call.scope).toBeUndefined();
@@ -272,13 +275,65 @@ describe("staged shared-number identity and ownership", () => {
     );
   });
 
-  it("releases a caller who never verifies, and frees the slot after the observed cleanup", async () => {
+  it("declines at once, without the slot, a call that no Mac can ever verify", async () => {
     const f = fixture();
     const a = await f.pair();
     f.router.connect(a.credential, "instance-a");
+    await f.router.enroll("account-b", "alias-b"); // a member with no Mac
+    const slot = () => f.store.state("shared-number-slot:line") ?? null;
+    for (const [call, caller] of [
+      ["call-hidden", null],
+      ["call-stranger", "+13125550100"],
+      ["call-unpaired", f.numbers.b],
+    ] as const) {
+      const declined = await f.incoming(call, caller);
+      expect(declined.state, call).toBe("declined");
+      expect(slot(), call).toBeNull();
+      // A replay of the same signed event returns the same answer.
+      expect((await f.incoming(call, caller)).state, call).toBe("declined");
+    }
+    // A member's call with a paired Mac still reserves the slot at once.
+    const own = await f.incoming("call-own");
+    expect(own.state).toBe("unknown_identity");
+    expect(slot()).toBe(own.id);
+    expect((await f.incoming("call-stranger-2", "+13125550100")).state).toBe(
+      "declined",
+    );
+  });
+
+  it("limits how often one caller can hold the slot without verifying", async () => {
+    const f = fixture();
+    const a = await f.pair(),
+      b = await f.pair("b");
+    f.router.connect(a.credential, "instance-a");
+    // Someone sends member A's number as the caller handle and never verifies.
+    for (let i = 0; i < 5; i++) {
+      expect((await f.incoming(`call-${i}`)).state).toBe("unknown_identity");
+      f.advance(UNVERIFIED_LIMIT_MS);
+      f.router.releaseUnverified();
+      await f.cleanup(`call-${i}`);
+    }
+    expect((await f.incoming("call-5")).state).toBe("declined");
+    expect(f.store.state("shared-number-slot:line") ?? null).toBeNull();
+    // Another member is not affected, and the limit passes with its window.
+    expect((await f.incoming("call-b", f.numbers.b)).state).toBe(
+      "unknown_identity",
+    );
+    await f.cleanup("call-b");
+    f.advance(60 * 60_000);
+    expect((await f.incoming("call-6")).state).toBe("unknown_identity");
+    void b;
+  });
+
+  it("releases a caller who never verifies, and frees the slot after the observed cleanup", async () => {
+    const f = fixture();
+    const a = await f.pair();
+    await f.pair("b");
+    f.router.connect(a.credential, "instance-a");
     expect(UNVERIFIED_LIMIT_MS).toBeGreaterThanOrEqual(60_000);
     expect(UNVERIFIED_LIMIT_MS).toBeLessThanOrEqual(120_000);
-    const stranger = await f.incoming("call-stranger", "+13125550100");
+    // Member B's number calls, but nobody runs shared prove on B's Mac.
+    const stranger = await f.incoming("call-stranger", f.numbers.b);
     expect(f.router.releaseUnverified()).toEqual([]);
     f.advance(UNVERIFIED_LIMIT_MS);
     // The trusted line adapter ends this call. No code can admit it now.
@@ -534,6 +589,7 @@ describe("staged shared-number identity and ownership", () => {
 
   it("deduplicates verified events and refuses conflicting or forged cleanup", async () => {
     const f = fixture();
+    await f.pair();
     const event = f.event();
     const call = await f.router.providerEvent(event);
     expect((await f.router.providerEvent(event)).id).toBe(call.id);
@@ -554,6 +610,7 @@ describe("staged shared-number identity and ownership", () => {
 
   it("retains early cleanup across recovery without reserving or releasing another call's slot", async () => {
     const f = fixture();
+    await f.pair();
     const ended = await f.cleanup("call-ended");
     expect(ended.state).toBe("ended");
     expect(ended.scope).toBeUndefined();
@@ -573,6 +630,7 @@ describe("staged shared-number identity and ownership", () => {
 
   it("deduplicates reverified provider events without accepting expired or changed evidence", async () => {
     const f = fixture();
+    await f.pair();
     const original = f.event();
     const call = await f.router.providerEvent(original);
     f.advance(60_000);
@@ -676,8 +734,11 @@ describe("staged shared-number identity and ownership", () => {
       "result-a",
     );
     expect(ca.scope.deviceId).toBe(a.pairing.deviceId);
-    expect(ca.scope.recipient).toBe("+14155550100");
-    expect(cb.scope.recipient).toBe("+12125550100");
+    // Each callback dials its own member's number, kept only sealed.
+    expect(f.router.callbackRecipient(ca.id)).toBe("+14155550100");
+    expect(f.router.callbackRecipient(cb.id)).toBe("+12125550100");
+    expect(ca.scope.recipientDigest).not.toBe(cb.scope.recipientDigest);
+    expect(JSON.stringify([ca, cb])).not.toMatch(/4155550100|2125550100/);
     expect(ca.callId).toBe(a.call.id);
     expect(
       f.router.completeTask(a.credential, a.connection.id, task.id, "result-a"),

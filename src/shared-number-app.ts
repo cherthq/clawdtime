@@ -37,6 +37,10 @@ export function createSharedNumberApp(options: {
   now?: () => number;
   relayTimeoutMs?: number;
   callbacksEnabled?: boolean;
+  /** True only when every request comes through a proxy on this host that
+   * appends the client address to X-Forwarded-For. Otherwise the header is
+   * ignored and the client is the socket address. */
+  behindProxy?: boolean;
 }) {
   if (options.lineToken.length < 32) throw Error("shared_line_token_required");
   const identity = new SharedPhoneIdentity(options.store, {
@@ -59,6 +63,7 @@ export function createSharedNumberApp(options: {
   const router = new SharedNumber(options.store, {
     lineId: options.lineId,
     proofKey: options.proofKey,
+    identityKey: options.identityKey,
     now: options.now,
     verifiers: {
       account: (proof) => identity.account(proof),
@@ -135,11 +140,12 @@ export function createSharedNumberApp(options: {
     const peer = (
       c.env as { incoming?: { socket?: { remoteAddress?: string } } }
     )?.incoming?.socket?.remoteAddress;
+    // Anyone can send this header. Only a proxy that appends it is trusted.
+    const forwarded = options.behindProxy
+      ? c.req.header("x-forwarded-for")
+      : undefined;
     return c.json(
-      await identity.start(
-        recipient,
-        signInClient(peer, c.req.header("x-forwarded-for")),
-      ),
+      await identity.start(recipient, signInClient(peer, forwarded)),
     );
   });
   app.post("/auth/verify", async (c) => {
@@ -275,33 +281,13 @@ export function createSharedNumberApp(options: {
       .object({ roomId: routingId })
       .strict()
       .parse(await c.req.json());
-    const calls = options.store
-      .all<import("./shared-number-contracts.js").SharedCall>(
-        "shared_number_call",
-      )
-      .filter(
-        (call) =>
-          call.roomId === roomId &&
-          call.lineId === options.lineId &&
-          ["unknown_identity", "admitted"].includes(call.state),
-      );
-    if (calls.length === 0) {
-      const callbacks = options.store
-        .all<import("./shared-number-contracts.js").SharedCallbackOwnership>(
-          "shared_number_callback",
-        )
-        .filter(
-          (callback) =>
-            callback.roomId === roomId &&
-            ["preparing", "dialing"].includes(callback.state),
-        );
-      if (callbacks.length === 1)
-        return c.json({
-          roomId,
-          participantId: "shared-bridge",
-          waiting: true,
-        });
-    }
+    const { calls, callbacks } = router.room(roomId);
+    if (calls.length === 0 && callbacks.length === 1)
+      return c.json({
+        roomId,
+        participantId: "shared-bridge",
+        waiting: true,
+      });
     if (calls.length !== 1)
       return c.json({ ok: false, code: "room_unavailable" }, 409);
     const call = calls[0]!;
@@ -335,25 +321,8 @@ export function createSharedNumberApp(options: {
       .strict()
       .parse(await c.req.json());
     options.store.transaction(() => {
-      const known =
-        options.store
-          .all<import("./shared-number-contracts.js").SharedCall>(
-            "shared_number_call",
-          )
-          .some(
-            (call) =>
-              call.roomId === roomId &&
-              ["unknown_identity", "admitted"].includes(call.state),
-          ) ||
-        options.store
-          .all<import("./shared-number-contracts.js").SharedCallbackOwnership>(
-            "shared_number_callback",
-          )
-          .some(
-            (callback) =>
-              callback.roomId === roomId &&
-              ["preparing", "dialing"].includes(callback.state),
-          );
+      const room = router.room(roomId);
+      const known = room.calls.length > 0 || room.callbacks.length > 0;
       if (!known) throw new DomainError(409, "shared_room_unavailable");
       const prior = options.store.get<{ id: string; workerId: string }>(
         "shared_voice_claim",

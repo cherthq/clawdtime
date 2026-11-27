@@ -159,18 +159,24 @@ export class SharedProviderAPI {
       cleanupComplete: events.has("cleanup_complete"),
     };
   }
-  dial(callback: SharedCallbackOwnership, credentials: TaskAudioCredentials) {
+  /** The recipient is the member's number, opened from its sealed copy only
+   * for this dial. It is never stored here. */
+  dial(
+    callback: SharedCallbackOwnership,
+    credentials: TaskAudioCredentials,
+    recipient: string,
+  ) {
     if (callback.lineId !== this.config.lineId)
       throw Error("shared_provider_line_mismatch");
     const calls = new NativeTaskAudioCalls(
-      { ...this.config, recipient: callback.scope.recipient },
+      { ...this.config, recipient },
       this.request,
     );
     return calls.createProactive(
       {
         attemptId: callback.id,
         lineId: callback.lineId,
-        recipientHash: hash(callback.scope.recipient),
+        recipientHash: hash(recipient),
         agentIdentity: "shared-agent",
         channel: "phone_walkthrough",
       },

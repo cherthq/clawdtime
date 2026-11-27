@@ -1,6 +1,5 @@
 import { createHmac, randomInt } from "node:crypto";
 import { z } from "zod";
-import type { Pairing } from "../contracts.js";
 import {
   accountIdentitySchema,
   verifiedAliasSchema,
@@ -15,9 +14,14 @@ import {
   type SharedCallProof,
   type SharedTaskOwnership,
   type SharedCallbackOwnership,
+  type SharedPairing,
 } from "../shared-number-contracts.js";
+import type { SQLInputValue } from "node:sqlite";
 import { Store } from "../storage/store.js";
 import { DomainError, equal, hash, id, token } from "../storage/security.js";
+import { SharedNumberKeys } from "../pairing/shared-number-keys.js";
+
+type Pairing = SharedPairing;
 
 interface Invitation {
   id: string;
@@ -32,6 +36,24 @@ const kind = (name: string) => `shared_number_${name}`;
 /** A caller who has not verified within this time is released, so one
  * unverified call cannot hold the single line slot. */
 export const UNVERIFIED_LIMIT_MS = 90_000;
+/** A callback whose claim ended before any dial is tried again this many
+ * times in all, after a pause that doubles from 30 s, then canceled. */
+const UNDIALED_TRIES = 5;
+/** One caller handle may hold the slot without verifying this many times in
+ * the window. Someone who sends a member's number cannot hold the line. */
+const CALLER_LIMIT = { count: 5, windowMs: 60 * 60_000 };
+// Each query of a large kind reads one of these, never every record of it.
+const indexes: [name: string, path: string][] = [
+  ["call", "$.state"],
+  ["call", "$.roomId"],
+  ["call", "$.callerDigest"],
+  ["callback", "$.state"],
+  ["callback", "$.roomId"],
+  ["task", "$.callId"],
+  ["credential", "$.pairingId"],
+  ["member", "$.alias.recipientDigest"],
+  ["member", "$.alias.conversationDigest"],
+];
 const refused = () => new DomainError(403, "shared_number_unauthorized");
 const conflict = () => new DomainError(409, "shared_number_conflict");
 const notWaiting = () => new DomainError(409, "shared_call_not_waiting");
@@ -59,11 +81,15 @@ export class SharedNumber {
   private readonly connections = new Map<string, SharedConnection>();
   private readonly now: () => number;
   private readonly lineId: string;
+  private readonly keys: SharedNumberKeys;
   constructor(
     private readonly store: Store,
     private readonly options: {
       lineId: string;
       proofKey: string;
+      /** The key of the numbers' digests and sealed copies, the same as the
+       * phone sign-in's, so a caller handle matches a member's number. */
+      identityKey: string;
       verifiers: SharedNumberVerifiers;
       now?: () => number;
     },
@@ -71,14 +97,78 @@ export class SharedNumber {
     this.lineId = routingId.parse(options.lineId);
     if (!/^[a-f0-9]{64}$/i.test(options.proofKey))
       throw new Error("Shared routing needs a separate 32-byte proof key.");
+    this.keys = new SharedNumberKeys(options.identityKey, this.lineId);
     this.now = options.now ?? Date.now;
+    for (const [name, path] of indexes)
+      this.store.db.exec(
+        `CREATE INDEX IF NOT EXISTS ${kind(name)}_${path.replace(/\W/g, "_")}
+         ON entities(kind, json_extract(body, '${path}'))
+         WHERE kind = '${kind(name)}'`,
+      );
+    this.migrate();
     // A restart cannot resume a desktop admission from an old connection.
     // Keep the slot reserved until exact provider cleanup is reconciled.
     this.store.transaction(() => {
-      for (const call of this.store.all<SharedCall>(kind("call"))) {
-        if (call.lineId === this.lineId && call.state === "admitted")
+      for (const call of this.select<SharedCall>(
+        "call",
+        "json_extract(body, '$.state') = 'admitted'",
+      )) {
+        if (call.lineId === this.lineId)
           this.store.put(kind("call"), { ...call, state: "outcome_unknown" });
       }
+    });
+  }
+  /** Records of one kind that match a condition on an indexed field. */
+  private select<T>(name: string, where: string, ...values: SQLInputValue[]) {
+    return this.store.db
+      .prepare(
+        `SELECT body FROM entities WHERE kind = '${kind(name)}' AND ${where}
+         ORDER BY rowid`,
+      )
+      .all(...values)
+      .map((row) => JSON.parse(String(row.body)) as T);
+  }
+
+  /** Rows from an earlier release kept numbers in the clear. Keep their keyed
+   * digests, and the member's number sealed for callbacks. The same function
+   * turns a pairing and its proof snapshot, so the two still match. */
+  private migrate() {
+    const digests = (value: Record<string, unknown>) => {
+      const { recipient, conversationId, ...rest } = value;
+      return {
+        ...rest,
+        recipientDigest: this.keys.digest(String(recipient)),
+        conversationDigest: this.keys.digest(String(conversationId)),
+      } as Record<string, unknown> as { id: string };
+    };
+    const legacy = (name: string, path: string) =>
+      this.store.db
+        .prepare(
+          `SELECT body FROM entities WHERE kind = ?
+           AND json_extract(body, ?) IS NOT NULL`,
+        )
+        .all(kind(name), path)
+        .map((row) => JSON.parse(String(row.body)));
+    this.store.transaction(() => {
+      for (const member of legacy("member", "$.alias.recipient"))
+        this.store.put(kind("member"), {
+          ...member,
+          alias: digests(member.alias),
+          // A banned member is never called back.
+          ...(member.revokedAt === undefined
+            ? { sealedRecipient: this.keys.seal(member.alias.recipient) }
+            : {}),
+        });
+      for (const pairing of legacy("pairing", "$.recipient"))
+        this.store.put(kind("pairing"), digests(pairing));
+      for (const proof of legacy("proof", "$.pairing.recipient"))
+        this.store.put(kind("proof"), {
+          ...proof,
+          pairing: digests(proof.pairing),
+        });
+      for (const name of ["call", "task", "callback"])
+        for (const row of legacy(name, "$.scope.recipient"))
+          this.store.put(kind(name), { ...row, scope: digests(row.scope) });
     });
   }
 
@@ -126,6 +216,8 @@ export class SharedNumber {
       alias.lineId !== this.lineId
     )
       throw refused();
+    const recipientDigest = this.keys.digest(alias.recipient);
+    const conversationDigest = this.keys.digest(alias.conversationId);
     return this.store.transaction(() => {
       const old = this.store.get<SharedMember>(
         kind("member"),
@@ -134,28 +226,40 @@ export class SharedNumber {
       if (old) {
         if (
           old.revokedAt !== undefined ||
-          old.alias.recipient !== alias.recipient ||
-          old.alias.conversationId !== alias.conversationId ||
+          old.alias.recipientDigest !== recipientDigest ||
+          old.alias.conversationDigest !== conversationDigest ||
           old.alias.lineId !== alias.lineId
         )
           throw conflict();
-        return old;
+        if (old.sealedRecipient) return old;
+        return this.store.put<SharedMember>(kind("member"), {
+          ...old,
+          sealedRecipient: this.keys.seal(alias.recipient),
+        });
       }
       // An alias never silently moves between accounts, including revoked ones.
       if (
-        this.store
-          .all<SharedMember>(kind("member"))
-          .some(
-            (m) =>
-              m.alias.lineId === alias.lineId &&
-              (m.alias.recipient === alias.recipient ||
-                m.alias.conversationId === alias.conversationId),
+        this.store.db
+          .prepare(
+            `SELECT 1 FROM entities WHERE kind = '${kind("member")}'
+             AND json_extract(body, '$.alias.lineId') = ?
+             AND (json_extract(body, '$.alias.recipientDigest') = ?
+               OR json_extract(body, '$.alias.conversationDigest') = ?)
+             LIMIT 1`,
           )
+          .get(alias.lineId, recipientDigest, conversationDigest)
       )
         throw conflict();
       return this.store.put<SharedMember>(kind("member"), {
         id: account.memberId,
-        alias,
+        alias: {
+          memberId: alias.memberId,
+          lineId: alias.lineId,
+          recipientDigest,
+          conversationDigest,
+          expiresAt: alias.expiresAt,
+        },
+        sealedRecipient: this.keys.seal(alias.recipient),
       });
     });
   }
@@ -201,8 +305,8 @@ export class SharedNumber {
         id: id("pair"),
         memberId: member.id,
         lineId: this.lineId,
-        recipient: member.alias.recipient,
-        conversationId: member.alias.conversationId,
+        recipientDigest: member.alias.recipientDigest,
+        conversationDigest: member.alias.conversationDigest,
         deviceId: id("mac"),
         displayId: acceptance.displayId,
         allowView: acceptance.allowView,
@@ -279,9 +383,11 @@ export class SharedNumber {
           throw refused();
       }
       const unpaired = this.unpair(member);
+      // A banned member is never called back, so the sealed number goes.
+      const { sealedRecipient: _sealed, ...banned } = unpaired;
       if (options.permanent)
         this.store.put(kind("member"), {
-          ...unpaired,
+          ...banned,
           revokedAt: this.now(),
         });
     });
@@ -292,8 +398,10 @@ export class SharedNumber {
     if (pair) {
       if (pair.revokedAt === undefined)
         this.store.put(kind("pairing"), { ...pair, revokedAt: this.now() });
-      for (const c of this.store.all<SharedDeviceCredential>(
-        kind("credential"),
+      for (const c of this.select<SharedDeviceCredential>(
+        "credential",
+        "json_extract(body, '$.pairingId') = ?",
+        pair.id,
       ))
         if (c.pairingId === pair.id && c.revokedAt === undefined)
           this.store.put(kind("credential"), { ...c, revokedAt: this.now() });
@@ -350,7 +458,10 @@ export class SharedNumber {
   }
   private fenceDevice(deviceId: string) {
     this.connections.delete(deviceId);
-    for (const call of this.store.all<SharedCall>(kind("call")))
+    for (const call of this.select<SharedCall>(
+      "call",
+      "json_extract(body, '$.state') = 'admitted'",
+    ))
       if (call.scope?.deviceId === deviceId && call.state === "admitted")
         this.store.put(kind("call"), { ...call, state: "outcome_unknown" });
   }
@@ -365,7 +476,14 @@ export class SharedNumber {
       throw refused();
     return this.store.transaction(() => {
       const eventKey = `shared-provider:${hash(JSON.stringify([this.lineId, event.eventId]))}`;
-      const fingerprint = hash(stableEvidence(event));
+      // The receipt fingerprints the caller only by its keyed digest.
+      const fingerprint = hash(
+        stableEvidence(
+          event.kind === "incoming" && event.caller
+            ? { ...event, caller: this.callerDigest(event.caller) }
+            : event,
+        ),
+      );
       const prior = this.store.event<{ callId: string }>(eventKey);
       if (prior) {
         if (prior.fingerprint !== fingerprint) throw conflict();
@@ -381,19 +499,20 @@ export class SharedNumber {
         throw conflict();
       let call: SharedCall;
       if (event.kind === "incoming") {
+        const callerDigest = event.caller
+          ? this.callerDigest(event.caller)
+          : undefined;
         call = old ?? {
           id: callId,
           lineId: this.lineId,
           providerCallId: event.providerCallId,
           roomId: event.roomId,
           participantId: event.participantId,
-          state: this.slot() ? "busy" : "unknown_identity",
+          state: this.admission(event.caller, callerDigest),
           createdAt: this.now(),
-          ...(event.caller
-            ? { callerDigest: this.callerDigest(event.caller) }
-            : {}),
+          ...(callerDigest ? { callerDigest } : {}),
         };
-        if (!old && call.state !== "busy")
+        if (!old && call.state === "unknown_identity")
           this.store.saveState(this.slotKey(), call.id);
       } else {
         // Cleanup can arrive before incoming. Retain its terminal binding so a
@@ -417,6 +536,45 @@ export class SharedNumber {
       return call;
     });
   }
+  /** A call reserves the slot only when a paired Mac could be shown its
+   * code: the caller handle is a member's verified number and that member
+   * has a paired Mac. Every other call, with no handle or anyone else's, is
+   * declined at once. So is a caller over its limit of unverified calls. */
+  private admission(caller?: string, callerDigest?: string) {
+    if (!caller || !callerDigest || !this.callerHasMac(caller))
+      return "declined" as const;
+    if (this.slot()) return "busy" as const;
+    const recent = this.store.db
+      .prepare(
+        `SELECT count(*) AS n FROM entities WHERE kind = '${kind("call")}'
+         AND json_extract(body, '$.callerDigest') = ?
+         AND json_extract(body, '$.createdAt') > ?
+         AND json_extract(body, '$.scope') IS NULL
+         AND json_extract(body, '$.state') NOT IN ('busy', 'declined')`,
+      )
+      .get(callerDigest, this.now() - CALLER_LIMIT.windowMs) as { n: number };
+    return recent.n >= CALLER_LIMIT.count
+      ? ("declined" as const)
+      : ("unknown_identity" as const);
+  }
+  private callerHasMac(caller: string) {
+    const rows = this.store.db
+      .prepare(
+        `SELECT id FROM entities WHERE kind = '${kind("member")}'
+         AND json_extract(body, '$.alias.lineId') = ?
+         AND json_extract(body, '$.alias.recipientDigest') = ?
+         AND json_extract(body, '$.revokedAt') IS NULL`,
+      )
+      .all(this.lineId, this.callerDigest(caller)) as { id: string }[];
+    return rows.some(({ id }) => {
+      try {
+        this.pairing(id);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
   private slotKey() {
     return `shared-number-slot:${this.lineId}`;
   }
@@ -429,9 +587,7 @@ export class SharedNumber {
     return call;
   }
   private callerDigest(handle: string) {
-    return createHmac("sha256", Buffer.from(this.options.proofKey, "hex"))
-      .update(JSON.stringify(["caller", this.lineId, handle]))
-      .digest("hex");
+    return this.keys.digest(handle);
   }
   /** Only the member whose verified number placed the call may be shown its
    * code. A callback is bound to its original member instead. Selection only:
@@ -440,7 +596,7 @@ export class SharedNumber {
     if (call.expectedMemberId) return call.expectedMemberId === memberId;
     if (!call.callerDigest) return false;
     const member = this.member(memberId);
-    return equal(call.callerDigest, this.callerDigest(member.alias.recipient));
+    return equal(call.callerDigest, member.alias.recipientDigest);
   }
   private proofDigest(callId: string, code: string) {
     return createHmac("sha256", Buffer.from(this.options.proofKey, "hex"))
@@ -501,6 +657,66 @@ export class SharedNumber {
   private waitingCall() {
     const call = this.slotCall();
     return call?.state === "unknown_identity" ? call : undefined;
+  }
+  /** The open call or callback of one room, for the trusted voice worker. */
+  room(roomId: string) {
+    return {
+      calls: this.select<SharedCall>(
+        "call",
+        `json_extract(body, '$.roomId') = ?
+         AND json_extract(body, '$.state') IN ('unknown_identity', 'admitted')`,
+        roomId,
+      ).filter((call) => call.lineId === this.lineId),
+      callbacks: this.select<SharedCallbackOwnership>(
+        "callback",
+        `json_extract(body, '$.roomId') = ?
+         AND json_extract(body, '$.state') IN ('preparing', 'dialing')`,
+        roomId,
+      ).filter((callback) => callback.lineId === this.lineId),
+    };
+  }
+  /** Ended, busy and declined calls leave no work. Ended before `before`,
+   * they go with their proof, their event receipts and their room's voice
+   * claim. Open, released and unknown calls always stay. */
+  prune(before: number, limit = 1000) {
+    return this.store.transaction(() => {
+      const slot = this.slot();
+      const rows = (
+        this.store.db
+          .prepare(
+            `SELECT id, json_extract(body, '$.roomId') AS roomId
+             FROM entities WHERE kind = '${kind("call")}'
+             AND json_extract(body, '$.state') IN ('ended', 'busy', 'declined')
+             AND coalesce(json_extract(body, '$.cleanupAt'),
+               json_extract(body, '$.createdAt')) <= ?
+             LIMIT ?`,
+          )
+          .all(before, limit) as { id: string; roomId: string }[]
+      ).filter((row) => row.id !== slot);
+      const ids = JSON.stringify(rows.map((row) => row.id));
+      this.store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind IN ('${kind("call")}', '${kind("proof")}')
+           AND id IN (SELECT value FROM json_each(?))`,
+        )
+        .run(ids);
+      this.store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind = 'shared_voice_claim'
+           AND id IN (SELECT value FROM json_each(?))`,
+        )
+        .run(JSON.stringify(rows.map((row) => row.roomId)));
+      // Only this router's receipts: provider events and proof turns.
+      this.store.db
+        .prepare(
+          `DELETE FROM events
+           WHERE ((id >= 'shared-provider:' AND id < 'shared-provider;')
+             OR (id >= 'shared-proof-turn:' AND id < 'shared-proof-turn;'))
+           AND json_extract(result, '$.callId') IN (SELECT value FROM json_each(?))`,
+        )
+        .run(ids);
+      return rows.map((row) => row.id);
+    });
   }
   /** The deadline for verification. A callback's window opens on answer. */
   verifyBy(call: SharedCall) {
@@ -661,8 +877,8 @@ export class SharedNumber {
           grantId: id("grant"),
           allowView: pair.allowView,
           allowControl: pair.allowControl,
-          recipient: pair.recipient,
-          conversationId: pair.conversationId,
+          recipientDigest: pair.recipientDigest,
+          conversationDigest: pair.conversationDigest,
         },
       };
       this.store.put(kind("call"), admitted);
@@ -747,12 +963,14 @@ export class SharedNumber {
         return existing;
       }
       if (
-        this.store
-          .all<SharedTaskOwnership>(kind("task"))
-          .some(
-            (task) =>
-              task.callId === call.id && task.userTurnId === parsed.userTurnId,
-          )
+        this.select<SharedTaskOwnership>(
+          "task",
+          "json_extract(body, '$.callId') = ?",
+          call.id,
+        ).some(
+          (task) =>
+            task.callId === call.id && task.userTurnId === parsed.userTurnId,
+        )
       )
         throw conflict();
       return this.store.put<SharedTaskOwnership>(kind("task"), {
@@ -824,23 +1042,27 @@ export class SharedNumber {
   hasQueuedCallback() {
     return (
       !this.slot() &&
-      this.store
-        .all<SharedCallbackOwnership>(kind("callback"))
-        .some(
-          (c) =>
-            c.state === "queued" &&
-            this.store.get<SharedTaskOwnership>(kind("task"), c.taskId)
-              ?.callbackRequested,
-        )
+      this.select<SharedCallbackOwnership>(
+        "callback",
+        "json_extract(body, '$.state') = 'queued'",
+      ).some(
+        (c) =>
+          c.state === "queued" &&
+          (c.notBefore ?? 0) <= this.now() &&
+          this.store.get<SharedTaskOwnership>(kind("task"), c.taskId)
+            ?.callbackRequested,
+      )
     );
   }
   claimCallback() {
     return this.store.transaction(() => {
       if (this.slot()) return null;
-      for (const callback of this.store.all<SharedCallbackOwnership>(
-        kind("callback"),
+      for (const callback of this.select<SharedCallbackOwnership>(
+        "callback",
+        "json_extract(body, '$.state') = 'queued'",
       )) {
         if (callback.state !== "queued") continue;
+        if ((callback.notBefore ?? 0) > this.now()) continue;
         const task = this.store.get<SharedTaskOwnership>(
           kind("task"),
           callback.taskId,
@@ -867,10 +1089,16 @@ export class SharedNumber {
           connection.desktopInstanceId !== callback.scope.desktopInstanceId
         )
           continue;
+        // A new room for each try: the voice worker of an earlier try may
+        // still hold the earlier room.
         const claimed: SharedCallbackOwnership = {
           ...callback,
           state: "preparing",
-          roomId: `callback_${hash(callback.id)}`,
+          roomId: `callback_${hash(
+            callback.undialed
+              ? JSON.stringify([callback.id, callback.undialed])
+              : callback.id,
+          )}`,
         };
         this.store.put(kind("callback"), claimed);
         this.store.saveState(this.slotKey(), callback.id);
@@ -886,6 +1114,17 @@ export class SharedNumber {
     );
     if (!callback || callback.lineId !== this.lineId) throw refused();
     return callback;
+  }
+  /** The number a callback dials: the member's sealed number, opened only for
+   * the dial. It must still be the number that the call's pairing verified. */
+  callbackRecipient(id: string) {
+    const callback = this.callback(id);
+    const member = this.member(callback.scope.memberId);
+    if (!member.sealedRecipient) throw refused();
+    const recipient = this.keys.open(member.sealedRecipient);
+    if (!equal(this.keys.digest(recipient), callback.scope.recipientDigest))
+      throw refused();
+    return recipient;
   }
   callbackDialing(id: string) {
     return this.store.transaction(() => {
@@ -968,6 +1207,26 @@ export class SharedNumber {
     )
       throw refused();
     return { taskId: task.id, resultId: task.resultId };
+  }
+  /** The claim ended before any dial, and its room is gone: nothing reached
+   * the provider. The callback goes back in the queue after a pause, or is
+   * canceled after its last try, and the slot frees. */
+  callbackUndialed(id: string) {
+    return this.store.transaction(() => {
+      const callback = this.callback(id);
+      // A stop after the requeue, before its attempt was saved, repeats it.
+      if (["queued", "canceled"].includes(callback.state)) return callback;
+      if (!["preparing", "dialing"].includes(callback.state)) throw conflict();
+      const undialed = (callback.undialed ?? 0) + 1;
+      if (this.slot() === callback.id)
+        this.store.saveState(this.slotKey(), null);
+      return this.store.put<SharedCallbackOwnership>(kind("callback"), {
+        ...callback,
+        state: undialed >= UNDIALED_TRIES ? "canceled" : "queued",
+        undialed,
+        notBefore: this.now() + 30_000 * 2 ** (undialed - 1),
+      });
+    });
   }
   callbackUnknown(id: string) {
     const callback = this.callback(id);
