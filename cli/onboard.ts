@@ -6,7 +6,6 @@
 import { execFile } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { homedir } from "node:os";
-import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { isatty, ReadStream, WriteStream } from "node:tty";
 import { OnboardEngine, type OnboardPorts } from "../src/onboard/engine.js";
@@ -109,10 +108,24 @@ export class TerminalWizard implements OnboardIO {
   private shown = new Map<string, string>();
   /** Quit, Ctrl+C or the end of the terminal's input at a question. */
   private stopped = false;
+  /** Ends the line that is being read now, if any. */
+  private interrupt: (() => void) | null = null;
+  /**
+   * @param settleMs Before each question the wizard drops what was typed so
+   * far, then waits this long and drops what comes in meanwhile: a second
+   * yes typed by mistake never answers the next question.
+   */
   constructor(
     private terminal: Terminal,
     private openUrl: (url: string) => Promise<void> = openSettings,
+    private settleMs = 250,
   ) {}
+
+  /** Stops setup from outside a question, as Ctrl+C or SIGTERM does. */
+  stop() {
+    this.stopped = true;
+    this.interrupt?.();
+  }
 
   private write(line: string) {
     this.terminal.output.write(`${line}\n`);
@@ -246,7 +259,9 @@ export class TerminalWizard implements OnboardIO {
           .trim()
           .toLowerCase();
         if (reply === "yes" || reply === "y") return input(true);
-        if (reply === "no" || reply === "n") return input(false);
+        // Enter alone gives no consent.
+        if (reply === "no" || reply === "n" || (asked.consent && reply === ""))
+          return input(false);
         if (skip && reply === "skip") return action("skip");
         if (reply === "quit") return { type: "cancel" };
       }
@@ -277,53 +292,99 @@ export class TerminalWizard implements OnboardIO {
 
   /** One line from the terminal. Ctrl+C stops. */
   private line(prompt: string) {
-    return new Promise<string>((done, fail) => {
-      const lines = createInterface({
-        input: this.terminal.input,
-        output: this.terminal.output,
-        terminal: this.terminal.input.isTTY === true,
-      });
-      let answered = false;
-      lines.on("SIGINT", () => lines.close());
-      lines.on("close", () => {
-        if (!answered) fail(new Interrupted());
-      });
-      lines.question(prompt, (answer) => {
-        answered = true;
-        lines.close();
-        done(answer);
-      });
-    });
+    return this.read(prompt, false);
   }
 
   /** A secret from the terminal, with no echo. Ctrl+C stops. */
   private hidden(prompt: string) {
+    return this.read(prompt, true);
+  }
+
+  /**
+   * Reads one answer. A terminal is read in raw mode, character by
+   * character, only while a question is open: before the prompt shows, all
+   * input that came in earlier is dropped (also a line typed ahead, which raw
+   * mode hands over at once), and the answer ends at its Return. What follows
+   * the Return in the same input is dropped too.
+   */
+  private async read(prompt: string, secret: boolean): Promise<string> {
     const input = this.terminal.input;
-    if (!input.setRawMode || input.isTTY !== true) return this.line(prompt);
-    this.terminal.output.write(prompt);
-    input.setRawMode(true);
+    const raw = input.isTTY === true && typeof input.setRawMode === "function";
+    const output = this.terminal.output;
+    if (raw) input.setRawMode!(true);
     input.setEncoding("utf8");
-    input.resume();
-    return new Promise<string>((done, fail) => {
-      let value = "";
-      const finish = (error?: Error) => {
-        input.off("data", take);
-        input.setRawMode!(false);
+    try {
+      await this.settle();
+      if (this.stopped || input.readableEnded || input.destroyed)
+        throw new Interrupted();
+      output.write(prompt);
+      return await new Promise<string>((done, fail) => {
+        let value = "";
+        const finish = (error?: Error) => {
+          input.off("data", take);
+          input.off("end", ended);
+          input.off("close", ended);
+          this.interrupt = null;
+          input.pause();
+          if (raw || secret) output.write("\n");
+          if (error) fail(error);
+          else done(value);
+        };
+        const ended = () => finish(new Interrupted());
+        const take = (chunk: string | Buffer) => {
+          // Arrow keys and other escape sequences are not part of an answer.
+          const text = String(chunk).replace(
+            // eslint-disable-next-line no-control-regex
+            /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|O.|.)?/g,
+            "",
+          );
+          for (const char of text) {
+            if (char === "\r" || char === "\n") return finish();
+            if (char === "\u0003") return finish(new Interrupted());
+            if (char === "\u0004") {
+              if (!value) return finish(new Interrupted());
+              continue;
+            }
+            if (char === "\u007f" || char === "\b") {
+              if (!value) continue;
+              value = Array.from(value).slice(0, -1).join("");
+              if (raw && !secret) output.write("\b \b");
+              continue;
+            }
+            if (char < " ") continue;
+            value += char;
+            if (raw && !secret) output.write(char);
+          }
+        };
+        this.interrupt = ended;
+        input.on("data", take);
+        input.once("end", ended);
+        input.once("close", ended);
+        input.resume();
+      });
+    } finally {
+      if (raw) input.setRawMode!(false);
+    }
+  }
+
+  /** Drops what was typed before a question: what is buffered now, and what comes in for a moment. */
+  private settle() {
+    const input = this.terminal.input;
+    while (input.read() !== null);
+    return new Promise<void>((done) => {
+      const drop = () => {};
+      const end = () => {
+        clearTimeout(timer);
+        input.off("data", drop);
+        this.interrupt = null;
         input.pause();
-        this.terminal.output.write("\n");
-        if (error) fail(error);
-        else done(value);
+        while (input.read() !== null);
+        done();
       };
-      const take = (chunk: string | Buffer) => {
-        for (const char of String(chunk)) {
-          if (char === "\r" || char === "\n" || char === "\u0004")
-            return finish();
-          if (char === "\u0003") return finish(new Interrupted());
-          if (char === "\u007f" || char === "\b") value = value.slice(0, -1);
-          else value += char;
-        }
-      };
-      input.on("data", take);
+      const timer = setTimeout(end, this.settleMs);
+      this.interrupt = end;
+      input.on("data", drop);
+      input.resume();
     });
   }
 }

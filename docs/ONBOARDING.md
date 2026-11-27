@@ -22,6 +22,11 @@ terminal, it opens `/dev/tty`. With no terminal at all, it prints
 `Run clawdtime onboard in Terminal to finish setup.` and exits with code 3. It
 never reads a key from a pipe.
 
+The terminal wizard reads the terminal only while a question is open. Before
+each question it drops everything typed so far, so a yes typed twice by
+mistake never answers the next question. At a yes or no consent question,
+Return alone means no.
+
 | Exit code | Meaning                                   |
 | --------- | ----------------------------------------- |
 | 0         | Setup is done.                            |
