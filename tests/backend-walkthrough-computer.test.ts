@@ -208,6 +208,32 @@ describe("computer control of a walkthrough call", () => {
     expect(f.line.permitsComputer("another-attempt")).toBe(false);
   });
 
+  it("is never granted to a call about a decision, so a spoken yes there has one place to go", async () => {
+    for (const [source, trigger] of [
+      [decisionSource, "decision"],
+      [{ ...jobSource, decisionId: "decision" }, "decision"],
+      [
+        {
+          kind: "computer",
+          sessionId: "session",
+          runId: "run",
+          decisionId: "question",
+        },
+        "decision",
+      ],
+    ] as const) {
+      const f = callFixture({ source, trigger });
+      expect(f.grant.inputAllowed, source.kind).toBe(false);
+      await f.prepare();
+      expect(f.line.permitsComputer(f.attemptId), source.kind).toBe(false);
+      expect(
+        await f.say("computer", "Click Save", "turn-1"),
+        source.kind,
+      ).toMatchObject({ computerAllowed: false });
+      expect(f.port.submit).not.toHaveBeenCalled();
+    }
+  });
+
   it("ends with revoked consent, the grant's expiry and a hidden screen", async () => {
     const revoked = callFixture();
     await revoked.prepare();

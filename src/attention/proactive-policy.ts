@@ -7,8 +7,24 @@ import {
   callChannelSchema,
   callTriggerSchema,
   type CallAttemptGrant,
+  type CallSource,
+  type CallTrigger,
   type EnqueueCall,
 } from "./proactive-contracts.js";
+
+/**
+ * Computer control is for a call about a result: a job or a session that
+ * finished. Such a call asks the caller nothing of its own, so a spoken yes
+ * can only answer a question that the computer task asked in this call. A
+ * call about a decision, a task review or a computer question keeps its one
+ * question and takes no computer input, under any policy.
+ */
+export const computerControlSubject = (
+  source: Pick<CallSource, "kind">,
+  trigger: CallTrigger,
+) =>
+  (source.kind === "job" || source.kind === "session") &&
+  trigger !== "decision";
 
 const identity = z.string().min(1).max(300);
 export const proactivePolicySchema = z
@@ -281,7 +297,8 @@ export class ProactivePolicyAuthority {
         inputAllowed:
           policy.allowComputerControl === true &&
           input.channel === "phone_walkthrough" &&
-          policy.viewScope.includes("selected-display"),
+          policy.viewScope.includes("selected-display") &&
+          computerControlSubject(input.source, input.trigger),
       };
       if (grant.expiresAt <= now)
         throw new DomainError(403, "Call intent expired.");

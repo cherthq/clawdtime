@@ -36,6 +36,11 @@ device, expiry and remaining attempt budget. Retire the superseded project
 policy so new jobs have one unambiguous policy to use. Existing enrollments
 bound to a retired policy need a deliberate new enrollment.
 
+Only a call about a result gets computer control: a job or a session that
+finished. A call about a decision, a task review or a question of the computer
+worker asks the caller its own question. It takes no computer input under any
+policy, so a spoken yes there can only answer that question.
+
 Policy identities and issued grants are immutable. Changing a configuration
 field does not upgrade an existing policy or a running call. Install at an idle
 boundary after call cleanup, then start a new authorized walkthrough.
