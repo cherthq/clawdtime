@@ -23,7 +23,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 
-it("routes a signed incoming call to the caller's own paired Mac, gives other members no code, and releases a stranger after 90 s", async () => {
+it("routes a signed incoming call to the caller's own paired Mac, gives other members no code, declines a stranger at once, and releases an unverified caller after 90 s", async () => {
   let clock = Date.now();
   const now = () => clock;
   const lineId = randomUUID();
@@ -231,34 +231,38 @@ it("routes a signed incoming call to the caller's own paired Mac, gives other me
   await provider.pump();
   expect(media.cleanup).toHaveBeenCalledWith(callA.roomId);
 
-  // 2. A stranger calls. No member's Mac gets a code for it.
+  // 2. A stranger calls. No Mac could verify it: it is declined at once,
+  // gets no room and does not hold the slot.
+  const prepared = media.prepare.mock.calls.length;
   const strangerCall = await incoming(stranger);
-  expect(strangerCall.action).toBe("accept");
+  expect(strangerCall.action).toBe("decline");
+  expect(media.prepare).toHaveBeenCalledTimes(prepared);
   await expect(prove(a)).rejects.toThrow("shared_call_not_waiting");
   await expect(prove(b)).rejects.toThrow("shared_call_not_waiting");
-  await provider.pump();
-  expect(media.cleanup).not.toHaveBeenCalledWith(strangerCall.roomId);
-  expect(store.all<any>("shared_number_call")).not.toEqual(
-    expect.arrayContaining([expect.objectContaining({ caller: stranger })]),
-  );
   expect(JSON.stringify(store.all("shared_number_call"))).not.toContain(
     stranger,
   );
 
-  // 3. After 90 s the stranger is released and the room removed. The slot
+  // 3. Member B's number calls, but nobody proves it on B's Mac. Member A's
+  // Mac gets no code for it.
+  const unverified = await incoming(memberB);
+  expect(unverified.action).toBe("accept");
+  await expect(prove(a)).rejects.toThrow("shared_call_not_waiting");
+  await provider.pump();
+  expect(media.cleanup).not.toHaveBeenCalledWith(unverified.roomId);
+
+  // 4. After 90 s the caller is released and the room removed. The slot
   // frees only after the provider reports the call ended and cleaned up.
   clock += UNVERIFIED_LIMIT_MS;
   await provider.pump();
-  expect(media.cleanup).toHaveBeenCalledWith(strangerCall.roomId);
+  expect(media.cleanup).toHaveBeenCalledWith(unverified.roomId);
   expect((await incoming(memberA)).action).toBe("decline");
-  ended.add(strangerCall.callId);
+  ended.add(unverified.callId);
   clock += 1000;
   await provider.pump();
   expect(
-    store.get<{ phase: string }>(
-      "shared_provider_incoming",
-      strangerCall.callId,
-    )?.phase,
+    store.get<{ phase: string }>("shared_provider_incoming", unverified.callId)
+      ?.phase,
   ).toBe("ended");
   expect((await incoming(memberA)).action).toBe("accept");
 }, 20_000);

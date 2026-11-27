@@ -35,6 +35,9 @@ export const UNVERIFIED_LIMIT_MS = 90_000;
 /** A callback whose claim ended before any dial is tried again this many
  * times in all, after a pause that doubles from 30 s, then canceled. */
 const UNDIALED_TRIES = 5;
+/** One caller handle may hold the slot without verifying this many times in
+ * the window. Someone who sends a member's number cannot hold the line. */
+const CALLER_LIMIT = { count: 5, windowMs: 60 * 60_000 };
 const refused = () => new DomainError(403, "shared_number_unauthorized");
 const conflict = () => new DomainError(409, "shared_number_conflict");
 const notWaiting = () => new DomainError(409, "shared_call_not_waiting");
@@ -384,19 +387,20 @@ export class SharedNumber {
         throw conflict();
       let call: SharedCall;
       if (event.kind === "incoming") {
+        const callerDigest = event.caller
+          ? this.callerDigest(event.caller)
+          : undefined;
         call = old ?? {
           id: callId,
           lineId: this.lineId,
           providerCallId: event.providerCallId,
           roomId: event.roomId,
           participantId: event.participantId,
-          state: this.slot() ? "busy" : "unknown_identity",
+          state: this.admission(event.caller, callerDigest),
           createdAt: this.now(),
-          ...(event.caller
-            ? { callerDigest: this.callerDigest(event.caller) }
-            : {}),
+          ...(callerDigest ? { callerDigest } : {}),
         };
-        if (!old && call.state !== "busy")
+        if (!old && call.state === "unknown_identity")
           this.store.saveState(this.slotKey(), call.id);
       } else {
         // Cleanup can arrive before incoming. Retain its terminal binding so a
@@ -418,6 +422,45 @@ export class SharedNumber {
       this.store.put(kind("call"), call);
       this.store.recordEvent(eventKey, fingerprint, { callId: call.id });
       return call;
+    });
+  }
+  /** A call reserves the slot only when a paired Mac could be shown its
+   * code: the caller handle is a member's verified number and that member
+   * has a paired Mac. Every other call, with no handle or anyone else's, is
+   * declined at once. So is a caller over its limit of unverified calls. */
+  private admission(caller?: string, callerDigest?: string) {
+    if (!caller || !callerDigest || !this.callerHasMac(caller))
+      return "declined" as const;
+    if (this.slot()) return "busy" as const;
+    const recent = this.store.db
+      .prepare(
+        `SELECT count(*) AS n FROM entities WHERE kind = '${kind("call")}'
+         AND json_extract(body, '$.callerDigest') = ?
+         AND json_extract(body, '$.createdAt') > ?
+         AND json_extract(body, '$.scope') IS NULL
+         AND json_extract(body, '$.state') NOT IN ('busy', 'declined')`,
+      )
+      .get(callerDigest, this.now() - CALLER_LIMIT.windowMs) as { n: number };
+    return recent.n >= CALLER_LIMIT.count
+      ? ("declined" as const)
+      : ("unknown_identity" as const);
+  }
+  private callerHasMac(caller: string) {
+    const rows = this.store.db
+      .prepare(
+        `SELECT id FROM entities WHERE kind = '${kind("member")}'
+         AND json_extract(body, '$.alias.lineId') = ?
+         AND json_extract(body, '$.alias.recipient') = ?
+         AND json_extract(body, '$.revokedAt') IS NULL`,
+      )
+      .all(this.lineId, caller) as { id: string }[];
+    return rows.some(({ id }) => {
+      try {
+        this.pairing(id);
+        return true;
+      } catch {
+        return false;
+      }
     });
   }
   private slotKey() {

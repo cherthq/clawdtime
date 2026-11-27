@@ -166,8 +166,14 @@ The coordinator passes the webhook's `data.from` to the router as the
 caller. The provider must send it in the same form that the member verified
 at sign-in, for example `+14155550100`. The router keeps only a keyed digest
 of it. The caller handle never authorizes a Mac. It only selects whose paired
-Mac may be shown the call code. A call with no caller handle, or a handle that
-matches no member, gives no code to any Mac.
+Mac may be shown the call code.
+
+The coordinator declines a call at once when no Mac could ever be shown its
+code: the call has no caller handle, or the handle is not the verified number
+of a member with a paired Mac. Such a call gets no room and does not hold the
+slot. One caller handle may hold the slot without verifying five times an
+hour. The coordinator declines its further calls in that hour, so someone who
+sends a member's number cannot keep the line busy.
 
 A caller who does not verify within 90 seconds is released. The voice worker
 removes the call's room, and the coordinator removes it on its next pass as
@@ -336,8 +342,9 @@ provider events and fake provider effects. They cover replay and identity
 rejection, answer gating, callback cleanup, exact result ownership, report
 escaping, expired leases and same-call actions. One end-to-end test sends a
 signed incoming call from a member's number. That member's Mac gets the code
-and the call opens only on it, another member's Mac gets no code, and a
-stranger is released after 90 seconds and its room removed. They send no real texts,
+and the call opens only on it, another member's Mac gets no code, a stranger
+is declined at once, and a member's call that nobody proves is released after
+90 seconds and its room removed. They send no real texts,
 place no calls and capture no screens. They do not prove handset audio,
 picture or native input.
 

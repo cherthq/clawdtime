@@ -111,6 +111,9 @@ export interface SharedCallScope {
   conversationId: string;
 }
 export type SharedCallState =
+  // Declined at once: no Mac could verify the caller, or the caller is over
+  // its limit of unverified calls. It never holds the slot.
+  | "declined"
   | "unknown_identity"
   | "unauthorized"
   | "offline"
