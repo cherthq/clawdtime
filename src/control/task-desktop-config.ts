@@ -13,7 +13,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, isAbsolute, sep } from "node:path";
-import { token } from "../storage/security.js";
+import type { IndependentTaskSession } from "../contracts.js";
+import { DomainError, hash, token } from "../storage/security.js";
+import { DesktopRefusal } from "../service-output.js";
 import type { TaskService } from "./task-service.js";
 
 export function desktopConfigurationFingerprint(value: {
@@ -81,6 +83,63 @@ export function writeDesktopPrivateJSON(path: string, value: unknown) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temporary, JSON.stringify(value), { mode: 0o600, flag: "wx" });
   renameSync(temporary, path);
+}
+/**
+ * The desktop's own task session lasts 24 hours from its registration or its
+ * last renewal, and a later start registers it again from the same receipt.
+ * A start after the expiry renews it as the operator's reauthorization does,
+ * with the same identity and permissions, only while no task, call, voice or
+ * instruction is open. Otherwise it refuses and changes nothing. A session
+ * file that the operator attached (--session-file) is never renewed here.
+ */
+export function renewDesktopSession(
+  service: TaskService,
+  input: { directory: string; now?: () => number },
+): "none" | "active" | "renewed" {
+  const bindingPath = join(input.directory, "desktop-binding.json");
+  if (!existsSync(bindingPath)) return "none";
+  const binding = readDesktopPrivateJSON(bindingPath);
+  if (typeof binding?.registrationId !== "string") return "none";
+  const receipt = service.store.state<{ sealed: string }>(
+    `task-session:${hash(binding.registrationId)}`,
+  );
+  if (!receipt) return "none";
+  const registered = service.vault.open<{ session: IndependentTaskSession }>(
+    receipt.sealed,
+  ).session;
+  const record = service.store.get<{ sealed: string }>(
+    "task-session",
+    registered.id,
+  );
+  if (!record) return "none";
+  const session = service.vault.open<IndependentTaskSession>(record.sealed);
+  const now = input.now?.() ?? Date.now();
+  if (session.revokedAt !== undefined)
+    throw new DesktopRefusal(
+      "session_revoked",
+      "The task session of this desktop was revoked, so the desktop did not start. Nothing was changed.",
+    );
+  if (session.expiresAt > now) return "active";
+  try {
+    service.reauthorize(session.id, {
+      eventId: `desktop-start-renewal:${randomUUID()}`,
+      pairingId: session.pairingId,
+      hostId: session.hostId,
+      projectRoot: session.projectRoot,
+      voice: session.permissions.voice,
+    });
+  } catch (error) {
+    if (error instanceof DomainError && error.status === 409)
+      throw new DesktopRefusal(
+        "session_open_work",
+        "The task session of this desktop expired while a task, call or voice is still open, so it was not renewed and nothing was changed.",
+      );
+    throw new DesktopRefusal(
+      "session_revoked",
+      "The task session of this desktop expired and cannot be renewed with the same identity, so the desktop did not start. Nothing was changed.",
+    );
+  }
+  return "renewed";
 }
 export function prepareTaskDesktop(
   service: TaskService,
@@ -182,7 +241,8 @@ export function prepareTaskDesktop(
       "Desktop configuration differs from this workspace. Preserve the existing binding.",
     );
   // Save the registration identity before any service mutation; restart recovers
-  // the same registration receipt, never a second session or silent renewal.
+  // the same registration receipt, never a second session. An expired one is
+  // renewed only by renewDesktopSession, which the service logs.
   if (!existsSync(bindingPath)) writeDesktopPrivateJSON(bindingPath, binding);
   const sessionToken =
     attachedToken ??
