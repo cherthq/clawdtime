@@ -81,6 +81,8 @@ describe("clawdtime start", () => {
           join(home, ".local", "share", "clawdtime", "desktop"),
           "--project",
           project,
+          "--panel-binary",
+          join(root, "mac", ".build", "debug", "ClawdTimeTaskPanel"),
         ],
         root,
         chat: "agent",
@@ -97,11 +99,11 @@ describe("clawdtime start", () => {
     env.CLAWDTIME_CHAT = "supervisor";
     await run(["--tucked", "true"]);
     expect(calls[0]!.chat).toBe("supervisor");
-    expect(calls[0]!.args.slice(-2)).toEqual(["--tucked", "true"]);
+    expect(calls[0]!.args.slice(-4, -2)).toEqual(["--tucked", "true"]);
   });
 
   it("uses the project that a person names on the first start", async () => {
-    const { base, home, calls, run } = setup();
+    const { base, home, root, calls, run } = setup();
     const project = join(base, "code", "stonepad");
     mkdirSync(project, { recursive: true });
     await run(["--project", "code/stonepad"], { cwd: base });
@@ -110,12 +112,14 @@ describe("clawdtime start", () => {
       join(home, ".local", "share", "clawdtime", "desktop"),
       "--project",
       project,
+      "--panel-binary",
+      join(root, "mac", ".build", "debug", "ClawdTimeTaskPanel"),
     ]);
     expect(existsSync(join(home, "clawdtime-work"))).toBe(false);
   });
 
   it("keeps the project that the desktop is bound to, and refuses another one", async () => {
-    const { base, home, calls, run } = setup();
+    const { base, home, root, calls, run } = setup();
     const project = join(base, "code", "riverchat");
     const other = join(base, "code", "stonepad");
     mkdirSync(project, { recursive: true });
@@ -123,7 +127,14 @@ describe("clawdtime start", () => {
     const state = join(home, ".local", "share", "clawdtime", "desktop");
     bind(state, project);
     await run([]);
-    expect(calls[0]!.args).toEqual(["--state", state, "--project", project]);
+    expect(calls[0]!.args).toEqual([
+      "--state",
+      state,
+      "--project",
+      project,
+      "--panel-binary",
+      join(root, "mac", ".build", "debug", "ClawdTimeTaskPanel"),
+    ]);
     await expect(run(["--project", other])).rejects.toThrow(
       `This desktop works in ${project}. Start it without --project to use that folder.`,
     );
