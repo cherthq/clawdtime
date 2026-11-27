@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { RoomServiceClient } from "livekit-server-sdk";
 import { callEntry } from "./agent.mjs";
 import { makeSharedDesk } from "./shared-desk.mjs";
-import { sharedRooms } from "./shared-rooms.mjs";
+import { endSharedRoom, sharedRooms } from "./shared-rooms.mjs";
 
 export async function sharedEntry(ctx) {
   const roomId = ctx.job?.room?.name;
@@ -13,6 +13,17 @@ export async function sharedEntry(ctx) {
     origin: process.env.CLAWDTIME_SHARED_ORIGIN,
     token: process.env.CLAWDTIME_SHARED_LINE_TOKEN,
     roomId,
+    // A caller who does not verify in time is released: end this call.
+    end: (reason) =>
+      endSharedRoom({
+        roomId,
+        rooms: new RoomServiceClient(
+          process.env.LIVEKIT_URL,
+          process.env.LIVEKIT_API_KEY,
+          process.env.LIVEKIT_API_SECRET,
+        ),
+        shutdown: () => ctx.shutdown(reason),
+      }),
   });
   await callEntry(ctx, { shared });
 }

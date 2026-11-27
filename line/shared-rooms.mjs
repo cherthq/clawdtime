@@ -40,3 +40,20 @@ export function sharedRooms({ live, limit = 10000, batch = 100 }) {
     },
   };
 }
+
+/** Ends one shared call that was not verified in time: removing its room ends
+ * the provider call, then this job stops. A failed removal still stops the
+ * job; the coordinator removes the room as well and frees the line slot only
+ * after the provider's cleanup. */
+export async function endSharedRoom({ roomId, rooms, shutdown }) {
+  try {
+    await rooms.deleteRoom(roomId);
+  } catch {
+    /* the coordinator also removes the room */
+  }
+  try {
+    shutdown();
+  } catch {
+    /* the job ended first */
+  }
+}
