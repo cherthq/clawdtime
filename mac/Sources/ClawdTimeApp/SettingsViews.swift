@@ -629,7 +629,7 @@ struct PermissionsPage: View {
         row("Screen Recording", who: "Capture helper", detail: "Lets ClawdTime show your screen on a call.", granted: model.permissions?.captureScreenRecording, pane: .screenRecording)
       }
       HStack(alignment: .top) {
-        Text("In System Settings, open Privacy & Security. Turn on ClawdTimeTaskPanel in Accessibility, and ClawdTimeTaskPanel and ClawdTimeTaskCapture in Screen & System Audio Recording. This page checks again when you come back.")
+        Text("In System Settings, open Privacy & Security. Turn on ClawdTime in Accessibility and in Screen & System Audio Recording. This page checks again when you come back.")
           .font(.system(size: 11)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 12)
         Button("Check again") { Task { await model.checkPermissions() } }

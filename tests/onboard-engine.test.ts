@@ -268,6 +268,7 @@ async function runJson(
     now?: () => number;
     root?: string;
     cancelAtHello?: boolean;
+    env?: Record<string, string | undefined>;
     /** Answers a step that is in progress and may be skipped. */
     progress?: (event: StepEvent) => Reply | undefined;
   } = {},
@@ -327,7 +328,7 @@ async function runJson(
     },
   });
   const code = await onboardCli(["--json", ...args], {
-    env: {},
+    env: extra.env ?? {},
     home,
     root: extra.root ?? folder(),
     stdin,
@@ -561,10 +562,10 @@ describe("clawdtime onboard --json", () => {
       url: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     });
     expect(asking[0]!.detail).toContain(
-      "In Accessibility, turn on ClawdTimeTaskPanel.",
+      "In Accessibility, turn on the app you run ClawdTime in, such as Terminal.",
     );
     expect(asking[0]!.details).toEqual([
-      "ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
+      "Checked for ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
     ]);
     expect(mac.calls.permissionChecks).toBe(3);
     expect(stateOf(events, "permissions")).toBe("ready");
@@ -594,11 +595,52 @@ describe("clawdtime onboard --json", () => {
         (event) => event.id === "permissions" && event.state === "needs_input",
       )!;
       expect(asking.detail).toBe(
-        `In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTimeTaskPanel. In ${screen}, turn on ClawdTimeTaskPanel. Then check again.`,
+        `In System Settings, open Privacy & Security. In Accessibility, turn on the app you run ClawdTime in, such as Terminal. In ${screen}, turn on the app you run ClawdTime in, such as Terminal. Then check again.`,
       );
       expect(asking.detail).not.toContain("/");
       expect(asking.details).toEqual([
-        "ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
+        "Checked for ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
+      ]);
+    }
+  });
+
+  it("names the app that macOS lists: ClawdTime in the Mac app, the terminal app in Terminal", async () => {
+    const denied: PermissionFacts = {
+      panel: {
+        path: "/Applications/Made Up/ClawdTimeTaskPanel",
+        accessibility: false,
+        screenRecording: false,
+      },
+      capture: { screenRecording: true },
+    };
+    for (const [args, env, name] of [
+      [["--local", "--app"], {}, "ClawdTime"],
+      [["--local"], { TERM_PROGRAM: "Apple_Terminal" }, "Terminal"],
+      [
+        ["--local"],
+        { TERM_PROGRAM: "made-up-term" },
+        "the app you run ClawdTime in, such as Terminal",
+      ],
+    ] as const) {
+      const mac = fakeMac({ permissions: [denied], darwinMajor: 25 });
+      const { events } = await runJson(
+        [...args],
+        folder(),
+        mac.ports,
+        agree(),
+        {
+          env: { ...env },
+        },
+      );
+      const asking = steps(events).find(
+        (event) => event.id === "permissions" && event.state === "needs_input",
+      )!;
+      expect(asking.detail).toBe(
+        `In System Settings, open Privacy & Security. In Accessibility, turn on ${name}. In Screen & System Audio Recording, turn on ${name}. Then check again.`,
+      );
+      expect(asking.detail).not.toContain("ClawdTimeTaskPanel");
+      expect(asking.details).toEqual([
+        "Checked for ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
       ]);
     }
   });
@@ -627,11 +669,11 @@ describe("clawdtime onboard --json", () => {
       (event) => event.id === "permissions" && event.state === "needs_input",
     )!;
     expect(asking.detail).toBe(
-      "In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTimeTaskPanel. In Screen & System Audio Recording, turn on ClawdTimeTaskCapture. Then check again.",
+      "In System Settings, open Privacy & Security. In Accessibility, turn on the app you run ClawdTime in, such as Terminal. In Screen & System Audio Recording, turn on the app you run ClawdTime in, such as Terminal. Then check again.",
     );
     expect(asking.details).toEqual([
-      "ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
-      "ClawdTimeTaskCapture: /Applications/Made Up/ClawdTimeTaskCapture",
+      "Checked for ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
+      "Checked for ClawdTimeTaskCapture: /Applications/Made Up/ClawdTimeTaskCapture",
     ]);
     expect(asking.recovery?.url).toBe(
       "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
