@@ -17,6 +17,11 @@ const schema = z
     enabled: z.boolean(),
     database: z.string().refine(isAbsolute),
     lineId: z.uuid(),
+    /** Numbers that may get a sign-in text before they are members. */
+    invited: z
+      .array(z.string().regex(/^\+[1-9]\d{6,14}$/))
+      .max(1000)
+      .default([]),
     proofKey: z.string().regex(/^[a-f0-9]{64}$/i),
     identityKey: z.string().regex(/^[a-f0-9]{64}$/i),
     lineToken: z.string().min(32),

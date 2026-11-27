@@ -120,3 +120,11 @@ it("refuses a project ID that is not a UUID", async () => {
     }),
   );
 }, 30_000);
+
+it("starts with a list of invited numbers, and refuses one that is not a phone number", async () => {
+  const output = await startsInStandby(
+    configFile(await freePort(), { invited: ["+14155550100", "+12125550100"] }),
+  );
+  expect(output).toContain("Shared coordinator standby");
+  refuses(configFile(await freePort(), { invited: ["555-0100"] }));
+}, 60_000);
