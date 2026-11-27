@@ -10,14 +10,16 @@ import {
   closeSync,
   constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
 } from "node:fs";
 import { release } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { z } from "zod";
 import {
   desktopStateFolder,
@@ -357,6 +359,38 @@ export async function stopDesktopService(
   }
 }
 
+/**
+ * The path of a file of a release runtime through the `current` link of its
+ * folder of versions, when the file sits in the version that `current` names
+ * now. An update switches `current` and a later one deletes the old version,
+ * so a path that is saved for later (the capture helper of a pairing) goes
+ * through the link. Any other path stays as it is.
+ */
+export function stableRuntimePath(path: string): string {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    return path;
+  }
+  for (let folder = dirname(real); dirname(folder) !== folder;) {
+    const link = join(dirname(folder), "current");
+    try {
+      if (
+        basename(folder) !== "current" &&
+        existsSync(join(folder, "manifest.json")) &&
+        lstatSync(link).isSymbolicLink() &&
+        realpathSync(link) === folder
+      )
+        return join(link, relative(folder, real));
+    } catch {
+      // No link here: look one folder up.
+    }
+    folder = dirname(folder);
+  }
+  return path;
+}
+
 /** The ports of the real Mac. */
 export function macPorts(input: {
   env: Record<string, string | undefined>;
@@ -433,7 +467,11 @@ export function macPorts(input: {
       return facts;
     },
     displays: {
-      capture,
+      // The pairing saves this path, so it must outlive updates.
+      capture: () => {
+        const found = capture();
+        return found && stableRuntimePath(found);
+      },
       list: async () => {
         const binary = capture();
         return binary ? listSharedDisplays(binary) : [];

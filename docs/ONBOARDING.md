@@ -234,6 +234,12 @@ Setup writes only what its steps make:
 Every file is for its owner only. `CLAWDTIME_CONFIG_HOME` moves the first
 three.
 
+The pairing saves the path of the capture helper. In an installed release it
+goes through the `current` link of the runtime folder, for example
+`~/Library/Application Support/ClawdTime/runtime/current/app/native/ClawdTimeTaskCapture`,
+so the pairing still works after an update removes the version that setup
+ran from.
+
 A process id comes back after its process ends, so a saved id alone never
 gets a signal. Setup stops the connection only when `ps` shows the start time
 and the command that it saved when the connection started. A record of a
