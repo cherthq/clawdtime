@@ -119,6 +119,28 @@ describe("bounded website event aggregates", () => {
     expect(db.query("SELECT * FROM operational_state")).toEqual([]);
   });
 
+  it.each(["download", "install_command", "copy_prompt"])(
+    "reports the %s installation action separately",
+    (action) => {
+      const metrics = new WebsiteMetrics(store(), { enabled: true });
+      const input = {
+        ...event,
+        event: "pilot_cta_clicked",
+        action,
+        placement: "hero",
+      };
+      expect(metrics.recordBrowser(input)).toEqual({ accepted: true });
+      expect(metrics.report().rows).toEqual([
+        expect.objectContaining({
+          event: "pilot_cta_clicked",
+          action,
+          placement: "hero",
+          count: 1,
+        }),
+      ]);
+    },
+  );
+
   it("persists counts across new connections using an atomic increment", () => {
     const folder = mkdtempSync(join(tmpdir(), "clawdtime-website-metrics-"));
     folders.push(folder);

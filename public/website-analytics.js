@@ -76,10 +76,22 @@
   view();
   document.addEventListener("visibilitychange", view);
   document.addEventListener("click", (event) => {
-    const link = event.target.closest?.("a[data-metric-action]");
+    const link = event.target.closest?.(
+      "a[data-metric-action], button[data-metric-action]",
+    );
     if (!link) return;
     const action = link.dataset.metricAction;
-    if (!["availability", "setup", "guide"].includes(action)) return;
+    if (
+      ![
+        "availability",
+        "setup",
+        "guide",
+        "download",
+        "install_command",
+        "copy_prompt",
+      ].includes(action)
+    )
+      return;
     const placement = link.closest(".site-header")
       ? "header"
       : link.closest(".hero")

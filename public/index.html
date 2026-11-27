@@ -101,7 +101,11 @@
           </p>
           <div class="hero-install">
             <div class="hero-action">
-              <a class="button button-primary" href="/download">
+              <a
+                class="button button-primary"
+                href="/download"
+                data-metric-action="download"
+              >
                 <svg aria-hidden="true"><use href="#pixel-download" /></svg>
                 Download for Mac
               </a>
@@ -109,6 +113,7 @@
                 type="button"
                 class="button button-secondary"
                 data-copy-target="hero-command"
+                data-metric-action="install_command"
               >
                 <span data-copy-label>Copy install command</span>
               </button>
@@ -217,7 +222,7 @@
               <li>Follow the setup.</li>
             </ol>
             <div class="route-action">
-              <a class="button" href="/download"
+              <a class="button" href="/download" data-metric-action="download"
                 ><svg><use href="#pixel-download" /></svg> Download for Mac</a
               >
             </div>
@@ -252,6 +257,7 @@ curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
                 type="button"
                 class="copy-button"
                 data-copy-target="route-command"
+                data-metric-action="install_command"
               >
                 <span data-copy-label>Copy</span
                 ><span class="visually-hidden"> the install command</span>
@@ -279,6 +285,7 @@ curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
             type="button"
             class="button button-small copy-prompt"
             data-copy-target="agent-prompt"
+            data-metric-action="copy_prompt"
           >
             <span data-copy-label>Copy prompt</span>
           </button>
