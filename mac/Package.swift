@@ -8,6 +8,9 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
     .executable(name: "ClawdTimeReviewWindow", targets: ["ClawdTimeReviewWindow"]),
     .executable(name: "PanelPreview", targets: ["PanelPreview"]),
 ], targets: [
+    .target(name: "ClawdTimeAppCore"),
+    // The protocol, the runtime checks and the owner run against a fake engine.
+    .testTarget(name: "ClawdTimeAppTests", dependencies: ["ClawdTimeAppCore"]),
     .target(name: "DeviceCore"),
     .target(name: "TaskPanelCore"),
     .executableTarget(name: "ClawdTimeReviewWindow", dependencies: ["TaskPanelCore"]),
