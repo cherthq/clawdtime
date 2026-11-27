@@ -1,63 +1,83 @@
 # Install ClawdTime
 
 ClawdTime is a computer use agent for your Mac. This page installs it and sets
-it up. You need a Mac with macOS 14 or later, Node 24 or later, the Xcode
-command line tools and an iPhone. The installer checks each one and says how to
-get what is missing.
+it up. You need a Mac with Apple silicon and macOS 14 or later. You do not need
+Node, Git or Xcode: the release brings its own runtime.
 
-This guide connects a dedicated line to one Mac. To use an existing shared
-number with your own Mac, follow [shared setup](docs/SHARED_NUMBER_SETUP.md)
-and use its coordinator address. Skip the dedicated line-claim step below.
+## Install with one command
+
+Run this in Terminal:
+
+```sh
+curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh
+```
+
+It does this, and it never uses sudo:
+
+1. It checks the Mac: macOS 14 or later, and Apple silicon.
+2. It reads the newest release, downloads it and checks its SHA-256. A
+   download that does not match is not installed, and nothing changes.
+3. It unpacks the release in
+   `~/Library/Application Support/ClawdTime/runtime/VERSION`, checks every
+   file, and switches the link `current` there to it in one step.
+4. It links `~/.local/bin/clawdtime` to that release. When `~/.local/bin` is
+   not on your PATH, it prints the one line that adds it. Run that line.
+5. It starts the guided setup, `clawdtime onboard`, in the same Terminal
+   window. When it runs with no Terminal, it says to run `clawdtime onboard`
+   in Terminal to finish setup.
+
+The guided setup asks for your model key in a hidden prompt, gives the panel
+its permissions, verifies your phone and pairs this Mac. Run
+`clawdtime onboard` again at any time: it checks each step that is ready and
+goes on where it stopped. ClawdTime works on this Mac before the phone is
+paired.
+
+## Update
+
+Run the same command again. It installs the newest release next to the one
+you have, then switches `current` to it. Your settings, keys and pairing stay
+where they are. The release before stays on the Mac, so you can go back to it:
+
+```sh
+ln -sfh 0.4.0 ~/Library/Application\ Support/ClawdTime/runtime/current
+```
+
+macOS gives each panel build its own permissions. After an update, give the
+new panel Accessibility and Screen & System Audio Recording again. The guided
+setup checks this.
+
+## Set it up by hand
+
+When the installer lists three steps instead of the guided setup, do them in
+Terminal:
+
+1. **Add a model key.** Run `clawdtime keys set openai`. It reads the key from
+   a hidden prompt and never shows it. For another provider, run
+   `clawdtime keys help`, or see
+   [Models and keys](INSTRUCTIONS.md#5-models-and-keys).
+2. **Give the panel two permissions.** Open System Settings, Privacy &
+   Security. In Accessibility, and in Screen & System Audio Recording, press
+   **+** and choose the panel file that the installer named, such as
+   `~/Library/Application Support/ClawdTime/runtime/0.4.0/app/native/ClawdTimeTaskPanel`
+   (press Command+Shift+G to type the path).
+3. **Start it.** Run `clawdtime start`. The mascot appears. Click it to open
+   the chat. The first start makes `~/clawdtime-work`, the folder for code
+   work. To choose another folder, use `clawdtime start --project PATH` the
+   first time.
 
 ## Paste this into your coding agent
 
 Open Claude Code or Codex on the Mac, and paste this:
 
 ```text
-Install and set up ClawdTime on this Mac, end to end. Do each step yourself. Ask me only where a step says "ask me".
+Install and set up ClawdTime on this Mac. Do each step yourself. Ask me only where a step says "ask me".
 
-1. Install: run curl -fsSL https://raw.githubusercontent.com/cherthq/clawdtime/main/scripts/install.sh | sh
-   If it stops on a missing tool, install that tool the way its line says, then run the script again. xcode-select --install opens a dialog: ask me to finish it. Never use sudo. If the script prints a PATH line, run it. If it says that it kept another clawdtime command, ask me before you replace it.
-2. Connect a line: ask me to run clawdtime connect in my own terminal. It opens the browser to sign me in to Chert, and it asks me for my number, my yes to calls and texts, and a project API key. I answer each question myself. When I say done, run clawdtime connect --check and tell me each step that is not ready, in its own words.
-3. Add a model key: ask me which provider I use (openai, anthropic, gemini, or another one from clawdtime keys help). Then ask me to run clawdtime keys set PROVIDER in my own terminal and type the key into its hidden prompt. Never ask me for a key in this chat. Never read, print or store a key.
-4. Permissions: ask me to give the panel two permissions in System Settings, Privacy & Security: Accessibility, and Screen & System Audio Recording. In each list I press + and choose the panel file that the installer named (by default ~/clawdtime/mac/.build/debug/ClawdTimeTaskPanel). Wait until I say done.
-5. Start: run clawdtime computer on, then clawdtime start. Tell me to click the mascot to open the chat. Then run clawdtime connect once more, so that the desktop gets its calling policy. If it asks a question, ask me to run it in my own terminal.
-6. Check: run clawdtime computer doctor. Fix each line that you can. Tell me each line that only I can fix, in its own words.
-7. Report in a few lines: what is ready, what is not, and a first request to type in the chat: "open wikipedia and tell me today's featured article".
+1. Install: run curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh
+   Never use sudo. If it prints a PATH line, run it. If it says that it kept another clawdtime command, ask me before you replace it.
+2. Setup: ask me to run clawdtime onboard in my own Terminal. It asks me for my model key in a hidden prompt, my permissions and my phone. I answer each question myself. Never ask me for a key or a code in this chat. If the installer listed three steps instead, ask me to do steps 1 and 2 of "Set it up by hand" in INSTALL.md, then run clawdtime start.
+3. Check: run clawdtime computer doctor. Fix each line that you can. Tell me each line that only I can fix, in its own words.
+4. Report in a few lines: what is ready, what is not, and a first request to type in the chat: "open wikipedia and tell me today's featured article".
 ```
-
-## Install by hand
-
-1. **Install.** Run this in Terminal:
-
-   ```sh
-   curl -fsSL https://raw.githubusercontent.com/cherthq/clawdtime/main/scripts/install.sh | sh
-   ```
-
-   It checks the Mac, puts ClawdTime in `~/clawdtime`, builds it, and adds
-   the `clawdtime` and `chert` commands. When a tool is missing, it prints how
-   to get it. When it prints a PATH line, run that line. Run it again at any
-   time: it updates ClawdTime.
-
-2. **Connect a line.** Run `clawdtime connect`. It signs you in to Chert in the
-   browser and gets you a line, one step at a time. Run it again at any time:
-   it goes on where it stopped.
-
-3. **Add a model key.** Run `clawdtime keys set openai`. It reads the key from
-   a hidden prompt and never shows it. For another provider, run
-   `clawdtime keys help`, or see
-   [Models and keys](INSTRUCTIONS.md#5-models-and-keys).
-
-4. **Give the panel two permissions.** Open System Settings, Privacy &
-   Security. In Accessibility, and in Screen & System Audio Recording, press
-   **+** and choose `~/clawdtime/mac/.build/debug/ClawdTimeTaskPanel` (press
-   Command+Shift+G to type the path).
-
-5. **Start it.** Run `clawdtime computer on`, then `clawdtime start`. The
-   mascot appears. Click it to open the chat. Then run `clawdtime connect` once
-   more, so that the desktop gets its calling policy. The first start makes
-   `~/clawdtime-work`, the folder for code work. To choose another folder, use
-   `clawdtime start --project PATH` the first time.
 
 ## Check it works
 
@@ -80,8 +100,31 @@ ClawdTime opens the page, reads it and tells you the answer in the chat.
 | `switch` off                                           | Run `clawdtime computer on`, then [start the desktop again](INSTRUCTIONS.md#3-start-the-desktop)                 |
 | `model key` missing                                    | Run `clawdtime keys set PROVIDER`, then [start the desktop again](INSTRUCTIONS.md#3-start-the-desktop)           |
 | `executor` not configured                              | The service started before the switch or the key. [Start the desktop again](INSTRUCTIONS.md#3-start-the-desktop) |
-| `hands`: a task says that the panel lacks a permission | Do step 4. Then choose Quit ClawdTime in the mascot's menu, and run `clawdtime start`                            |
-| `calls to you` not ready                               | Run `clawdtime connect`: it does the missing step                                                                |
+| `hands`: a task says that the panel lacks a permission | Do step 2 of "Set it up by hand". Then choose Quit ClawdTime in the mascot's menu, and run `clawdtime start`     |
+| `calls to you` not ready                               | Run `clawdtime onboard`, or `clawdtime connect` for a dedicated line: it does the missing step                   |
 
-The full guide is [INSTRUCTIONS.md](INSTRUCTIONS.md). The line in detail is in
+## Build from the source
+
+To build ClawdTime from its source, with a dedicated line, add `--source`:
+
+```sh
+curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh -s -- --source
+```
+
+In a checkout, run `sh scripts/install.sh --source`. The source build needs
+Node 24 or later, Git and Swift 6 or later (the Xcode command line tools). It
+checks each one and says how to get what is missing. It puts ClawdTime in
+`~/clawdtime`, builds it, and adds the `clawdtime` and `chert` commands. Then:
+
+1. **Connect a line.** Run `clawdtime connect`. It signs you in to Chert in the
+   browser and gets you a line, one step at a time.
+2. **Add a model key** and **give the panel its permissions** as in "Set it up
+   by hand". The panel of a source build is
+   `~/clawdtime/mac/.build/debug/ClawdTimeTaskPanel`.
+3. **Start it.** Run `clawdtime computer on`, then `clawdtime start`. Then run
+   `clawdtime connect` once more, so that the desktop gets its calling policy.
+
+To use an existing shared number with your own Mac, follow
+[shared setup](docs/SHARED_NUMBER_SETUP.md). The full guide is
+[INSTRUCTIONS.md](INSTRUCTIONS.md). The line in detail is in
 [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md).

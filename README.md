@@ -42,11 +42,22 @@ a Chert line.
 
 ## Quick start
 
-**The simple way: [INSTALL.md](INSTALL.md).** One command installs ClawdTime,
-or one prompt has your coding agent install and set it up.
+You need a Mac with Apple silicon and macOS 14 or later. You do not need Node,
+Git or Xcode. Run this in Terminal:
 
-By hand: you need macOS 14 or later, Node 24 or later, Swift (the Xcode
-command line tools) and an iPhone.
+```sh
+curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh
+```
+
+It installs the newest release in `~/Library/Application Support/ClawdTime`,
+links the `clawdtime` command in `~/.local/bin`, and starts the guided setup,
+`clawdtime onboard`: your model key, the panel's permissions, your phone and
+the pairing of this Mac. Run it again to update: your settings, keys and
+pairing stay. [INSTALL.md](INSTALL.md) has each step, the setup by hand and a
+prompt that has your coding agent do it.
+
+To build from the source instead, you need macOS 14 or later, Node 24 or later,
+Swift (the Xcode command line tools) and an iPhone:
 
 1. **Install** ClawdTime and the `chert` command:
 
@@ -56,6 +67,8 @@ command line tools) and an iPhone.
    cd ~/clawdtime && npm ci && npm run build && npm link
    (cd line && npm install)
    ```
+
+   Or run `sh scripts/install.sh --source`: it does these steps for you.
 
 2. **Connect** to Chert and get a line: `clawdtime connect`
 3. **Turn on** computer use: `clawdtime computer on`
