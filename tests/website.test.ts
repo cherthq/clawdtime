@@ -113,6 +113,24 @@ describe("public website discovery and isolation", () => {
     expect(dimensions.getUint32(20)).toBe(630);
   });
 
+  it("allows the recorded demo only on the homepage and discloses the early release", async () => {
+    const runtime = fixture();
+    const home = await runtime.app.request("/");
+    const html = await home.text();
+    expect(home.headers.get("content-security-policy")).toContain(
+      "frame-src https://www.youtube-nocookie.com",
+    );
+    expect(html).toContain("https://youtu.be/1DTf_1M67aw");
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain('href="/download"');
+    expect(html).toContain("signed and notarized by Apple");
+    expect(html).not.toContain("Release pending");
+    const operational = await runtime.app.request("/pair");
+    expect(operational.headers.get("content-security-policy")).not.toContain(
+      "youtube",
+    );
+  });
+
   it("indexes canonical live marketing HTML but excludes aliases without redirecting APIs", async () => {
     const runtime = fixture();
     const control = new ControlCoordinator(
@@ -208,13 +226,13 @@ describe("homepage install routes", () => {
       /<wbr \/>/g,
       "",
     );
-    const hero = html.slice(
-      html.indexOf('<section class="hero'),
-      html.indexOf("</section>", html.indexOf('<section class="hero')),
-    );
+    const hero = html.match(
+      /<section\b[^>]*class="hero\b[^>]*>([\s\S]*?)<\/section>/,
+    )![1]!;
     expect(hero).toContain('href="/download"');
     expect(hero).toContain(installCommand);
-    expect(hero).toContain("macOS 14 or later, Apple silicon.");
+    expect(hero).toContain("macOS 14 or later");
+    expect(hero).toContain("Apple silicon");
     expect(hero).not.toMatch(/invited|invitation/i);
     const routes = html.slice(html.indexOf('id="get-clawdtime"'));
     expect(routes).toContain('href="/download"');
@@ -226,14 +244,15 @@ describe("homepage install routes", () => {
     expect(targets.length).toBeGreaterThanOrEqual(3);
     for (const id of targets) expect(html).toContain(`id="${id}"`);
     // A copy button copies the exact command: one line, nothing around it.
-    for (const id of ["hero-command", "route-command"])
-      expect(html).toContain(`id="${id}">\n${installCommand}</pre>`);
+    for (const id of ["hero-command", "route-command"]) {
+      const command = html.match(
+        new RegExp(`<pre\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</pre>`),
+      )![1]!;
+      expect(command.trim()).toBe(installCommand);
+    }
     const prompt = html.match(/<pre id="agent-prompt">([\s\S]*?)<\/pre>/)![1]!;
     expect(prompt).toContain(installCommand);
     expect(prompt).toContain("clawdtime onboard");
-    // The pricing copy no longer says the product is invitation only.
-    const pricing = html.slice(html.indexOf('id="pricing"'));
-    expect(pricing.slice(0, pricing.indexOf("</h2>"))).not.toMatch(/invited/i);
   });
 
   it("keeps em and en dashes and contact instructions out of the changed pages", async () => {

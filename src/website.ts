@@ -11,9 +11,9 @@ export const macDownloadUrl =
 export const websitePages = {
   "/": {
     file: "index.html",
-    title: "ClawdTime | FaceTime calls from your coding agent",
+    title: "ClawdTime | A computer use agent for your Mac",
     description:
-      "Review your coding agent’s screen and respond over FaceTime. Explore ClawdTime’s invited Mac pilot, tested agents, setup and current limitations.",
+      "ClawdTime works across your Mac apps and browser. Watch the demo, explore guided setup and the native Mac app, and get the latest release.",
   },
   "/pricing": {
     file: "pricing.html",
@@ -35,9 +35,9 @@ export const websitePages = {
   },
   "/guides/getting-started": {
     file: "getting-started.html",
-    title: "Get started with the ClawdTime Mac pilot",
+    title: "Installation options and shared-number setup | ClawdTime",
     description:
-      "Check ClawdTime’s invitation, Mac, agent and permission requirements. Follow the supervised setup process for the current internal pilot.",
+      "Install ClawdTime with guided command setup or the native Mac app. Check early-release limitations and source installation requirements.",
   },
   "/privacy": {
     file: "privacy.html",
@@ -108,7 +108,7 @@ export function websitePage(
     <meta property="og:image" content="${websiteOrigin}/assets/social-card.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="ClawdTime. Your coding agent can FaceTime you. Invited Mac pilot." />
+    <meta property="og:image:alt" content="ClawdTime. A computer use agent for your Mac. Internal pilot." />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${escape(page.title)}" />
     <meta name="twitter:description" content="${escape(page.description)}" />

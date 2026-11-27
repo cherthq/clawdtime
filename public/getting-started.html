@@ -29,81 +29,117 @@
     <main id="main" class="section-wrap guide-page">
       <header class="guide-hero">
         <p class="eyebrow">GETTING STARTED / PUBLIC GUIDE</p>
-        <h1>A guided start.<br />Your existing tools.</h1>
+        <h1>Set up your Mac.<br />Connect your phone.</h1>
         <p class="lede">
-          Install ClawdTime with the Mac app or one command, then follow the
-          guided setup. This page explains prerequisites; it does not activate
-          your Mac or place a call.
+          Version 0.4.0 is available for Apple silicon and macOS 14 or later.
+          Install with one command or download the Mac app. The Mac app is
+          signed and notarized by Apple. Local use is available; shared calls
+          still need live qualification.
         </p>
-        <p class="guide-date">ClawdTime team · Checked November 13, 2026</p>
+        <p class="guide-date">Updated November 27, 2026</p>
       </header>
       <div class="guide-body">
-        <section>
-          <h2>Before you begin</h2>
-          <ul class="checklist">
-            <li>A phone with FaceTime and iMessage.</li>
-            <li>A Mac with Apple silicon, running macOS 14 or later.</li>
-            <li>ClawdTime, from the Mac app or the install command.</li>
-            <li>
-              A supported, running coding session and the project you intend to
-              connect.
-            </li>
-            <li>
-              A display you are comfortable sharing, with private material
-              closed or hidden.
-            </li>
-          </ul>
+        <section id="guided-command">
+          <h2>One command with guided setup</h2>
           <p>
-            Get ClawdTime only from <a href="/#get-clawdtime">this site</a> or
-            its GitHub releases. Do not download a similarly named package.
+            The release installer targets Apple silicon and macOS 14 or later.
+            It includes Node and the native helpers, checks the downloaded
+            files, and starts <code>clawdtime onboard</code>. Setup handles your
+            model key, permissions and optional phone pairing. Rerunning setup
+            checks what is already ready.
+          </p>
+          <p>
+            Paste this command into Terminal. It installs the published runtime
+            and opens guided setup. Read the release notes before installing.
+          </p>
+          <pre
+            class="install-command"
+          ><code>curl -fsSL https://www.clawdtime.com/install.sh | sh</code></pre>
+          <a href="https://github.com/cherthq/clawdtime/releases"
+            >Check published releases</a
+          >
+        </section>
+        <section id="mac-app">
+          <h2>Downloadable Mac app</h2>
+          <p>
+            The native app includes a setup window, secure key entry, permission
+            guidance, a readiness view, menu-bar Start and Stop, and optional
+            launch at login. Its bundled runtime needs no Node, Git or Xcode on
+            the user's Mac. It targets Apple silicon and macOS 14 or later.
+          </p>
+          <p>
+            <strong>Early release.</strong> The Mac app is signed and notarized
+            by Apple. Download it again if you have an earlier copy. Read the
+            release notes for installation requirements. A published package
+            does not establish real-call readiness.
+          </p>
+          <p><a class="button" href="/download">Download for Mac</a></p>
+          <p>
+            <a href="https://github.com/cherthq/clawdtime/releases/tag/v0.4.0"
+              >Version 0.4.0 release notes</a
+            >
+          </p>
+          <a
+            href="https://github.com/cherthq/clawdtime/blob/main/docs/MAC_APP.md"
+          >
+            Read the Mac app build and release guide</a
+          >
+        </section>
+        <section id="available-today">
+          <h2>Available today: build from source</h2>
+          <p>
+            For developers. Use macOS 14 or later, Node 24 or later with npm,
+            Git, and Xcode command line tools with Swift 6 or later. In a new
+            checkout, build both native helpers and start local onboarding:
+          </p>
+          <pre
+            class="install-command"
+          ><code>git clone https://github.com/cherthq/clawdtime.git
+cd clawdtime
+npm ci
+npm run build
+(cd mac &amp;&amp; swift build --product ClawdTimeTaskPanel)
+(cd mac &amp;&amp; swift build --product ClawdTimeTaskCapture)
+node dist/cli/main.js onboard --local</code></pre>
+          <p>
+            Enter your model key in the hidden prompt and grant the requested
+            Mac permissions yourself. Local mode skips phone setup. The
+            <a
+              href="https://github.com/cherthq/clawdtime/blob/main/docs/ONBOARDING.md"
+            >
+              onboarding guide</a
+            >
+            explains recovery and rerunning each step.
+          </p>
+          <p>
+            For shared-number development, follow the
+            <a
+              href="https://github.com/cherthq/clawdtime/blob/main/docs/SHARED_NUMBER_SETUP.md#participant-mac"
+            >
+              shared setup guide</a
+            >. It needs an enabled HTTPS coordinator and invited or existing
+            member access. Skip dedicated-line claims. Only the paired Mac's
+            live connection can obtain a call code; phone sign-in alone does not
+            authorize the Mac.
+          </p>
+          <p>
+            Shared calls have automated coverage but remain unqualified for live
+            use. The shared service has one simultaneous call slot. Shared
+            inbound texting is not implemented.
           </p>
         </section>
         <section>
-          <h2>Set up</h2>
-          <ol class="guide-steps">
-            <li>
-              <strong>Install ClawdTime and run the guided setup.</strong>
-              Download for Mac and open the app, or paste the install command
-              into Terminal. The setup asks for your model key and each
-              permission.
-            </li>
-            <li>
-              <strong
-                >Give the setup prompt to the intended coding session.</strong
-              >
-              Your agent guides configuration while preserving its native
-              permissions.
-            </li>
-            <li>
-              <strong>Select the screen and grant permission locally.</strong>
-              Screen Recording is needed for viewing. Accessibility and separate
-              control consent are needed for supported computer input. View-only
-              is a valid choice.
-            </li>
-            <li>
-              <strong>Enable the companion locally.</strong> Check the selected
-              display and session in the Mac Control Panel. Being connected is
-              not itself permission to share.
-            </li>
-            <li>
-              <strong>Authorize one supervised test call.</strong> Confirm the
-              correct screen, response delivery and continuation. If the call
-              fails or has an unknown outcome, do not repeatedly redial.
-            </li>
-          </ol>
-        </section>
-        <section>
-          <h2>How do I know setup worked?</h2>
+          <h2>Check that setup worked</h2>
           <p>
-            A successful installation or connected call is only a milestone. In
-            the supervised test, check that the phone shows the intended screen,
-            your feedback reaches the intended agent, and the agent actually
-            continues the agreed work. A computer input being submitted is not
-            proof that the intended UI changed.
+            Check local readiness with the guide's doctor commands. When you
+            choose to test a call, confirm that your phone shows the selected
+            display and that a requested action produces the intended result on
+            your Mac. Automated checks do not prove handset audio, picture or
+            native input success.
           </p>
           <p>
-            Local Stop ends ClawdTime sharing and input. End the call when
-            finished. Use Stop if the wrong screen, session or device appears.
+            Use local Stop if the wrong screen appears. If a call outcome is
+            uncertain, preserve it for recovery instead of repeatedly dialing.
           </p>
         </section>
         <section>
@@ -136,19 +172,6 @@
               >
             </article>
           </div>
-        </section>
-        <section>
-          <h2>Ready to install?</h2>
-          <p>
-            Download the Mac app or paste one command. Both routes run the same
-            guided setup. There is no paid plan or active subscription yet.
-          </p>
-          <a
-            class="button"
-            href="/#get-clawdtime"
-            data-metric-action="availability"
-            >Get ClawdTime ↗</a
-          >
         </section>
         <section class="related-links">
           <h2>More detail</h2>
