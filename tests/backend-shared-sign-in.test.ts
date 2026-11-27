@@ -182,6 +182,50 @@ describe("shared sign-in texts", () => {
     expect(verified.status).toBe(200);
     expect(typeof verified.body.token).toBe("string");
   });
+
+  it("refuses simple-request content types and grants no cross-origin access", async () => {
+    const store = new Store();
+    cleanup.push(() => store.close());
+    const f = await coordinator(store, [member]);
+    for (const type of [
+      "text/plain",
+      "text/plain;charset=UTF-8",
+      "application/x-www-form-urlencoded",
+      "multipart/form-data; boundary=x",
+      "application/jsonx",
+    ]) {
+      const refused = await f.post(
+        "/auth/start",
+        { recipient: member },
+        { type, client: memberMac },
+      );
+      expect(refused.status, type).toBe(415);
+      const verify = await f.post(
+        "/auth/verify",
+        { challengeId: "challenge", code: "00000000" },
+        { type },
+      );
+      expect(verify.status, type).toBe(415);
+    }
+    expect(f.texts).toEqual([]);
+    const accepted = await f.post(
+      "/auth/start",
+      { recipient: member },
+      { type: "application/json; charset=utf-8", client: memberMac },
+    );
+    expect(accepted.status).toBe(200);
+    expect(accepted.headers.get("access-control-allow-origin")).toBeNull();
+    const preflight = await fetch(`${f.origin}/auth/start`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://page.example",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    expect(preflight.headers.get("access-control-allow-methods")).toBeNull();
+  });
 });
 
 describe("shared sign-in limits and storage", () => {

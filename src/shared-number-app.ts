@@ -115,6 +115,12 @@ export function createSharedNumberApp(options: {
       lineOwnership: "external",
     }),
   );
+  // A web page can send text/plain or a form without a preflight; not JSON.
+  app.use("/auth/*", async (c, next) => {
+    if (!/^application\/json\s*(;|$)/i.test(c.req.header("content-type") ?? ""))
+      return c.json({ ok: false, code: "json_required" }, 415);
+    await next();
+  });
   app.post("/auth/start", async (c) => {
     const { recipient } = z
       .object({ recipient: z.string().max(32) })
