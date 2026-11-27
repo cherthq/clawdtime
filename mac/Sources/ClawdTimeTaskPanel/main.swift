@@ -49,6 +49,8 @@ import TaskPanelCore
   private var styleItems: [NSMenuItem] = []
   private var eyeItems: [NSMenuItem] = []
   private var sizeSliders: [NSSlider] = []
+  /// ClawdTime.app, when it runs this panel and says so. It then has no menu bar item of its own.
+  private let ownerApp = OwnerApp(environment: ProcessInfo.processInfo.environment)
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     // An accessory: no Dock icon and no menu bar takeover. It lives beside the work.
@@ -101,9 +103,34 @@ import TaskPanelCore
     sharing.target = self; stopSharingItems.append(sharing)
     let call = menu.addItem(withTitle: "Stop call", action: #selector(stopCall), keyEquivalent: "")
     call.target = self; stopCallItems.append(call)
+    for item in Self.ownerItems(ownerApp, target: self) { menu.addItem(item) }
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit ClawdTime. Work keeps running.", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     menu.autoenablesItems = false
+  }
+  /// Settings… and Stop ClawdTime, only while ClawdTime.app runs the panel. Without the app: nothing.
+  static func ownerItems(_ app: OwnerApp?, target: AnyObject) -> [NSMenuItem] {
+    guard app != nil else { return [] }
+    return [.separator()] + OwnerApp.menu.map { row in
+      let item = NSMenuItem(title: row.title, action: #selector(openOwnerLink(_:)), keyEquivalent: row.key)
+      item.target = target; item.representedObject = row.link.url.absoluteString
+      return item
+    }
+  }
+  /// Opens the row's link in the app that runs the panel, and in no other copy of it.
+  @objc func openOwnerLink(_ sender: NSMenuItem) {
+    guard let ownerApp, let raw = sender.representedObject as? String,
+      let link = OwnerAppLink.allCases.first(where: { $0.url.absoluteString == raw }) else { return }
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = link.activates
+    NSWorkspace.shared.open([link.url], withApplicationAt: ownerApp.bundle, configuration: configuration) { [weak self] _, error in
+      guard error != nil else { return }
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          self?.note(link == .stop ? "ClawdTime.app did not answer. Nothing was stopped." : "ClawdTime.app did not answer. Open it again.")
+        }
+      }
+    }
   }
   /// A menu row with the size slider. The mascot changes size while the person drags.
   private func sizeItem() -> NSMenuItem {
