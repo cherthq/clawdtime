@@ -60,6 +60,31 @@ final class EngineProcessTests: XCTestCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("cancelled").path))
   }
 
+  func testACancelSaysWhenTheEngineHasLeft() throws {
+    let folder = try temporaryFolder(self)
+    let script = try writeScript(folder.appendingPathComponent("clawdtime"), """
+    echo '{"type":"hello","protocol":2,"version":"0.4.0"}'
+    IFS= read -r line
+    sleep 0.5
+    echo ended > "\(folder.path)/ended"
+    exit 1
+    """)
+    let engine = EngineProcess(executable: script, arguments: ["onboard", "--json"])
+    let hello = expectation(description: "hello")
+    let left = expectation(description: "left")
+    engine.onEvent = { if case .hello = $0 { hello.fulfill() } }
+    try engine.start()
+    wait(for: [hello], timeout: 10)
+    var endedFirst = false
+    engine.cancel(grace: 5) {
+      endedFirst = FileManager.default.fileExists(atPath: folder.appendingPathComponent("ended").path)
+      left.fulfill()
+    }
+    wait(for: [left], timeout: 10)
+    XCTAssertTrue(endedFirst, "the engine ended its work before it left")
+    XCTAssertFalse(engine.isRunning)
+  }
+
   func testAnEngineThatIgnoresCancelIsEndedAfterTheGraceTime() throws {
     let folder = try temporaryFolder(self)
     let script = try writeScript(folder.appendingPathComponent("clawdtime"), """

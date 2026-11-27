@@ -82,6 +82,8 @@ function fakeMac(
     onCall?: (port: string) => void;
     /** The Darwin major version: 25 unless set. */
     darwinMajor?: number;
+    /** The ports remember the desktop that an app setup started, as the real ones do. */
+    remembers?: boolean;
   } = {},
 ) {
   const call = (port: string) => options.onCall?.(port);
@@ -95,6 +97,8 @@ function fakeMac(
     validated: 0,
   };
   let desktop = options.desktop ?? "absent";
+  /** The desktop that an app setup started runs, and no owner holds it. */
+  let setupStarted = false;
   let connection: "running" | "stopped" = "stopped";
   let restarted = false;
   const granted: PermissionFacts = {
@@ -145,6 +149,7 @@ function fakeMac(
         calls.desktopStarts++;
         log("Desktop panel requested.");
         desktop = "connected";
+        if (options.remembers) setupStarted = true;
       },
       restart: async () => {
         call("desktop.restart");
@@ -154,7 +159,13 @@ function fakeMac(
       stop: async () => {
         calls.desktopStops++;
         desktop = "absent";
+        setupStarted = false;
       },
+      ...(options.remembers
+        ? {
+            setupStarted: async () => setupStarted && desktop === "connected",
+          }
+        : {}),
     },
     permissions: async () => {
       calls.permissionChecks++;
@@ -244,7 +255,7 @@ async function runJson(
   home: string,
   ports: OnboardPorts,
   respond: Responder,
-  extra: { now?: () => number; root?: string } = {},
+  extra: { now?: () => number; root?: string; cancelAtHello?: boolean } = {},
 ) {
   const stdin = new PassThrough();
   const lines: string[] = [];
@@ -271,6 +282,8 @@ async function runJson(
         partial = partial.slice(end + 1);
         lines.push(line);
         const event = JSON.parse(line) as OnboardEvent;
+        if (event.type === "hello" && extra.cancelAtHello)
+          setImmediate(() => stdin.end('{"type":"cancel"}\n'));
         if (
           event.type === "step" &&
           (event.state === "needs_input" || event.state === "failed")
@@ -752,6 +765,67 @@ describe("clawdtime onboard --json", () => {
     ).toBe("ClawdTime connects this Mac to the shared number when setup ends.");
   });
 
+  it("in the app, a no to the connection ends the one that Terminal setup started, so the report is true", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const mac = fakeMac();
+    const yes = agree(() => coordinator.codeFor(member));
+    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    expect(mac.calls.connectionStarts).toBe(1);
+    const app = await runJson(
+      ["--coordinator", coordinator.origin, "--app"],
+      home,
+      mac.ports,
+      (event) =>
+        event.id === "connection" && event.state === "needs_input"
+          ? { type: "input", id: "connection", value: false }
+          : yes(event),
+    );
+    expect(stateOf(app.events, "connection")).toBe("skipped");
+    expect(
+      done(app.events).report.find((row) => row.id === "connection")!.detail,
+    ).toBe(
+      "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard.",
+    );
+    expect(mac.calls.connectionStops).toBe(1);
+    expect(await mac.ports.connection.status("desktop_1")).toBe("stopped");
+  });
+
+  it("a connection that does not stop after a no is reported as running, never as not connected", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const mac = fakeMac();
+    const yes = agree(() => coordinator.codeFor(member));
+    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    mac.ports.connection.stop = async () => {
+      throw Error("connection_did_not_stop");
+    };
+    const app = await runJson(
+      ["--coordinator", coordinator.origin, "--app"],
+      home,
+      mac.ports,
+      (event) =>
+        event.id === "connection"
+          ? event.state === "needs_input"
+            ? { type: "input", id: "connection", value: false }
+            : { type: "action", id: "connection", action: "skip" }
+          : yes(event),
+    );
+    const failed = steps(app.events).find(
+      (event) => event.id === "connection" && event.state === "failed",
+    )!;
+    expect(failed.detail).toBe(
+      "The connection that runs in the background did not stop. Try again.",
+    );
+    expect(
+      done(app.events).report.find((row) => row.id === "connection")!.detail,
+    ).toBe(
+      "A connection to the shared number still runs in the background. Run setup again to end it.",
+    );
+  });
+
   it("never starts a second connection: one that runs for this desktop is used", async () => {
     const coordinator = await fakeCoordinator();
     cleanup.push(coordinator.close);
@@ -808,6 +882,58 @@ describe("clawdtime onboard --json", () => {
       expect(mac.calls.desktopStarts).toBe(1);
       expect(mac.calls.desktopStops).toBe(stops);
     }
+  });
+
+  it("in the app, done says when the desktop that setup started still runs with no owner", async () => {
+    const mac = fakeMac({ remembers: true });
+    const home = folder();
+    const app = await runJson(["--local", "--app"], home, mac.ports, agree());
+    expect(app.code).toBe(0);
+    expect(done(app.events).setupDesktop).toBe(true);
+    // In Terminal the desktop is the person's own: done says nothing of it.
+    const terminal = await runJson(["--local"], home, fakeMac().ports, agree());
+    expect(done(terminal.events).setupDesktop).toBeUndefined();
+  });
+
+  it("in the app, a Stop during a second setup run ends the desktop that the first run started", async () => {
+    for (const stopAt of ["hello", "computer"] as const) {
+      const mac = fakeMac({ remembers: true });
+      const home = folder();
+      const no = (event: StepEvent) =>
+        event.id === "computer"
+          ? ({ type: "input", id: "computer", value: false } as const)
+          : agree()(event);
+      await runJson(["--local", "--app"], home, mac.ports, no);
+      expect(mac.calls.desktopStarts).toBe(1);
+      expect(mac.calls.desktopStops).toBe(0);
+      // The second run finds the desktop running: it did not start it.
+      const second = await runJson(
+        ["--local", "--app"],
+        home,
+        mac.ports,
+        (event) => (event.id === "computer" ? undefined : agree()(event)),
+        stopAt === "hello" ? { cancelAtHello: true } : {},
+      );
+      expect(second.code).toBe(1);
+      expect(mac.calls.desktopStarts).toBe(1);
+      expect(mac.calls.desktopStops).toBe(1);
+      expect(done(second.events).setupDesktop).toBe(false);
+    }
+  });
+
+  it("in Terminal, a Stop never ends a desktop that an earlier run started", async () => {
+    const mac = fakeMac({ remembers: true });
+    const home = folder();
+    await runJson(["--local"], home, mac.ports, (event) =>
+      event.id === "computer"
+        ? { type: "input", id: "computer", value: false }
+        : agree()(event),
+    );
+    const second = await runJson(["--local"], home, mac.ports, (event) =>
+      event.id === "computer" ? undefined : agree()(event),
+    );
+    expect(second.code).toBe(1);
+    expect(mac.calls.desktopStops).toBe(0);
   });
 
   it("starts an idle desktop again after the yes to computer use, in Terminal and in the app", async () => {

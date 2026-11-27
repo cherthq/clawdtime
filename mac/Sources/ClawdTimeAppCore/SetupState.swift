@@ -94,7 +94,7 @@ public struct SetupState: Equatable, Sendable {
       if step.state != .pending { focus = step.id }
     case .log(let level, let message):
       if level == "warn" { warn(message) }
-    case .done(let ready, let report):
+    case .done(let ready, let report, _):
       self.report = report
       for entry in report where steps[entry.id] == nil || steps[entry.id]?.state != entry.state {
         var step = steps[entry.id] ?? StepEvent(id: entry.id, state: entry.state)

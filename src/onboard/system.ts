@@ -10,14 +10,16 @@ import {
   closeSync,
   constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
 } from "node:fs";
 import { release } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { z } from "zod";
 import {
   desktopStateFolder,
@@ -190,7 +192,11 @@ export function processStartMs(start: string) {
   );
 }
 
-const sameProcess = async (record: ConnectionRecord) => {
+const sameProcess = async (record: {
+  pid: number;
+  processStart: string;
+  command: string;
+}) => {
   const now = await processIdentity(record.pid);
   return (
     !!now && now.start === record.processStart && now.command === record.command
@@ -317,7 +323,11 @@ const foregroundLock = "desktop-owner.lock";
  */
 export async function stopDesktopService(
   system: { env: Record<string, string | undefined>; home: string },
-  options: { waitMs?: number } = {},
+  options: {
+    waitMs?: number;
+    /** Only this process: a service with another id gets no signal. */
+    pid?: number;
+  } = {},
 ) {
   const folder = desktopStateFolder(system);
   if (!folder) return;
@@ -332,6 +342,7 @@ export async function stopDesktopService(
   } catch {
     return;
   }
+  if (options.pid !== undefined && pid !== options.pid) return;
   // The service writes its lock once, as it starts. The process with that id
   // is the service only when it began before the lock was written and runs
   // the task server; else the id belongs to another process now, and it gets
@@ -357,11 +368,119 @@ export async function stopDesktopService(
   }
 }
 
+/**
+ * The path of a file of a release runtime through the `current` link of its
+ * folder of versions, when the file sits in the version that `current` names
+ * now. An update switches `current` and a later one deletes the old version,
+ * so a path that is saved for later (the capture helper of a pairing) goes
+ * through the link. Any other path stays as it is.
+ */
+export function stableRuntimePath(path: string): string {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    return path;
+  }
+  for (let folder = dirname(real); dirname(folder) !== folder;) {
+    const link = join(dirname(folder), "current");
+    try {
+      if (
+        basename(folder) !== "current" &&
+        existsSync(join(folder, "manifest.json")) &&
+        lstatSync(link).isSymbolicLink() &&
+        realpathSync(link) === folder
+      )
+        return join(link, relative(folder, real));
+    } catch {
+      // No link here: look one folder up.
+    }
+    folder = dirname(folder);
+  }
+  return path;
+}
+
+/**
+ * The record of the desktop service that setup started: what `ps` said of
+ * it right after the start, and whether the app's setup started it. It holds
+ * no credential.
+ */
+const desktopRecordSchema = z
+  .object({
+    version: z.literal(1),
+    pid: z.number().int().positive(),
+    processStart: z.string().min(1).max(100),
+    command: z.string().min(1).max(8192),
+    app: z.boolean(),
+  })
+  .strict();
+type DesktopRecord = z.infer<typeof desktopRecordSchema>;
+
+/**
+ * The desktop service that setup started, remembered across setup runs. A
+ * stop ends only that process, after `ps` still says the same of it, and
+ * only while it is the service of the owner lock. A desktop that the person
+ * started is never in it.
+ */
+function setupDesktop(
+  system: { env: Record<string, string | undefined>; home: string },
+  file: string,
+) {
+  const servicePid = (): number | null => {
+    const folder = desktopStateFolder(system);
+    if (!folder) return null;
+    try {
+      return z
+        .object({ pid: z.number().int().positive() })
+        .strict()
+        .parse(readDesktopPrivateJSON(join(folder, "owner.lock"))).pid;
+    } catch {
+      return null;
+    }
+  };
+  /** The record, only while its process is the running desktop service. */
+  const live = async (): Promise<DesktopRecord | null> => {
+    const loaded = readPrivateJSON(file);
+    if (loaded.problem || loaded.value === undefined || loaded.value === null)
+      return null;
+    const parsed = desktopRecordSchema.safeParse(loaded.value);
+    if (
+      parsed.success &&
+      servicePid() === parsed.data.pid &&
+      (await sameProcess(parsed.data))
+    )
+      return parsed.data;
+    rmSync(file, { force: true });
+    return null;
+  };
+  return {
+    servicePid,
+    live,
+    /** Remembers the service that runs now, which this start made. */
+    remember: async (app: boolean) => {
+      const pid = servicePid();
+      const identity = pid ? await processIdentity(pid) : null;
+      if (!pid || !identity) return rmSync(file, { force: true });
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      writePrivateJSON(file, {
+        version: 1,
+        pid,
+        processStart: identity.start,
+        command: identity.command,
+        app,
+      } satisfies DesktopRecord);
+    },
+    forget: () => rmSync(file, { force: true }),
+  };
+}
+
 /** The ports of the real Mac. */
 export function macPorts(input: {
   env: Record<string, string | undefined>;
   home: string;
   root: string;
+  /** The Mac app drives setup: a desktop that setup starts is the app's to own or end. */
+  app?: boolean;
   command: { executable: string; args: string[] };
   /** Starts the desktop. `tucked`: the panel, when one opens, takes no focus. */
   startDesktop: (
@@ -375,6 +494,11 @@ export function macPorts(input: {
   const panel = () => findNativeHelper("ClawdTimeTaskPanel", where);
   const capture = () => findNativeHelper("ClawdTimeTaskCapture", where);
   const system = { env: input.env, home: input.home };
+  const started = setupDesktop(
+    system,
+    join(sharedPairingPaths(input.home).directory, "onboard-desktop.json"),
+  );
+  const app = input.app === true;
   return {
     mac: async () => ({
       darwinMajor: darwinMajor(),
@@ -387,13 +511,41 @@ export function macPorts(input: {
         const folder = desktopStateFolder(system);
         return (folder ? findDesktopService(folder) : null)?.instanceId ?? null;
       },
-      start: (log) => input.startDesktop(log),
-      stop: () => stopDesktopService(system),
+      // Setup starts the desktop only when none runs. A service that runs
+      // after the start, with no owner lock before it, is the one it made.
+      start: async (log) => {
+        const before = started.servicePid();
+        try {
+          await input.startDesktop(log);
+        } finally {
+          if (before === null) await started.remember(app);
+        }
+      },
+      // Only the service that setup started, checked by its process.
+      stop: async () => {
+        const record = await started.live();
+        if (!record) return;
+        await stopDesktopService(system, { pid: record.pid });
+        started.forget();
+      },
+      setupStarted: async () => {
+        const record = await started.live();
+        const folder = desktopStateFolder(system);
+        return (
+          !!record &&
+          record.app &&
+          !(folder && processLockHolder(join(folder, foregroundLock)))
+        );
+      },
       // An open panel stays and finds the new service by itself; a new one
-      // opens tucked, so the restart takes no focus.
+      // opens tucked, so the restart takes no focus. A desktop that setup
+      // started stays setup's after the restart.
       restart: async (log) => {
+        const record = await started.live();
         await stopDesktopService(system);
+        if (!record) started.forget();
         await input.startDesktop(log, { tucked: true });
+        if (record) await started.remember(record.app);
       },
     },
     permissions: async (): Promise<PermissionFacts> => {
@@ -433,7 +585,11 @@ export function macPorts(input: {
       return facts;
     },
     displays: {
-      capture,
+      // The pairing saves this path, so it must outlive updates.
+      capture: () => {
+        const found = capture();
+        return found && stableRuntimePath(found);
+      },
       list: async () => {
         const binary = capture();
         return binary ? listSharedDisplays(binary) : [];

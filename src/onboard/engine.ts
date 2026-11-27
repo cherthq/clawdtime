@@ -85,8 +85,17 @@ export interface OnboardPorts {
     start(log: (message: string) => void): Promise<void>;
     /** Starts an idle desktop again, so that it reads a new setting. Optional. */
     restart?(log: (message: string) => void): Promise<void>;
-    /** Ends the desktop service. Optional: setup in the Mac app ends the desktop it started when the person stops setup. */
+    /**
+     * Ends the desktop service that setup started, and only that one.
+     * Optional: setup in the Mac app ends the desktop it started when the
+     * person stops setup, and any setup ends a desktop that was starting.
+     */
     stop?(): Promise<void>;
+    /**
+     * Whether a desktop service that an app setup started (in this run or an
+     * earlier one) still runs, with no foreground owner. Optional.
+     */
+    setupStarted?(): Promise<boolean>;
   };
   /** A fresh read-only check of the installed panel and capture helper. */
   permissions(): Promise<PermissionFacts>;
@@ -190,6 +199,8 @@ export class OnboardEngine {
   private paired: SharedConnection | null = null;
   private keepOther = false;
   private startedDesktop = false;
+  /** A stop came while the desktop started: setup ends what that start made. */
+  private stoppedWhileStarting = false;
   private computerOn = false;
   /** Every question id of this run. */
   private asked = new Set<string>();
@@ -251,18 +262,44 @@ export class OnboardEngine {
           });
       }
     }
-    // The app's Stop ends every process that its setup started.
-    if (cancelled && this.settings.appOwned && this.startedDesktop)
-      await this.ports.desktop.stop?.().catch(() => {
-        this.log("warn", "The desktop that setup started did not stop.");
-      });
+    // The app's Stop ends every process that its setup started. A stop that
+    // comes while the desktop starts, in the app or in Terminal, ends the
+    // desktop of that start: the start runs to its end first, so that its
+    // service is known, and is never left half started with no owner.
+    // In the app, a desktop that an earlier setup run started and that no
+    // owner holds is setup's too: a Stop in a second run ends it.
+    let stopped = false;
+    if (
+      cancelled &&
+      (this.stoppedWhileStarting ||
+        (this.settings.appOwned &&
+          (this.startedDesktop || (await this.adoptable()))))
+    )
+      await this.ports.desktop.stop?.().then(
+        () => (stopped = true),
+        () => this.log("warn", "The desktop that setup started did not stop."),
+      );
     const ready = !cancelled && this.finish();
+    // The app learns whether a desktop that setup started runs with no
+    // owner: its owner takes it on Finish, or a Stop ends it.
+    const setupDesktop = this.settings.appOwned
+      ? this.ports.desktop.setupStarted
+        ? await this.adoptable()
+        : this.startedDesktop && !stopped
+      : undefined;
     this.io.emit({
       type: "done",
       ready,
       report: stepIds.map((id) => this.rows.get(id)!),
+      ...(setupDesktop !== undefined ? { setupDesktop } : {}),
     });
     return { ready, cancelled };
+  }
+
+  /** A desktop that an app setup started runs, with no owner. A failed check counts as one. */
+  private async adoptable() {
+    if (!this.ports.desktop.setupStarted) return false;
+    return this.ports.desktop.setupStarted().catch(() => true);
   }
 
   private step(
@@ -622,11 +659,22 @@ export class OnboardEngine {
           );
           this.startedDesktop = true;
         } catch (error) {
+          await new Promise((done) => setImmediate(done));
+          if (this.io.cancelled()) {
+            // A start that failed may still have left its service.
+            this.stoppedWhileStarting = true;
+            throw new Cancelled();
+          }
           await this.failed(
             "desktop",
             plain(error, "The desktop did not start. Nothing was replaced."),
           );
           continue;
+        }
+        await new Promise((done) => setImmediate(done));
+        if (this.io.cancelled()) {
+          this.stoppedWhileStarting = true;
+          throw new Cancelled();
         }
         status = await this.waitForDesktop();
       }
@@ -1287,10 +1335,38 @@ export class OnboardEngine {
           ? "ClawdTime keeps the connection while the app runs. Calls from your verified phone can then reach this Mac."
           : "It stays connected in the background while the desktop runs. Calls from your verified phone can then reach this Mac.",
       );
-      if (go !== true)
+      if (go !== true) {
+        if (state === "stopped")
+          return skipped(
+            "This Mac is not connected. To connect it later, run clawdtime onboard.",
+          );
+        // No means not connected: the background connection that Terminal
+        // setup started (or one of an earlier desktop) ends now, checked by
+        // its process start and command. A report never says not connected
+        // while it runs.
+        await this.proceed();
+        this.step("connection", "in_progress", {
+          detail: "Ending the connection that runs in the background.",
+        });
+        try {
+          await this.ports.connection.stop();
+        } catch (error) {
+          if (error instanceof Cancelled) throw error;
+          if (
+            (await this.failed(
+              "connection",
+              "The connection that runs in the background did not stop. Try again.",
+            )) === "skip"
+          )
+            return skipped(
+              "A connection to the shared number still runs in the background. Run setup again to end it.",
+            );
+          continue;
+        }
         return skipped(
-          "This Mac is not connected. To connect it later, run clawdtime onboard.",
+          "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard.",
         );
+      }
       await this.proceed();
       this.step("connection", "in_progress", {
         detail: app

@@ -152,12 +152,112 @@ final class SetupCoordinatorTests: XCTestCase {
     setup.stop { done = true }
     XCTAssertTrue(stoppedEngine.cancelled)
     XCTAssertEqual(owner.stops, 1)
-    XCTAssertTrue(done)
     XCTAssertEqual(setup.state.phase, .stopped)
     XCTAssertFalse(setup.engineIsRunning)
     stoppedEngine.emit(#"{"type":"step","id":"phone","state":"ready"}"#)
-    stoppedEngine.onExit?(15, [])
+    stoppedEngine.leave(code: 15)
+    XCTAssertTrue(done)
     XCTAssertEqual(setup.state.phase, .stopped, "events after Stop change nothing")
+  }
+
+  func testStopGivesTheEngineTimeToEndTheDesktopItWasStarting() {
+    let setup = coordinator()
+    engine.emit(#"{"type":"step","id":"desktop","state":"in_progress"}"#)
+    let stoppedEngine = engine!
+    var done = false
+    setup.stop { done = true }
+    // A first desktop start can take many seconds: SIGTERM only after the grace time.
+    XCTAssertGreaterThanOrEqual(stoppedEngine.grace ?? 0, 15)
+    XCTAssertFalse(done, "Stop is done only when the engine has left")
+    XCTAssertTrue(setup.isStopping)
+    stoppedEngine.leave()
+    XCTAssertTrue(done)
+    XCTAssertFalse(setup.isStopping)
+  }
+
+  func testANewRunStartsOnlyAfterTheStoppedEngineHasLeft() {
+    var made = 0
+    let first = ScriptedEngine(), second = ScriptedEngine()
+    let setup = SetupCoordinator(makeEngine: { _ in made += 1; return made == 1 ? first : second }, owner: nil, open: { _ in false })
+    setup.begin()
+    first.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
+    setup.stop()
+    setup.begin()
+    XCTAssertEqual(made, 1, "two engines never run at once")
+    first.leave()
+    XCTAssertEqual(made, 2)
+    XCTAssertTrue(second.started)
+  }
+
+  /// A coordinator whose engines are made in turn: the first one runs setup, later ones only end what setup left.
+  private func coordinatorWithEngines(_ count: Int) -> (SetupCoordinator, [ScriptedEngine], RecordingOwner) {
+    let engines = (0..<count).map { _ in ScriptedEngine() }
+    var made = 0
+    let owner = RecordingOwner()
+    let setup = SetupCoordinator(makeEngine: { _ in made += 1; return engines[made - 1] }, owner: owner, open: { _ in false })
+    setup.begin()
+    engines[0].emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
+    return (setup, engines, owner)
+  }
+
+  func testStopStaysAvailableAtTheFinishedScreenAndEndsTheDesktopThatSetupStarted() {
+    let (setup, engines, _) = coordinatorWithEngines(2)
+    engines[0].emit(#"{"type":"done","ready":true,"report":[{"id":"desktop","state":"ready"}],"setupDesktop":true}"#)
+    engines[0].onExit?(0, [])
+    XCTAssertFalse(setup.engineIsRunning)
+    XCTAssertTrue(setup.canStop, "a desktop that setup started runs: Stop stays available")
+    var done = false
+    setup.stop { done = true }
+    // An engine that is cancelled at once ends the desktop that app setup started.
+    XCTAssertTrue(engines[1].started)
+    XCTAssertTrue(engines[1].cancelled)
+    XCTAssertGreaterThanOrEqual(engines[1].grace ?? 0, 15)
+    XCTAssertFalse(done)
+    engines[1].leave()
+    XCTAssertTrue(done)
+    XCTAssertFalse(setup.canStop)
+  }
+
+  func testQuitAtTheFinishedScreenEndsTheDesktopThatSetupStartedBeforeItReplies() {
+    let (setup, engines, _) = coordinatorWithEngines(2)
+    engines[0].emit(#"{"type":"done","ready":true,"report":[{"id":"desktop","state":"ready"}],"setupDesktop":true}"#)
+    engines[0].onExit?(0, [])
+    var replied = false
+    setup.shutdown { replied = true }
+    XCTAssertTrue(engines[1].cancelled)
+    XCTAssertFalse(replied)
+    engines[1].leave()
+    XCTAssertTrue(replied)
+  }
+
+  func testFinishHandsTheDesktopThatSetupStartedToTheOwner() {
+    let (setup, engines, owner) = coordinatorWithEngines(2)
+    engines[0].emit(#"{"type":"done","ready":true,"report":[{"id":"desktop","state":"ready"}],"setupDesktop":true}"#)
+    engines[0].onExit?(0, [])
+    setup.finish()
+    XCTAssertEqual(owner.starts, [false])
+    XCTAssertFalse(setup.canStop, "the owner holds it now; the menu's Stop ends it")
+    setup.stop()
+    XCTAssertFalse(engines[1].started, "the owner's stop ends it: no second engine")
+    XCTAssertEqual(owner.stops, 1)
+  }
+
+  func testAnEngineThatLeavesBeforeItsReportMayLeaveADesktop() {
+    let (setup, engines, _) = coordinatorWithEngines(2)
+    engines[0].emit(#"{"type":"step","id":"desktop","state":"in_progress"}"#)
+    engines[0].onExit?(9, ["killed"])
+    XCTAssertTrue(setup.canStop)
+    setup.stop()
+    XCTAssertTrue(engines[1].cancelled)
+  }
+
+  func testNoDesktopLeftMeansNoSecondEngine() {
+    let (setup, engines, _) = coordinatorWithEngines(2)
+    engines[0].emit(#"{"type":"done","ready":true,"report":[{"id":"desktop","state":"ready"}],"setupDesktop":false}"#)
+    engines[0].onExit?(0, [])
+    XCTAssertFalse(setup.canStop)
+    setup.stop()
+    XCTAssertFalse(engines[1].started)
   }
 
   func testAnotherProtocolCancelsTheEngineBeforeAnyStep() {
@@ -175,7 +275,10 @@ final class SetupCoordinatorTests: XCTestCase {
     var replied = false
     setup.shutdown { replied = true }
     XCTAssertTrue(engine.cancelled)
+    XCTAssertGreaterThanOrEqual(engine.grace ?? 0, 15)
     XCTAssertEqual(owner.stops, 1)
+    XCTAssertFalse(replied, "the app quits only after the engine has left")
+    engine.leave()
     XCTAssertTrue(replied)
   }
 

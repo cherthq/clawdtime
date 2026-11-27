@@ -89,7 +89,17 @@ export type OnboardEvent =
   | { type: "hello"; protocol: number; version: string }
   | StepEvent
   | { type: "log"; level: "info" | "warn"; message: string }
-  | { type: "done"; ready: boolean; report: ReportRow[] };
+  | {
+      type: "done";
+      ready: boolean;
+      report: ReportRow[];
+      /**
+       * With `--app` only: a desktop service that setup started still runs
+       * and no owner holds it. The app's owner takes it on Finish, and a
+       * cancelled run ends it.
+       */
+      setupDesktop?: boolean;
+    };
 
 const stepId = z.enum(stepIds);
 /** A question id: random, url-safe, used for one answer only. */
@@ -142,7 +152,7 @@ export interface OnboardIO {
 export function jsonLinesIO(
   input: Readable,
   write: (line: string) => void,
-): OnboardIO & { close(): void } {
+): OnboardIO & { close(): void; cancel(): void } {
   const queue: OnboardCommand[] = [];
   let waiting: ((command: OnboardCommand) => void) | null = null;
   let ended = false;
@@ -191,5 +201,7 @@ export function jsonLinesIO(
           : new Promise((resolve) => (waiting = resolve)),
     cancelled: () => stopped || ended,
     close: () => lines.close(),
+    /** A cancel from outside the input, such as SIGTERM. */
+    cancel: () => deliver({ type: "cancel" }),
   };
 }

@@ -22,6 +22,20 @@ terminal, it opens `/dev/tty`. With no terminal at all, it prints
 `Run clawdtime onboard in Terminal to finish setup.` and exits with code 3. It
 never reads a key from a pipe.
 
+The terminal wizard reads the terminal only while a question is open. Before
+each question it drops everything typed so far, so a yes typed twice by
+mistake never answers the next question. At a yes or no consent question,
+Return alone means no.
+
+SIGTERM, SIGINT (Ctrl+C outside a question) and SIGHUP stop setup as a cancel
+does. A desktop start that runs then goes to its end, and setup ends the
+desktop of that start before it leaves, in Terminal too. Setup never leaves a
+desktop half started with no owner.
+
+The desktop launcher holds `desktop-launch.lock` with a lock that the kernel
+ends with its process. A launcher that is gone, also after a kill, never
+blocks the next launch.
+
 | Exit code | Meaning                                   |
 | --------- | ----------------------------------------- |
 | 0         | Setup is done.                            |
@@ -86,6 +100,10 @@ owner.
   `clawdtime shared run`. A background connection that Terminal setup started
   ends first. When the person stops setup in the app, setup ends the desktop
   that it started.
+- **A no to the connection.** In Terminal and in the app, a no (or a skip)
+  ends a background connection that Terminal setup started, after the same
+  check of its process. The report then says that it ended. When it does not
+  stop, the step fails with Try again, and a skip reports that it still runs.
 
 One connection runs on a Mac at a time. `clawdtime shared run` holds a lock
 (`~/.config/clawdtime/shared/connection.lock`) for its whole life, and a
@@ -139,7 +157,10 @@ example a pairing that the coordinator made.
   answer gives or refuses consent: computer use, a sign-in text, view,
   computer actions, reports, the pairing, a replacement and the connection.
   An interface gives such a question no default answer.
-- `done` comes last, with `ready` and one report row for each step.
+- `done` comes last, with `ready` and one report row for each step. With
+  `--app` it has `setupDesktop`: true while a desktop service that setup
+  started runs and no owner holds it. A cancelled run with `--app` ends that
+  service, also when an earlier run started it.
 
 ### Commands
 
@@ -214,11 +235,18 @@ Setup writes only what its steps make:
 | `~/.local/share/clawdtime/computer/config.json`      | `computer`                                                                                 |
 | `~/.config/clawdtime/shared/connection.json`         | `pairing`                                                                                  |
 | `~/.config/clawdtime/shared/onboard-connection.json` | `connection`, the process, its start and command, and the desktop it serves, no credential |
+| `~/.config/clawdtime/shared/onboard-desktop.json`    | `desktop`, the desktop service that setup started, its start and command, no credential    |
 | `~/.config/clawdtime/shared/connection.log`          | `connection`, the output of the connection                                                 |
 | `~/.config/clawdtime/shared/connection.lock`         | `clawdtime shared run`, the process that holds the one connection                          |
 
 Every file is for its owner only. `CLAWDTIME_CONFIG_HOME` moves the first
 three.
+
+The pairing saves the path of the capture helper. In an installed release it
+goes through the `current` link of the runtime folder, for example
+`~/Library/Application Support/ClawdTime/runtime/current/app/native/ClawdTimeTaskCapture`,
+so the pairing still works after an update removes the version that setup
+ran from.
 
 A process id comes back after its process ends, so a saved id alone never
 gets a signal. Setup stops the connection only when `ps` shows the start time
