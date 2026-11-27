@@ -10,7 +10,12 @@ import {
   ControlCoordinator,
   SimulatedDevice,
 } from "../src/control/coordinator.js";
-import { websiteOrigin, websitePages } from "../src/website.js";
+import {
+  installCommand,
+  macDownloadUrl,
+  websiteOrigin,
+  websitePages,
+} from "../src/website.js";
 import { WEBSITE_PUBLIC_PATHS } from "../src/storage/website-metrics.js";
 
 const operator = "website-test-operator-not-a-real-secret";
@@ -92,6 +97,10 @@ describe("public website discovery and isolation", () => {
         /(?:href|src)="(\/[^"#]*)(?:#[^"]*)?"/g,
       )) {
         const target = await runtime.app.request(match[1]!);
+        if (match[1] === "/download") {
+          expect(target.status).toBe(302);
+          continue;
+        }
         expect(target.status, `${path} links to ${match[1]}`).toBe(200);
       }
     }
@@ -151,6 +160,44 @@ describe("public website discovery and isolation", () => {
       expect(xml).not.toContain(`<loc>${websiteOrigin}${path}</loc>`);
     }
     expect(runtime.store.effects()).toHaveLength(0);
+  });
+});
+
+describe("install routes", () => {
+  it("serves the install script as plain text that no cache keeps", async () => {
+    const runtime = fixture();
+    const response = await runtime.app.request("/install.sh");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "text/plain; charset=utf-8",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
+    expect(await response.text()).toBe(
+      readFileSync(new URL("../scripts/install.sh", import.meta.url), "utf8"),
+    );
+    const head = await runtime.app.request("/install.sh", { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(installCommand).toBe(
+      "curl -fsSL https://www.clawdtime.com/install.sh | sh",
+    );
+  });
+
+  it("sends Download for Mac to the disk image of the latest release", async () => {
+    const runtime = fixture();
+    const response = await runtime.app.request("/download");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(macDownloadUrl);
+    expect(macDownloadUrl).toBe(
+      "https://github.com/cherthq/clawdtime/releases/latest/download/ClawdTime-arm64.dmg",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
+    const sitemap = await (await runtime.app.request("/sitemap.xml")).text();
+    expect(sitemap).not.toContain("/download");
+    expect(sitemap).not.toContain("/install.sh");
   });
 });
 
