@@ -13,8 +13,9 @@ provider, media and callback integrations are qualified. `clawdtime shared
 doctor` reports live shared-call acceptance as not qualified. No two-member,
 two-Mac physical test has run.
 
-Changes in progress: call proofs bound to the paired Mac, sign-in limits, call
-liveness, re-pair and revoke.
+Call proofs are bound to the paired Mac; sign-in has limits and an invited
+list; unknown calls are reconciled with the provider; a member can re-pair,
+rotate a device credential and revoke.
 
 Not built: email identities, shared inbound texting and a background
 participant service. The older masked-number text poller must never be used
@@ -82,7 +83,10 @@ their credentials.
 - Verified incoming events reserve the one line slot without granting a Mac.
   A trusted adapter must supply the exact provider call, room and expected
   participant. Duplicate event IDs retain their original binding.
-- The authenticated account receives one eight-digit code for that call.
+- The paired Mac of the member whose verified number is calling receives
+  one eight-digit code for that call, over its own authenticated device
+  connection (`clawdtime shared prove`). No other member and no sign-in
+  session gets it. An unverified caller is released after 90 seconds.
   It expires after at most two minutes and allows five distinct attempts.
   It is stored as a keyed digest with a separate 32-byte coordinator key.
   The code is accepted only through a separately verified original call turn.
