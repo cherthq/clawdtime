@@ -124,6 +124,44 @@ ClawdTime opens the page, reads it and tells you the answer in the chat.
 | `hands`: a task says that the panel lacks a permission | Do step 2 of "Set it up by hand". Then choose Quit ClawdTime in the mascot's menu, and run `clawdtime start`     |
 | `calls to you` not ready                               | Run `clawdtime onboard`, or `clawdtime connect` for a dedicated line: it does the missing step                   |
 
+## Uninstall
+
+In the app, open Settings, General, and choose **Uninstall ClawdTime…**. In
+Terminal, run:
+
+```sh
+clawdtime uninstall
+```
+
+It lists what it moves and what it keeps, and asks first. Add `--yes` to skip
+the question, or `--plan` to see the list and change nothing. It does this,
+and it never uses sudo:
+
+1. It stops the shared connection, the desktop service and the panel. It
+   checks each process before it stops it. When the app runs the desktop,
+   quit the app first, or uninstall from the app.
+2. It unpairs this Mac from the shared number, when the Mac is paired and the
+   coordinator answers. When the coordinator does not answer, the pairing
+   stays in `~/.config/clawdtime/shared`, and nothing on the Mac uses it. To
+   finish, pair another Mac with `clawdtime shared pair --replace`, which
+   unpairs this one. Or install again and run `clawdtime uninstall` while the
+   Mac is online.
+3. It moves these to the Trash. It deletes nothing:
+   - the runtime, `~/Library/Application Support/ClawdTime`
+   - the command, `~/.local/bin/clawdtime`, when it runs that runtime
+   - the settings, keys and pairing, `~/.local/share/clawdtime` and
+     `~/.config/clawdtime`, and the logs, `~/Library/Logs/ClawdTime`
+
+To keep your settings and keys for a later install, add `--keep-settings`.
+
+It keeps these where they are, and says so:
+
+- receipts of actions whose outcome is unknown or pending
+- your project folder, such as `~/clawdtime-work`
+- a source checkout, and a `clawdtime` command that runs one
+- the app, `ClawdTime.app`: uninstall it from its own Settings, which also
+  takes out its login item
+
 ## Build from the source
 
 To build ClawdTime from its source, with a dedicated line, add `--source`:

@@ -45,6 +45,8 @@ struct SettingsRootView: View {
   @ObservedObject var setup: SetupCoordinator
   let loginItem: LoginItemControlling
   var actions = SettingsActions()
+  /// Uninstall ClawdTime… on the General page. Nil: the page has no such row.
+  var uninstall: UninstallModel?
   @State private var tab: SettingsTab
   /// For the pictures of the tests: a key field or a removal that is open.
   private let editing: String?
@@ -55,8 +57,10 @@ struct SettingsRootView: View {
   static let size = CGSize(width: 760, height: 620)
 
   init(model: SettingsModel, owner: ProcessOwner, setup: SetupCoordinator, loginItem: LoginItemControlling,
-       actions: SettingsActions = SettingsActions(), tab: SettingsTab = .keys, editing: String? = nil, removing: String? = nil) {
+       actions: SettingsActions = SettingsActions(), uninstall: UninstallModel? = nil, tab: SettingsTab = .keys,
+       editing: String? = nil, removing: String? = nil) {
     self.model = model; self.owner = owner; self.setup = setup; self.loginItem = loginItem; self.actions = actions
+    self.uninstall = uninstall
     _tab = State(initialValue: tab)
     self.editing = editing; self.removing = removing
   }
@@ -142,7 +146,7 @@ struct SettingsRootView: View {
         case .keys: KeysPage(model: model, editing: editing, removing: removing)
         case .model: ModelPage(model: model)
         case .permissions: PermissionsPage(model: model)
-        case .general: GeneralPage(model: model, owner: owner, setup: setup, loginItem: loginItem, actions: actions)
+        case .general: GeneralPage(model: model, owner: owner, setup: setup, loginItem: loginItem, actions: actions, uninstall: uninstall)
         }
       }
       .padding(.horizontal, 30)
@@ -675,11 +679,15 @@ struct GeneralPage: View {
   @ObservedObject var setup: SetupCoordinator
   let loginItem: LoginItemControlling
   var actions: SettingsActions
+  var uninstall: UninstallModel?
   @State private var openAtLogin: Bool
   @State private var loginNote: String?
+  @State private var uninstalling = false
 
-  init(model: SettingsModel, owner: ProcessOwner, setup: SetupCoordinator, loginItem: LoginItemControlling, actions: SettingsActions) {
+  init(model: SettingsModel, owner: ProcessOwner, setup: SetupCoordinator, loginItem: LoginItemControlling, actions: SettingsActions,
+       uninstall: UninstallModel? = nil) {
     self.model = model; self.owner = owner; self.setup = setup; self.loginItem = loginItem; self.actions = actions
+    self.uninstall = uninstall
     _openAtLogin = State(initialValue: loginItem.isEnabled)
     _loginNote = State(initialValue: loginItem.needsApproval ? "Allow ClawdTime in System Settings, Login Items." : nil)
   }
@@ -709,6 +717,21 @@ struct GeneralPage: View {
           Button { actions.stop() } label: { Label("Stop", systemImage: "stop.fill") }
             .buttonStyle(SmallPill(kind: .danger))
             .disabled(!(owner.isActive || setup.engineIsRunning))
+        }
+      }
+      if let uninstall {
+        SettingsGroup {
+          action("Uninstall", detail: "Stops ClawdTime, unpairs this Mac and moves ClawdTime and its files to the Trash. It deletes nothing.") {
+            Button("Uninstall ClawdTime…") {
+              uninstalling = true
+              Task { await uninstall.load() }
+            }
+            .buttonStyle(SmallPill(kind: .danger))
+          }
+        }
+        .sheet(isPresented: $uninstalling) {
+          UninstallSheet(model: uninstall, cancel: { uninstalling = false })
+            .interactiveDismissDisabled(UninstallSheet.holdsOpen(uninstall.phase))
         }
       }
       SettingsGroup {

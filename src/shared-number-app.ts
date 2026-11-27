@@ -219,6 +219,15 @@ export function createSharedNumberApp(options: {
       ),
     });
   });
+  // The Mac unpairs itself, as when ClawdTime is uninstalled. It only ends
+  // access, so its own credential is enough.
+  app.post("/device/unpair", async (c) => {
+    z.object({})
+      .strict()
+      .parse(await body(c));
+    router.unpairDevice(bearer(c.req.header("authorization")));
+    return c.json({ ok: true });
+  });
   for (const action of ["heartbeat", "disconnect", "poll"] as const)
     app.post(`/device/${action}`, async (c) => {
       const { connectionId } = z

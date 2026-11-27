@@ -196,10 +196,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.setup.begin()
       },
       stop: { [weak self] in self?.setup.stop() })
+    let defaults = defaults, app = appBundle
+    let uninstall = UninstallModel(
+      // Stopping, unpairing and moving can take a while: a longer wait than other commands.
+      runner: ProcessCommandRunner(timeout: 180), launcher: layout?.launcher, loginItem: loginItem,
+      stopApp: { [weak self] done in
+        guard let self else { done(); return }
+        self.setup.stop(then: done)
+      },
+      forgetSetup: { defaults.removeObject(forKey: Self.setupDoneKey) },
+      trashApp: {
+        guard let app else { throw CocoaError(.fileNoSuchFile) }
+        try FileManager.default.trashItem(at: app, resultingItemURL: nil)
+      },
+      quit: { NSApp.terminate(nil) })
     return SettingsWindowController(
       model: model,
       makeView: { [unowned self] in
-        SettingsRootView(model: model, owner: self.owner, setup: self.setup, loginItem: self.loginItem, actions: actions)
+        SettingsRootView(model: model, owner: self.owner, setup: self.setup, loginItem: self.loginItem, actions: actions,
+                         uninstall: uninstall)
       },
       closed: { [weak self] in
         guard let self else { return }
