@@ -20,6 +20,9 @@
 # the published SHASUMS256 (and the pinned SHA-256 of the default version), and
 # keeps it in artifacts/cache/ of this checkout, which Git ignores. It puts no
 # browser in the runtime: the computer browser stays a later, optional step.
+# It signs Node and the native helpers ad hoc with the hardened runtime
+# (scripts/release/sign-runtime.sh), so DYLD_ variables load no other library
+# into them.
 # The build host needs macOS on Apple silicon, Swift 6, Git, curl and network
 # access to nodejs.org and the npm registry.
 set -euo pipefail
@@ -36,7 +39,7 @@ fail() {
   printf '\nStopped: %s\n' "$*" >&2
   exit 1
 }
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
 
 out="" coordinator="" download_base=""
 while [ $# -gt 0 ]; do
@@ -70,7 +73,7 @@ fi
 
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] ||
   fail "build on a Mac with Apple silicon: the runtime is for darwin-arm64."
-for tool in git swift curl shasum tar lipo; do
+for tool in git swift curl shasum tar lipo codesign; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing on this build Mac."
 done
 
@@ -209,6 +212,9 @@ if [ ${#problems[@]} -gt 0 ]; then
   fail "the runtime is not self-contained."
 fi
 say "No npm, npx, tsx, source file, build folder or link. Node and both helpers are arm64."
+
+step "Signatures (ad hoc, with the hardened runtime)"
+"$work/src/scripts/release/sign-runtime.sh" "$runtime" || fail "the runtime is not signed."
 
 step "Manifest, archive and latest.json"
 "$node" "$work/src/scripts/release/manifest.mjs" "$runtime" "$version" "$commit" "v$node_version"
