@@ -190,6 +190,8 @@ export class OnboardEngine {
   private paired: SharedConnection | null = null;
   private keepOther = false;
   private startedDesktop = false;
+  /** A stop came while the desktop started: setup ends what that start made. */
+  private stoppedWhileStarting = false;
   private computerOn = false;
   /** Every question id of this run. */
   private asked = new Set<string>();
@@ -251,8 +253,15 @@ export class OnboardEngine {
           });
       }
     }
-    // The app's Stop ends every process that its setup started.
-    if (cancelled && this.settings.appOwned && this.startedDesktop)
+    // The app's Stop ends every process that its setup started. A stop that
+    // comes while the desktop starts, in the app or in Terminal, ends the
+    // desktop of that start: the start runs to its end first, so that its
+    // service is known, and is never left half started with no owner.
+    if (
+      cancelled &&
+      (this.stoppedWhileStarting ||
+        (this.settings.appOwned && this.startedDesktop))
+    )
       await this.ports.desktop.stop?.().catch(() => {
         this.log("warn", "The desktop that setup started did not stop.");
       });
@@ -622,11 +631,22 @@ export class OnboardEngine {
           );
           this.startedDesktop = true;
         } catch (error) {
+          await new Promise((done) => setImmediate(done));
+          if (this.io.cancelled()) {
+            // A start that failed may still have left its service.
+            this.stoppedWhileStarting = true;
+            throw new Cancelled();
+          }
           await this.failed(
             "desktop",
             plain(error, "The desktop did not start. Nothing was replaced."),
           );
           continue;
+        }
+        await new Promise((done) => setImmediate(done));
+        if (this.io.cancelled()) {
+          this.stoppedWhileStarting = true;
+          throw new Cancelled();
         }
         status = await this.waitForDesktop();
       }

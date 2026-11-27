@@ -7,8 +7,15 @@ public protocol EngineControlling: AnyObject {
   var onExit: ((Int32, [String]) -> Void)? { get set }
   func start() throws
   func send(_ command: EngineCommand)
-  /// Sends `cancel`, closes stdin, and ends the engine if it has not left after the grace time.
-  func cancel(grace: TimeInterval)
+  /// Sends `cancel` and closes stdin. The engine then ends what it was
+  /// starting and leaves. SIGTERM comes after the grace time (the engine
+  /// takes it as a cancel too), SIGKILL after a second one. `exited` runs
+  /// once the engine has left.
+  func cancel(grace: TimeInterval, exited: @escaping () -> Void)
+}
+
+extension EngineControlling {
+  public func cancel(grace: TimeInterval) { cancel(grace: grace, exited: {}) }
 }
 
 /// The environment for every process the app starts. A Mac app opened from
@@ -48,6 +55,7 @@ public final class EngineProcess: EngineControlling, @unchecked Sendable {
   private var outputClosed = false
   private var exitStatus: Int32?
   private var finished = false
+  private var leftWaiters: [() -> Void] = []
 
   public init(executable: URL, arguments: [String], environment: [String: String] = childEnvironment(), directory: URL? = nil, deliver: DispatchQueue = .main) {
     self.executable = executable
@@ -95,7 +103,14 @@ public final class EngineProcess: EngineControlling, @unchecked Sendable {
 
   public func closeInput() { io.async { [self] in closeInputNow() } }
 
-  public func cancel(grace: TimeInterval) {
+  public func cancel(grace: TimeInterval, exited: @escaping () -> Void) {
+    io.async { [self] in
+      if finished || process.processIdentifier == 0 {
+        deliver.async(execute: exited)
+      } else {
+        leftWaiters.append(exited)
+      }
+    }
     send(.cancel)
     closeInput()
     io.asyncAfter(deadline: .now() + grace) { [self] in
@@ -158,6 +173,11 @@ public final class EngineProcess: EngineControlling, @unchecked Sendable {
     guard !finished, outputClosed, let status = exitStatus else { return }
     finished = true
     let details = tail.lines
-    deliver.async { [weak self] in self?.onExit?(status, details) }
+    let waiters = leftWaiters
+    leftWaiters = []
+    deliver.async { [weak self] in
+      self?.onExit?(status, details)
+      waiters.forEach { $0() }
+    }
   }
 }

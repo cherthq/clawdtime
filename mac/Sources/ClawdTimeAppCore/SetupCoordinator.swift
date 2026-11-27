@@ -19,6 +19,12 @@ public final class SetupCoordinator: ObservableObject {
   private var shown: (question: String, at: TimeInterval)?
   /// True from Finish until the next setup run: the owner holds the processes.
   @Published public private(set) var handedOff = false
+  /// True from Stop or Quit until every stopped engine has left. An engine
+  /// first ends the desktop that it was starting, which can take a while.
+  @Published public private(set) var isStopping = false
+  private var draining = 0
+  private var afterDrain: [@MainActor () -> Void] = []
+  private var beginQueued = false
 
   public typealias EngineFactory = @MainActor (_ local: Bool) throws -> EngineControlling
   private let makeEngine: EngineFactory
@@ -44,6 +50,10 @@ public final class SetupCoordinator: ObservableObject {
 
   /// Longer than the double-click time of macOS by default.
   nonisolated public static let defaultAnswerDelay: TimeInterval = 0.6
+  /// After Stop the engine ends the desktop that it was starting: a cold
+  /// first start, then the stop of its service. SIGTERM comes only after this
+  /// time and SIGKILL after twice it.
+  nonisolated public static let stopGrace: TimeInterval = 20
 
   /// The step on screen asks this question, and its buttons work now.
   public func accepts(_ question: String) -> Bool {
@@ -56,6 +66,17 @@ public final class SetupCoordinator: ObservableObject {
   /// Starts (or starts again) the engine. A rerun resumes: ready steps are checked, not repeated.
   public func begin(local: Bool = false) {
     guard engine == nil else { return }
+    // Two engines never run at once: a stopped one leaves first.
+    guard draining == 0 else {
+      if !beginQueued {
+        beginQueued = true
+        afterDrain.append { [weak self] in
+          self?.beginQueued = false
+          self?.begin(local: local)
+        }
+      }
+      return
+    }
     run += 1
     let current = run
     state.begin()
@@ -152,16 +173,42 @@ public final class SetupCoordinator: ObservableObject {
     perform(.recheck)
   }
 
+  /// Cancels an engine and counts it until it has left.
+  private func drain(_ engine: EngineControlling) {
+    draining += 1
+    isStopping = true
+    engine.cancel(grace: Self.stopGrace) { [weak self] in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.draining -= 1
+        guard self.draining == 0 else { return }
+        self.isStopping = false
+        let waiting = self.afterDrain
+        self.afterDrain = []
+        waiting.forEach { $0() }
+      }
+    }
+  }
+
+  private func whenDrained(_ action: @escaping @MainActor () -> Void) {
+    if draining == 0 { action() } else { afterDrain.append(action) }
+  }
+
   /// The local Stop: setup ends and the owner ends every process it started.
+  /// `done` runs when the owner has stopped and the engine has left.
   public func stop(then done: (@MainActor () -> Void)? = nil) {
     run += 1
-    engine?.cancel(grace: 2)
+    if let engine { drain(engine) }
     engine = nil
     answered = nil
     handedOff = false
     state.stopped()
-    guard let owner else { done?(); return }
-    owner.stop { done?() }
+    let finish: @MainActor () -> Void = { [weak self] in
+      guard let self else { done?(); return }
+      self.whenDrained { done?() }
+    }
+    guard let owner else { finish(); return }
+    owner.stop { finish() }
   }
 
   /// Setup is done: start what the report says is ready.
@@ -181,12 +228,17 @@ public final class SetupCoordinator: ObservableObject {
     state.fail(.runtimeMissing(problem))
   }
 
-  /// Quit: ends the engine and every owned process, then calls `done`.
+  /// Quit: ends the engine and every owned process, then calls `done` once
+  /// the engine has left.
   public func shutdown(then done: @escaping @MainActor () -> Void) {
     run += 1
-    engine?.cancel(grace: 2)
+    if let engine { drain(engine) }
     engine = nil
-    guard let owner else { done(); return }
-    owner.stop(completion: done)
+    let finish: @MainActor () -> Void = { [weak self] in
+      guard let self else { done(); return }
+      self.whenDrained(done)
+    }
+    guard let owner else { finish(); return }
+    owner.stop { finish() }
   }
 }

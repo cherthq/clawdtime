@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { desktopCli } from "../cli/task-desktop.js";
+import { processLockHolder } from "../src/process-lock.js";
 import { Store } from "../src/storage/store.js";
 import { Vault } from "../src/storage/security.js";
 import { TaskLedger } from "../src/attention/task-ledger.js";
@@ -138,7 +139,7 @@ it("real isolated simulation service survives panel exit and reattach with one o
       JSON.parse(readFileSync(join(state, "owner.lock"), "utf8")).pid,
     ).toBe(owner.pid);
     expect(services[0]!.exitCode).toBeNull();
-    expect(existsSync(join(state, "desktop-launch.lock"))).toBe(false);
+    expect(processLockHolder(join(state, "desktop-launch.lock"))).toBeNull();
     // Only this test's known child is stopped; closing either fake UI did not do so.
     await closeOwned(services[0]!);
     expect(existsSync(join(state, "owner.lock"))).toBe(false);

@@ -142,7 +142,7 @@ export interface OnboardIO {
 export function jsonLinesIO(
   input: Readable,
   write: (line: string) => void,
-): OnboardIO & { close(): void } {
+): OnboardIO & { close(): void; cancel(): void } {
   const queue: OnboardCommand[] = [];
   let waiting: ((command: OnboardCommand) => void) | null = null;
   let ended = false;
@@ -191,5 +191,7 @@ export function jsonLinesIO(
           : new Promise((resolve) => (waiting = resolve)),
     cancelled: () => stopped || ended,
     close: () => lines.close(),
+    /** A cancel from outside the input, such as SIGTERM. */
+    cancel: () => deliver({ type: "cancel" }),
   };
 }

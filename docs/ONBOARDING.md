@@ -27,6 +27,15 @@ each question it drops everything typed so far, so a yes typed twice by
 mistake never answers the next question. At a yes or no consent question,
 Return alone means no.
 
+SIGTERM, SIGINT (Ctrl+C outside a question) and SIGHUP stop setup as a cancel
+does. A desktop start that runs then goes to its end, and setup ends the
+desktop of that start before it leaves, in Terminal too. Setup never leaves a
+desktop half started with no owner.
+
+The desktop launcher holds `desktop-launch.lock` with a lock that the kernel
+ends with its process. A launcher that is gone, also after a kill, never
+blocks the next launch.
+
 | Exit code | Meaning                                   |
 | --------- | ----------------------------------------- |
 | 0         | Setup is done.                            |

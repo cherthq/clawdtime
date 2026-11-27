@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { findNativeHelper } from "../src/native-helpers.js";
+import { takeProcessLock } from "../src/process-lock.js";
 import { createHash } from "node:crypto";
 import {
   accessSync,
@@ -12,8 +13,6 @@ import {
   openSync,
   readFileSync,
   realpathSync,
-  unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -391,21 +390,24 @@ export async function desktopCli(
   const descriptorPath = join(state, "desktop-service.json");
   const ownerPath = join(state, "owner.lock");
   const launchPath = join(state, "desktop-launch.lock");
-  let launch: number;
-  try {
-    launch = openSync(launchPath, "wx", 0o600);
-  } catch {
+  // The kernel holds the launch lock for this process alone and ends it when
+  // the process ends, also on a kill. So a launcher that is gone never blocks
+  // the next one, and a live one is never displaced: no process id is read.
+  const launch = takeProcessLock(launchPath, {
+    version: 2,
+    pid: process.pid,
+    startedAt: Date.now(),
+  });
+  if (!launch)
     throw Error(
-      "Another desktop launch or an unresolved launch lock exists. Do not steal the lock; establish prior process quiescence first.",
+      "Another desktop launch runs now. Wait until it ends, then try again.",
     );
-  }
   const spawnProcess = dependencies.spawn ?? spawn;
   const request = dependencies.request ?? fetch;
   let serviceChild: ChildProcess | undefined;
   let serviceFailed = false;
   let servicePid = 0;
   try {
-    writeFileSync(launch, JSON.stringify({ pid: process.pid }));
     const attach = existsSync(ownerPath);
     if (!attach) {
       const serviceArgs = [
@@ -556,13 +558,8 @@ export async function desktopCli(
     );
     return { service, panel };
   } finally {
-    const owned = fstatSync(launch);
-    closeSync(launch);
-    if (existsSync(launchPath)) {
-      const current = lstatSync(launchPath);
-      if (current.dev === owned.dev && current.ino === owned.ino)
-        unlinkSync(launchPath);
-    }
+    // The file stays: removing it could let two launchers lock two files.
+    launch.release();
   }
 }
 

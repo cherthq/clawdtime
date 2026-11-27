@@ -152,12 +152,41 @@ final class SetupCoordinatorTests: XCTestCase {
     setup.stop { done = true }
     XCTAssertTrue(stoppedEngine.cancelled)
     XCTAssertEqual(owner.stops, 1)
-    XCTAssertTrue(done)
     XCTAssertEqual(setup.state.phase, .stopped)
     XCTAssertFalse(setup.engineIsRunning)
     stoppedEngine.emit(#"{"type":"step","id":"phone","state":"ready"}"#)
-    stoppedEngine.onExit?(15, [])
+    stoppedEngine.leave(code: 15)
+    XCTAssertTrue(done)
     XCTAssertEqual(setup.state.phase, .stopped, "events after Stop change nothing")
+  }
+
+  func testStopGivesTheEngineTimeToEndTheDesktopItWasStarting() {
+    let setup = coordinator()
+    engine.emit(#"{"type":"step","id":"desktop","state":"in_progress"}"#)
+    let stoppedEngine = engine!
+    var done = false
+    setup.stop { done = true }
+    // A first desktop start can take many seconds: SIGTERM only after the grace time.
+    XCTAssertGreaterThanOrEqual(stoppedEngine.grace ?? 0, 15)
+    XCTAssertFalse(done, "Stop is done only when the engine has left")
+    XCTAssertTrue(setup.isStopping)
+    stoppedEngine.leave()
+    XCTAssertTrue(done)
+    XCTAssertFalse(setup.isStopping)
+  }
+
+  func testANewRunStartsOnlyAfterTheStoppedEngineHasLeft() {
+    var made = 0
+    let first = ScriptedEngine(), second = ScriptedEngine()
+    let setup = SetupCoordinator(makeEngine: { _ in made += 1; return made == 1 ? first : second }, owner: nil, open: { _ in false })
+    setup.begin()
+    first.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
+    setup.stop()
+    setup.begin()
+    XCTAssertEqual(made, 1, "two engines never run at once")
+    first.leave()
+    XCTAssertEqual(made, 2)
+    XCTAssertTrue(second.started)
   }
 
   func testAnotherProtocolCancelsTheEngineBeforeAnyStep() {
@@ -175,7 +204,10 @@ final class SetupCoordinatorTests: XCTestCase {
     var replied = false
     setup.shutdown { replied = true }
     XCTAssertTrue(engine.cancelled)
+    XCTAssertGreaterThanOrEqual(engine.grace ?? 0, 15)
     XCTAssertEqual(owner.stops, 1)
+    XCTAssertFalse(replied, "the app quits only after the engine has left")
+    engine.leave()
     XCTAssertTrue(replied)
   }
 

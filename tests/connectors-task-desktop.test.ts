@@ -11,12 +11,13 @@ import {
   symlinkSync,
   realpathSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import type { spawn } from "node:child_process";
+import { spawn as spawnProcess, type spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { desktopCli } from "../cli/task-desktop.js";
 import { desktopConfigurationFingerprint } from "../src/control/task-desktop-config.js";
+import { processLockHolder, takeProcessLock } from "../src/process-lock.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -473,7 +474,7 @@ describe("independent desktop service launcher", () => {
       redirect: "error",
     });
     expect(f.print.mock.calls.flat().join(" ")).not.toContain(f.panel.token);
-    expect(existsSync(join(f.state, "desktop-launch.lock"))).toBe(false);
+    expect(processLockHolder(join(f.state, "desktop-launch.lock"))).toBeNull();
     await f.run();
     expect(f.spawnMock).toHaveBeenCalledTimes(3);
     expect(f.spawnMock.mock.calls[2]![0]).toBe(f.binary);
@@ -539,7 +540,7 @@ describe("independent desktop service launcher", () => {
     f.failPanel();
     await expect(f.run()).rejects.toThrow("task service remains available");
     expect(existsSync(join(f.state, "owner.lock"))).toBe(true);
-    expect(existsSync(join(f.state, "desktop-launch.lock"))).toBe(false);
+    expect(processLockHolder(join(f.state, "desktop-launch.lock"))).toBeNull();
     expect(f.children[0]!.kill).not.toHaveBeenCalled();
   });
   it.each(["project", "fingerprint", "instance", "pid", "origin", "mode"])(
@@ -570,14 +571,60 @@ describe("independent desktop service launcher", () => {
     expect(f.request).toHaveBeenCalledTimes(1);
     expect(f.spawnMock).not.toHaveBeenCalled();
   });
-  it("preserves a stale launcher lock instead of stealing it", async () => {
+  it("takes over the launch lock of a launcher that is gone", async () => {
     const f = fixture();
+    // A launcher that ended (or was killed) mid-launch left its lock file.
     f.write(join(f.state, "desktop-launch.lock"), { pid: 999999 });
-    const before = readFileSync(join(f.state, "desktop-launch.lock"));
-    await expect(f.run()).rejects.toThrow("Do not steal");
-    expect(readFileSync(join(f.state, "desktop-launch.lock"))).toEqual(before);
-    expect(f.spawnMock).not.toHaveBeenCalled();
+    await f.run();
+    expect(
+      f.spawnMock.mock.calls.filter(
+        ([command]) => command === process.execPath,
+      ),
+    ).toHaveLength(1);
+    expect(processLockHolder(join(f.state, "desktop-launch.lock"))).toBeNull();
   });
+  it("refuses while a live launcher holds the launch lock", async () => {
+    const f = fixture();
+    const held = takeProcessLock(join(f.state, "desktop-launch.lock"), {
+      pid: process.pid,
+    });
+    try {
+      await expect(f.run()).rejects.toThrow("Another desktop launch runs now");
+      expect(f.spawnMock).not.toHaveBeenCalled();
+    } finally {
+      held!.release();
+    }
+  });
+  it("a launcher killed mid-launch leaves no lock that blocks the next launch", async () => {
+    const f = fixture();
+    const script = join(f.root, "launch.mts");
+    // The real launcher, killed while its service is still starting.
+    writeFileSync(
+      script,
+      `import { spawn } from "node:child_process";
+const { desktopCli } = await import(${JSON.stringify(resolve("cli/task-desktop.ts"))});
+await desktopCli(["--state", ${JSON.stringify(f.state)}, "--project", ${JSON.stringify(f.project)}, "--panel-binary", "/bin/sleep"], {
+  root: ${JSON.stringify(f.root)}, print: () => {}, panel: false, startupMs: 60000,
+  spawn: ((_c, _a, o) => { const c = spawn("/bin/sleep", ["30"], { ...o, stdio: "ignore" }); console.log("SERVICE " + c.pid); return c; }),
+});
+`,
+    );
+    const child = spawnProcess(process.execPath, ["--import", "tsx", script], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const service = await new Promise<number>((done) =>
+      child.stdout!.on("data", (chunk: Buffer) => {
+        const found = /SERVICE (\d+)/.exec(chunk.toString());
+        if (found) done(Number(found[1]));
+      }),
+    );
+    process.kill(service, "SIGKILL");
+    child.kill("SIGKILL");
+    await new Promise((done) => child.once("exit", done));
+    expect(processLockHolder(join(f.state, "desktop-launch.lock"))).toBeNull();
+    await f.run();
+    expect(f.spawnMock).toHaveBeenCalled();
+  }, 30_000);
   it("leaves an uncertain startup untouched and releases only its own launch lock", async () => {
     const f = fixture();
     f.noPublish();
@@ -586,7 +633,7 @@ describe("independent desktop service launcher", () => {
     expect(f.spawnMock).toHaveBeenCalledTimes(1);
     expect(f.children[0]!.kill).not.toHaveBeenCalled();
     expect(existsSync(join(f.state, "desktop-service.json"))).toBe(true);
-    expect(existsSync(join(f.state, "desktop-launch.lock"))).toBe(false);
+    expect(processLockHolder(join(f.state, "desktop-launch.lock"))).toBeNull();
   });
   it("serializes overlapping launches before any duplicate service spawn", async () => {
     const f = fixture();
@@ -598,7 +645,7 @@ describe("independent desktop service launcher", () => {
       return new Response(JSON.stringify(f.stateResponse));
     });
     const first = f.run();
-    await expect(f.run()).rejects.toThrow("unresolved launch lock");
+    await expect(f.run()).rejects.toThrow("Another desktop launch runs now");
     release();
     await first;
     expect(

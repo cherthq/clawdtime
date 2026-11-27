@@ -110,10 +110,22 @@ final class ScriptedEngine: EngineControlling {
   var started = false
   var sent: [EngineCommand] = []
   var cancelled = false
+  /// The grace time of the last cancel.
+  var grace: TimeInterval?
+  private var leftWaiters: [() -> Void] = []
   func start() throws { started = true }
   func send(_ command: EngineCommand) { sent.append(command) }
-  func cancel(grace: TimeInterval) { cancelled = true; sent.append(.cancel) }
+  func cancel(grace: TimeInterval, exited: @escaping () -> Void) {
+    cancelled = true; self.grace = grace; sent.append(.cancel); leftWaiters.append(exited)
+  }
   func emit(_ line: String) { onEvent?(try! EngineEvent.decode(line: line)) }
+  /// The engine process leaves, as after it ended what it started.
+  func leave(code: Int32 = 1) {
+    onExit?(code, [])
+    let waiters = leftWaiters
+    leftWaiters = []
+    waiters.forEach { $0() }
+  }
 }
 
 @MainActor

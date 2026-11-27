@@ -61,6 +61,8 @@ export interface OnboardCliDependencies {
   desktopWaitMs?: number;
   pollMs?: number;
   now?: () => number;
+  /** Where SIGTERM, SIGINT and SIGHUP come from. Tests replace it. */
+  signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
 }
 
 /** Opens the controlling terminal, or null when there is none. */
@@ -453,11 +455,17 @@ export async function onboardCli(
 
   let io: OnboardIO;
   let close = () => {};
+  let stop = () => {};
   let log: (message: string) => void;
   if (options.json) {
+    // The app may be gone while setup ends what it started: a write to a
+    // closed pipe then fails quietly and never ends setup early.
+    stdout.on("error", () => {});
+    stderr.on("error", () => {});
     const lines = jsonLinesIO(stdin, (line) => stdout.write(`${line}\n`));
     io = lines;
     close = () => lines.close();
+    stop = () => lines.cancel();
     log = (message) => stderr.write(`${message}\n`);
   } else {
     // A key is never read from a pipe: only from a terminal.
@@ -468,8 +476,10 @@ export async function onboardCli(
       stdout.write(`${noTerminalLine}\n`);
       return 3;
     }
-    io = new TerminalWizard(terminal, dependencies.openUrl);
+    const wizard = new TerminalWizard(terminal, dependencies.openUrl);
+    io = wizard;
     close = () => terminal.close();
+    stop = () => wizard.stop();
     log = (message) => terminal.output.write(`  ${message}\n`);
   }
 
@@ -513,10 +523,23 @@ export async function onboardCli(
   // any library goes to standard error instead.
   const original = console.log;
   if (options.json) console.log = (...parts: unknown[]) => log(parts.join(" "));
+  // SIGTERM (the app's Stop after its grace time), Ctrl+C outside a question
+  // and a closed terminal stop setup as a cancel does: setup then ends what
+  // it was starting before it leaves. Later signals wait for that.
+  const signals = dependencies.signals ?? process;
+  const names = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  let signalled = false;
+  const onSignal = () => {
+    if (!signalled) log("Stopping setup. It ends what it was starting first.");
+    signalled = true;
+    stop();
+  };
+  for (const name of names) signals.on(name, onSignal);
   try {
     const result = await engine.run();
     return result.cancelled ? 1 : result.ready ? 0 : 2;
   } finally {
+    for (const name of names) signals.off(name, onSignal);
     console.log = original;
     close();
   }

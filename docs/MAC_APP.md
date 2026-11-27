@@ -91,9 +91,13 @@ panel, and starts no background connection.
 - A line that is not protocol JSON is counted and ignored. A line over 1 MB is
   dropped.
 - If the engine ends before `done`, the window shows the last lines of its
-  stderr and a Try again button. Stop sends `cancel`, closes stdin, and ends
-  the engine after 2 seconds if it is still there. Setup stops before its
-  next effect as soon as it reads the cancel, also in the middle of a step.
+  stderr and a Try again button. Stop sends `cancel` and closes stdin. Setup
+  stops before its next effect as soon as it reads the cancel, also in the
+  middle of a step. A desktop start that runs then goes to its end, and setup
+  ends the desktop of that start before it leaves. The engine takes SIGTERM
+  as a cancel too. The app sends SIGTERM only after 20 seconds and SIGKILL
+  after 40 seconds, so that a slow first start never leaves a desktop with no
+  owner. Quit and a new setup run wait until the engine has left.
 
 ### After setup: one owner
 
