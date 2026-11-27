@@ -113,13 +113,16 @@ public struct StepEvent: Codable, Equatable, Sendable {
   public var id: StepID
   public var state: StepState
   public var title: String?
+  /// Plain words for the person, with no file path.
   public var detail: String?
+  /// Lines shown only when the person opens Details, such as the full path of a binary.
+  public var details: [String]?
   public var recovery: Recovery?
   public var input: StepInput?
   /// The one-time id of the question this event asks. An answer must name it.
   public var question: String?
-  public init(id: StepID, state: StepState, title: String? = nil, detail: String? = nil, recovery: Recovery? = nil, input: StepInput? = nil, question: String? = nil) {
-    self.id = id; self.state = state; self.title = title; self.detail = detail; self.recovery = recovery; self.input = input; self.question = question
+  public init(id: StepID, state: StepState, title: String? = nil, detail: String? = nil, details: [String]? = nil, recovery: Recovery? = nil, input: StepInput? = nil, question: String? = nil) {
+    self.id = id; self.state = state; self.title = title; self.detail = detail; self.details = details; self.recovery = recovery; self.input = input; self.question = question
   }
   public var displayTitle: String { (title?.isEmpty == false ? title : nil) ?? id.fallbackTitle }
 }

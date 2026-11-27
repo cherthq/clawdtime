@@ -42,7 +42,7 @@ final class SetupViewTests: XCTestCase {
       #"{"type":"step","id":"model","state":"needs_input","title":"Model key","input":{"kind":"secret","prompt":"Model key"}}"#,
       #"{"type":"step","id":"desktop","state":"needs_input","input":{"kind":"text","prompt":"Project folder"}}"#,
       #"{"type":"step","id":"computer","state":"needs_input","input":{"kind":"confirm","prompt":"Allow computer use?"}}"#,
-      #"{"type":"step","id":"permissions","state":"failed","detail":"Screen Recording is off.","recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"}}"#,
+      #"{"type":"step","id":"permissions","state":"failed","detail":"Screen Recording is off.","details":["ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel"],"recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"}}"#,
       #"{"type":"step","id":"phone","state":"needs_input","input":{"kind":"phone","prompt":"Phone number"}}"#,
       #"{"type":"step","id":"phone","state":"needs_input","input":{"kind":"code","prompt":"Code"}}"#,
       #"{"type":"step","id":"pairing","state":"needs_input","input":{"kind":"choice","options":[{"id":"1","label":"Built-in display"},{"id":"2","label":"Studio display","detail":"Right"}],"multiple":true}}"#,

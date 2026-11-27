@@ -145,7 +145,14 @@ export class TerminalWizard implements OnboardIO {
     const said = this.shown.get(event.id) !== key;
     this.shown.set(event.id, key);
     if (event.state === "needs_input" || event.state === "failed") {
-      if (said && event.detail) this.write(`${event.title}: ${event.detail}`);
+      if (said && event.detail) {
+        this.write(`${event.title}: ${event.detail}`);
+        // A terminal has no disclosure: the details follow on their own lines.
+        if (event.details?.length) {
+          this.write("  Details:");
+          for (const line of event.details) this.write(`    ${line}`);
+        }
+      }
       // Only a question is answered: a failure that waits for nothing is not.
       if (event.question) this.pending = event;
       return;

@@ -193,6 +193,8 @@ export class OnboardEngine {
   private computerOn = false;
   /** Every question id of this run. */
   private asked = new Set<string>();
+  /** The Darwin major version that preflight read (24 is macOS 15). */
+  private darwin: number | null = null;
   private readonly now: () => number;
   private readonly root: string;
   private readonly pairingFiles: { directory: string; file: string };
@@ -268,6 +270,7 @@ export class OnboardEngine {
     state: StepState,
     more: {
       detail?: string;
+      details?: string[];
       recovery?: Recovery;
       input?: InputRequest;
       question?: string;
@@ -336,7 +339,7 @@ export class OnboardEngine {
   private async ask(
     id: StepId,
     input: InputRequest,
-    view: { detail?: string; recovery?: Recovery } = {},
+    view: { detail?: string; details?: string[]; recovery?: Recovery } = {},
   ): Promise<
     | { value: string | boolean | string[] }
     | { action: "retry" | "recheck" | "skip" }
@@ -420,6 +423,7 @@ export class OnboardEngine {
   private async preflight(): Promise<boolean> {
     this.step("preflight", "in_progress", { detail: "Checking this Mac." });
     const mac = await this.ports.mac();
+    this.darwin = mac.darwinMajor;
     if (mac.darwinMajor === null || mac.darwinMajor < 23) {
       this.step("preflight", "failed", {
         detail:
@@ -739,27 +743,34 @@ export class OnboardEngine {
         );
         continue;
       }
-      // Each binary once, with every permission that it still needs.
-      const missing: { binary: string; needs: string[]; url: string }[] = [];
-      const need = (binary: string, permission: string, url: string) => {
-        const one = missing.find((entry) => entry.binary === binary);
-        if (one) one.needs.push(permission);
-        else missing.push({ binary, needs: [permission], url });
+      // Each list of System Settings once, as the person sees it there, with
+      // every binary that it still needs. The paths go only to the details.
+      const accessibility: string[] = [];
+      const screen: string[] = [];
+      const paths = new Map<string, string>();
+      const named = (name: string, path: string | undefined) => {
+        if (path) paths.set(name, path);
+        return name;
       };
-      const panel = `ClawdTimeTaskPanel${facts.panel.path ? ` (${facts.panel.path})` : ""}`;
-      const capture = `ClawdTimeTaskCapture${facts.capture.path ? ` (${facts.capture.path})` : ""}`;
+      const panel = named("ClawdTimeTaskPanel", facts.panel.path);
       if (this.computerOn) {
-        if (!facts.panel.accessibility)
-          need(panel, "Accessibility", accessibilityPane);
-        if (!facts.panel.screenRecording)
-          need(panel, "Screen Recording", screenPane);
+        if (!facts.panel.accessibility) accessibility.push(panel);
+        if (!facts.panel.screenRecording) screen.push(panel);
       }
       if (
         this.mode === "shared" &&
         facts.capture.path &&
         !facts.capture.screenRecording
       )
-        need(capture, "Screen Recording", screenPane);
+        screen.push(named("ClawdTimeTaskCapture", facts.capture.path));
+      const missing = [
+        {
+          list: "Accessibility",
+          binaries: accessibility,
+          url: accessibilityPane,
+        },
+        { list: this.screenList(), binaries: screen, url: screenPane },
+      ].filter((one) => one.binaries.length);
       if (!missing.length)
         return this.step("permissions", "ready", {
           detail: `${this.computerOn ? "Accessibility and Screen Recording are on for the panel." : "Computer use is off, so the panel needs no permission."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for the capture helper." : ""}`,
@@ -768,7 +779,10 @@ export class OnboardEngine {
         "permissions",
         { kind: "confirm", prompt: "Check again" },
         {
-          detail: `Turn on ${missing.map((one) => `${one.needs.join(" and ")} for ${one.binary}`).join(", and ")} in System Settings, Privacy & Security. Then check again.`,
+          detail: `In System Settings, open Privacy & Security. ${missing.map((one) => `In ${one.list}, turn on ${one.binaries.join(" and ")}.`).join(" ")} Then check again.`,
+          details: [...new Set(missing.flatMap((one) => one.binaries))].flatMap(
+            (name) => (paths.has(name) ? [`${name}: ${paths.get(name)}`] : []),
+          ),
           recovery: {
             label: "Open System Settings",
             action: "open_settings",
@@ -777,6 +791,13 @@ export class OnboardEngine {
         },
       );
     }
+  }
+
+  /** The name of the Screen Recording list in System Settings on this Mac. */
+  private screenList() {
+    return this.darwin !== null && this.darwin < 24
+      ? "Screen Recording"
+      : "Screen & System Audio Recording";
   }
 
   private localDetail() {

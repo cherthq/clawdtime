@@ -21,6 +21,9 @@ final class SetupProtocolTests: XCTestCase {
     guard case .step(let step) = try EngineEvent.decode(line: #"{"type":"step","id":"computer","state":"needs_input","question":"computer-question-01","input":{"kind":"confirm","prompt":"Turn on computer use?","consent":true}}"#) else { return XCTFail("a step") }
     XCTAssertEqual(step.question, "computer-question-01")
     XCTAssertEqual(step.input?.consent, true)
+    guard case .step(let settings) = try EngineEvent.decode(line: #"{"type":"step","id":"permissions","state":"needs_input","question":"settings-question-01","detail":"In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTimeTaskPanel. Then check again.","details":["ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel"],"input":{"kind":"confirm","prompt":"Check again"}}"#) else { return XCTFail("a step") }
+    XCTAssertFalse(settings.detail!.contains("/"), "the detail has plain words only")
+    XCTAssertEqual(settings.details, ["ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel"])
     guard case .step(let working) = try EngineEvent.decode(line: #"{"type":"step","id":"computer","state":"in_progress"}"#) else { return XCTFail("a step") }
     XCTAssertNil(working.question, "a step that asks nothing has no question")
   }

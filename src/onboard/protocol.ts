@@ -64,7 +64,13 @@ export interface StepEvent {
   id: StepId;
   state: StepState;
   title: string;
+  /** Plain words for the person. It names no file path. */
   detail?: string;
+  /**
+   * Lines that an interface shows only when the person asks for them, such
+   * as the full path of each binary that needs a permission.
+   */
+  details?: string[];
   recovery?: Recovery;
   input?: InputRequest;
   /**

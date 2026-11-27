@@ -14,9 +14,11 @@ Requirements: macOS 14 or later on a Mac with Apple silicon.
 3. Choose **Set up ClawdTime**. Each screen shows one step: its title, what it
    needs and why, and one field or choice.
 4. Answer the step and choose **Continue**. A key goes in a secure field.
-5. When a step needs a macOS permission, choose **Open System Settings**,
-   allow ClawdTime there, and come back. The app checks the step again when
-   you return. **Check again** does the same.
+5. When a step needs a macOS permission, the screen names the list in
+   System Settings, Privacy & Security, and the item to turn on in it.
+   Choose **Open System Settings**, turn the item on, and come back. The app
+   checks the step again when you return. **Check again** does the same.
+   **Details** shows the full path of each item, when you need it.
 6. You can skip your phone, the pairing, the connection and computer use, and
    come back to them later. ClawdTime then works on this Mac only.
 7. The last screen shows what is ready. Choose **Finish**.

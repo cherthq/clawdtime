@@ -80,6 +80,8 @@ function fakeMac(
     taskAdmission?: DesktopReadiness["taskAdmission"];
     /** Called as each port is called, before it acts. */
     onCall?: (port: string) => void;
+    /** The Darwin major version: 25 unless set. */
+    darwinMajor?: number;
   } = {},
 ) {
   const call = (port: string) => options.onCall?.(port);
@@ -108,7 +110,10 @@ function fakeMac(
   };
   const permissions = [...(options.permissions ?? [])];
   const ports: OnboardPorts = {
-    mac: async () => ({ darwinMajor: 25, appleSilicon: true }),
+    mac: async () => ({
+      darwinMajor: options.darwinMajor ?? 25,
+      appleSilicon: true,
+    }),
     helpers: () => ({ panel: true, capture: true }),
     desktop: {
       status: async () => {
@@ -519,8 +524,11 @@ describe("clawdtime onboard --json", () => {
       url: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     });
     expect(asking[0]!.detail).toContain(
-      "Accessibility for ClawdTimeTaskPanel (/Applications/Made Up/ClawdTimeTaskPanel)",
+      "In Accessibility, turn on ClawdTimeTaskPanel.",
     );
+    expect(asking[0]!.details).toEqual([
+      "ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
+    ]);
     expect(
       events.some(
         (event) =>
@@ -532,7 +540,7 @@ describe("clawdtime onboard --json", () => {
     expect(stateOf(events, "permissions")).toBe("ready");
   });
 
-  it("names each binary once, with every permission that it needs", async () => {
+  it("names each permission and each binary as System Settings shows them, and keeps the paths for the details", async () => {
     const denied: PermissionFacts = {
       panel: {
         path: "/Applications/Made Up/ClawdTimeTaskPanel",
@@ -541,13 +549,62 @@ describe("clawdtime onboard --json", () => {
       },
       capture: { screenRecording: true },
     };
-    const mac = fakeMac({ permissions: [denied] });
-    const { events } = await runJson(["--local"], folder(), mac.ports, agree());
+    for (const [darwinMajor, screen] of [
+      [25, "Screen & System Audio Recording"],
+      [23, "Screen Recording"],
+    ] as const) {
+      const mac = fakeMac({ permissions: [denied], darwinMajor });
+      const { events } = await runJson(
+        ["--local"],
+        folder(),
+        mac.ports,
+        agree(),
+      );
+      const asking = steps(events).find(
+        (event) => event.id === "permissions" && event.state === "needs_input",
+      )!;
+      expect(asking.detail).toBe(
+        `In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTimeTaskPanel. In ${screen}, turn on ClawdTimeTaskPanel. Then check again.`,
+      );
+      expect(asking.detail).not.toContain("/");
+      expect(asking.details).toEqual([
+        "ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
+      ]);
+    }
+  });
+
+  it("names the capture helper in the Screen Recording list in shared mode", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const denied: PermissionFacts = {
+      panel: {
+        path: "/Applications/Made Up/ClawdTimeTaskPanel",
+        accessibility: false,
+        screenRecording: true,
+      },
+      capture: {
+        path: "/Applications/Made Up/ClawdTimeTaskCapture",
+        screenRecording: false,
+      },
+    };
+    const { events } = await runJson(
+      ["--coordinator", coordinator.origin],
+      folder(),
+      fakeMac({ permissions: [denied] }).ports,
+      agree(() => coordinator.codeFor(member)),
+    );
     const asking = steps(events).find(
       (event) => event.id === "permissions" && event.state === "needs_input",
     )!;
     expect(asking.detail).toBe(
-      "Turn on Accessibility and Screen Recording for ClawdTimeTaskPanel (/Applications/Made Up/ClawdTimeTaskPanel) in System Settings, Privacy & Security. Then check again.",
+      "In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTimeTaskPanel. In Screen & System Audio Recording, turn on ClawdTimeTaskCapture. Then check again.",
+    );
+    expect(asking.details).toEqual([
+      "ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
+      "ClawdTimeTaskCapture: /Applications/Made Up/ClawdTimeTaskCapture",
+    ]);
+    expect(asking.recovery?.url).toBe(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     );
   });
 

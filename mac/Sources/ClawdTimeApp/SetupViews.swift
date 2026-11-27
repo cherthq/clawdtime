@@ -287,6 +287,7 @@ struct StepCard: View {
   @State private var recoveryRefused = false
   @State private var shownKind: StepInput.Kind?
   @State private var armed: Bool
+  @State private var showDetails = false
 
   init(step: StepEvent, answered: Bool, armDelay: TimeInterval, submit: @escaping (InputValue) -> Void,
        perform: @escaping (StepAction) -> Void, recover: @escaping () -> Bool) {
@@ -339,6 +340,16 @@ struct StepCard: View {
       }
       if let detail = step.detail, !detail.isEmpty {
         Text(detail).font(.system(size: 14)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
+      }
+      // Paths and other long lines stay here, closed until the person opens them.
+      if let details = step.details, !details.isEmpty {
+        DisclosureGroup("Details", isExpanded: $showDetails) {
+          Text(details.joined(separator: "\n"))
+            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.secondaryText)
+            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
+        }
+        .font(.system(size: 12))
       }
       if step.state == .needsInput, let input = step.input, !Self.checksSettings(step) {
         InputField(input: input, text: $text, selection: $selection, submit: send)
