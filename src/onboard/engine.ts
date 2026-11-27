@@ -83,6 +83,8 @@ export interface OnboardPorts {
     start(log: (message: string) => void): Promise<void>;
     /** Starts an idle desktop again, so that it reads a new setting. Optional. */
     restart?(log: (message: string) => void): Promise<void>;
+    /** Ends the desktop service. Optional: setup in the Mac app ends the desktop it started when the person stops setup. */
+    stop?(): Promise<void>;
   };
   /** A fresh read-only check of the installed panel and capture helper. */
   permissions(): Promise<PermissionFacts>;
@@ -93,7 +95,14 @@ export interface OnboardPorts {
     capture(): string | undefined;
   };
   connection: {
+    /** The background connection that Terminal setup started. */
     status(instanceId: string): Promise<"running" | "stale" | "stopped">;
+    /**
+     * The one `clawdtime shared run` that holds the connection lock of this
+     * Mac, whoever started it, or null. `managed` says that it is the one of
+     * `status`.
+     */
+    holder(): Promise<{ instanceId: string | null; managed: boolean } | null>;
     start(instanceId: string): Promise<void>;
     stop(): Promise<void>;
   };
@@ -109,6 +118,11 @@ export interface OnboardPorts {
 export interface OnboardSettings {
   version: string;
   local: boolean;
+  /**
+   * The Mac app drives setup and owns the long-lived processes: setup starts
+   * no background connection, and the app connects after setup.
+   */
+  appOwned?: boolean;
   /** The --coordinator option. */
   coordinator?: string;
   env: Record<string, string | undefined>;
@@ -225,6 +239,11 @@ export class OnboardEngine {
           });
       }
     }
+    // The app's Stop ends every process that its setup started.
+    if (cancelled && this.settings.appOwned && this.startedDesktop)
+      await this.ports.desktop.stop?.().catch(() => {
+        this.log("warn", "The desktop that setup started did not stop.");
+      });
     const ready = !cancelled && this.finish();
     this.io.emit({
       type: "done",
@@ -1107,6 +1126,10 @@ export class OnboardEngine {
   private async connection() {
     const skipped = (detail: string) =>
       this.step("connection", "skipped", { detail });
+    const connected = (
+      detail = "This Mac is connected to the shared number.",
+    ) => this.step("connection", "ready", { detail });
+    const app = this.settings.appOwned === true;
     if (this.mode !== "shared") return skipped(this.localDetail());
     if (!this.paired || this.keepOther)
       return skipped("This Mac is not paired with this coordinator.");
@@ -1126,26 +1149,50 @@ export class OnboardEngine {
           return skipped("This Mac is not connected.");
         continue;
       }
+      // One connection per Mac: `shared run` holds a lock, and setup never
+      // starts a second one next to the holder.
+      const holder = await this.ports.connection.holder();
+      if (holder && !holder.managed) {
+        if (holder.instanceId === instanceId) return connected();
+        if (
+          (await this.failed(
+            "connection",
+            "Another connection to the shared number runs on this Mac, for an earlier desktop. End that clawdtime shared run, then try again.",
+          )) === "skip"
+        )
+          return skipped("This Mac is not connected.");
+        continue;
+      }
       const state = await this.ports.connection.status(instanceId);
-      if (state === "running")
-        return this.step("connection", "ready", {
-          detail: "This Mac is connected to the shared number.",
-        });
+      if (!app && state === "running") return connected();
       const go = await this.confirm(
         "connection",
-        "Connect this Mac to the shared number now?",
-        "It stays connected in the background while the desktop runs. Calls from your verified phone can then reach this Mac.",
+        app
+          ? "Connect this Mac to the shared number when setup ends?"
+          : "Connect this Mac to the shared number now?",
+        app
+          ? "ClawdTime keeps the connection while the app runs. Calls from your verified phone can then reach this Mac."
+          : "It stays connected in the background while the desktop runs. Calls from your verified phone can then reach this Mac.",
       );
       if (go !== true)
         return skipped(
           "This Mac is not connected. To connect it later, run clawdtime onboard.",
         );
       this.step("connection", "in_progress", {
-        detail: "Connecting this Mac.",
+        detail: app
+          ? "Making way for the app's connection."
+          : "Connecting this Mac.",
       });
       try {
-        // A connection of an earlier desktop lifetime ends first.
-        if (state === "stale") await this.ports.connection.stop();
+        // The app runs the one connection itself: a background one that
+        // Terminal setup started ends first. In Terminal, a connection of an
+        // earlier desktop lifetime ends first.
+        if (state !== "stopped" && (app || state === "stale"))
+          await this.ports.connection.stop();
+        if (app)
+          return connected(
+            "ClawdTime connects this Mac to the shared number when setup ends.",
+          );
         await this.ports.connection.start(instanceId);
       } catch {
         if (
@@ -1157,9 +1204,7 @@ export class OnboardEngine {
           return skipped("This Mac is not connected.");
         continue;
       }
-      return this.step("connection", "ready", {
-        detail: "This Mac is connected to the shared number.",
-      });
+      return connected();
     }
   }
 

@@ -37,7 +37,7 @@ final class EngineProcessTests: XCTestCase {
     XCTAssertEqual(coordinator.state.state(of: .model), .ready)
     XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("key-arrived").path), "the engine read the key from stdin")
     let args = try String(contentsOf: folder.appendingPathComponent("args"), encoding: .utf8)
-    XCTAssertEqual(args, "onboard\n--json\n")
+    XCTAssertEqual(args, "onboard\n--json\n--app\n")
     let environment = try String(contentsOf: folder.appendingPathComponent("env"), encoding: .utf8)
     XCTAssertFalse(environment.contains(madeUpKey))
     XCTAssertTrue(environment.contains("PATH="))

@@ -7,14 +7,15 @@ protocol, which the Mac app uses. Both run the same operations.
 ## The command
 
 ```sh
-clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json]
+clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]
 ```
 
-| Option          | What it does                                                                                    |
-| --------------- | ----------------------------------------------------------------------------------------------- |
-| `--local`       | Sets up this Mac alone. The phone, pairing and connection steps are skipped.                    |
-| `--coordinator` | The https origin of the shared number's coordinator, for example `https://coordinator.example`. |
-| `--json`        | Speaks the protocol below on standard input and output.                                         |
+| Option          | What it does                                                                                                    |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| `--local`       | Sets up this Mac alone. The phone, pairing and connection steps are skipped.                                    |
+| `--coordinator` | The https origin of the shared number's coordinator, for example `https://coordinator.example`.                 |
+| `--json`        | Speaks the protocol below on standard input and output.                                                         |
+| `--app`         | The Mac app drives setup and owns the desktop and the connection. It goes with `--json`. See [Owners](#owners). |
 
 Without `--json`, the command needs a terminal. When standard input is no
 terminal, it opens `/dev/tty`. With no terminal at all, it prints
@@ -53,20 +54,47 @@ coordinator. Run the command again later to pair a phone.
 
 The step ids and their order are fixed.
 
-| Id            | What it does                                                                                                                                                                                                           | Skip |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                            | no   |
-| `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                  | no   |
-| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                           | no   |
-| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off.                                                                                                              | yes  |
-| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each missing permission, offers its System Settings pane, and checks again. | no   |
-| `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                    | yes  |
-| `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                         | yes  |
-| `connection`  | Starts one shared connection in the background, bound to the running desktop. It reuses a connection of the same desktop. A connection of an earlier desktop ends first.                                               | yes  |
-| `ready`       | One readiness report. It never places a call or sends a text.                                                                                                                                                          | no   |
+| Id            | What it does                                                                                                                                                                                                                 | Skip |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                                  | no   |
+| `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                        | no   |
+| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                 | no   |
+| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off.                                                                                                                    | yes  |
+| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each missing permission, offers its System Settings pane, and checks again.       | no   |
+| `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                          | yes  |
+| `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                               | yes  |
+| `connection`  | Starts one shared connection in the background, bound to the running desktop. It reuses a connection of the same desktop. A connection of an earlier desktop ends first. With `--app` it starts none: see [Owners](#owners). | yes  |
+| `ready`       | One readiness report. It never places a call or sends a text.                                                                                                                                                                | no   |
 
 In local mode, `phone`, `pairing` and `connection` are skipped. With computer
 use off in local mode, `permissions` is skipped too.
+
+## Owners
+
+The desktop and the shared connection run long after setup. Each has one
+owner.
+
+- **Terminal.** Setup starts the desktop with its panel, as `clawdtime start`
+  does, and one `clawdtime shared run` in the background. Both keep running
+  after setup ends.
+- **The Mac app.** The app passes `--app`. Setup starts the desktop service
+  with no panel, so that it can check it, and starts no connection. The
+  `connection` step asks the person, then reports ready with
+  `ClawdTime connects this Mac to the shared number when setup ends.` When
+  setup ends, the app runs `clawdtime start --tucked true --foreground`,
+  which takes over the running service and opens the panel, and then
+  `clawdtime shared run`. A background connection that Terminal setup started
+  ends first. When the person stops setup in the app, setup ends the desktop
+  that it started.
+
+One connection runs on a Mac at a time. `clawdtime shared run` holds a lock
+(`~/.config/clawdtime/shared/connection.lock`) for its whole life, and a
+second one stops at once with
+`Another clawdtime shared run connects this Mac already.` The kernel ends the
+lock with its process, so a crash leaves no stale lock. Setup never starts a
+connection next to the one that holds the lock: it uses a connection of the
+running desktop, and it stops with a recovery when the holder serves an
+earlier desktop.
 
 ## The protocol
 
@@ -156,6 +184,7 @@ Setup writes only what its steps make:
 | `~/.config/clawdtime/shared/connection.json`         | `pairing`                                                          |
 | `~/.config/clawdtime/shared/onboard-connection.json` | `connection`, the process and the desktop it serves, no credential |
 | `~/.config/clawdtime/shared/connection.log`          | `connection`, the output of the connection                         |
+| `~/.config/clawdtime/shared/connection.lock`         | `clawdtime shared run`, the process that holds the one connection  |
 
 Every file is for its owner only. `CLAWDTIME_CONFIG_HOME` moves the first
 three.

@@ -30,9 +30,11 @@ import {
   resolveSharedDisplay,
   saveSharedPairing,
   sharedAcceptance,
+  sharedConnectionLock,
   sharedConnectionSchema,
   sharedPairingPaths,
 } from "../src/onboard/pairing.js";
+import { takeProcessLock } from "../src/process-lock.js";
 import type {
   SharedOperation,
   SharedResult,
@@ -142,6 +144,18 @@ export async function sharedCli(args: string[]) {
   if (args[0] === "run") {
     if (!config || !service) throw Error("shared_pairing_and_desktop_required");
     const instanceId = service.instanceId;
+    // One connection per Mac, whoever starts it: the app, setup in Terminal
+    // or a person. The kernel ends the lock with this process.
+    const lock = takeProcessLock(sharedConnectionLock(homedir()), {
+      version: 1,
+      pid: process.pid,
+      instanceId,
+      startedAt: Date.now(),
+    });
+    if (!lock)
+      throw Error(
+        "Another clawdtime shared run connects this Mac already. Only one connection runs at a time.",
+      );
     const store = new Store(join(directory, "receipts.sqlite"));
     const controller = new AbortController();
     const stop = () => controller.abort();
@@ -249,6 +263,7 @@ export async function sharedCli(args: string[]) {
     } finally {
       await display?.close();
       store.close();
+      lock.release();
       process.removeListener("SIGINT", stop);
       process.removeListener("SIGTERM", stop);
     }

@@ -22,17 +22,19 @@ import { macPorts, packageVersion } from "../src/onboard/system.js";
 import { checkoutRoot, startCli } from "./start.js";
 
 export const onboardHelp = `clawdtime onboard: set up ClawdTime on this Mac, step by step
-  clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json]
+  clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]
   --local          set up this Mac alone: no phone, pairing or shared connection
   --coordinator    the https origin of the shared number's coordinator. Without it,
                    CLAWDTIME_COORDINATOR, then the coordinator of this release
   --json           speak the setup protocol on standard input and output (docs/ONBOARDING.md)
+  --app            the ClawdTime app drives setup and owns the desktop and the connection:
+                   setup opens no panel and starts no background connection
 It checks this Mac, stores your model key, starts the desktop, asks for computer use,
 checks the permissions, verifies your phone, pairs this Mac and connects it. Run it
 again to continue where it stopped: a step that is ready is checked, not repeated.
 A sign-in text goes out only after you say yes. Keys, numbers and codes are never shown.`;
 const usage =
-  "Use: clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json]";
+  "Use: clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]";
 export const noTerminalLine =
   "Run clawdtime onboard in Terminal to finish setup.";
 
@@ -309,10 +311,11 @@ export class TerminalWizard implements OnboardIO {
 }
 
 function parse(args: string[]) {
-  const options = { local: false, json: false, help: false } as {
+  const options = { local: false, json: false, help: false, app: false } as {
     local: boolean;
     json: boolean;
     help: boolean;
+    app: boolean;
     coordinator?: string;
   };
   for (let i = 0; i < args.length; i++) {
@@ -320,6 +323,7 @@ function parse(args: string[]) {
     if (arg === "help" || arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--local" && !options.local) options.local = true;
     else if (arg === "--json" && !options.json) options.json = true;
+    else if (arg === "--app" && !options.app) options.app = true;
     else if (arg === "--coordinator" && options.coordinator === undefined) {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw Error(usage);
@@ -328,7 +332,27 @@ function parse(args: string[]) {
   }
   if (options.local && options.coordinator !== undefined)
     throw Error("Use --local or --coordinator, not both.");
+  if (options.app && !options.json)
+    throw Error("--app goes with --json: the app speaks the setup protocol.");
   return options;
+}
+
+/**
+ * How setup starts the desktop. In Terminal it is `clawdtime start`, panel
+ * and all. For the app it is the service alone: the app opens the panel with
+ * `clawdtime start --foreground` when setup ends, and owns it from then on.
+ */
+export function desktopStarter(
+  app: boolean,
+  base: { env: Record<string, string | undefined>; home: string; root: string },
+  start: typeof startCli = startCli,
+) {
+  return (say: (line: string) => void, options: { tucked?: boolean } = {}) =>
+    start(options.tucked ? ["--tucked", "true"] : [], {
+      ...base,
+      print: (line) => say(line),
+      ...(app ? { panel: false } : {}),
+    });
 }
 
 /** Runs setup. The exit code: 0 ready, 2 not finished, 1 stopped, 3 no terminal. */
@@ -381,14 +405,14 @@ export async function onboardCli(
       home,
       root,
       command,
-      startDesktop: (say) =>
-        startCli([], { env, home, root, print: (line) => say(line) }),
+      startDesktop: desktopStarter(options.app, { env, home, root }),
     });
   const engine = new OnboardEngine(
     io,
     {
       version: packageVersion(root),
       local: options.local,
+      ...(options.app ? { appOwned: true } : {}),
       ...(options.coordinator !== undefined
         ? { coordinator: options.coordinator }
         : {}),

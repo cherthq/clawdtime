@@ -65,8 +65,9 @@ final class SetupProtocolTests: XCTestCase {
   }
 
   func testTheEngineGetsNoSecretOnItsCommandLine() {
-    XCTAssertEqual(SetupProtocol.arguments(local: false), ["onboard", "--json"])
-    XCTAssertEqual(SetupProtocol.arguments(local: true), ["onboard", "--json", "--local"])
+    // --app: the app owns the desktop and the one connection, so setup starts no background connection.
+    XCTAssertEqual(SetupProtocol.arguments(local: false), ["onboard", "--json", "--app"])
+    XCTAssertEqual(SetupProtocol.arguments(local: true), ["onboard", "--json", "--app", "--local"])
   }
 
   func testStepsHaveTheirFixedOrderAndOnlySomeMayBeSkipped() {

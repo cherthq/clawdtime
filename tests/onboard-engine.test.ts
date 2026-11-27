@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { noTerminalLine, onboardCli, TerminalWizard } from "../cli/onboard.js";
+import {
+  desktopStarter,
+  noTerminalLine,
+  onboardCli,
+  TerminalWizard,
+} from "../cli/onboard.js";
+import type { startCli } from "../cli/start.js";
 import type { DesktopReadiness } from "../connectors/agents/desktop-readiness.js";
 import { keyRows } from "../connectors/computer/keys.js";
 import { readComputerSwitch } from "../connectors/computer/journal.js";
@@ -60,10 +66,20 @@ function fakeMac(
     permissions?: PermissionFacts[];
     desktop?: "absent" | "connected";
     request?: typeof fetch;
+    /** A `shared run` that setup did not start, and the desktop it serves. */
+    other?: { instanceId: string };
+    /** What the desktop reports of computer use, before and after a restart. */
+    computer?: {
+      before: DesktopReadiness["computer"];
+      after: DesktopReadiness["computer"];
+    };
+    taskAdmission?: DesktopReadiness["taskAdmission"];
   } = {},
 ) {
   const calls = {
     desktopStarts: 0,
+    desktopRestarts: 0,
+    desktopStops: 0,
     permissionChecks: 0,
     connectionStarts: 0,
     connectionStops: 0,
@@ -71,6 +87,7 @@ function fakeMac(
   };
   let desktop = options.desktop ?? "absent";
   let connection: "running" | "stopped" = "stopped";
+  let restarted = false;
   const granted: PermissionFacts = {
     panel: {
       path: "/Applications/Made Up/ClawdTimeTaskPanel",
@@ -93,15 +110,34 @@ function fakeMac(
               ...desktopAbsent,
               service: "connected",
               chat: "connected",
-              computer: "configured",
-              taskSession: "inactive",
+              computer: options.computer
+                ? restarted
+                  ? options.computer.after
+                  : options.computer.before
+                : "configured",
+              // A live desktop has an authorized session, as the real one says.
+              taskSession: "active",
+              taskAdmission: options.taskAdmission ?? "available",
             }
           : desktopAbsent,
-      instanceId: async () => (desktop === "connected" ? "desktop_1" : null),
+      instanceId: async () =>
+        desktop === "connected"
+          ? restarted
+            ? "desktop_2"
+            : "desktop_1"
+          : null,
       start: async (log) => {
         calls.desktopStarts++;
         log("Desktop panel requested.");
         desktop = "connected";
+      },
+      restart: async () => {
+        calls.desktopRestarts++;
+        restarted = true;
+      },
+      stop: async () => {
+        calls.desktopStops++;
+        desktop = "absent";
       },
     },
     permissions: async () => {
@@ -124,6 +160,12 @@ function fakeMac(
     },
     connection: {
       status: async () => connection,
+      holder: async () =>
+        connection === "running"
+          ? { instanceId: restarted ? "desktop_2" : "desktop_1", managed: true }
+          : options.other
+            ? { instanceId: options.other.instanceId, managed: false }
+            : null,
       start: async () => {
         calls.connectionStarts++;
         connection = "running";
@@ -577,6 +619,90 @@ describe("clawdtime onboard --json", () => {
     );
   });
 
+  it("in the app, the app owns the connection: setup asks, starts none, and ends one that Terminal setup started", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const mac = fakeMac();
+    const yes = agree(() => coordinator.codeFor(member));
+    // Terminal setup leaves its background connection running.
+    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    expect(mac.calls.connectionStarts).toBe(1);
+    const app = await runJson(
+      ["--coordinator", coordinator.origin, "--app"],
+      home,
+      mac.ports,
+      yes,
+    );
+    expect(app.code).toBe(0);
+    expect(stateOf(app.events, "connection")).toBe("ready");
+    expect(asked(app.events, "connection")).toBe(1);
+    // No second connection: the one of Terminal setup ends, the app starts its own.
+    expect(mac.calls.connectionStarts).toBe(1);
+    expect(mac.calls.connectionStops).toBe(1);
+    expect(
+      done(app.events).report.find((row) => row.id === "connection")!.detail,
+    ).toBe("ClawdTime connects this Mac to the shared number when setup ends.");
+  });
+
+  it("never starts a second connection: one that runs for this desktop is used", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const mac = fakeMac({ other: { instanceId: "desktop_1" } });
+    const { events } = await runJson(
+      ["--coordinator", coordinator.origin],
+      folder(),
+      mac.ports,
+      agree(() => coordinator.codeFor(member)),
+    );
+    expect(stateOf(events, "connection")).toBe("ready");
+    expect(asked(events, "connection")).toBe(0);
+    expect(mac.calls.connectionStarts).toBe(0);
+    expect(mac.calls.connectionStops).toBe(0);
+  });
+
+  it("starts no connection while one of an earlier desktop runs, in Terminal and in the app", async () => {
+    for (const args of [[], ["--app"]]) {
+      const coordinator = await fakeCoordinator();
+      cleanup.push(coordinator.close);
+      const mac = fakeMac({ other: { instanceId: "desktop_0" } });
+      const yes = agree(() => coordinator.codeFor(member));
+      const { events } = await runJson(
+        ["--coordinator", coordinator.origin, ...args],
+        folder(),
+        mac.ports,
+        (event) =>
+          event.id === "connection" && event.state === "failed"
+            ? { type: "action", id: "connection", action: "skip" }
+            : yes(event),
+      );
+      const failed = steps(events).find(
+        (event) => event.id === "connection" && event.state === "failed",
+      )!;
+      expect(failed.detail).toBe(
+        "Another connection to the shared number runs on this Mac, for an earlier desktop. End that clawdtime shared run, then try again.",
+      );
+      expect(stateOf(events, "connection")).toBe("skipped");
+      expect(mac.calls.connectionStarts).toBe(0);
+      expect(mac.calls.connectionStops).toBe(0);
+    }
+  });
+
+  it("in the app, a Stop during setup ends the desktop that setup started; in Terminal it stays", async () => {
+    for (const [args, stops] of [
+      [["--local", "--app"], 1],
+      [["--local"], 0],
+    ] as const) {
+      const mac = fakeMac();
+      const { code } = await runJson([...args], folder(), mac.ports, (event) =>
+        event.id === "computer" ? undefined : agree()(event),
+      );
+      expect(code).toBe(1);
+      expect(mac.calls.desktopStarts).toBe(1);
+      expect(mac.calls.desktopStops).toBe(stops);
+    }
+  });
+
   it("stops with a cancel and reports where it stopped", async () => {
     const { code, events } = await runJson(
       ["--local"],
@@ -691,5 +817,37 @@ describe("clawdtime onboard in a terminal", () => {
         "utf8",
       ),
     ).toContain(key);
+  });
+});
+
+describe("how setup starts the desktop", () => {
+  it("opens no panel for the app, a panel in Terminal, and a tucked one on a restart", async () => {
+    const seen: { args: string[]; panel?: boolean }[] = [];
+    const start = (async (
+      args: string[],
+      dependencies: { panel?: boolean },
+    ) => {
+      seen.push({
+        args,
+        ...(dependencies.panel !== undefined
+          ? { panel: dependencies.panel }
+          : {}),
+      });
+    }) as unknown as typeof startCli;
+    const base = { env: {}, home: "/Users/made-up", root: "/made-up/app" };
+    await desktopStarter(true, base, start)(() => {});
+    await desktopStarter(false, base, start)(() => {});
+    await desktopStarter(false, base, start)(() => {}, { tucked: true });
+    expect(seen).toEqual([
+      { args: [], panel: false },
+      { args: [] },
+      { args: ["--tucked", "true"] },
+    ]);
+  });
+
+  it("takes --app only with --json", async () => {
+    await expect(
+      onboardCli(["--app"], { ports: fakeMac().ports }),
+    ).rejects.toThrow("--app goes with --json");
   });
 });

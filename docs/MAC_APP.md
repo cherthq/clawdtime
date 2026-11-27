@@ -61,9 +61,11 @@ are in `mac/Tests/ClawdTimeAppTests`.
 
 ### Setup: the engine protocol
 
-The app starts `Resources/runtime/bin/clawdtime onboard --json` and speaks the
-setup protocol with it: one JSON object per line, events on the engine's
-stdout and commands on its stdin.
+The app starts `Resources/runtime/bin/clawdtime onboard --json --app` and
+speaks the setup protocol with it: one JSON object per line, events on the
+engine's stdout and commands on its stdin. `--app` tells setup that the app
+owns the desktop and the connection: setup checks the desktop service with no
+panel, and starts no background connection.
 
 - The app sends every answer on stdin. A key never goes on a command line, in
   the environment, in a file or in a log. A command prints as
