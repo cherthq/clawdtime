@@ -24,7 +24,12 @@ interface Incoming {
   roomId: string;
   phase: "preparing" | "prepared" | "unknown" | "ended";
   activated?: boolean;
+  /** Reconciliation reads of an unknown call that did not end it. */
+  retries?: number;
+  retryAt?: number;
 }
+// Unknown calls are read again after 1, 2, 4, 8 and 16 s, then every 30 s.
+const retryCeilingMs = 30_000;
 const eventSchema = z
   .object({
     event_id: z.uuid(),
@@ -227,7 +232,12 @@ export class SharedProvider {
       for (const item of this.options.store.all<Incoming>(
         "shared_provider_incoming",
       )) {
-        if (item.phase !== "prepared" || this.preparing.has(item.id)) continue;
+        if (this.preparing.has(item.id)) continue;
+        if (item.phase === "unknown") {
+          await this.reconcile(item);
+          continue;
+        }
+        if (item.phase !== "prepared") continue;
         try {
           const state = await this.options.api.observe(item.id);
           if (state.terminal && state.cleanupComplete) {
@@ -252,5 +262,35 @@ export class SharedProvider {
     } finally {
       this.busy = false;
     }
+  }
+  /** A failed preparation or a restart leaves no evidence of a room or of the
+   * provider call. Only the provider's terminal cleanup and an observed room
+   * absence free the slot; a live, unread or uncleaned call keeps it. Nothing
+   * is accepted, activated or redialed for an unknown call. */
+  private async reconcile(item: Incoming) {
+    if ((item.retryAt ?? 0) > this.now()) return;
+    try {
+      const state = await this.options.api.observe(item.id);
+      if (state.terminal && state.cleanupComplete) {
+        if (await this.options.media.cleanup(item.roomId)) {
+          await this.options.event(this.binding(item, "cleanup_complete"));
+          this.options.store.put("shared_provider_incoming", {
+            ...item,
+            phase: "ended",
+          });
+          return;
+        }
+      }
+    } catch {
+      /* an unread provider or room state keeps the slot */
+    }
+    const retries = (item.retries ?? 0) + 1;
+    this.options.store.put("shared_provider_incoming", {
+      ...item,
+      retries,
+      retryAt:
+        this.now() +
+        Math.min(retryCeilingMs, 1000 * 2 ** Math.min(retries - 1, 15)),
+    });
   }
 }

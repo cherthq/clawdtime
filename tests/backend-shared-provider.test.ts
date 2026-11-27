@@ -12,9 +12,12 @@ afterEach(() => {
     .forEach((fn) => fn());
   vi.useRealTimers();
 });
-function setup() {
-  const store = new Store();
-  const lineId = randomUUID(),
+function setup(
+  options: { now?: () => number; store?: Store; lineId?: string } = {},
+) {
+  // Passing a prior store and line restarts the coordinator on that database.
+  const store = options.store ?? new Store();
+  const lineId = options.lineId ?? randomUUID(),
     secret = "s".repeat(32);
   const service = createSharedNumberApp({
     store,
@@ -23,10 +26,11 @@ function setup() {
     identityKey: "bb".repeat(32),
     lineToken: "t".repeat(32),
     sendCode: async () => true,
+    now: options.now,
   });
   cleanup.push(() => {
     service.close();
-    store.close();
+    if (!options.store) store.close();
   });
   const credentials = {
     livekit_url: "wss://media.example",
@@ -55,6 +59,7 @@ function setup() {
     media,
     api,
     event: service.providerEvent,
+    now: options.now,
   });
   const event = {
     event_id: randomUUID(),
@@ -74,8 +79,35 @@ function setup() {
       `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`,
     );
   };
-  return { store, service, provider, media, api, event, send, credentials };
+  // A fresh signed incoming call on the same line, inside the replay window.
+  const next = () => ({
+    ...event,
+    event_id: randomUUID(),
+    created_at: new Date((options.now ?? Date.now)()).toISOString(),
+    data: { ...event.data, call_id: randomUUID() },
+  });
+  const phase = (callId: string) =>
+    store.get<{ phase: string }>("shared_provider_incoming", callId)?.phase;
+  const room = (callId: string) =>
+    store.get<{ roomId: string }>("shared_provider_incoming", callId)!.roomId;
+  return {
+    store,
+    lineId,
+    service,
+    provider,
+    media,
+    api,
+    event,
+    next,
+    send,
+    phase,
+    room,
+    credentials,
+  };
 }
+const live = { answered: true, terminal: false, cleanupComplete: false };
+const terminal = { answered: true, terminal: true, cleanupComplete: false };
+const cleaned = { answered: true, terminal: true, cleanupComplete: true };
 it("requires exact signed raw bytes, pins the line, and never persists or replays bearer media credentials", async () => {
   const f = setup();
   await expect(
@@ -162,6 +194,93 @@ it("retains unknown room creation and declines stale events without allocation",
   await f.provider.pump();
   expect(f.media.cleanup).not.toHaveBeenCalled();
   expect(f.store.all<any>("shared_provider_incoming")[0].phase).toBe("unknown");
+});
+it("frees the slot of a failed media preparation only after the provider reports the call ended and cleaned up", async () => {
+  let clock = Date.now();
+  const f = setup({ now: () => clock });
+  const first = f.next();
+  f.media.prepare.mockRejectedValueOnce(Error("lost response"));
+  expect(await f.send(first)).toEqual({ action: "decline" });
+  expect(f.phase(first.data.call_id)).toBe("unknown");
+  // Fail closed: the first call may still be live, so the slot stays held.
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  f.api.observe.mockResolvedValue(live);
+  await f.provider.pump();
+  expect(f.api.observe).toHaveBeenCalledWith(first.data.call_id);
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  clock += 60_000;
+  f.api.observe.mockResolvedValue(terminal);
+  await f.provider.pump();
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  expect(f.media.cleanup).not.toHaveBeenCalled();
+  expect(f.media.activate).not.toHaveBeenCalled(); // never answered by us
+  clock += 60_000;
+  f.api.observe.mockResolvedValue(cleaned);
+  await f.provider.pump();
+  expect(f.media.cleanup).toHaveBeenCalledWith(f.room(first.data.call_id));
+  expect(f.phase(first.data.call_id)).toBe("ended");
+  expect(f.media.prepare).toHaveBeenCalledOnce();
+  expect(await f.send(f.next())).toEqual({
+    action: "accept",
+    ...f.credentials,
+  });
+});
+it("reconciles a call left preparing by a coordinator restart before admitting the next call", async () => {
+  vi.useFakeTimers();
+  const f = setup();
+  f.media.prepare.mockImplementation(() => new Promise(() => {}));
+  const first = f.next();
+  const answer = f.send(first);
+  await vi.advanceTimersByTimeAsync(4501);
+  expect(await answer).toEqual({ action: "decline" });
+  expect(f.phase(first.data.call_id)).toBe("preparing");
+  // The process stops here. A new coordinator opens the same database.
+  const g = setup({ store: f.store, lineId: f.lineId });
+  expect(g.phase(first.data.call_id)).toBe("unknown");
+  expect(await g.send(g.next())).toEqual({ action: "decline" });
+  await g.provider.pump();
+  expect(g.media.cleanup).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(60_000);
+  g.api.observe.mockResolvedValue(cleaned);
+  await g.provider.pump();
+  expect(g.media.cleanup).toHaveBeenCalledWith(g.room(first.data.call_id));
+  expect(g.phase(first.data.call_id)).toBe("ended");
+  expect(await g.send(g.next())).toEqual({
+    action: "accept",
+    ...g.credentials,
+  });
+});
+it("bounds unknown reconciliation retries and keeps the slot until room cleanup is verified", async () => {
+  let clock = Date.now();
+  const f = setup({ now: () => clock });
+  const first = f.next();
+  f.media.prepare.mockRejectedValueOnce(Error("lost response"));
+  await f.send(first);
+  f.api.observe.mockRejectedValue(Error("provider unavailable"));
+  for (let i = 0; i < 20; i++) await f.provider.pump();
+  expect(f.api.observe).toHaveBeenCalledOnce();
+  for (let second = 0; second < 600; second++) {
+    clock += 1000;
+    await f.provider.pump();
+  }
+  // Ten minutes of one-second ticks: backoff caps reads near one per 30 s.
+  expect(f.api.observe.mock.calls.length).toBeGreaterThan(10);
+  expect(f.api.observe.mock.calls.length).toBeLessThanOrEqual(30);
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  f.api.observe.mockResolvedValue(cleaned);
+  f.media.cleanup.mockResolvedValueOnce(false); // room still listed
+  clock += 30_000;
+  await f.provider.pump();
+  expect(f.media.cleanup).toHaveBeenCalledOnce();
+  expect(f.phase(first.data.call_id)).toBe("unknown");
+  expect(await f.send(f.next())).toEqual({ action: "decline" });
+  clock += 30_000;
+  await f.provider.pump();
+  expect(f.phase(first.data.call_id)).toBe("ended");
+  expect(await f.send(f.next())).toEqual({
+    action: "accept",
+    ...f.credentials,
+  });
 });
 it("checks the real provider response contract and does not confuse room connection with answered or terminal cleanup", async () => {
   const lineId = randomUUID(),
