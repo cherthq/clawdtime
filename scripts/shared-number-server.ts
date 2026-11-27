@@ -229,6 +229,9 @@ async function main() {
             ? Response.json(
                 {
                   service: "shared-number",
+                  // Setup refuses a coordinator whose protocol it does not
+                  // speak. Raise it only for a change that older Macs cannot use.
+                  protocol: 1,
                   mode: config.enabled ? "enabled" : "standby",
                   providerConfigured: !!provider,
                   physicalAcceptance: false,
