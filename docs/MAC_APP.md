@@ -25,7 +25,9 @@ Requirements: macOS 14 or later on a Mac with Apple silicon.
 
 **Stop** is at the top of the window from the first screen, before anything
 can reach the Mac from outside. It ends setup and every process that
-ClawdTime started. Nothing is shared after Stop.
+ClawdTime started. Nothing is shared after Stop. Stop stays available on the
+last screen while the desktop that setup started runs and Finish has not
+taken it over. Stop and Quit then end it, also after a second setup run.
 
 After setup, ClawdTime lives in the menu bar:
 
@@ -98,6 +100,21 @@ panel, and starts no background connection.
   as a cancel too. The app sends SIGTERM only after 20 seconds and SIGKILL
   after 40 seconds, so that a slow first start never leaves a desktop with no
   owner. Quit and a new setup run wait until the engine has left.
+
+### The desktop that setup starts
+
+Setup starts the desktop service with no panel, so that it can check it.
+Until **Finish** hands it to the owner, nothing else owns it:
+
+- `done` has `"setupDesktop": true` while that service runs with no owner.
+  An engine that leaves before `done` may have left one too.
+- Stop or Quit then starts the engine and cancels it at once. With `--app`,
+  a cancelled engine ends the desktop service that an app setup started, in
+  this run or an earlier one, and only that one: setup remembers its process
+  when it starts it, and checks the start time and the command before the
+  signal. A desktop that the person started, or that a foreground owner
+  holds, is never ended.
+- **Finish** starts the owner, which takes the service over.
 
 ### After setup: one owner
 

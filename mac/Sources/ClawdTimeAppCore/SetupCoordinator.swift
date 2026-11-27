@@ -22,6 +22,12 @@ public final class SetupCoordinator: ObservableObject {
   /// True from Stop or Quit until every stopped engine has left. An engine
   /// first ends the desktop that it was starting, which can take a while.
   @Published public private(set) var isStopping = false
+  /// A desktop service that setup started may still run with no owner: the
+  /// last report said so, or the engine left before its report. Stop and
+  /// Quit then end it; Finish hands it to the owner.
+  @Published public private(set) var holdsSetupDesktop = false
+  /// Stop has something to end: a running engine or a desktop that setup started.
+  public var canStop: Bool { engine != nil || holdsSetupDesktop }
   private var draining = 0
   private var afterDrain: [@MainActor () -> Void] = []
   private var beginQueued = false
@@ -98,6 +104,8 @@ public final class SetupCoordinator: ObservableObject {
     }
     engine.onExit = { [weak self] code, details in
       guard let self, current == self.run else { return }
+      // An engine that left before its report may have left a desktop.
+      if self.state.isActive { self.holdsSetupDesktop = true }
       self.engine = nil
       self.answered = nil
       self.state.engineExited(code: code, details: details)
@@ -127,8 +135,9 @@ public final class SetupCoordinator: ObservableObject {
     case .hello where state.phase != .running:
       // A protocol this app does not speak: leave before any step runs.
       engine?.cancel(grace: 2)
-    case .done(let ready, _):
+    case .done(let ready, _, let setupDesktop):
       answered = nil
+      holdsSetupDesktop = setupDesktop
       if ready && finishWhenReady { finish() }
     default: break
     }
@@ -190,6 +199,16 @@ public final class SetupCoordinator: ObservableObject {
     }
   }
 
+  /// No engine runs, but a desktop that setup started may: an engine that
+  /// is cancelled at once ends it (only that one, checked by its process).
+  private func endSetupDesktop() {
+    guard holdsSetupDesktop else { return }
+    holdsSetupDesktop = false
+    guard let cleanup = try? makeEngine(false) else { return }
+    do { try cleanup.start() } catch { return }
+    drain(cleanup)
+  }
+
   private func whenDrained(_ action: @escaping @MainActor () -> Void) {
     if draining == 0 { action() } else { afterDrain.append(action) }
   }
@@ -198,7 +217,8 @@ public final class SetupCoordinator: ObservableObject {
   /// `done` runs when the owner has stopped and the engine has left.
   public func stop(then done: (@MainActor () -> Void)? = nil) {
     run += 1
-    if let engine { drain(engine) }
+    // A running engine ends what setup started when it reads the cancel.
+    if let engine { drain(engine); holdsSetupDesktop = false } else { endSetupDesktop() }
     engine = nil
     answered = nil
     handedOff = false
@@ -216,7 +236,8 @@ public final class SetupCoordinator: ObservableObject {
     guard case .finished = state.phase else { return }
     let desktopReady = state.reported(.desktop) == .ready
     let connectionReady = state.reported(.connection) == .ready
-    if desktopReady { owner?.start(connection: connectionReady) }
+    // The owner takes over the desktop that setup started.
+    if desktopReady, let owner { owner.start(connection: connectionReady); holdsSetupDesktop = false }
     handedOff = true
     onFinish?()
   }
@@ -232,7 +253,7 @@ public final class SetupCoordinator: ObservableObject {
   /// the engine has left.
   public func shutdown(then done: @escaping @MainActor () -> Void) {
     run += 1
-    if let engine { drain(engine) }
+    if let engine { drain(engine); holdsSetupDesktop = false } else { endSetupDesktop() }
     engine = nil
     let finish: @MainActor () -> Void = { [weak self] in
       guard let self else { done(); return }

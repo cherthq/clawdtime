@@ -85,8 +85,17 @@ export interface OnboardPorts {
     start(log: (message: string) => void): Promise<void>;
     /** Starts an idle desktop again, so that it reads a new setting. Optional. */
     restart?(log: (message: string) => void): Promise<void>;
-    /** Ends the desktop service. Optional: setup in the Mac app ends the desktop it started when the person stops setup. */
+    /**
+     * Ends the desktop service that setup started, and only that one.
+     * Optional: setup in the Mac app ends the desktop it started when the
+     * person stops setup, and any setup ends a desktop that was starting.
+     */
     stop?(): Promise<void>;
+    /**
+     * Whether a desktop service that an app setup started (in this run or an
+     * earlier one) still runs, with no foreground owner. Optional.
+     */
+    setupStarted?(): Promise<boolean>;
   };
   /** A fresh read-only check of the installed panel and capture helper. */
   permissions(): Promise<PermissionFacts>;
@@ -257,21 +266,40 @@ export class OnboardEngine {
     // comes while the desktop starts, in the app or in Terminal, ends the
     // desktop of that start: the start runs to its end first, so that its
     // service is known, and is never left half started with no owner.
+    // In the app, a desktop that an earlier setup run started and that no
+    // owner holds is setup's too: a Stop in a second run ends it.
+    let stopped = false;
     if (
       cancelled &&
       (this.stoppedWhileStarting ||
-        (this.settings.appOwned && this.startedDesktop))
+        (this.settings.appOwned &&
+          (this.startedDesktop || (await this.adoptable()))))
     )
-      await this.ports.desktop.stop?.().catch(() => {
-        this.log("warn", "The desktop that setup started did not stop.");
-      });
+      await this.ports.desktop.stop?.().then(
+        () => (stopped = true),
+        () => this.log("warn", "The desktop that setup started did not stop."),
+      );
     const ready = !cancelled && this.finish();
+    // The app learns whether a desktop that setup started runs with no
+    // owner: its owner takes it on Finish, or a Stop ends it.
+    const setupDesktop = this.settings.appOwned
+      ? this.ports.desktop.setupStarted
+        ? await this.adoptable()
+        : this.startedDesktop && !stopped
+      : undefined;
     this.io.emit({
       type: "done",
       ready,
       report: stepIds.map((id) => this.rows.get(id)!),
+      ...(setupDesktop !== undefined ? { setupDesktop } : {}),
     });
     return { ready, cancelled };
+  }
+
+  /** A desktop that an app setup started runs, with no owner. A failed check counts as one. */
+  private async adoptable() {
+    if (!this.ports.desktop.setupStarted) return false;
+    return this.ports.desktop.setupStarted().catch(() => true);
   }
 
   private step(

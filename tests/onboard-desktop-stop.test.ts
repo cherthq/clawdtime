@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { stopDesktopService } from "../src/onboard/system.js";
+import { macPorts, stopDesktopService } from "../src/onboard/system.js";
 import { takeProcessLock } from "../src/process-lock.js";
 
 const folders: string[] = [];
@@ -113,4 +113,76 @@ it("sends no signal when the owner lock names a process that is not the desktop 
     before.kill("SIGKILL");
     after.kill("SIGKILL");
   }
+}, 20_000);
+
+/** The real ports, with a desktop start that starts a stand-in service. */
+function portsWith(base: string, state: string, app: boolean) {
+  const started: ReturnType<typeof spawn>[] = [];
+  const ports = macPorts({
+    env: { CLAWDTIME_DESKTOP_STATE: state },
+    home: base,
+    root: base,
+    app,
+    command: { executable: process.execPath, args: [] },
+    startDesktop: async () => {
+      started.push(await service(state));
+    },
+  });
+  return { ports, started };
+}
+
+it("remembers the desktop that an app setup started, by its process, and stops only that one", async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "clawdtime-stop-")));
+  folders.push(base);
+  const state = join(base, "desktop");
+  mkdirSync(state, { mode: 0o700 });
+  const { ports, started } = portsWith(base, state, true);
+  expect(await ports.desktop.setupStarted!()).toBe(false);
+  await ports.desktop.start(() => {});
+  const ours = started[0]!;
+  // A later setup run (a new process with new ports) knows it too.
+  const later = portsWith(base, state, true).ports;
+  expect(await later.desktop.setupStarted!()).toBe(true);
+  // While a foreground owner holds it, it is that owner's.
+  const owner = takeProcessLock(join(state, "desktop-owner.lock"), {
+    pid: process.pid,
+  });
+  expect(await later.desktop.setupStarted!()).toBe(false);
+  owner!.release();
+  const ended = new Promise((done) => ours.once("exit", done));
+  await later.desktop.stop!();
+  await ended;
+  expect(await later.desktop.setupStarted!()).toBe(false);
+}, 20_000);
+
+it("never stops a desktop that setup did not start, and Terminal setup leaves none to adopt", async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "clawdtime-stop-")));
+  folders.push(base);
+  const state = join(base, "desktop");
+  mkdirSync(state, { mode: 0o700 });
+  // The person's own desktop runs: setup found it, it did not start it.
+  const own = await service(state);
+  try {
+    const { ports } = portsWith(base, state, true);
+    expect(await ports.desktop.setupStarted!()).toBe(false);
+    await ports.desktop.stop!();
+    await new Promise((done) => setTimeout(done, 300));
+    expect(own.exitCode).toBeNull();
+    expect(own.signalCode).toBeNull();
+  } finally {
+    const ended = new Promise((done) => own.once("exit", done));
+    own.kill("SIGTERM");
+    await ended;
+  }
+  // Terminal setup starts a desktop that is the person's: no app run adopts
+  // it, but a Stop while it starts still ends it.
+  const terminal = portsWith(base, state, false);
+  await terminal.ports.desktop.start(() => {});
+  expect(await terminal.ports.desktop.setupStarted!()).toBe(false);
+  expect(await portsWith(base, state, true).ports.desktop.setupStarted!()).toBe(
+    false,
+  );
+  const ended = new Promise((done) => terminal.started[0]!.once("exit", done));
+  await terminal.ports.desktop.stop!();
+  await ended;
 }, 20_000);

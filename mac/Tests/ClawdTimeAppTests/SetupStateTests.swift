@@ -52,7 +52,7 @@ final class SetupStateTests: XCTestCase {
   func testDoneKeepsTheReportAndSettlesEachStep() {
     var state = running()
     state.apply(.step(StepEvent(id: .model, state: .needsInput, input: StepInput(kind: .secret))))
-    state.apply(.done(ready: true, report: [ReportEntry(id: .model, state: .ready, detail: "Stored"), ReportEntry(id: .phone, state: .skipped)]))
+    state.apply(.done(ready: true, report: [ReportEntry(id: .model, state: .ready, detail: "Stored"), ReportEntry(id: .phone, state: .skipped)], setupDesktop: false))
     XCTAssertEqual(state.phase, .finished(ready: true))
     XCTAssertEqual(state.reported(.phone), .skipped)
     XCTAssertEqual(state.state(of: .model), .ready)
@@ -83,7 +83,7 @@ final class SetupStateTests: XCTestCase {
     XCTAssertEqual(notStarted.kind, .engineDidNotStart)
 
     var finished = running()
-    finished.apply(.done(ready: true, report: []))
+    finished.apply(.done(ready: true, report: [], setupDesktop: false))
     finished.engineExited(code: 0, details: [])
     XCTAssertEqual(finished.phase, .finished(ready: true))
 

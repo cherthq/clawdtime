@@ -493,6 +493,7 @@ export async function onboardCli(
       env,
       home,
       root,
+      app: options.app,
       command,
       startDesktop: desktopStarter(options.app, { env, home, root }),
     });

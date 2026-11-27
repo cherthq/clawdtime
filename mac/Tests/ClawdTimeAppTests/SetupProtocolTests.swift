@@ -14,7 +14,9 @@ final class SetupProtocolTests: XCTestCase {
     XCTAssertEqual(event.input?.options?.first?.detail, "3024 x 1964")
     XCTAssertTrue(event.input?.allowsMany == true)
     XCTAssertEqual(try EngineEvent.decode(line: #"{"type":"done","ready":false,"report":[{"id":"model","state":"ready","detail":"Stored"},{"id":"phone","state":"skipped"}]}"#),
-                   .done(ready: false, report: [ReportEntry(id: .model, state: .ready, detail: "Stored"), ReportEntry(id: .phone, state: .skipped)]))
+                   .done(ready: false, report: [ReportEntry(id: .model, state: .ready, detail: "Stored"), ReportEntry(id: .phone, state: .skipped)], setupDesktop: false))
+    XCTAssertEqual(try EngineEvent.decode(line: #"{"type":"done","ready":true,"report":[],"setupDesktop":true}"#),
+                   .done(ready: true, report: [], setupDesktop: true), "a desktop that setup started runs with no owner")
   }
 
   func testAQuestionCarriesItsIdAndWhetherItAsksForConsent() throws {

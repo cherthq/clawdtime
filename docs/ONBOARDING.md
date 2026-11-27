@@ -157,7 +157,10 @@ example a pairing that the coordinator made.
   answer gives or refuses consent: computer use, a sign-in text, view,
   computer actions, reports, the pairing, a replacement and the connection.
   An interface gives such a question no default answer.
-- `done` comes last, with `ready` and one report row for each step.
+- `done` comes last, with `ready` and one report row for each step. With
+  `--app` it has `setupDesktop`: true while a desktop service that setup
+  started runs and no owner holds it. A cancelled run with `--app` ends that
+  service, also when an earlier run started it.
 
 ### Commands
 
@@ -232,6 +235,7 @@ Setup writes only what its steps make:
 | `~/.local/share/clawdtime/computer/config.json`      | `computer`                                                                                 |
 | `~/.config/clawdtime/shared/connection.json`         | `pairing`                                                                                  |
 | `~/.config/clawdtime/shared/onboard-connection.json` | `connection`, the process, its start and command, and the desktop it serves, no credential |
+| `~/.config/clawdtime/shared/onboard-desktop.json`    | `desktop`, the desktop service that setup started, its start and command, no credential    |
 | `~/.config/clawdtime/shared/connection.log`          | `connection`, the output of the connection                                                 |
 | `~/.config/clawdtime/shared/connection.lock`         | `clawdtime shared run`, the process that holds the one connection                          |
 

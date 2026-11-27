@@ -139,7 +139,9 @@ public enum EngineEvent: Equatable, Sendable {
   case hello(protocol: Int, version: String)
   case step(StepEvent)
   case log(level: String, message: String)
-  case done(ready: Bool, report: [ReportEntry])
+  /// `setupDesktop`: a desktop service that setup started still runs and no
+  /// owner holds it. The owner takes it on Finish; Stop and Quit end it.
+  case done(ready: Bool, report: [ReportEntry], setupDesktop: Bool)
   /// A type this app does not know. It is ignored.
   case unknown(type: String)
 
@@ -148,7 +150,7 @@ public enum EngineEvent: Equatable, Sendable {
   private struct Envelope: Decodable { var type: String }
   private struct Hello: Decodable { var `protocol`: Int; var version: String }
   private struct Log: Decodable { var level: String; var message: String }
-  private struct Done: Decodable { var ready: Bool; var report: [ReportEntry]? }
+  private struct Done: Decodable { var ready: Bool; var report: [ReportEntry]?; var setupDesktop: Bool? }
 
   public static func decode(line: String) throws -> EngineEvent {
     guard let data = line.data(using: .utf8), (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
@@ -167,7 +169,7 @@ public enum EngineEvent: Equatable, Sendable {
         return .log(level: log.level, message: log.message)
       case "done":
         let done = try decoder.decode(Done.self, from: data)
-        return .done(ready: done.ready, report: done.report ?? [])
+        return .done(ready: done.ready, report: done.report ?? [], setupDesktop: done.setupDesktop ?? false)
       default: return .unknown(type: envelope.type)
       }
     } catch {

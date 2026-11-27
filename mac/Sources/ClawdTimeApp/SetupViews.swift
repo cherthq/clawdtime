@@ -47,7 +47,8 @@ struct SetupRootView: View {
   var body: some View {
     let screen = Screen(setup.state)
     VStack(spacing: 0) {
-      HeaderView(running: setup.engineIsRunning || owner.isActive, stop: { setup.stop() })
+      // Stop stays available while a desktop that setup started may run.
+      HeaderView(running: setup.canStop || owner.isActive, stop: { setup.stop() })
       ProgressRail(state: setup.state, visible: screen != .welcome)
         .padding(.horizontal, 32)
         .padding(.top, 4)

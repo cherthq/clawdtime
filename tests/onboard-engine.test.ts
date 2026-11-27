@@ -82,6 +82,8 @@ function fakeMac(
     onCall?: (port: string) => void;
     /** The Darwin major version: 25 unless set. */
     darwinMajor?: number;
+    /** The ports remember the desktop that an app setup started, as the real ones do. */
+    remembers?: boolean;
   } = {},
 ) {
   const call = (port: string) => options.onCall?.(port);
@@ -95,6 +97,8 @@ function fakeMac(
     validated: 0,
   };
   let desktop = options.desktop ?? "absent";
+  /** The desktop that an app setup started runs, and no owner holds it. */
+  let setupStarted = false;
   let connection: "running" | "stopped" = "stopped";
   let restarted = false;
   const granted: PermissionFacts = {
@@ -145,6 +149,7 @@ function fakeMac(
         calls.desktopStarts++;
         log("Desktop panel requested.");
         desktop = "connected";
+        if (options.remembers) setupStarted = true;
       },
       restart: async () => {
         call("desktop.restart");
@@ -154,7 +159,13 @@ function fakeMac(
       stop: async () => {
         calls.desktopStops++;
         desktop = "absent";
+        setupStarted = false;
       },
+      ...(options.remembers
+        ? {
+            setupStarted: async () => setupStarted && desktop === "connected",
+          }
+        : {}),
     },
     permissions: async () => {
       calls.permissionChecks++;
@@ -244,7 +255,7 @@ async function runJson(
   home: string,
   ports: OnboardPorts,
   respond: Responder,
-  extra: { now?: () => number; root?: string } = {},
+  extra: { now?: () => number; root?: string; cancelAtHello?: boolean } = {},
 ) {
   const stdin = new PassThrough();
   const lines: string[] = [];
@@ -271,6 +282,8 @@ async function runJson(
         partial = partial.slice(end + 1);
         lines.push(line);
         const event = JSON.parse(line) as OnboardEvent;
+        if (event.type === "hello" && extra.cancelAtHello)
+          setImmediate(() => stdin.end('{"type":"cancel"}\n'));
         if (
           event.type === "step" &&
           (event.state === "needs_input" || event.state === "failed")
@@ -869,6 +882,58 @@ describe("clawdtime onboard --json", () => {
       expect(mac.calls.desktopStarts).toBe(1);
       expect(mac.calls.desktopStops).toBe(stops);
     }
+  });
+
+  it("in the app, done says when the desktop that setup started still runs with no owner", async () => {
+    const mac = fakeMac({ remembers: true });
+    const home = folder();
+    const app = await runJson(["--local", "--app"], home, mac.ports, agree());
+    expect(app.code).toBe(0);
+    expect(done(app.events).setupDesktop).toBe(true);
+    // In Terminal the desktop is the person's own: done says nothing of it.
+    const terminal = await runJson(["--local"], home, fakeMac().ports, agree());
+    expect(done(terminal.events).setupDesktop).toBeUndefined();
+  });
+
+  it("in the app, a Stop during a second setup run ends the desktop that the first run started", async () => {
+    for (const stopAt of ["hello", "computer"] as const) {
+      const mac = fakeMac({ remembers: true });
+      const home = folder();
+      const no = (event: StepEvent) =>
+        event.id === "computer"
+          ? ({ type: "input", id: "computer", value: false } as const)
+          : agree()(event);
+      await runJson(["--local", "--app"], home, mac.ports, no);
+      expect(mac.calls.desktopStarts).toBe(1);
+      expect(mac.calls.desktopStops).toBe(0);
+      // The second run finds the desktop running: it did not start it.
+      const second = await runJson(
+        ["--local", "--app"],
+        home,
+        mac.ports,
+        (event) => (event.id === "computer" ? undefined : agree()(event)),
+        stopAt === "hello" ? { cancelAtHello: true } : {},
+      );
+      expect(second.code).toBe(1);
+      expect(mac.calls.desktopStarts).toBe(1);
+      expect(mac.calls.desktopStops).toBe(1);
+      expect(done(second.events).setupDesktop).toBe(false);
+    }
+  });
+
+  it("in Terminal, a Stop never ends a desktop that an earlier run started", async () => {
+    const mac = fakeMac({ remembers: true });
+    const home = folder();
+    await runJson(["--local"], home, mac.ports, (event) =>
+      event.id === "computer"
+        ? { type: "input", id: "computer", value: false }
+        : agree()(event),
+    );
+    const second = await runJson(["--local"], home, mac.ports, (event) =>
+      event.id === "computer" ? undefined : agree()(event),
+    );
+    expect(second.code).toBe(1);
+    expect(mac.calls.desktopStops).toBe(0);
   });
 
   it("starts an idle desktop again after the yes to computer use, in Terminal and in the app", async () => {
