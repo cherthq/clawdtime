@@ -50,6 +50,7 @@ function callFixture(
     source?: CallSource;
     trigger?: CallTrigger;
     viewScope?: string[];
+    computer?: ReturnType<typeof walkthroughComputer>;
   } = {},
 ) {
   const store = new Store(":memory:");
@@ -150,7 +151,7 @@ function callFixture(
       sourceCurrent: () => true,
       answer,
       stopSharing,
-      computer: port,
+      computer: options.computer ?? port,
     },
     clock,
   );
@@ -328,7 +329,7 @@ const idle = (): DesktopExecutionSnapshot => ({
 });
 
 /** The port over a real phone adapter and a scripted native worker. */
-function portFixture(options: { owns?: () => boolean } = {}) {
+function portFixture(options: { owns?: () => boolean; waitMs?: number } = {}) {
   let current = idle();
   const authorities: (DesktopExecutionAuthority | undefined)[] = [];
   const runtime = {
@@ -357,7 +358,7 @@ function portFixture(options: { owns?: () => boolean } = {}) {
   const port = walkthroughComputer({
     phone,
     owns: options.owns ?? (() => true),
-    waitMs: 50,
+    waitMs: options.waitMs ?? 50,
     pollMs: 1,
   });
   const intent = { id: "intent", attemptId: "attempt" } as ProactiveCallIntent;
@@ -570,6 +571,73 @@ describe("a spoken yes in a walkthrough call", () => {
     ask(f, first);
     expect(await f.port.submit(f.intent, "yes", "turn-3")).toBe(unheard(first));
     expect(f.runtime.answer).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a refusal before any effect", () => {
+  it("is a refusal when another call holds the computer, and the rest of the call still works", async () => {
+    const f = portFixture();
+    f.phone.open("ordinary-call");
+    expect(await f.port.submit(f.intent, "Click Save", "turn-1")).toBe(
+      "Another call uses the computer now. No action was sent.",
+    );
+    expect(f.runtime.submit).not.toHaveBeenCalled();
+    // On the line: the refusal is the turn's answer, not an unknown outcome.
+    const call = callFixture({ computer: f.port });
+    await call.prepare();
+    expect(await call.say("computer", "Click Save", "turn-1")).toMatchObject({
+      message: "Another call uses the computer now. No action was sent.",
+      computerAllowed: true,
+    });
+    expect(await call.say("answer", "What changed?", "turn-2")).toMatchObject({
+      message: "Applied to the exact pending request.",
+    });
+    expect(call.answer).toHaveBeenCalledOnce();
+  });
+
+  it("is a refusal after the call's computer lease ended, and a heartbeat does not fail on it", async () => {
+    const f = portFixture();
+    await f.port.submit(f.intent, "Search the fixture shop", "turn-1");
+    f.port.close(f.intent);
+    expect(() => f.port.renew(f.intent)).not.toThrow();
+    expect(await f.port.submit(f.intent, "Click Save", "turn-2")).toBe(
+      "This call's computer control has ended. No action was sent.",
+    );
+    expect(f.runtime.submit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a lost effect unknown: nothing more is sent in that call", async () => {
+    const f = portFixture();
+    f.runtime.submit.mockRejectedValueOnce(Error("lost response"));
+    const call = callFixture({ computer: f.port });
+    await call.prepare();
+    await expect(
+      call.say("computer", "Click Save", "turn-1"),
+    ).rejects.toThrow();
+    expect(call.line.permitsComputer(call.attemptId)).toBe(false);
+    await expect(
+      call.say("computer", "Click Save", "turn-2"),
+    ).rejects.toThrow();
+    expect(f.runtime.submit).toHaveBeenCalledOnce();
+  });
+
+  it("hiding sharing while a request waits for its result stops it without poisoning the call", async () => {
+    const f = portFixture({ waitMs: 2000 });
+    const call = callFixture({ computer: f.port });
+    await call.prepare();
+    const pending = call.say("computer", "Search the fixture shop", "turn-1");
+    await vi.waitFor(() => expect(f.runtime.submit).toHaveBeenCalledOnce());
+    expect(await call.command("stop_sharing")).toMatchObject({
+      sharingAllowed: false,
+    });
+    expect(f.runtime.stop).toHaveBeenCalledOnce();
+    expect(await pending).toMatchObject({
+      message:
+        "This call's computer request was stopped when its computer control ended. Its last step is not confirmed.",
+    });
+    expect(await call.say("answer", "What changed?", "turn-2")).toMatchObject({
+      message: "Applied to the exact pending request.",
+    });
   });
 });
 

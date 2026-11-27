@@ -102,6 +102,13 @@ example after a reply that said the request was still running, the next reply
 tells that question, and those words answer nothing. A question that comes
 again after an answer is told again before a yes can answer it.
 
+A refusal before any effect is the answer of that turn: another call uses the
+computer, or this call's computer control has ended. It says that no action was
+sent, and the rest of the call goes on. When hiding sharing or a lost lease
+stops a request that is still running, the reply says that it stopped and that
+its last step is not confirmed. Only a request whose outcome is not known ends
+computer control for the rest of the call.
+
 Stop cancels only computer work owned by that call and leaves video on, also
 after computer control ended in that call. Hiding sharing, ending the call,
 revoking permission or losing the call lease also stops its computer work.

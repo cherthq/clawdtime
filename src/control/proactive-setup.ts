@@ -109,7 +109,7 @@ export interface ProactiveComputerSource {
 export function walkthroughComputer(deps: {
   phone: Pick<
     PhoneDesktop,
-    "open" | "renew" | "run" | "stop" | "close" | "execution"
+    "open" | "renew" | "inspect" | "run" | "stop" | "close" | "execution"
   >;
   /** The call still has computer control and owns the selected display. */
   owns(intent: ProactiveCallIntent): boolean;
@@ -134,6 +134,16 @@ export function walkthroughComputer(deps: {
       state.pendingAction?.id ?? null,
       state.message,
     ]);
+  const leaseEnded = (callId: string) => {
+    try {
+      phone.inspect(callId);
+      return false;
+    } catch (error) {
+      return (
+        error instanceof DomainError && error.message === "phone_call_expired"
+      );
+    }
+  };
   /** The reply the caller hears: it tells a waiting question when it says it. */
   const reply = (callId: string, message: string) => {
     const now = phone.execution.snapshot();
@@ -146,11 +156,22 @@ export function walkthroughComputer(deps: {
       const callId = intent.attemptId!;
       if (!deps.owns(intent))
         return "This call no longer owns the shared display. No action was sent.";
-      phone.open(callId);
-      computerCalls.add(callId);
-      phone.renew(callId);
+      // A refusal before any effect is the answer of this turn. Only an
+      // effect whose outcome is not known makes the rest of the call unknown.
+      try {
+        phone.open(callId);
+        computerCalls.add(callId);
+        phone.renew(callId);
+      } catch (error) {
+        return error instanceof DomainError &&
+          error.message === "phone_call_in_use"
+          ? "Another call uses the computer now. No action was sent."
+          : "This call's computer control has ended. No action was sent.";
+      }
       // Provider speech identity, not model arguments, supplies these words.
       const requestId = `turn_${hash(turnId)}`;
+      // Set once the worker may have the words. A throw before it sent nothing.
+      let sent = false;
       try {
         return await phone.run(callId, requestId, words, async () => {
           const before = phone.execution.snapshot();
@@ -161,9 +182,14 @@ export function walkthroughComputer(deps: {
               told.set(callId, question(before));
               return `This question came after your last words, so they did not answer it: ${before.message}`;
             }
-            return reply(callId, (await phone.execution.answer(words)).message);
+            // The adapter refuses synchronously, before the worker hears it.
+            const answered = phone.execution.answer(words);
+            sent = true;
+            return reply(callId, (await answered).message);
           }
-          const result = await phone.execution.submit(requestId, words);
+          const submitted = phone.execution.submit(requestId, words);
+          sent = true;
+          const result = await submitted;
           if (result.message) return reply(callId, result.message);
           // Await observed completion or a question while independent
           // status heartbeats maintain the call lease. Never resubmit.
@@ -186,11 +212,23 @@ export function walkthroughComputer(deps: {
           error.message === "phone_request_cancelled"
         )
           return "This call's computer request was stopped.";
+        if (!sent)
+          return "This call's computer control ended before the request was sent. No action was sent.";
+        // Hiding sharing, the end of the call or a lost lease closed the call's
+        // computer lease, and its end stopped the call's work. The worker's
+        // own journal keeps an input whose outcome is not known.
+        if (leaseEnded(callId))
+          return "This call's computer request was stopped when its computer control ended. Its last step is not confirmed.";
         throw error;
       }
     },
     renew(intent: ProactiveCallIntent) {
-      if (computerCalls.has(intent.attemptId!)) phone.renew(intent.attemptId!);
+      if (!computerCalls.has(intent.attemptId!)) return;
+      try {
+        phone.renew(intent.attemptId!);
+      } catch {
+        // An ended lease has nothing to renew; the next request says so.
+      }
     },
     stop(intent: ProactiveCallIntent) {
       if (!computerCalls.has(intent.attemptId!))
