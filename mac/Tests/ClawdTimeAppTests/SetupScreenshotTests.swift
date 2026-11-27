@@ -55,7 +55,7 @@ final class SetupScreenshotTests: XCTestCase {
       #"{"type":"step","id":"computer","state":"in_progress","title":"Computer use","detail":"Starting the desktop again, so that it can use this Mac."}"#,
     ]),
     Shot(name: "11-permissions", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer"]) + [
-      #"{"type":"step","id":"permissions","state":"needs_input","title":"Permissions","question":"shot-question-0006","detail":"In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTimeTaskPanel. In Screen & System Audio Recording, turn on ClawdTimeTaskPanel and ClawdTimeTaskCapture. Then check again.","details":["ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel","ClawdTimeTaskCapture: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskCapture"],"recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"}}"#,
+      #"{"type":"step","id":"permissions","state":"needs_input","title":"Permissions","question":"shot-question-0006","detail":"In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTime. In Screen & System Audio Recording, turn on ClawdTime. Then check again.","details":["ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel","ClawdTimeTaskCapture: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskCapture"],"recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"}}"#,
     ]),
     Shot(name: "12-phone-number", lines: [hello] + pending + ready(["preflight", "model", "desktop", "computer", "permissions"]) + [
       #"{"type":"step","id":"phone","state":"needs_input","title":"Your phone","question":"shot-question-0007","detail":"ClawdTime checks that the phone is yours. Your number goes only to the coordinator.","input":{"kind":"phone","prompt":"Your own phone number, with country code"}}"#,
@@ -117,7 +117,7 @@ final class SetupScreenshotTests: XCTestCase {
       ("model", "ready", "A key for OpenAI is in the protected key store."),
       ("desktop", "ready", "The desktop started."),
       ("computer", "ready", "Computer use is on."),
-      ("permissions", ready ? "ready" : "failed", ready ? "Accessibility and Screen Recording are on for the panel. Screen Recording is on for the capture helper." : "In System Settings, open Privacy & Security. In Screen & System Audio Recording, turn on ClawdTimeTaskPanel. Then check again."),
+      ("permissions", ready ? "ready" : "failed", ready ? "Accessibility and Screen Recording are on for the panel. Screen Recording is on for the capture helper." : "In System Settings, open Privacy & Security. In Screen & System Audio Recording, turn on ClawdTime. Then check again."),
       ("phone", "ready", "Your phone is verified."),
       ("pairing", "ready", "This Mac is paired. View allowed. Computer actions declined. Reports allowed."),
       ("connection", "ready", "ClawdTime connects this Mac to the shared number when setup ends."),

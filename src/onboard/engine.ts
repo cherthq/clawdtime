@@ -985,9 +985,12 @@ export class OnboardEngine {
         "permissions",
         { kind: "confirm", prompt: "Check again" },
         {
-          detail: `In System Settings, open Privacy & Security. ${missing.map((one) => `In ${one.list}, turn on ${one.binaries.join(" and ")}.`).join(" ")} Then check again.`,
+          detail: `In System Settings, open Privacy & Security. ${missing.map((one) => `In ${one.list}, turn on ${this.permissionHolder()}.`).join(" ")} Then check again.`,
           details: [...new Set(missing.flatMap((one) => one.binaries))].flatMap(
-            (name) => (paths.has(name) ? [`${name}: ${paths.get(name)}`] : []),
+            (name) =>
+              paths.has(name)
+                ? [`Checked for ${name}: ${paths.get(name)}`]
+                : [],
           ),
           recovery: {
             label: "Open System Settings",
@@ -1002,6 +1005,20 @@ export class OnboardEngine {
   }
 
   /** The name of the Screen Recording list in System Settings on this Mac. */
+  /**
+   * The app that System Settings lists for these permissions. macOS gives a
+   * helper's permissions to the app that started it: ClawdTime when the Mac
+   * app runs setup, the terminal app when setup runs in a terminal.
+   */
+  private permissionHolder() {
+    if (this.settings.appOwned) return "ClawdTime";
+    const terminal: Record<string, string> = { Apple_Terminal: "Terminal" };
+    return (
+      terminal[this.settings.env.TERM_PROGRAM ?? ""] ??
+      "the app you run ClawdTime in, such as Terminal"
+    );
+  }
+
   private screenList() {
     return this.darwin !== null && this.darwin < 24
       ? "Screen Recording"
