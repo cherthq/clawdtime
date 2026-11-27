@@ -129,6 +129,9 @@ export interface SharedCallProof {
   callId: string;
   memberId: string;
   pairing: Pairing;
+  // The code was shown on this paired Mac, over this live device connection.
+  credentialId: string;
+  connectionId: string;
   digest: string;
   attempts: number;
   expiresAt: number;

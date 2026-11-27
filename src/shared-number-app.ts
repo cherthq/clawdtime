@@ -101,6 +101,7 @@ export function createSharedNumberApp(options: {
       return c.json({ ok: false, code: "line_unauthorized" }, 403);
     await next();
   });
+  app.notFound((c) => c.json({ ok: false, code: "not_found" }, 404));
   app.onError((error, c) =>
     c.json(
       {
@@ -153,21 +154,6 @@ export function createSharedNumberApp(options: {
     await router.enroll(proof, proof);
     return c.json(await router.invite(proof));
   });
-  app.post("/account/proof", async (c) => {
-    const { callId } = z
-      .object({ callId: routingId })
-      .strict()
-      .parse(await c.req.json());
-    return c.json(
-      await router.issueCallProof(
-        bearer(c.req.header("authorization")),
-        callId,
-      ),
-    );
-  });
-  app.post("/account/pending-call", async (c) =>
-    c.json(await router.pendingCall(bearer(c.req.header("authorization")))),
-  );
   app.post("/account/revoke", async (c) => {
     await router.revoke(bearer(c.req.header("authorization")));
     return c.json({ ok: true });
@@ -186,6 +172,17 @@ export function createSharedNumberApp(options: {
       .parse(await c.req.json());
     return c.json(
       router.connect(bearer(c.req.header("authorization")), instanceId),
+    );
+  });
+  // The paired Mac shows this code to the person at that Mac. The account
+  // sign-in never yields a call code.
+  app.post("/device/call-proof", async (c) => {
+    const { callId } = z
+      .object({ callId: routingId.optional() })
+      .strict()
+      .parse(await c.req.json());
+    return c.json(
+      router.issueCallProof(bearer(c.req.header("authorization")), callId),
     );
   });
   for (const action of ["heartbeat", "disconnect", "poll"] as const)

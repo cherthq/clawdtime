@@ -42,13 +42,49 @@ const configuration = z
       .optional(),
   })
   .strict();
+/** The paired Mac asks for the call code with its own device credential. The
+ * coordinator gives it only while this Mac's `shared run` connection is live,
+ * so a sign-in session alone never yields a code. */
+export async function sharedCallProof(
+  config: { origin: string; credential: string },
+  callId?: string,
+  request: typeof fetch = fetch,
+) {
+  const response = await request(
+    `${sharedOrigin(config.origin)}/device/call-proof`,
+    {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.credential}`,
+      },
+      body: JSON.stringify(callId ? { callId: routingId.parse(callId) } : {}),
+      signal: AbortSignal.timeout(20_000),
+    },
+  );
+  const body = (await response.json().catch(() => ({}))) as unknown;
+  if (!response.ok)
+    throw Error(
+      z.object({ code: z.string().max(100) }).safeParse(body).data?.code ??
+        "shared_call_proof_refused",
+    );
+  return z
+    .object({
+      callId: routingId,
+      code: z.string().regex(/^\d{8}$/),
+      expiresAt: z.number(),
+    })
+    .parse(body);
+}
+
 export async function sharedCli(args: string[]) {
   const directory = join(homedir(), ".config", "clawdtime", "shared");
   const file = join(directory, "connection.json");
   const system = { env: process.env, home: homedir() };
   if (!["pair", "run", "prove", "doctor"].includes(args[0] ?? "")) {
     console.log(
-      "clawdtime shared pair HTTPS_ORIGIN\nclawdtime shared run\nclawdtime shared prove [CALL_ID]\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
+      "clawdtime shared pair HTTPS_ORIGIN\nclawdtime shared run\nclawdtime shared prove [CALL_ID]   (on the paired Mac, while shared run is open)\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
     );
     return;
   }
@@ -176,11 +212,43 @@ export async function sharedCli(args: string[]) {
     }
     return;
   }
+  if (args[0] === "prove") {
+    if (!config) throw Error("shared_pairing_required");
+    if (!process.stdin.isTTY) throw Error("shared_setup_requires_terminal");
+    const terminal = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    try {
+      if (
+        (
+          await terminal.question(
+            "Are you on the ClawdTime call from your verified phone now? Type yes: ",
+          )
+        ).trim() !== "yes"
+      )
+        return;
+      let proof: Awaited<ReturnType<typeof sharedCallProof>>;
+      try {
+        proof = await sharedCallProof(config, args[1]);
+      } catch {
+        console.error(
+          "No code was given. Keep clawdtime shared run open on this Mac, call the shared number from your verified phone, then run this again.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      console.log(
+        `Say this code on the ClawdTime call: ${proof.code}. It works once, only for this Mac, and expires within two minutes.`,
+      );
+    } finally {
+      terminal.close();
+    }
+    return;
+  }
   if (args[0] === "pair" && config)
     throw Error("shared_pairing_already_exists");
-  const origin = sharedOrigin(
-    args[0] === "pair" ? (args[1] ?? "") : (config?.origin ?? ""),
-  );
+  const origin = sharedOrigin(args[1] ?? "");
   if (!process.stdin.isTTY) throw Error("shared_setup_requires_terminal");
   const terminal = createInterface({
     input: process.stdin,
@@ -201,41 +269,13 @@ export async function sharedCli(args: string[]) {
     return response.json();
   };
   try {
+    // Only pairing signs in. A call is proved by the paired Mac itself.
     const session = await sharedSignIn({
       origin,
       ask: (question) => terminal.question(question),
       post,
-      ...(args[0] === "prove" && {
-        keep: {
-          file: join(directory, "session.json"),
-          check: (token: string) => post("/account/pending-call", {}, token),
-        },
-      }),
     });
     if (!session) return;
-    if (args[0] === "prove") {
-      if (
-        (
-          await terminal.question(
-            "Are you currently on the ClawdTime call you want to authorize? Type yes: ",
-          )
-        ).trim() !== "yes"
-      )
-        return;
-      const callId = args[1]
-        ? routingId.parse(args[1])
-        : z
-            .object({ callId: routingId })
-            .parse(await post("/account/pending-call", {}, session.token))
-            .callId;
-      const proof = z
-        .object({ code: z.string(), expiresAt: z.number() })
-        .parse(await post("/account/proof", { callId }, session.token));
-      console.log(
-        `Say this code only on the ClawdTime call you started: ${proof.code}. It expires within two minutes.`,
-      );
-      return;
-    }
     if (!service) throw Error("shared_desktop_required");
     const displayId = routingId.parse(
       (await terminal.question("Display ID to pair: ")).trim(),

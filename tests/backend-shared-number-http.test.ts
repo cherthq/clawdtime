@@ -99,7 +99,8 @@ async function fixture(timeout = 2000, callbacksEnabled = false) {
     participantId: `participant:${providerCallId}`,
     expiresAt: Date.now() + 60_000,
   });
-  const admit = async (account: string, providerCallId: string) => {
+  // The paired Mac asks for the call code with its own device credential.
+  const admit = async (credential: string, providerCallId: string) => {
     const incoming = await post(
       "/line/event",
       event(providerCallId),
@@ -107,9 +108,9 @@ async function fixture(timeout = 2000, callbacksEnabled = false) {
     );
     expect(incoming.status).toBe(200);
     const proof = await post(
-      "/account/proof",
+      "/device/call-proof",
       { callId: incoming.body.id },
-      account,
+      credential,
     );
     expect(proof.status).toBe(200);
     const {
@@ -139,7 +140,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       a.credential,
     );
     await f.post("/device/connect", { instanceId: "instance-b" }, b.credential);
-    const callA = await f.admit(a.account, "call-a");
+    const callA = await f.admit(a.credential, "call-a");
     const roomClaim = { roomId: callA.roomId, workerId: "voice-one" };
     expect(
       (await f.post("/line/room/claim", roomClaim, lineToken)).status,
@@ -174,7 +175,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       f.event("call-a", "cleanup_complete"),
       lineToken,
     );
-    const callB = await f.admit(b.account, "call-b");
+    const callB = await f.admit(b.credential, "call-b");
     const dial = vi.fn(async () => ({ providerCallId: "outbound-a" }));
     const inspect = vi.fn(async () => ({
       terminal: false,
@@ -210,13 +211,18 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       lineToken,
     );
     expect(
-      (await f.post("/account/proof", { callId: binding.body.id }, b.account))
-        .status,
+      (
+        await f.post(
+          "/device/call-proof",
+          { callId: binding.body.id },
+          b.credential,
+        )
+      ).status,
     ).toBe(403);
     const proof = await f.post(
-      "/account/proof",
+      "/device/call-proof",
       { callId: binding.body.id },
-      a.account,
+      a.credential,
     );
     expect(proof.status).toBe(200);
     inspect.mockResolvedValue({ terminal: true, cleanupComplete: false });
@@ -239,7 +245,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       { instanceId: "original-instance" },
       a.credential,
     );
-    const call = await f.admit(a.account, "original-call");
+    const call = await f.admit(a.credential, "original-call");
     f.service.router.createTask(call.id, call.scope.grantId, {
       taskId: "original-task",
       userTurnId: "turn",
@@ -302,9 +308,9 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     expect((await getRoom()).body.awaitingAnswer).toBe(false);
     const room = (await getRoom()).body;
     const proof = await f.post(
-      "/account/proof",
+      "/device/call-proof",
       { callId: room.id },
-      a.account,
+      a.credential,
     );
     await f.post(
       "/device/connect",
@@ -344,7 +350,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       { instanceId: "instance-a" },
       a.credential,
     );
-    const call = await f.admit(a.account, "call-a");
+    const call = await f.admit(a.credential, "call-a");
     f.service.router.createTask(call.id, call.scope.grantId, {
       taskId: "task",
       userTurnId: "turn",
@@ -361,7 +367,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     expect(() =>
       f.service.router.requestCallback(call.id, call.scope.grantId, "task"),
     ).toThrow();
-    const next = await f.admit(a.account, "call-next");
+    const next = await f.admit(a.credential, "call-next");
     f.service.router.createTask(next.id, next.scope.grantId, {
       taskId: "task-next",
       userTurnId: "turn-next",
@@ -443,7 +449,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     await vi.waitFor(() => {
       expect(connected).toBe(2);
     });
-    const callA = await f.admit(a.account, "call-a");
+    const callA = await f.admit(a.credential, "call-a");
     const command = (call: any, requestId: string, text: string) =>
       f.post(
         "/line/command",
@@ -467,7 +473,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       f.event("call-a", "cleanup_complete"),
       lineToken,
     );
-    const callB = await f.admit(b.account, "call-b");
+    const callB = await f.admit(b.credential, "call-b");
     expect(
       (await command(callB, "three", "Open a sample note")).body.reply.text,
     ).toBe("b:Open a sample note");
@@ -501,6 +507,24 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     expect(JSON.stringify(f.store.all("shared_relay"))).not.toContain(
       "blue whales",
     );
+  });
+
+  it("gives a call code only to the paired Mac, never to a sign-in session", async () => {
+    const f = await fixture();
+    const a = await f.pair("+14155550100");
+    const incoming = await f.post("/line/event", f.event("call-a"), lineToken);
+    for (const path of ["/account/proof", "/account/pending-call"])
+      expect(
+        (await f.post(path, { callId: incoming.body.id }, a.account)).status,
+      ).toBe(404);
+    // A paired Mac that is not connected is not shown a code.
+    expect((await f.post("/device/call-proof", {}, a.credential)).status).toBe(
+      409,
+    );
+    await f.post("/device/connect", { instanceId: "instance-a" }, a.credential);
+    const proof = await f.post("/device/call-proof", {}, a.credential);
+    expect(proof.status).toBe(200);
+    expect(proof.body.code).toMatch(/^\d{8}$/);
   });
 
   it("checks the device credential before reading a device body and keeps device bodies small", async () => {
@@ -565,7 +589,7 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       { instanceId: "instance-b" },
       b.credential,
     );
-    const call = await f.admit(a.account, "call-a");
+    const call = await f.admit(a.credential, "call-a");
     const payload = {
       callId: call.id,
       grantId: call.scope.grantId,

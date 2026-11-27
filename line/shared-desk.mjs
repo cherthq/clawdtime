@@ -112,10 +112,10 @@ export async function makeSharedDesk({
     },
     close,
     greeting() {
-      return "This is ClawdTime. Verify this call from your paired Mac before asking me to use it.";
+      return "This is ClawdTime. No Mac is connected yet. On your paired Mac, run clawdtime shared prove, then say the eight-digit code that it shows.";
     },
-    // This identifier is displayed by the authenticated setup flow. It grants
-    // no authority on its own; the account receives a separate short-lived code.
+    // This identifier grants no authority on its own. Only the paired Mac,
+    // over its own device connection, receives the short-lived call code.
     callId: call.id,
     video: () => {
       const video = makeProactiveVideo({
@@ -180,7 +180,7 @@ export async function makeSharedDesk({
             text,
           )?.[1];
         if (!code)
-          return "Complete call verification in ClawdTime on your Mac, then say the eight-digit call code. No computer is connected yet.";
+          return "On your paired Mac, run clawdtime shared prove, then say the eight-digit code that it shows. No computer is connected yet.";
         const proof = await post("/line/proof-turn", {
           lineId: call.lineId,
           providerCallId: call.providerCallId,
@@ -191,7 +191,7 @@ export async function makeSharedDesk({
           expiresAt: now() + 10_000,
         });
         if (proof.state !== "admitted")
-          return "Call verification did not authorize an online Mac. No action was sent.";
+          return "That code did not connect your paired Mac. No action was sent.";
         grantId = proof.call.scope.grantId;
         const result = await command({ action: "open" });
         if (!result.ok) {

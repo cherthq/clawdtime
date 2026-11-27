@@ -40,7 +40,15 @@ test("shared voice requires the exact caller and proof before remote actions, th
     assert.equal(await desk.bindCaller("wrong"), false);
     assert.match(await desk.ask("Click", { requestId: "one" }), /unavailable/);
     assert.equal(await desk.bindCaller("bridge"), true);
-    assert.match(await desk.ask("Click", { requestId: "two" }), /verification/);
+    // The greeting and the refusal say how the paired Mac verifies this call.
+    assert.match(
+      desk.greeting(),
+      /on your paired Mac, run clawdtime shared prove/i,
+    );
+    assert.match(
+      await desk.ask("Click", { requestId: "two" }),
+      /on your paired Mac, run clawdtime shared prove/i,
+    );
     assert.equal(commands.length, 0);
     assert.match(
       await desk.ask("12345678", { requestId: "proof" }),

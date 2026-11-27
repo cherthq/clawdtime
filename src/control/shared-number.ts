@@ -28,6 +28,7 @@ interface Invitation {
 const kind = (name: string) => `shared_number_${name}`;
 const refused = () => new DomainError(403, "shared_number_unauthorized");
 const conflict = () => new DomainError(409, "shared_number_conflict");
+const notWaiting = () => new DomainError(409, "shared_call_not_waiting");
 // Verifiers may refresh the lifetime of their attestation on redelivery.
 // Check that lifetime separately, but fingerprint only the stable event/turn.
 const stableEvidence = <T extends { expiresAt: number }>(evidence: T) => {
@@ -393,43 +394,50 @@ export class SharedNumber {
       .digest("hex");
   }
 
-  /** Return the code only to the authenticated account. The voice model must
-   * never generate it, select a member, or receive account credentials. */
-  async issueCallProof(accountProof: unknown, callId: string) {
-    const account = await this.account(accountProof);
+  /** The paired Mac itself asks for the code, with its own device credential
+   * and over its live connection, and shows it to the person at that Mac. A
+   * sign-in session alone never receives a call code. The voice model must
+   * never generate it, select a member, or receive any credential. */
+  issueCallProof(credential: string, callId?: string) {
+    if (callId !== undefined) routingId.parse(callId);
     return this.store.transaction(() => {
-      const call = this.call(callId);
-      const pair = this.pairing(account.memberId);
-      if (call.expectedMemberId && call.expectedMemberId !== account.memberId)
-        throw refused();
+      const { record, pair } = this.authenticate(credential);
+      const connection = this.connections.get(pair.deviceId);
       if (
-        call.state !== "unknown_identity" ||
-        this.slot() !== call.id ||
-        this.store.get(kind("proof"), call.id)
+        !connection ||
+        connection.credentialId !== record.id ||
+        connection.expiresAt <= this.now()
       )
-        throw conflict();
+        throw notWaiting();
+      const call = this.waitingCall();
+      if (!call || (callId !== undefined && callId !== call.id))
+        throw notWaiting();
+      if (call.expectedMemberId && call.expectedMemberId !== pair.memberId)
+        throw refused();
+      if (this.store.get(kind("proof"), call.id)) throw conflict();
       const code = randomInt(100_000_000).toString().padStart(8, "0");
       const proof = this.store.put<SharedCallProof>(kind("proof"), {
         id: call.id,
         callId: call.id,
-        memberId: account.memberId,
+        memberId: pair.memberId,
         pairing: pair,
+        credentialId: record.id,
+        connectionId: connection.id,
         digest: this.proofDigest(call.id, code),
         attempts: 0,
-        expiresAt: Math.min(account.expiresAt, this.now() + 120_000),
+        expiresAt: this.now() + 120_000,
       });
-      return { code, expiresAt: proof.expiresAt };
+      return { callId: call.id, code, expiresAt: proof.expiresAt };
     });
   }
-  /** The single waiting call locator is not authority. A code is delivered only
-   * to this authenticated account and must be presented on the pinned call. */
-  async pendingCall(accountProof: unknown) {
-    const account = await this.account(accountProof);
-    this.pairing(account.memberId);
-    const id = this.slot();
-    if (!id) return null;
-    const call = this.call(id);
-    return call.state === "unknown_identity" ? { callId: call.id } : null;
+  private waitingCall() {
+    const slot = this.slot();
+    const call = slot
+      ? this.store.get<SharedCall>(kind("call"), slot)
+      : undefined;
+    return call?.lineId === this.lineId && call.state === "unknown_identity"
+      ? call
+      : undefined;
   }
 
   /** Caller binding is delivered by the authenticated call adapter, not model
@@ -509,6 +517,14 @@ export class SharedNumber {
       if (!connection || connection.expiresAt <= this.now()) {
         this.store.put(kind("call"), { ...call, state: "offline" });
         return { state: "offline" as const };
+      }
+      // Admit only to the exact Mac connection that was shown the code.
+      if (
+        connection.id !== proof.connectionId ||
+        connection.credentialId !== proof.credentialId
+      ) {
+        this.store.put(kind("call"), { ...call, state: "unauthorized" });
+        return { state: "unauthorized" as const };
       }
       const admitted: SharedCall = {
         ...call,
