@@ -16,6 +16,7 @@ import { computerCli } from "../cli/computer.js";
 import {
   ChertReachCalls,
   callTimes,
+  callsFile,
   callsSettings,
   mountReachCalls,
   reachCallsFolder,
@@ -1202,6 +1203,24 @@ describe("choosing the Calls API path and what the doctor says", () => {
       },
     );
     expect(callsSettings({}, root)).toEqual({ missing: "livekit_settings" });
+  });
+
+  it("calls on the line that connect saved, not on a CHERT_LINE_ID of the shell", () => {
+    const root = home();
+    chmodSync(root, 0o700);
+    const line = complete(root);
+    const other = "11111111-2222-4333-8444-555555555555";
+    expect(callsSettings({ CHERT_LINE_ID: other }, root)).toMatchObject({
+      settings: { lineId, video: true },
+    });
+    // With nothing saved, the variable still names the line.
+    rmSync(callsFile(root));
+    expect(
+      callsSettings(
+        { CHERT_LINE_ID: other, CLAWDTIME_LINE_DIRECTORY: line },
+        root,
+      ),
+    ).toMatchObject({ settings: { lineId: other, video: false } });
   });
 
   it("the reach calls through the Calls API without a retained provider, and through the retained one when it is there", () => {

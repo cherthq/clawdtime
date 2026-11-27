@@ -20,7 +20,8 @@ The callback repairs also cover:
 - Bounded diagnostic codes for startup and cleanup, without saved speech,
   screen pixels, credentials or arbitrary worker output.
 - Forwarding the configured line identity and API base to the desktop service
-  so outbound texts use its selected line.
+  so outbound texts use its selected line. Calls keep the line that
+  `clawdtime connect` saved: a `CHERT_LINE_ID` in the shell does not move them.
 
 ## Enable continuation
 
