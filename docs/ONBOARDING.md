@@ -106,8 +106,8 @@ input is a cancel.
 ### Events
 
 ```json
-{"type":"hello","protocol":1,"version":"0.4.0"}
-{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"Paste your OpenAI API key. It is not shown.","input":{"kind":"secret","prompt":"OpenAI API key"}}
+{"type":"hello","protocol":2,"version":"0.4.0"}
+{"type":"step","id":"model","state":"needs_input","title":"Model key","detail":"Paste your OpenAI API key. It is not shown.","question":"Wm3dQ0sJ9xVfK2aT","input":{"kind":"secret","prompt":"OpenAI API key"}}
 {"type":"log","level":"info","message":"The desktop runs already. It reads the new key the next time it starts."}
 {"type":"done","ready":true,"report":[{"id":"model","state":"ready","detail":"A key for OpenAI is in the protected key store."}]}
 ```
@@ -117,26 +117,41 @@ input is a cancel.
   `failed` or `skipped`. It may have a `detail`, a `recovery` and an `input`.
 - `recovery` has a `label` and an `action`: `retry`, `open_settings` or
   `open_url`, with a `url` for the last two. The interface opens the URL.
+- `question` is the one-time id of the question that the step asks. A
+  `needs_input` step has one. A `failed` step that waits for a retry or a skip
+  has one too. Each question has a new id, also when the same question comes
+  again.
 - `input` has a `kind`: `secret`, `text`, `choice`, `confirm`, `phone` or
   `code`, a `prompt`, and for a choice its `options`, each with an `id`, a
-  `label` and an optional `detail`.
+  `label` and an optional `detail`. `consent: true` marks a question whose
+  answer gives or refuses consent: computer use, a sign-in text, view,
+  computer actions, reports, the pairing, a replacement and the connection.
+  An interface gives such a question no default answer.
 - `done` comes last, with `ready` and one report row for each step.
 
 ### Commands
 
 ```json
-{"type":"input","id":"model","value":"..."}
-{"type":"action","id":"permissions","action":"recheck"}
+{"type":"input","id":"model","question":"Wm3dQ0sJ9xVfK2aT","value":"..."}
+{"type":"action","id":"permissions","question":"pR7cLw0eYb4nHs1M","action":"recheck"}
 {"type":"cancel"}
 ```
 
-- `input` answers the step that waits. The value is a string, a boolean for
-  `confirm`, or an array of option ids for a choice with `multiple`.
+- `input` answers the question that is open. The value is a string, a
+  boolean for `confirm`, or an array of option ids for a choice with
+  `multiple`.
 - `action` is `retry`, `recheck` or `skip`. Only `computer`, `phone`,
   `pairing` and `connection` accept `skip`.
-- A command for another step, or a value that does not fit, is ignored with a
-  warning. A line that is not a command is ignored with a fixed warning that
-  never quotes the line.
+- Every `input` and `action` names the `question` it answers. A command for
+  an earlier question, a repeated answer, an unknown id or no id is ignored
+  with a warning and has no effect. So a double click or a second Return
+  never answers the next question.
+- Each question takes one answer. When the answer cannot be used (a value
+  that does not fit, or a skip that the step refuses), the step asks again
+  with a new id.
+- A command for another step is ignored with a warning. A line that is not a
+  command is ignored with a fixed warning that never quotes the line.
+- The terminal wizard uses the same ids.
 
 ### What each question waits for
 

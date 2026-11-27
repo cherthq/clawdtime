@@ -17,6 +17,14 @@ final class SetupProtocolTests: XCTestCase {
                    .done(ready: false, report: [ReportEntry(id: .model, state: .ready, detail: "Stored"), ReportEntry(id: .phone, state: .skipped)]))
   }
 
+  func testAQuestionCarriesItsIdAndWhetherItAsksForConsent() throws {
+    guard case .step(let step) = try EngineEvent.decode(line: #"{"type":"step","id":"computer","state":"needs_input","question":"computer-question-01","input":{"kind":"confirm","prompt":"Turn on computer use?","consent":true}}"#) else { return XCTFail("a step") }
+    XCTAssertEqual(step.question, "computer-question-01")
+    XCTAssertEqual(step.input?.consent, true)
+    guard case .step(let working) = try EngineEvent.decode(line: #"{"type":"step","id":"computer","state":"in_progress"}"#) else { return XCTFail("a step") }
+    XCTAssertNil(working.question, "a step that asks nothing has no question")
+  }
+
   func testEveryStepStateHasItsWireName() throws {
     for (wire, state) in [("pending", StepState.pending), ("in_progress", .inProgress), ("needs_input", .needsInput), ("ready", .ready), ("failed", .failed), ("skipped", .skipped)] {
       XCTAssertEqual(try EngineEvent.decode(line: #"{"type":"step","id":"model","state":"\#(wire)"}"#), .step(StepEvent(id: .model, state: state)))
@@ -39,22 +47,24 @@ final class SetupProtocolTests: XCTestCase {
       XCTAssertEqual(line.filter { $0 == 0x0A }.count, 1, "exactly one newline")
       return try XCTUnwrap(JSONSerialization.jsonObject(with: line) as? [String: Any])
     }
-    let text = try object(.input(id: .phone, value: .string("+14155550100\nsecond line")))
+    let text = try object(.input(id: .phone, question: "phone-question-0001", value: .string("+14155550100\nsecond line")))
     XCTAssertEqual(text["type"] as? String, "input")
     XCTAssertEqual(text["id"] as? String, "phone")
+    XCTAssertEqual(text["question"] as? String, "phone-question-0001")
     XCTAssertEqual(text["value"] as? String, "+14155550100\nsecond line")
-    XCTAssertEqual(try object(.input(id: .computer, value: .bool(true)))["value"] as? Bool, true)
-    XCTAssertEqual(try object(.input(id: .pairing, value: .strings(["view", "control"])))["value"] as? [String], ["view", "control"])
-    let action = try object(.action(id: .permissions, action: .recheck))
+    XCTAssertEqual(try object(.input(id: .computer, question: "computer-question-01", value: .bool(true)))["value"] as? Bool, true)
+    XCTAssertEqual(try object(.input(id: .pairing, question: "pairing-question-01", value: .strings(["view", "control"])))["value"] as? [String], ["view", "control"])
+    let action = try object(.action(id: .permissions, question: "settings-question-01", action: .recheck))
     XCTAssertEqual(action["type"] as? String, "action")
     XCTAssertEqual(action["action"] as? String, "recheck")
+    XCTAssertEqual(action["question"] as? String, "settings-question-01")
     XCTAssertEqual(String(decoding: EngineCommand.cancel.line(), as: UTF8.self), "{\"type\":\"cancel\"}\n")
-    XCTAssertEqual(String(decoding: EngineCommand.input(id: .model, value: .string("a/b")).line(), as: UTF8.self),
-                   "{\"id\":\"model\",\"type\":\"input\",\"value\":\"a/b\"}\n")
+    XCTAssertEqual(String(decoding: EngineCommand.input(id: .model, question: "model-question-0001", value: .string("a/b")).line(), as: UTF8.self),
+                   "{\"id\":\"model\",\"question\":\"model-question-0001\",\"type\":\"input\",\"value\":\"a/b\"}\n")
   }
 
   func testACommandNeverShowsItsValueWhenPrintedDumpedOrReflected() {
-    let command = EngineCommand.input(id: .model, value: .string(madeUpKey))
+    let command = EngineCommand.input(id: .model, question: "model-question-0001", value: .string(madeUpKey))
     var dumped = ""
     dump(command, to: &dumped)
     for text in [String(describing: command), String(reflecting: command), "\(command)", dumped, String(describing: [command])] {

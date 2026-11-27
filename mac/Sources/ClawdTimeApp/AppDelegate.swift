@@ -50,7 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return EngineProcess(executable: layout.launcher, arguments: SetupProtocol.arguments(local: local))
       },
       owner: owner,
-      open: { NSWorkspace.shared.open($0) })
+      open: { NSWorkspace.shared.open($0) },
+      // The second click of a double click never answers the next question,
+      // even with a slow double-click setting (capped at 1.5 seconds).
+      answerDelay: min(1.5, max(SetupCoordinator.defaultAnswerDelay, NSEvent.doubleClickInterval + 0.1)))
     setup.onFinish = { [weak self] in self?.didFinishSetup() }
     watch = setup.$state.sink { [weak self] state in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.stateChanged(state) } }

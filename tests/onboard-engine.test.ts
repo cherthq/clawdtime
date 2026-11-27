@@ -184,9 +184,17 @@ function fakeMac(
   return { ports, calls };
 }
 
-type Responder = (
-  event: StepEvent,
-) => OnboardCommand | OnboardCommand[] | undefined;
+/** A command as a test writes it. runJson names the question of the event,
+ * as the app and the terminal do, unless the command has its own `question`. */
+type Reply =
+  | { type: "cancel" }
+  | (Omit<Extract<OnboardCommand, { type: "input" }>, "question"> & {
+      question?: string | undefined;
+    })
+  | (Omit<Extract<OnboardCommand, { type: "action" }>, "question"> & {
+      question?: string | undefined;
+    });
+type Responder = (event: StepEvent) => Reply | Reply[] | undefined;
 
 /** The answers of a person who says yes to everything. */
 const agree =
@@ -225,8 +233,18 @@ async function runJson(
   const lines: string[] = [];
   const errors: string[] = [];
   let partial = "";
-  const send = (command: OnboardCommand) =>
-    setImmediate(() => stdin.write(`${JSON.stringify(command)}\n`));
+  // Each answer names the question it answers, as the app and the terminal
+  // do. A command with its own `question` key keeps it.
+  const send = (command: Reply, event: StepEvent) =>
+    setImmediate(() =>
+      stdin.write(
+        `${JSON.stringify(
+          command.type !== "cancel" && !("question" in command)
+            ? { ...command, question: event.question }
+            : command,
+        )}\n`,
+      ),
+    );
   const stdout = new Writable({
     write(chunk, _encoding, done) {
       partial += chunk.toString();
@@ -241,8 +259,8 @@ async function runJson(
           (event.state === "needs_input" || event.state === "failed")
         ) {
           const answer = respond(event);
-          for (const command of [answer ?? []].flat()) send(command);
-          if (!answer) send({ type: "cancel" });
+          for (const command of [answer ?? []].flat()) send(command, event);
+          if (!answer) send({ type: "cancel" }, event);
         }
       }
       done();
@@ -303,7 +321,7 @@ describe("clawdtime onboard --json", () => {
     expect(code).toBe(0);
     expect(events[0]).toEqual({
       type: "hello",
-      protocol: 1,
+      protocol: 2,
       version: "unknown",
     });
     // Every line is one protocol object.
@@ -469,11 +487,9 @@ describe("clawdtime onboard --json", () => {
       (event) => {
         if (event.id === "permissions" && first) {
           first = false;
-          // Permissions cannot be skipped: the skip is refused, the recheck works.
-          return [
-            { type: "action", id: "permissions", action: "skip" },
-            { type: "action", id: "permissions", action: "recheck" },
-          ];
+          // Permissions cannot be skipped: the skip is refused and the
+          // question comes again with a new id. Then the recheck works.
+          return { type: "action", id: "permissions", action: "skip" };
         }
         return yes(event);
       },
@@ -481,7 +497,10 @@ describe("clawdtime onboard --json", () => {
     const asking = steps(events).filter(
       (event) => event.id === "permissions" && event.state === "needs_input",
     );
-    expect(asking).toHaveLength(2);
+    // Asked, asked again after the refused skip, asked after a denied recheck.
+    expect(asking).toHaveLength(3);
+    expect(asking[1]!.detail).toBe(asking[0]!.detail);
+    expect(asking[1]!.question).not.toBe(asking[0]!.question);
     expect(asking[0]!.recovery).toEqual({
       label: "Open System Settings",
       action: "open_settings",
@@ -790,6 +809,112 @@ describe("clawdtime onboard --json", () => {
     expect(stateOf(events, "desktop")).toBe("pending");
   });
 
+  it("a double yes on showing the display cannot answer the question about computer actions", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const yes = agree(() => coordinator.codeFor(member));
+    const { events } = await runJson(
+      ["--coordinator", coordinator.origin],
+      home,
+      fakeMac().ports,
+      (event) =>
+        // One double click: the same answer goes out twice.
+        event.input?.prompt.startsWith("Allow this display")
+          ? [yes(event)!, yes(event)!].flat()
+          : yes(event),
+    );
+    const saved = readSharedPairing(sharedPairingPaths(home).file);
+    expect(saved.kind).toBe("paired");
+    if (saved.kind !== "paired") return;
+    // The person said no to computer actions and yes to reports.
+    expect(saved.connection).toMatchObject({
+      allowView: true,
+      allowControl: false,
+      walkthroughReports: true,
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "log" &&
+          event.message ===
+            "That answer is not for the question that is open now. It was ignored.",
+      ),
+    ).toBe(true);
+  });
+
+  it("a repeated no on computer actions cannot land on the reports question", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const yes = agree(() => coordinator.codeFor(member));
+    await runJson(
+      ["--coordinator", coordinator.origin],
+      home,
+      fakeMac().ports,
+      (event) =>
+        event.input?.prompt.startsWith("Allow your verified phone to ask")
+          ? [yes(event)!, yes(event)!].flat()
+          : yes(event),
+    );
+    const saved = readSharedPairing(sharedPairingPaths(home).file);
+    if (saved.kind !== "paired") throw Error("not paired");
+    expect(saved.connection.allowControl).toBe(false);
+    expect(saved.connection.walkthroughReports).toBe(true);
+  });
+
+  it("refuses an answer with no question, an unknown question or a used one, with no effect", async () => {
+    const home = folder();
+    const { events } = await runJson(
+      ["--local"],
+      home,
+      fakeMac().ports,
+      (event) =>
+        event.id === "computer" && event.state === "needs_input"
+          ? [
+              {
+                type: "input",
+                id: "computer",
+                question: undefined,
+                value: true,
+              },
+              {
+                type: "input",
+                id: "computer",
+                question: "made-up",
+                value: true,
+              },
+              { type: "input", id: "computer", value: false },
+              { type: "input", id: "computer", value: true },
+            ]
+          : agree()(event),
+    );
+    expect(stateOf(events, "computer")).toBe("skipped");
+    expect(
+      readComputerSwitch(join(home, ".local", "share", "clawdtime")).enabled,
+    ).toBe(false);
+    expect(stateOf(events, "permissions")).toBe("skipped");
+    expect(done(events).ready).toBe(true);
+  });
+
+  it("gives every question its own id, and every answer names it", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const { events } = await runJson(
+      ["--coordinator", coordinator.origin],
+      folder(),
+      fakeMac().ports,
+      agree(() => coordinator.codeFor(member)),
+    );
+    const questions = steps(events)
+      .filter((event) => event.state === "needs_input")
+      .map((event) => event.question);
+    expect(questions.length).toBeGreaterThan(8);
+    for (const question of questions)
+      expect(question).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    expect(new Set(questions).size).toBe(questions.length);
+  });
+
   it("ignores a line that is not a command without quoting it", async () => {
     const { events, lines } = await runJson(
       ["--local"],
@@ -863,9 +988,26 @@ describe("clawdtime onboard in a terminal", () => {
       },
     });
     const wizard = new TerminalWizard({ input, output, close: () => {} });
+    // Every answer of the wizard names the question that it answers.
+    const asked: string[] = [];
+    const named: (string | undefined)[] = [];
+    const io = {
+      emit: (event: OnboardEvent) => {
+        const question = (event as { question?: string }).question;
+        if (question) asked.push(question);
+        wizard.emit(event);
+      },
+      next: async () => {
+        const command = await wizard.next();
+        if (command.type !== "cancel")
+          named.push((command as { question?: string }).question);
+        return command;
+      },
+      cancelled: () => false,
+    };
     const home = folder();
     const result = await new OnboardEngine(
-      wizard,
+      io,
       {
         version: "0.4.0",
         local: true,
@@ -877,6 +1019,8 @@ describe("clawdtime onboard in a terminal", () => {
       fakeMac().ports,
     ).run();
     expect(result.ready).toBe(true);
+    expect(named).toHaveLength(3);
+    expect(named).toEqual(asked);
     const text = shown.join("");
     expect(text).toContain(
       "Model key: done. A key for OpenAI is in the protected key store.",

@@ -70,10 +70,18 @@ panel, and starts no background connection.
 - The app sends every answer on stdin. A key never goes on a command line, in
   the environment, in a file or in a log. A command prints as
   `input(model, <redacted>)`.
-- `hello` must say protocol 1. Another protocol stops setup before any step.
+- `hello` must say protocol 2. Another protocol stops setup before any step.
   With no `hello` in 30 seconds, setup stops with a Try again button.
 - The window shows the latest step that is not `pending`. Steps the app does
   not know are drawn from their event, after the known ones.
+- Each question is a screen of its own, keyed by its `question` id. Every
+  answer names that id. The buttons of a new question work 0.6 seconds after
+  it appears, or longer with a slow double-click setting in macOS, so the
+  second click of a double click never answers the next question. After one
+  answer they stay disabled until the engine asks the next question.
+- A consent question (computer use, a sign-in text, view, computer actions,
+  reports, the pairing, a replacement, the connection) has no default
+  button: Return does not answer it.
 - The app offers **Skip for now** only on `phone`, `pairing`, `connection` and
   `computer`.
 - A recovery may open only a System Settings pane (`x-apple.systempreferences:`)

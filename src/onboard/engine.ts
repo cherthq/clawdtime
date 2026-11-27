@@ -12,6 +12,7 @@
  * phone number and a sign-in code go only to the coordinator. None of them is
  * put in an event, a log, an argument or an error.
  */
+import { randomBytes } from "node:crypto";
 import type { DesktopReadiness } from "../../connectors/agents/desktop-readiness.js";
 import { stateRoot } from "../../connectors/agents/hooks.js";
 import {
@@ -52,6 +53,7 @@ import {
   skippableSteps,
   stepIds,
   type InputRequest,
+  type OnboardCommand,
   type OnboardIO,
   type Recovery,
   type ReportRow,
@@ -189,6 +191,8 @@ export class OnboardEngine {
   private keepOther = false;
   private startedDesktop = false;
   private computerOn = false;
+  /** Every question id of this run. */
+  private asked = new Set<string>();
   private readonly now: () => number;
   private readonly root: string;
   private readonly pairingFiles: { directory: string; file: string };
@@ -256,10 +260,56 @@ export class OnboardEngine {
   private step(
     id: StepId,
     state: StepState,
-    more: { detail?: string; recovery?: Recovery; input?: InputRequest } = {},
+    more: {
+      detail?: string;
+      recovery?: Recovery;
+      input?: InputRequest;
+      question?: string;
+    } = {},
   ) {
     this.rows.set(id, { id, state, detail: more.detail ?? "" });
     this.io.emit({ type: "step", id, state, title: titles[id], ...more });
+  }
+
+  /** A new question id: random, never used before in this run. */
+  private newQuestion() {
+    for (;;) {
+      const id = randomBytes(12).toString("base64url");
+      if (!this.asked.has(id)) {
+        this.asked.add(id);
+        return id;
+      }
+    }
+  }
+
+  /**
+   * Waits for the one command that answers this question. A command that
+   * names no open question (an earlier one, a repeated one or an unknown
+   * one) is refused with no effect, and the question stays open.
+   */
+  private async answerTo(
+    id: StepId,
+    question: string,
+  ): Promise<Exclude<OnboardCommand, { type: "cancel" }>> {
+    for (;;) {
+      const command = await this.io.next();
+      if (command.type === "cancel") throw new Cancelled();
+      if (command.question !== question) {
+        this.log(
+          "warn",
+          "That answer is not for the question that is open now. It was ignored.",
+        );
+        continue;
+      }
+      if (command.id !== id) {
+        this.log(
+          "warn",
+          `That command is for ${command.id}, but setup waits at ${id}. It was ignored.`,
+        );
+        continue;
+      }
+      return command;
+    }
   }
 
   private log(level: "info" | "warn", message: string) {
@@ -275,17 +325,12 @@ export class OnboardEngine {
     | { value: string | boolean | string[] }
     | { action: "retry" | "recheck" | "skip" }
   > {
-    this.step(id, "needs_input", { ...view, input });
+    // Every answer uses up its question: a question that must be answered
+    // again is asked again with a new id.
     for (;;) {
-      const command = await this.io.next();
-      if (command.type === "cancel") throw new Cancelled();
-      if (command.id !== id) {
-        this.log(
-          "warn",
-          `That command is for ${command.id}, but setup waits at ${id}. It was ignored.`,
-        );
-        continue;
-      }
+      const question = this.newQuestion();
+      this.step(id, "needs_input", { ...view, input, question });
+      const command = await this.answerTo(id, question);
       if (command.type === "action") {
         if (command.action === "skip" && !skippableSteps.has(id)) {
           this.log("warn", "This step cannot be skipped.");
@@ -329,11 +374,11 @@ export class OnboardEngine {
     detail: string,
     recovery: Recovery = retry(),
   ): Promise<"retry" | "skip"> {
-    this.step(id, "failed", { detail, recovery });
     for (;;) {
-      const command = await this.io.next();
-      if (command.type === "cancel") throw new Cancelled();
-      if (command.type === "action" && command.id === id) {
+      const question = this.newQuestion();
+      this.step(id, "failed", { detail, recovery, question });
+      const command = await this.answerTo(id, question);
+      if (command.type === "action") {
         if (command.action !== "skip") return "retry";
         if (skippableSteps.has(id)) return "skip";
         this.log("warn", "This step cannot be skipped.");
@@ -588,7 +633,7 @@ export class OnboardEngine {
       if (!chosen.enabled) {
         const answer = await this.ask(
           "computer",
-          { kind: "confirm", prompt: "Turn on computer use?" },
+          { kind: "confirm", prompt: "Turn on computer use?", consent: true },
           {
             detail:
               "ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.",
@@ -741,6 +786,7 @@ export class OnboardEngine {
         }
         const answer = await this.ask("phone", {
           kind: "choice",
+          consent: true,
           prompt: "This Mac is paired with another coordinator.",
           options: [
             {
@@ -796,7 +842,11 @@ export class OnboardEngine {
       }
       const consent = await this.ask(
         "phone",
-        { kind: "confirm", prompt: "Send a sign-in code to this number now?" },
+        {
+          kind: "confirm",
+          prompt: "Send a sign-in code to this number now?",
+          consent: true,
+        },
         {
           detail: `The coordinator at ${this.origin} texts one code to the number you gave. Nothing is sent before you say yes.`,
         },
@@ -889,10 +939,11 @@ export class OnboardEngine {
     }
   }
 
+  /** One consent question: yes, no, or a skip where the step allows it. */
   private async confirm(id: StepId, prompt: string, detail?: string) {
     const answer = await this.ask(
       id,
-      { kind: "confirm", prompt },
+      { kind: "confirm", prompt, consent: true },
       detail ? { detail } : {},
     );
     if ("action" in answer) return answer.action === "skip" ? "skip" : false;
@@ -1042,6 +1093,7 @@ export class OnboardEngine {
         if (status === 409 && !replace) {
           const choice = await this.ask("pairing", {
             kind: "choice",
+            consent: true,
             prompt: "Your number already has a paired Mac.",
             options: [
               {

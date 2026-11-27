@@ -7,7 +7,11 @@ import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 
-export const onboardProtocol = 1;
+/**
+ * 2: every question carries a one-time `question` id, and every input and
+ * action must name the question it answers.
+ */
+export const onboardProtocol = 2;
 
 /** The steps, in order. The ids are fixed. */
 export const stepIds = [
@@ -48,6 +52,12 @@ export interface InputRequest {
   prompt: string;
   options?: InputOption[];
   multiple?: boolean;
+  /**
+   * The answer gives or refuses consent: computer use, view, computer
+   * actions, reports, the pairing, a replacement, a sign-in text or the
+   * connection. An interface gives it no default answer.
+   */
+  consent?: boolean;
 }
 export interface StepEvent {
   type: "step";
@@ -57,6 +67,12 @@ export interface StepEvent {
   detail?: string;
   recovery?: Recovery;
   input?: InputRequest;
+  /**
+   * The one-time id of the question that this event asks: on `needs_input`,
+   * and on `failed` when the step waits for a retry or a skip. An answer
+   * names it. A new question always has a new id.
+   */
+  question?: string;
 }
 export interface ReportRow {
   id: StepId;
@@ -70,11 +86,15 @@ export type OnboardEvent =
   | { type: "done"; ready: boolean; report: ReportRow[] };
 
 const stepId = z.enum(stepIds);
+/** A question id: random, url-safe, used for one answer only. */
+export const questionIdPattern = /^[A-Za-z0-9_-]{16,64}$/;
+const questionId = z.string().regex(questionIdPattern);
 export const onboardCommandSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("input"),
       id: stepId,
+      question: questionId,
       value: z.union([
         z.string().max(8192),
         z.boolean(),
@@ -86,6 +106,7 @@ export const onboardCommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("action"),
       id: stepId,
+      question: questionId,
       action: z.enum(["retry", "recheck", "skip"]),
     })
     .strict(),

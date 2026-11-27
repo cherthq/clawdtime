@@ -7,7 +7,7 @@ final class SelfTestTests: XCTestCase {
     let root = try FakeRuntime.make(at: folder.appendingPathComponent("ClawdTime.app/Contents/Resources/runtime"), engine: FakeEngine.waitsForCancel(folder))
     let report = SelfTest.run(runtime: root, timeout: 10)
     XCTAssertTrue(report.ok, report.problem ?? "")
-    XCTAssertEqual(report.engineProtocol, 1)
+    XCTAssertEqual(report.engineProtocol, 2)
     XCTAssertEqual(report.engineVersion, "0.4.0")
     XCTAssertEqual(report.engineExit, 0)
     XCTAssertEqual(report.filesVerified, 5)
@@ -20,11 +20,11 @@ final class SelfTestTests: XCTestCase {
 
   func testItFailsForAnotherProtocol() throws {
     let folder = try temporaryFolder(self)
-    let root = try FakeRuntime.make(at: folder.appendingPathComponent("runtime"), engine: FakeEngine.waitsForCancel(folder, protocolVersion: 2))
+    let root = try FakeRuntime.make(at: folder.appendingPathComponent("runtime"), engine: FakeEngine.waitsForCancel(folder, protocolVersion: 1))
     let report = SelfTest.run(runtime: root, timeout: 10)
     XCTAssertFalse(report.ok)
-    XCTAssertEqual(report.engineProtocol, 2)
-    XCTAssertEqual(report.problem, "The engine speaks protocol 2; this app speaks protocol 1.")
+    XCTAssertEqual(report.engineProtocol, 1)
+    XCTAssertEqual(report.problem, "The engine speaks protocol 1; this app speaks protocol 2.")
   }
 
   func testItFailsForAnEngineThatSaysNothingOrPrintsText() throws {
@@ -35,7 +35,7 @@ final class SelfTestTests: XCTestCase {
 
     let chatty = try FakeRuntime.make(at: temporaryFolder(self).appendingPathComponent("runtime"), engine: """
     echo 'Welcome to ClawdTime'
-    echo '{"type":"hello","protocol":1,"version":"0.4.0"}'
+    echo '{"type":"hello","protocol":2,"version":"0.4.0"}'
     read line
     exit 0
     """)

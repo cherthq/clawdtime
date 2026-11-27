@@ -144,7 +144,8 @@ export class TerminalWizard implements OnboardIO {
     this.shown.set(event.id, key);
     if (event.state === "needs_input" || event.state === "failed") {
       if (said && event.detail) this.write(`${event.title}: ${event.detail}`);
-      this.pending = event;
+      // Only a question is answered: a failure that waits for nothing is not.
+      if (event.question) this.pending = event;
       return;
     }
     if (!said) return;
@@ -171,13 +172,22 @@ export class TerminalWizard implements OnboardIO {
     }
   }
 
+  /** The answer to one question. Each command names that question. */
   private async answer(event: StepEvent): Promise<OnboardCommand> {
     const id = event.id;
+    const question = event.question!;
     const skip = skippableSteps.has(id);
     const action = (value: "retry" | "recheck" | "skip"): OnboardCommand => ({
       type: "action",
       id,
+      question,
       action: value,
+    });
+    const input = (value: string | boolean): OnboardCommand => ({
+      type: "input",
+      id,
+      question,
+      value,
     });
     if (event.state === "failed") {
       const reply = (
@@ -190,7 +200,7 @@ export class TerminalWizard implements OnboardIO {
       if (reply === "quit") return { type: "cancel" };
       return action(skip && reply === "skip" ? "skip" : "retry");
     }
-    const input = event.input!;
+    const asked = event.input!;
     if (event.recovery?.action === "open_settings" && event.recovery.url) {
       const first = (
         await this.line(
@@ -209,31 +219,25 @@ export class TerminalWizard implements OnboardIO {
       if (second === "quit") return { type: "cancel" };
       return action("recheck");
     }
-    if (input.kind === "secret")
-      return {
-        type: "input",
-        id,
-        value: await this.hidden(`${input.prompt} (it is not shown): `),
-      };
-    if (input.kind === "confirm")
+    if (asked.kind === "secret")
+      return input(await this.hidden(`${asked.prompt} (it is not shown): `));
+    if (asked.kind === "confirm")
       for (;;) {
         const reply = (
           await this.line(
-            `${input.prompt} Type yes or no${skip ? ", or skip" : ""}: `,
+            `${asked.prompt} Type yes or no${skip ? ", or skip" : ""}: `,
           )
         )
           .trim()
           .toLowerCase();
-        if (reply === "yes" || reply === "y")
-          return { type: "input", id, value: true };
-        if (reply === "no" || reply === "n")
-          return { type: "input", id, value: false };
+        if (reply === "yes" || reply === "y") return input(true);
+        if (reply === "no" || reply === "n") return input(false);
         if (skip && reply === "skip") return action("skip");
         if (reply === "quit") return { type: "cancel" };
       }
-    if (input.kind === "choice") {
-      const options = input.options ?? [];
-      this.write(input.prompt);
+    if (asked.kind === "choice") {
+      const options = asked.options ?? [];
+      this.write(asked.prompt);
       options.forEach((option, index) =>
         this.write(
           `  ${index + 1}. ${option.label}${option.detail ? `. ${option.detail}` : ""}`,
@@ -244,17 +248,16 @@ export class TerminalWizard implements OnboardIO {
           await this.line(`Type a number${skip ? ", or skip" : ""}: `)
         ).trim();
         const option = options[Number(reply) - 1];
-        if (option && /^\d+$/.test(reply))
-          return { type: "input", id, value: option.id };
+        if (option && /^\d+$/.test(reply)) return input(option.id);
         if (skip && reply === "skip") return action("skip");
         if (reply === "quit") return { type: "cancel" };
       }
     }
     const reply = (
-      await this.line(`${input.prompt}${skip ? " (or skip)" : ""}: `)
+      await this.line(`${asked.prompt}${skip ? " (or skip)" : ""}: `)
     ).trim();
     if (skip && reply === "skip") return action("skip");
-    return { type: "input", id, value: reply };
+    return input(reply);
   }
 
   /** One line from the terminal. Ctrl+C stops. */
