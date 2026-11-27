@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { sharedCallProof, sharedRotate } from "../cli/shared.js";
+import {
+  sharedAcceptance,
+  sharedCallProof,
+  sharedConnectionSchema,
+  sharedRotate,
+} from "../cli/shared.js";
 
 const credential = `credential_${"a".repeat(36)}.${"b".repeat(43)}`;
 
@@ -53,4 +58,36 @@ it("rotates the device credential with the current device credential", async () 
   expect((init.headers as Record<string, string>).authorization).toBe(
     `Bearer ${credential}`,
   );
+});
+
+it("sends the real view answer when pairing and saves both answers on the Mac", () => {
+  expect(
+    sharedAcceptance({ displayId: "1", shareScreen: false, control: true }),
+  ).toEqual({
+    localAccepted: true,
+    displayId: "1",
+    allowView: false,
+    allowControl: false,
+  });
+  expect(
+    sharedAcceptance({ displayId: "1", shareScreen: true, control: false }),
+  ).toMatchObject({ allowView: true, allowControl: false });
+  const saved = sharedConnectionSchema.parse({
+    origin: "https://coordinator.example",
+    credential,
+    deviceId: "mac_1",
+    displayId: "1",
+    allowView: true,
+    allowControl: false,
+  });
+  expect(saved).toMatchObject({ allowView: true, allowControl: false });
+  // A connection file from before these answers were saved allows nothing.
+  expect(
+    sharedConnectionSchema.parse({
+      origin: "https://coordinator.example",
+      credential,
+      deviceId: "mac_1",
+      displayId: "1",
+    }),
+  ).toMatchObject({ allowView: false, allowControl: false });
 });

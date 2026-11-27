@@ -26,12 +26,17 @@ import { sharedDisplayTargetSchema } from "../src/control/proactive-display-view
 import { oneJSON } from "../src/control/proactive-views.js";
 import { sharedSignIn } from "./shared-sign-in.js";
 
-const configuration = z
+/** The private connection file of a paired Mac. It keeps the person's own
+ * view and control answers, and this Mac enforces them whatever the
+ * coordinator sends. A file without the answers allows neither. */
+export const sharedConnectionSchema = z
   .object({
     origin: z.string(),
     credential: z.string().min(32),
     deviceId: routingId,
     displayId: routingId,
+    allowView: z.boolean().default(false),
+    allowControl: z.boolean().default(false),
     walkthroughReports: z.boolean().default(false),
     capture: z
       .object({
@@ -42,6 +47,24 @@ const configuration = z
       .optional(),
   })
   .strict();
+const configuration = sharedConnectionSchema;
+
+/** The acceptance that pairing sends: the person's real answers. Viewing is
+ * allowed only when they agreed to share the display. Computer actions need
+ * viewing, as on the coordinator. */
+export function sharedAcceptance(answers: {
+  displayId: string;
+  shareScreen: boolean;
+  control: boolean;
+}) {
+  return {
+    localAccepted: true as const,
+    displayId: routingId.parse(answers.displayId),
+    allowView: answers.shareScreen,
+    allowControl: answers.shareScreen && answers.control,
+  };
+}
+
 /** The paired Mac asks for the call code with its own device credential. The
  * coordinator gives it only while this Mac's `shared run` connection is live,
  * so a sign-in session alone never yields a code. */
@@ -120,7 +143,7 @@ export async function sharedCli(args: string[]) {
   const service = state ? findDesktopService(state) : null;
   if (args[0] === "doctor") {
     console.log(
-      `Shared pairing: ${config ? "configured" : "missing"}. Desktop: ${service ? "available" : "missing"}. Live shared-call acceptance: not qualified.`,
+      `Shared pairing: ${config ? `configured, view ${config.allowView ? "allowed" : "declined"}, control ${config.allowControl ? "allowed" : "declined"}` : "missing"}. Desktop: ${service ? "available" : "missing"}. Live shared-call acceptance: not qualified.`,
     );
     return;
   }
@@ -360,12 +383,21 @@ export async function sharedCli(args: string[]) {
           "Allow ClawdTime to open an inert task result report during your verified callbacks? Type yes: ",
         )
       ).trim() === "yes";
-    const allowControl =
-      (
-        await terminal.question(
-          "Allow this paired account to request computer actions on this Mac? Type yes: ",
-        )
-      ).trim() === "yes";
+    if (!capture)
+      console.log(
+        "This display is not shared, so calls cannot view or use this Mac. Computer actions stay off.",
+      );
+    const acceptance = sharedAcceptance({
+      displayId,
+      shareScreen: !!capture,
+      control:
+        !!capture &&
+        (
+          await terminal.question(
+            "Allow this paired account to request computer actions on this Mac? Type yes: ",
+          )
+        ).trim() === "yes",
+    });
     if (
       (
         await terminal.question(
@@ -389,23 +421,15 @@ export async function sharedCli(args: string[]) {
         credential: z.string(),
         pairing: z.object({ deviceId: routingId }),
       })
-      .parse(
-        await post("/pair/accept", {
-          ...invitation,
-          acceptance: {
-            localAccepted: true,
-            displayId,
-            allowView: true,
-            allowControl,
-          },
-        }),
-      );
+      .parse(await post("/pair/accept", { ...invitation, acceptance }));
     privateFolder(directory);
     writePrivateJSON(file, {
       origin,
       credential: accepted.credential,
       deviceId: accepted.pairing.deviceId,
       displayId,
+      allowView: acceptance.allowView,
+      allowControl: acceptance.allowControl,
       walkthroughReports,
       ...(capture ? { capture } : {}),
     });
