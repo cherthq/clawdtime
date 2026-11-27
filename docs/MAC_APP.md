@@ -90,7 +90,8 @@ panel, and starts no background connection.
   dropped.
 - If the engine ends before `done`, the window shows the last lines of its
   stderr and a Try again button. Stop sends `cancel`, closes stdin, and ends
-  the engine after 2 seconds if it is still there.
+  the engine after 2 seconds if it is still there. Setup stops before its
+  next effect as soon as it reads the cancel, also in the middle of a step.
 
 ### After setup: one owner
 
@@ -129,6 +130,14 @@ window. It checks the runtime layout and manifest, hashes every file the
 manifest lists, starts the engine, waits for `hello`, sends `cancel` and waits
 for the engine to leave. It prints one JSON line and exits 0 when all of it
 passes. `--runtime PATH` checks another runtime folder.
+
+The self-test runs on every build, often from a shell with a real home and a
+model key. So the engine runs as `onboard --json --app --local` in a new
+empty home, with its own temporary folder. It gets only `PATH`, `HOME` and
+`TMPDIR`: no key, no coordinator and no ClawdTime setting of the shell.
+It never contacts the coordinator and never starts a desktop. A home that is
+not empty after the engine left fails the self-test. The temporary folders
+are removed at the end.
 
 Signing puts a signature inside each Mach-O file, so those files no longer
 match the hashes of the unsigned runtime. The self-test counts them as

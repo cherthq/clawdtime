@@ -12,7 +12,10 @@ import {
 import type { startCli } from "../cli/start.js";
 import type { DesktopReadiness } from "../connectors/agents/desktop-readiness.js";
 import { keyRows } from "../connectors/computer/keys.js";
-import { readComputerSwitch } from "../connectors/computer/journal.js";
+import {
+  readComputerSwitch,
+  setComputerSwitch,
+} from "../connectors/computer/journal.js";
 import {
   OnboardEngine,
   type OnboardPorts,
@@ -29,6 +32,7 @@ import {
   verifySharedSignIn,
 } from "../src/onboard/pairing.js";
 import {
+  jsonLinesIO,
   stepIds,
   type OnboardCommand,
   type OnboardEvent,
@@ -74,8 +78,11 @@ function fakeMac(
       after: DesktopReadiness["computer"];
     };
     taskAdmission?: DesktopReadiness["taskAdmission"];
+    /** Called as each port is called, before it acts. */
+    onCall?: (port: string) => void;
   } = {},
 ) {
+  const call = (port: string) => options.onCall?.(port);
   const calls = {
     desktopStarts: 0,
     desktopRestarts: 0,
@@ -104,8 +111,9 @@ function fakeMac(
     mac: async () => ({ darwinMajor: 25, appleSilicon: true }),
     helpers: () => ({ panel: true, capture: true }),
     desktop: {
-      status: async () =>
-        desktop === "connected"
+      status: async () => {
+        call("desktop.status");
+        return desktop === "connected"
           ? {
               ...desktopAbsent,
               service: "connected",
@@ -119,7 +127,8 @@ function fakeMac(
               taskSession: "active",
               taskAdmission: options.taskAdmission ?? "available",
             }
-          : desktopAbsent,
+          : desktopAbsent;
+      },
       instanceId: async () =>
         desktop === "connected"
           ? restarted
@@ -127,11 +136,13 @@ function fakeMac(
             : "desktop_1"
           : null,
       start: async (log) => {
+        call("desktop.start");
         calls.desktopStarts++;
         log("Desktop panel requested.");
         desktop = "connected";
       },
       restart: async () => {
+        call("desktop.restart");
         calls.desktopRestarts++;
         restarted = true;
       },
@@ -176,6 +187,7 @@ function fakeMac(
       },
     },
     validateKey: async () => {
+      call("validateKey");
       calls.validated++;
       return "valid";
     },
@@ -1035,6 +1047,105 @@ describe("clawdtime onboard in a terminal", () => {
         "utf8",
       ),
     ).toContain(key);
+  });
+});
+
+describe("a stop before the next effect", () => {
+  /**
+   * The engine on JSON lines in local mode. The person answers yes to each
+   * question, and stops setup (a cancel and the end of the input, or the end
+   * alone) at one moment: at hello, or as one port is called.
+   */
+  async function stopAt(
+    moment: string,
+    how: "cancel" | "end",
+    setup: { env?: Record<string, string>; computerOn?: boolean } = {},
+  ) {
+    const home = folder();
+    const root = join(home, ".local", "share", "clawdtime");
+    if (setup.computerOn) setComputerSwitch(root, true, Date.now());
+    const stdin = new PassThrough();
+    let ended = false;
+    const stop = () => {
+      if (ended) return;
+      ended = true;
+      if (how === "cancel") stdin.write('{"type":"cancel"}\n');
+      stdin.end();
+    };
+    const mac = fakeMac({
+      computer: { before: "not_configured", after: "configured" },
+      onCall: (port) => {
+        if (port === moment) stop();
+      },
+    });
+    const events: OnboardEvent[] = [];
+    const yes = agree();
+    const io = jsonLinesIO(stdin, (line) => {
+      const event = JSON.parse(line) as OnboardEvent;
+      events.push(event);
+      if (event.type === "hello" && moment === "hello") stop();
+      if (
+        event.type === "step" &&
+        (event.state === "needs_input" || event.state === "failed")
+      )
+        setImmediate(() => {
+          if (ended) return;
+          for (const reply of [yes(event) ?? []].flat())
+            stdin.write(
+              `${JSON.stringify({ ...reply, question: event.question })}\n`,
+            );
+        });
+    });
+    const result = await new OnboardEngine(
+      io,
+      {
+        version: "0",
+        local: true,
+        env: setup.env ?? {},
+        home,
+        root: folder(),
+        pollMs: 0,
+        desktopWaitMs: 0,
+      },
+      mac.ports,
+    ).run();
+    io.close();
+    const stored = keyRows({}, root).rows.some(
+      (row) => row.from?.kind === "store",
+    );
+    return { result, events, calls: mac.calls, stored, root };
+  }
+  const withKey = { OPENAI_API_KEY: key };
+
+  it("starts no desktop after a cancel and the end of the input right after hello", async () => {
+    for (const how of ["cancel", "end"] as const) {
+      const { result, calls } = await stopAt("hello", how, { env: withKey });
+      expect(result).toEqual({ ready: false, cancelled: true });
+      expect(calls.desktopStarts).toBe(0);
+    }
+  });
+
+  it("stores no key when setup stops while the provider checks it", async () => {
+    const { result, calls, stored } = await stopAt("validateKey", "cancel");
+    expect(result.cancelled).toBe(true);
+    expect(calls.validated).toBe(1);
+    expect(stored).toBe(false);
+    expect(calls.desktopStarts).toBe(0);
+  });
+
+  it("starts no desktop when setup stops while it checks the desktop", async () => {
+    const { calls } = await stopAt("desktop.status", "end", { env: withKey });
+    expect(calls.desktopStarts).toBe(0);
+  });
+
+  it("starts no desktop again when setup stops while the desktop starts", async () => {
+    const { calls, root } = await stopAt("desktop.start", "cancel", {
+      env: withKey,
+      computerOn: true,
+    });
+    expect(calls.desktopStarts).toBe(1);
+    expect(calls.desktopRestarts).toBe(0);
+    expect(readComputerSwitch(root).enabled).toBe(true);
   });
 });
 

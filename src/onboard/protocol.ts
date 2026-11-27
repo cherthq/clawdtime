@@ -118,13 +118,20 @@ export type OnboardCommand = z.infer<typeof onboardCommandSchema>;
 export interface OnboardIO {
   emit(event: OnboardEvent): void;
   next(): Promise<OnboardCommand>;
+  /**
+   * True from the moment the person stops setup: a cancel came in, or the
+   * input ended. The engine checks it before each effect, not only at a
+   * question, and answers already queued behind it are not used.
+   */
+  cancelled(): boolean;
 }
 
 /**
  * The JSON protocol over a pair of streams: events go out as one JSON object
  * per line, commands come in the same way. A line that is not a command is
  * ignored with a fixed warning that never quotes it: it may hold a key. The
- * end of the input is a cancel.
+ * end of the input is a cancel. A cancel counts as soon as its line is read,
+ * ahead of any command that came before it and is not used yet.
  */
 export function jsonLinesIO(
   input: Readable,
@@ -133,7 +140,12 @@ export function jsonLinesIO(
   const queue: OnboardCommand[] = [];
   let waiting: ((command: OnboardCommand) => void) | null = null;
   let ended = false;
+  let stopped = false;
   const deliver = (command: OnboardCommand) => {
+    if (command.type === "cancel") {
+      stopped = true;
+      queue.length = 0;
+    }
     if (waiting) {
       const resolve = waiting;
       waiting = null;
@@ -166,11 +178,12 @@ export function jsonLinesIO(
   return {
     emit,
     next: () =>
-      queue.length
-        ? Promise.resolve(queue.shift()!)
-        : ended
-          ? Promise.resolve({ type: "cancel" })
+      stopped || ended
+        ? Promise.resolve({ type: "cancel" })
+        : queue.length
+          ? Promise.resolve(queue.shift()!)
           : new Promise((resolve) => (waiting = resolve)),
+    cancelled: () => stopped || ended,
     close: () => lines.close(),
   };
 }

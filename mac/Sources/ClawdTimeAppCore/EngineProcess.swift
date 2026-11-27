@@ -35,6 +35,7 @@ public final class EngineProcess: EngineControlling, @unchecked Sendable {
   public let executable: URL
   public let arguments: [String]
   private let environment: [String: String]
+  private let directory: URL
   private let deliver: DispatchQueue
   private let io = DispatchQueue(label: "com.clawdtime.app.engine-io")
   private let process = Process()
@@ -48,10 +49,11 @@ public final class EngineProcess: EngineControlling, @unchecked Sendable {
   private var exitStatus: Int32?
   private var finished = false
 
-  public init(executable: URL, arguments: [String], environment: [String: String] = childEnvironment(), deliver: DispatchQueue = .main) {
+  public init(executable: URL, arguments: [String], environment: [String: String] = childEnvironment(), directory: URL? = nil, deliver: DispatchQueue = .main) {
     self.executable = executable
     self.arguments = arguments
     self.environment = environment
+    self.directory = directory ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     self.deliver = deliver
   }
 
@@ -62,7 +64,7 @@ public final class EngineProcess: EngineControlling, @unchecked Sendable {
     process.executableURL = executable
     process.arguments = arguments
     process.environment = environment
-    process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+    process.currentDirectoryURL = directory
     process.standardInput = input
     process.standardOutput = output
     process.standardError = errors

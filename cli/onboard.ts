@@ -107,6 +107,8 @@ class Interrupted extends Error {}
 export class TerminalWizard implements OnboardIO {
   private pending: StepEvent | null = null;
   private shown = new Map<string, string>();
+  /** Quit, Ctrl+C or the end of the terminal's input at a question. */
+  private stopped = false;
   constructor(
     private terminal: Terminal,
     private openUrl: (url: string) => Promise<void> = openSettings,
@@ -157,19 +159,25 @@ export class TerminalWizard implements OnboardIO {
     this.write(`${event.title}: ${state}${event.detail ?? ""}`.trimEnd());
   }
 
+  cancelled() {
+    return this.stopped;
+  }
+
   async next(): Promise<OnboardCommand> {
     const event = this.pending;
     this.pending = null;
-    if (!event) return { type: "cancel" };
-    try {
-      return await this.answer(event);
-    } catch (error) {
-      if (error instanceof Interrupted) {
+    let command: OnboardCommand;
+    if (!event || this.stopped) command = { type: "cancel" };
+    else
+      try {
+        command = await this.answer(event);
+      } catch (error) {
+        if (!(error instanceof Interrupted)) throw error;
         this.write("");
-        return { type: "cancel" };
+        command = { type: "cancel" };
       }
-      throw error;
-    }
+    if (command.type === "cancel") this.stopped = true;
+    return command;
   }
 
   /** The answer to one question. Each command names that question. */

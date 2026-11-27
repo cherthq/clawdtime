@@ -103,6 +103,15 @@ Nothing else goes to standard output. Human logs go to standard error. The
 interface writes one command per line on standard input. The end of standard
 input is a cancel.
 
+A cancel, or the end of standard input, stops setup before its next effect,
+at any step: while it checks the Mac or a key, starts the desktop, or waits
+for an answer. Setup checks for it before each effect (a key check, the key
+store, a desktop start or restart, the computer switch, a sign-in text, a
+code check, a pairing request, a connection start or stop), not only at a
+question. A command that came before the cancel and is not used yet is
+dropped. Only an outcome that an effect returned already is still saved, for
+example a pairing that the coordinator made.
+
 ### Events
 
 ```json

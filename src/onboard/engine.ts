@@ -217,14 +217,20 @@ export class OnboardEngine {
     for (const id of stepIds) this.step(id, "pending");
     let cancelled = false;
     try {
+      await this.proceed();
       if (await this.preflight()) {
-        await this.model();
-        await this.desktop();
-        await this.computer();
-        await this.permissions();
-        await this.phone();
-        await this.pairing();
-        await this.connection();
+        for (const step of [
+          () => this.model(),
+          () => this.desktop(),
+          () => this.computer(),
+          () => this.permissions(),
+          () => this.phone(),
+          () => this.pairing(),
+          () => this.connection(),
+        ]) {
+          await this.proceed();
+          await step();
+        }
       }
     } catch (error) {
       if (error instanceof Cancelled) cancelled = true;
@@ -316,6 +322,16 @@ export class OnboardEngine {
     this.io.emit({ type: "log", level, message });
   }
 
+  /**
+   * Goes on only while the person has not stopped setup. It runs before each
+   * effect and each step, not only at a question. It first lets the input
+   * that has come in be read, so a Stop that came before this moment counts.
+   */
+  private async proceed() {
+    await new Promise((done) => setImmediate(done));
+    if (this.io.cancelled()) throw new Cancelled();
+  }
+
   /** Asks one question and waits for its answer, or for an action. */
   private async ask(
     id: StepId,
@@ -391,6 +407,7 @@ export class OnboardEngine {
   private async waitForDesktop(): Promise<DesktopReadiness> {
     const deadline = this.now() + (this.settings.desktopWaitMs ?? 30_000);
     for (;;) {
+      await this.proceed();
       const status = await this.ports.desktop.status();
       if (status.service === "connected" || this.now() >= deadline)
         return status;
@@ -445,6 +462,7 @@ export class OnboardEngine {
         mode = `The coordinator in ${from} is not an https origin, so it is not used. ${local}`;
         this.log("warn", mode);
       } else {
+        await this.proceed();
         const health = await checkCoordinator(
           choice.origin,
           this.ports.request,
@@ -540,6 +558,7 @@ export class OnboardEngine {
         detail = plain(error, "That key cannot be used. Nothing was stored.");
         continue;
       }
+      await this.proceed();
       this.step("model", "in_progress", {
         detail: `Checking the key with ${provider.name}.`,
       });
@@ -555,6 +574,7 @@ export class OnboardEngine {
           "warn",
           `${provider.name} could not be reached to check the key. It is stored anyway.`,
         );
+      await this.proceed();
       try {
         storeKey(this.root, provider, key);
         // The chosen provider plans, even when a key of another one is set.
@@ -588,6 +608,7 @@ export class OnboardEngine {
     for (;;) {
       let status = await this.ports.desktop.status();
       if (status.service === "absent") {
+        await this.proceed();
         this.step("desktop", "in_progress", {
           detail: "Starting the desktop.",
         });
@@ -645,6 +666,7 @@ export class OnboardEngine {
             detail:
               "Computer use stays off. Turn it on later: clawdtime computer on",
           });
+        await this.proceed();
         setComputerSwitch(this.root, true, this.now());
         continue;
       }
@@ -662,6 +684,7 @@ export class OnboardEngine {
           status.taskAdmission !== "available" ||
           (await this.ports.connection.holder()) !== null;
         if (!busy && this.ports.desktop.restart) {
+          await this.proceed();
           this.step("computer", "in_progress", {
             detail: "Starting the desktop again, so that it can use this Mac.",
           });
@@ -670,7 +693,8 @@ export class OnboardEngine {
               this.log("info", message),
             );
             status = await this.waitForDesktop();
-          } catch {
+          } catch (error) {
+            if (error instanceof Cancelled) throw error;
             // The owner of a foreground desktop (the Mac app) keeps it: then
             // nothing was stopped. Otherwise say how to start it.
             status = await this.ports.desktop.status();
@@ -701,6 +725,7 @@ export class OnboardEngine {
         detail: "Computer use is off, so no permission is needed.",
       });
     for (;;) {
+      await this.proceed();
       this.step("permissions", "in_progress", {
         detail: "Checking Screen Recording and Accessibility.",
       });
@@ -861,6 +886,7 @@ export class OnboardEngine {
         return skipped(
           "No text was sent. To pair your phone later, run clawdtime onboard.",
         );
+      await this.proceed();
       this.step("phone", "in_progress", {
         detail: "Asking the coordinator to send the code.",
       });
@@ -918,6 +944,7 @@ export class OnboardEngine {
         continue;
       }
       if (expired()) return again("The code expired. Ask for a new one.");
+      await this.proceed();
       try {
         this.session = await verifySharedSignIn(
           this.post!,
@@ -1080,6 +1107,7 @@ export class OnboardEngine {
         await this.verifyPhone();
         if (!this.session) return skipped("This Mac is not paired.");
       }
+      await this.proceed();
       this.step("pairing", "in_progress", { detail: "Pairing this Mac." });
       let invitation: { invitation: string };
       try {
@@ -1139,6 +1167,9 @@ export class OnboardEngine {
           return skipped("This Mac is not paired.");
         continue;
       }
+      // The pairing that the coordinator makes next is saved even if the
+      // person stops right after it: its outcome is never lost.
+      await this.proceed();
       let accepted: Awaited<ReturnType<typeof acceptSharedInvitation>>;
       try {
         accepted = await acceptSharedInvitation(
@@ -1239,6 +1270,7 @@ export class OnboardEngine {
         return skipped(
           "This Mac is not connected. To connect it later, run clawdtime onboard.",
         );
+      await this.proceed();
       this.step("connection", "in_progress", {
         detail: app
           ? "Making way for the app's connection."
@@ -1254,8 +1286,10 @@ export class OnboardEngine {
           return connected(
             "ClawdTime connects this Mac to the shared number when setup ends.",
           );
+        await this.proceed();
         await this.ports.connection.start(instanceId);
-      } catch {
+      } catch (error) {
+        if (error instanceof Cancelled) throw error;
         if (
           (await this.failed(
             "connection",
