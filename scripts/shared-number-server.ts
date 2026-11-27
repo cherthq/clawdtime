@@ -16,7 +16,7 @@ const schema = z
   .object({
     enabled: z.boolean(),
     database: z.string().refine(isAbsolute),
-    lineId: z.string(),
+    lineId: z.uuid(),
     proofKey: z.string().regex(/^[a-f0-9]{64}$/i),
     identityKey: z.string().regex(/^[a-f0-9]{64}$/i),
     lineToken: z.string().min(32),
@@ -45,7 +45,7 @@ const schema = z
     messaging: z
       .object({
         origin: z.url(),
-        projectId: z.string(),
+        projectId: z.uuid(),
         key: z.string().min(32),
       })
       .strict(),

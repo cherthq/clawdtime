@@ -1,22 +1,34 @@
 # Shared number routing implementation plan
 
-Status: the callback, provider and walkthrough integrations are implemented.
-The signed webhook is configured, the previous connector has released the
-line with its journals retained, and the coordinator is enabled. Provider
-readiness and HTTPS authorization checks passed. This checkpoint supersedes
-the older pending integration and physical-test gates below.
+This plan describes the design and the boundaries of shared-number routing.
+It does not describe any deployment. A checkout does not prove what a host
+runs. Keep deployment records outside this public repository. Setup and
+operations are in [SHARED_NUMBER_SETUP.md](SHARED_NUMBER_SETUP.md).
 
-Reviewed: 2026-11-26. A checkout does not prove what production runs.
+## Status
 
-## Integrated delivery, 2026-11-26
+The integrations are in the code. They are not qualified.
+`clawdtime shared` says that shared calls remain unavailable until the
+provider, media and callback integrations are qualified. `clawdtime shared
+doctor` reports live shared-call acceptance as not qualified. No two-member,
+two-Mac physical test has run.
+
+Changes in progress: call proofs bound to the paired Mac, sign-in limits, call
+liveness, re-pair and revoke.
+
+Not built: email identities, shared inbound texting and a background
+participant service. The older masked-number text poller must never be used
+for shared routing.
+
+## Provider integration
 
 The service uses a signed HTTPS webhook integration with `customer_decides`
 and no default Assistant. Outbound callbacks use the Calls API. The webhook
 stays assigned during callbacks, so there is no per-call connector release
-and reclaim. The previous dedicated connector must release the line once
-at migration. The optional custom BYOR handler is not the production path.
+and reclaim. The previous dedicated connector releases the line once, at
+migration. The optional custom BYOR handler is not the intended path.
 
-Implemented components:
+## Components
 
 - Phone sign-in, durable limits, hashed sessions and separate call proofs.
 - One coordinator with private configuration, a durable SQLite call slot,
@@ -37,51 +49,32 @@ Implemented components:
   The local user chooses whether reports may open. Reports contain escaped,
   inert text, not executable instructions or automatically followed URLs.
 - Same-call computer actions after verification, including during callbacks.
-  Routine lease renewal no longer forgets the callback task.
-- Private standby coordinator and separate voice-worker configuration. HTTPS
-  health and refusal of standby admissions are checked independently.
+  Routine lease renewal does not forget the callback task.
+- A standby mode for the coordinator and a separate voice-worker
+  configuration. In standby, health answers and every other route returns 503.
 
-Participant setup is in [SHARED_NUMBER_SETUP.md](SHARED_NUMBER_SETUP.md).
-Each Mac needs the local desktop service, model credentials, native permissions
-and an active `shared run` connection. The shared number has one simultaneous
-call slot. Each participant verifies their phone and pairs only their own Mac.
+Each Mac needs the local desktop service, model credentials, native
+permissions and an active `shared run` connection. The shared number has one
+simultaneous call slot. Each participant verifies their phone and pairs only
+their own Mac.
 
-The user waived the two-person physical test for this release. Automated
-checks do not establish real handset audio, picture or native input success;
-this is a stated limitation, not an unrequested release gate.
+## Where the code lives
 
-Validation passed typecheck, **10,970 tests across 278 files**, and build.
-The independent line suite passed 325 tests, with two added media tests also
-passing under Node’s runner. Coverage includes focused
-signed-provider, callback, exact-result and same-call regression tests. The
-HTTP integration tests use two simulated Macs and fake provider effects with
-real loopback HTTP. No test sends a real text, places a call or captures a real
-screen. Deployment configuration stays outside this public repository.
+| Area                   | Files                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Contracts and domain   | `src/shared-number-contracts.ts`, `src/shared-relay-contracts.ts`, `src/control/shared-number.ts`           |
+| Coordinator            | `scripts/shared-number-server.ts`, `src/shared-number-app.ts`, `src/control/shared-number-relay.ts`         |
+| Phone sign-in          | `src/pairing/shared-phone-identity.ts`, `src/transport/shared-verification-text.ts`                         |
+| Provider and callbacks | `src/control/shared-provider.ts`, `src/control/shared-callbacks.ts`, `src/transport/shared-provider-api.ts` |
+| Voice worker           | `line/shared-agent.mjs`, `line/shared-desk.mjs`, `line/shared-media.mjs`                                    |
+| Participant Mac        | `cli/shared.ts`, `connectors/shared/shared-*.ts`                                                            |
+| Tests                  | `tests/*shared*.test.ts`, `line/shared-*.test.mjs`                                                          |
 
-Activation completed after explicit approval. The named shared voice worker
-registered successfully. The coordinator reports enabled and configured over
-HTTPS. Invalid signatures and unauthorized line requests return 403. Signed
-invalid bodies reach validation and return 400. The provider reports the exact
-route ready with no competing connector. No live calls or texts were placed.
-The old owner's retained journals remain available for rollback. Participants
-still need to pair their own Mac and keep its shared connection running.
+## Domain boundaries
 
-Email identities, shared inbound texting and background participant service
-packaging remain outside this release. Foreground participant setup is usable.
-The older masked-number text poller must never be used for shared routing.
-
-## Earlier foundation checkpoint, 2026-11-26
-
-The following records the earlier domain-only delivery. Its pending items are
-superseded by the integration checkpoint above where explicitly implemented.
-
-The first delivery slice now has source in `src/shared-number-contracts.ts`
-and `src/control/shared-number.ts`, with regression coverage in
-`tests/backend-shared-number.test.ts`. It uses the existing SQLite `Store`
-and `Pairing` shape in a separate `shared_number_*` namespace. It does not
-upgrade dedicated pairings or reuse their credentials.
-
-Implemented domain boundaries:
+The domain uses the existing SQLite `Store` and `Pairing` shape in a separate
+`shared_number_*` namespace. It does not upgrade dedicated pairings or reuse
+their credentials.
 
 - Enrollment requires separate trusted account and alias verifier outputs.
   Exact aliases are exclusive to an account. Caller handles, hashes, masked
@@ -94,12 +87,12 @@ Implemented domain boundaries:
   It is stored as a keyed digest with a separate 32-byte coordinator key.
   The code is accepted only through a separately verified original call turn.
   Duplicate turn delivery does not spend another attempt. Consumption and
-  failed attempts persist transactionally; reissuing a code is refused.
+  failed attempts persist transactionally. Reissuing a code is refused.
 - Pairing invitations expire after five minutes and are consumed once.
-  Explicit local acceptance selects the display and separate view/control
+  Local acceptance selects the display and separate view and control
   permissions. The server allocates the device ID and a random device secret.
-  Only its digest is retained. Rotation invalidates the old credential;
-  account revocation invalidates the pairing and its credentials.
+  Only its digest is retained. Rotation invalidates the old credential.
+  Account revocation invalidates the pairing and its credentials.
 - Connection identity comes from that credential, never a device header.
   Heartbeats expire after 30 seconds. Replacement connections, credential
   rotation and coordinator recovery fence prior desktop admission. An offline
@@ -111,129 +104,41 @@ Implemented domain boundaries:
 - Tasks record their call, original user-turn ID, request digest and exact
   owner before execution. Duplicate or changed task identities conflict.
   Completion must come from that device and original desktop instance, even
-  after hangup. Callback records retain the original destination and result;
-  they cannot use the most recent caller. This records a queue item only and
-  does not dispatch a callback.
+  after hangup. Callback records retain the original destination and result.
+  They cannot use the most recent caller.
 - Cleanup must be verified for the exact provider call, room and participant
   before releasing the slot. Media disconnect, expiry and unknown outcomes
   do not release it. Restart preserves unknown call state and task ownership.
-
-The verifier interfaces are mandatory integration boundaries, not working
-identity-provider adapters. Their outputs must never be parsed directly from
-untrusted HTTP JSON. There is no default verifier or public shared endpoint.
-The test adapters are deliberately synthetic and provide no production proof.
-The local pairing acceptance UI is also pending; a client boolean alone is
-not evidence that the native UI obtained acceptance.
-
-### Fresh read-only topology evidence
-
-- Checkout: `c53a3d4`, branch `local-main-update`. Initially there were five
-  untracked planning/readiness documents and no tracked changes. Those
-  documents remain; only this plan was updated. Existing demo artifacts were
-  not opened, rebuilt, copied or rerun.
-- One installed line-agent process and one provider incoming-owner process
-  were observed. Both run outside this checkout, under an installed release
-  directory labeled `main-de562b1-20261126`. The directory label does not prove
-  every installed file came from that commit. Installed package metadata says
-  application 0.4.0 and line package 0.1.0.
-- The installed desktop service's protected metadata names a live PID. Its
-  process runs from the installed release, outside this checkout. The line's
-  private environment points at a separate desktop state directory. That
-  state contains one calling policy, a selected shared display and an outbound
-  provider configuration. No shared-routing setting was configured.
-- Installed `agent.mjs`, `phone-desk.mjs` and `desk.mjs` matched checkout bytes
-  before implementation. Incoming source waits for a room participant and
-  opens the configured local phone desk; its call ID is locally generated.
-  This is not a verified shared-member routing path. The job watcher still
-  uses call timing, so it must not be reused for shared ownership.
-- Node resolves to 24.22.1; the installed provider package reports
-  `@trychert/facetime` 0.1.0-beta.19. The existing release-update hold is
-  present. No process, provider configuration, cursor, receipt, permission or
-  installed file was changed. No line readiness or current call state is
-  inferred from these process observations.
-- The current limits documentation was reachable and still describes one
-  active slot per line and a default five-second incoming decision deadline.
-  Attempts to retrieve the security and webhook pages failed in this session.
-  Their earlier review is historical evidence, not fresh verification of the
-  deployed webhook contract or signing configuration.
-
-### Verification and remaining delivery work
-
-The initial implementation did not run local tests, typecheck, build, eval,
-browser checks or a physical demo. The new test file covers identity
-separation, call/participant mismatch, proof expiry/replay and attempt limits,
-single-use invitation, two aliases with matching last-four digits, credential
-isolation/rotation, view-only access, revocation, offline routing, stale
-connections, event deduplication, original-owner callbacks and database reopen.
-The follow-up review found and fixed two recovery issues:
-
-- Verified cleanup received before incoming now writes an ended call record.
-  Delayed incoming delivery cannot reserve that call's slot, and cleanup for
+- Verified cleanup received before incoming writes an ended call record. A
+  delayed incoming delivery cannot reserve that call's slot, and cleanup for
   another call cannot release the current owner's slot.
 - Event and original-turn fingerprints exclude verification expiry, which an
   adapter can refresh on redelivery. Every delivery still requires fresh
-  verified evidence; changed call identity or proof content still conflicts.
-  A retry cannot consume another failed attempt or reuse a successful proof.
+  verified evidence. A changed call identity or proof content conflicts. A
+  retry cannot consume another failed attempt or reuse a successful proof.
 
-Three added regression tests failed against the original implementation and
-passed after these fixes. All 16 shared-number tests pass. The targeted
-shared-number, phone-desktop and connection-setup suites pass 50 tests.
+The verifier outputs must never be parsed directly from untrusted HTTP JSON.
+The coordinator wires them to its own phone sign-in sessions and to evidence
+that only its provider handler creates. The test adapters are synthetic and
+provide no production proof. The pairing acceptance is a terminal prompt in
+`clawdtime shared pair`. A client boolean alone is not evidence of a native
+acceptance UI.
 
-The first full check passed typechecking and exposed two pre-existing test
-failures: a phone test expected the old same-call behavior, and a missing-CLI
-fixture exposed the host's global provider executable. Separate test-only
-changes model a worker's busy response, cover accepted same-call follow-ups,
-and isolate the fixture PATH from global npm executables. No production
-behavior changes are included in those test repairs.
+## Open gates
 
-After the test repairs, `npm run check` passed: typecheck, 10,939 tests in 271
-files, and build. Line dependencies were installed, so the root suite included
-the voice-library-dependent line tests. Formatting checks cover the changed
-source, tests and this plan. No physical call, shared routing activation or
-production migration has been performed. Automated results qualify this
-unmounted foundation, not the missing integration paths.
+1. Physical qualification with two distinct paired Macs, two authenticated
+   members and the full acceptance matrix below.
+2. An exact authenticated messaging identity path. Until it exists, shared
+   texting stays unavailable.
+3. Email identities, if they are wanted, with their own verifier, audience,
+   issuer, expiry and revocation checks.
+4. A background participant service. Today `shared run` must stay open in a
+   terminal.
 
-| Slice                               | Current state                                          | Remaining gate                                                                                                                                      |
-| ----------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Identity and ownership           | Domain and durable records staged                      | Authenticated account/alias adapters and qualified provider call/turn adapter                                                                       |
-| 2. Enrollment and device connection | Invitations, credentials and connection fencing staged | Native local acceptance UI, protected credential storage/recovery, authenticated WSS endpoint and desktop relay operations                          |
-| 3. Incoming traffic and walkthrough | Pending                                                | Route open/renew/chat/stop/close/status and authorized transient screen delivery to the exact Mac; bind original turns and tasks at actual creation |
-| 4. Callbacks and scheduling         | Ownership records and incoming slot reservation staged | Outgoing reservation, bounded queue, provider receipts/reconciliation and retained-owner cleanup integration                                        |
-| 5. Setup and release                | Pending                                                | Explicit deployment setting, diagnostics, standby coordinator, idle handoff and two-member/two-Mac acceptance                                       |
-
-Concrete release prerequisites still unmet:
-
-1. An account authentication service with a stable member subject and a
-   separately verified canonical phone/email alias, plus an authenticated
-   account channel for the invitation and call code. No such service is
-   configured by this checkout. Select and implement its verifier, audience,
-   issuer, expiry and revocation checks before exposing enrollment.
-2. A deployed provider interface that supplies authenticated incoming call IDs,
-   the accepted room and expected participant, and observable cleanup
-   completion. If webhooks are used, configure an HTTPS coordinator endpoint
-   and enabled signing, verify the raw request signature, and meet the decision
-   deadline with an identity-only room. Wire original participant turns into
-   the proof verifier. The current `chert dev` participant waiter alone does
-   not establish these guarantees.
-3. A protected always-on coordinator database and proof key, TLS/WSS device
-   endpoint, and local desktop adapter for the newer phone endpoints. The
-   existing Python relay's shared secret and legacy/default-device fallback
-   must not serve this shared path. Do not introduce a remote shell.
-4. An exact authenticated messaging identity path. The installed text poller
-   uses masked recipient digits; shared texting must stay unavailable. The
-   older native Messages adapter is a candidate, not proof that its event
-   interface is available to this installed line.
-5. Repeat relevant automated checks as the integrations are implemented, then
-   qualify two distinct paired Macs with two authenticated members and the
-   full acceptance matrix below. The foundation's full check has passed, but
-   no second paired Mac or shared account proof flow was established during
-   this work.
-
-Next implementation work is the authenticated device relay and local phone
-adapter, followed by admission/media wiring. Keep the current dedicated line
-owner, callbacks, walkthrough and same-call input path installed until those
-gates and an idle reconciled handoff are satisfied. Nothing in this checkpoint
-authorizes treating a queued callback or submitted input as observed success.
+Keep the dedicated line owner, callbacks, walkthrough and same-call input path
+usable until these gates and an idle reconciled handoff are satisfied. Nothing
+here authorizes treating a queued callback or submitted input as observed
+success.
 
 ## Goal and first release
 
@@ -258,18 +163,18 @@ among several Macs, billing, and horizontal scaling are outside this release.
 Read `AGENTS.md`, `README.md`, `INSTALL.md` if present,
 `SETUP_CLAWDTIME.md`, `IMPLEMENTATION_PLAN.md`, and `SESSION_PROMPT.md`.
 The last two explain the original architecture and scope. Their deferral of
-public shared-line routing describes the older release. This plan describes
-the proposed extension, not evidence that it already exists.
+public shared-line routing describes the older release. The status section
+of this plan says what exists now.
 
 Then inspect `docs/ARCHITECTURE.md`, `docs/COMPUTER_USE.md`,
 `docs/SUPERVISOR.md`, `docs/DEVICE.md`, and the applicable line handoff guide.
 Follow current repository instructions and preserve unrelated work.
 
-## Baseline findings
+## Baseline before shared routing
 
 | Area              | Existing foundation                                                                                    | Gap                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| Installed desktop | One configured owner, local desktop endpoint, and selected display were observed                       | No central member-to-Mac router was configured                                 |
+| Dedicated desktop | One configured owner, a local desktop endpoint and one selected display                                | No central member-to-Mac router                                                |
 | Pairing           | `src/contracts.ts` links member, recipient, conversation, line, device, display, and permissions       | Self-service verified enrollment and device credential isolation               |
 | Incoming voice    | `line/agent.mjs`, `line/desk.mjs`, and `line/phone-desk.mjs` open a local desktop session              | Resolve and authorize the member before binding a remote desktop               |
 | Texts             | `connectors/agents/texts.ts` polls messages for one configured owner                                   | Its masked last-four-digit comparison cannot authorize multiple members        |
@@ -291,7 +196,7 @@ intact. Do not rebuild or rerun an existing demo merely to establish context.
 
 ## Provider facts and prerequisites
 
-Documentation checked on the review date:
+Provider documentation:
 
 - [Limits and readiness](https://docs.trychert.com/facetime/limits): one
   provisioned line has one active call slot. Per-call room selection is
@@ -310,8 +215,8 @@ verification rules, project capacity, and the chosen identity proof flow.
 Provider webhook authenticity and human account authentication are separate.
 
 Required infrastructure is one always-on coordinator with persistent state,
-an HTTPS endpoint if using webhooks, authenticated WSS device connectivity,
-and the existing call/media service. Inventory concrete deployment tooling,
+an HTTPS endpoint for webhooks, authenticated outbound HTTPS device
+connections, and the existing call/media service. Inventory concrete deployment tooling,
 versions, credentials, and permissions privately. Do not add infrastructure
 or purchase capacity based on assumptions.
 
@@ -483,5 +388,5 @@ keys, or runtime records in tracked files or fixtures.
   routing on a live line.
 - Continue independent implementation when an external prerequisite is
   unavailable, and report the exact remaining dependency.
-- Update this plan with implemented versus pending milestones, verification
-  evidence, and concrete deployment or acceptance gaps.
+- Update the status and open gates in this plan when a milestone lands. Keep
+  deployment state, host details and test counts out of it.
