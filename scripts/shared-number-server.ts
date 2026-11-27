@@ -1,7 +1,15 @@
 import { serve } from "@hono/node-server";
 import { z } from "zod";
 import { isAbsolute, dirname } from "node:path";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import {
   readPrivateJSON,
   privateFolder,
@@ -75,6 +83,49 @@ const lineModule = (name: string) => {
   const root = here.pathname.endsWith("/dist/scripts/") ? "../../" : "../";
   return new URL(`${root}line/${name}`, here).href;
 };
+/** A lock without an owner file this old was left by a crash between the
+ * two steps that make it. A younger one may belong to a starting owner. */
+const ownerlessLockMs = 60_000;
+
+/** The process that wrote the owner file has ended, or an ownerless lock is
+ * old. Any doubt keeps the lock, so two coordinators never share one store. */
+function ownerEnded(lock: string) {
+  let owner: unknown;
+  try {
+    owner = JSON.parse(readFileSync(`${lock}/owner.json`, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    return Date.now() - statSync(lock).mtimeMs > ownerlessLockMs;
+  }
+  const pid = z.object({ pid: z.number().int().positive() }).safeParse(owner);
+  if (!pid.success || pid.data.pid === process.pid) return false;
+  try {
+    process.kill(pid.data.pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
+/** Moves an ended owner's lock aside and removes it. The lock is moved first
+ * and checked again, so a lock that another starting coordinator made in the
+ * meantime is put back untouched. */
+function takeOverEndedOwner(lock: string) {
+  try {
+    if (!ownerEnded(lock)) return;
+    const aside = `${lock}.ended-${process.pid}-${randomBytes(6).toString("hex")}`;
+    renameSync(lock, aside);
+    if (!ownerEnded(aside)) {
+      renameSync(aside, lock);
+      return;
+    }
+    rmSync(aside, { recursive: true, force: true });
+    console.error("Shared coordinator took over the lock of an ended owner.");
+  } catch {
+    // The second attempt to make the lock decides.
+  }
+}
+
 async function main() {
   const path = process.env.CLAWDTIME_SHARED_CONFIG;
   if (!path || !isAbsolute(path)) throw Error("shared_config_required");
@@ -86,7 +137,12 @@ async function main() {
   try {
     mkdirSync(lock, { mode: 0o700 });
   } catch {
-    throw Error("shared_coordinator_owner_unresolved");
+    takeOverEndedOwner(lock);
+    try {
+      mkdirSync(lock, { mode: 0o700 });
+    } catch {
+      throw Error("shared_coordinator_owner_unresolved");
+    }
   }
   writeFileSync(
     `${lock}/owner.json`,

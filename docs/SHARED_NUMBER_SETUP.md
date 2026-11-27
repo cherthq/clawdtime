@@ -73,10 +73,12 @@ Health shows the mode and whether the provider is configured, not secrets.
 All other routes return 503 in standby. Back up the database and persistent
 keys together. Changing the identity key changes account subjects and number
 digests, and the coordinator can no longer open the sealed numbers. A second
-process refuses the database's `.owner` lock. After an unclean exit,
-reconcile pending provider and media effects before you remove a stale lock.
-Its `owner.json` identifies the process that created it. Never remove a live
-process's lock.
+process refuses the database's `.owner` lock while the process named in its
+`owner.json` runs. After an unclean exit, the next start takes over the lock
+only when that process has ended, or when a lock without `owner.json` is
+older than 60 seconds. On start the coordinator marks each call that was being
+prepared as unknown, and every pending call keeps the line until the provider
+reports it ended and cleaned up. Never remove a live process's lock.
 
 The database keeps phone numbers and caller handles only as keyed digests
 under `identityKey`. A number is kept sealed, with a key derived from
