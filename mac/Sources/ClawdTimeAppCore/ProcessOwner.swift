@@ -16,7 +16,9 @@ public struct ManagedCommand: Equatable, Sendable {
   /// foreground for the desktop's whole life and stops both on SIGTERM.
   public static let desktop = ManagedCommand(name: "desktop", arguments: ["start", "--tucked", "true", "--foreground"], waitsForReady: true)
   /// The one shared connection. It needs a ready desktop and ends on SIGTERM.
-  public static let connection = ManagedCommand(name: "connection", arguments: ["shared", "run"], waitsForReady: false)
+  /// `--owned`: it also ends by itself when the app is gone, after a crash too,
+  /// so it never stays connected with no owner and never keeps the lock.
+  public static let connection = ManagedCommand(name: "connection", arguments: ["shared", "run", "--owned"], waitsForReady: false)
 
   /// A stdout line that says the command is ready.
   public static func isReadyLine(_ line: String) -> Bool {

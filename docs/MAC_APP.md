@@ -124,7 +124,7 @@ the final report says is ready:
 | Process    | Command                                      | Starts when                                                  |
 | ---------- | -------------------------------------------- | ------------------------------------------------------------ |
 | Desktop    | `clawdtime start --tucked true --foreground` | `desktop` is ready                                           |
-| Connection | `clawdtime shared run`                       | the desktop prints its ready line, and `connection` is ready |
+| Connection | `clawdtime shared run --owned`               | the desktop prints its ready line, and `connection` is ready |
 
 - Each process starts in its own process group, with stdin from `/dev/null`.
 - `clawdtime start --foreground` takes over the desktop service that setup
@@ -141,6 +141,10 @@ the final report says is ready:
   still there after 10 seconds gets SIGKILL with its whole group.
 - When the desktop ends, the app ends the connection too: a connection belongs
   to one desktop lifetime.
+- With `--owned`, the connection checks its parent. When the app is gone,
+  also after a crash, it disconnects, frees the connection lock and leaves,
+  as `clawdtime start --foreground` does. A connection that Terminal setup
+  starts has no `--owned`: it keeps running after setup ends.
 - Nothing restarts by itself. The menu says what ended, and Start is your
   choice.
 - Sleep changes nothing in the app. The connection keeps its own rules for a
