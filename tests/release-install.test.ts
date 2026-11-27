@@ -12,6 +12,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -468,6 +469,47 @@ describe("the release route of the installer", () => {
     expect(f.recorded()).toBe("");
   });
 
+  it("keeps the link of a source build unless CLAWDTIME_REPLACE_SOURCE=1, and says so either way", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    // A source build, linked by npm link in ~/.local as the source route links it.
+    const checkout = join(f.base, "clawdtime");
+    for (const path of ["cli/main.ts", "scripts/install.sh", "package.json"]) {
+      mkdirSync(join(checkout, path, ".."), { recursive: true });
+      writeFileSync(join(checkout, path), "made-up source\n");
+    }
+    mkdirSync(join(checkout, "dist", "cli"), { recursive: true });
+    writeFileSync(join(checkout, "dist", "cli", "main.js"), "made-up build\n");
+    const local = join(f.home, ".local");
+    mkdirSync(join(local, "lib", "node_modules"), { recursive: true });
+    symlinkSync(checkout, join(local, "lib", "node_modules", "clawdtime"));
+    mkdirSync(join(local, "bin"));
+    const link = join(local, "bin", "clawdtime");
+    const npmLink = "../lib/node_modules/clawdtime/dist/cli/main.js";
+    symlinkSync(npmLink, link);
+    const launcher = join(f.runtimes, "current", "bin", "clawdtime");
+
+    const kept = await f.install();
+    expect(kept.status, kept.output).toBe(0);
+    expect(readlinkSync(link)).toBe(npmLink);
+    expect(kept.output).toContain(
+      `Kept ${link}: it runs the source build in ${checkout}. To use this release there, run this again with CLAWDTIME_REPLACE_SOURCE=1. The command of this release is ${launcher}`,
+    );
+    expect(kept.output).toContain(`Start it: ${launcher} start`);
+    expect(kept.output).not.toContain(`Ready: ${link}`);
+
+    const replaced = await f.install({
+      env: { CLAWDTIME_REPLACE_SOURCE: "1" },
+    });
+    expect(replaced.status, replaced.output).toBe(0);
+    expect(readlinkSync(link)).toBe(launcher);
+    expect(replaced.output).toContain(
+      `Replaced ${link}, which ran the source build in ${checkout}: CLAWDTIME_REPLACE_SOURCE=1. To go back: cd ${checkout} && npm link`,
+    );
+    expect(replaced.output).toContain(`Ready: ${link} runs ClawdTime 0.4.1.`);
+    expect(f.recorded()).toBe("");
+  });
+
   it("never runs as root", async () => {
     const f = setup();
     publish(f.releases, { version: "0.4.1" });
@@ -559,6 +601,7 @@ describe("the source route of the installer", () => {
     for (const line of [
       "Installs ClawdTime on this Mac, or updates it.",
       "CLAWDTIME_ALLOW_DOWNGRADE",
+      "CLAWDTIME_REPLACE_SOURCE",
       "uses sudo. The steps that need you come at the end.",
     ])
       expect(help.output).toContain(line);
