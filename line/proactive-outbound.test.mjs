@@ -232,6 +232,27 @@ test("stopComputer stops the call's computer work and leaves sharing on", async 
   assert.equal(actions.includes("stop_computer"), true);
   assert.equal(actions.includes("stop_sharing"), false);
 });
+test("stopComputer of a call that had computer control never hides sharing, also after control ended", async () => {
+  const f = fixture("phone_walkthrough");
+  f.state.computerAllowed = true;
+  await f.client.bindCaller("caller-one");
+  // The server ends computer control, for example at an unknown outcome.
+  f.state.computerAllowed = false;
+  await f.client.status();
+  await f.client.stopComputer();
+  const actions = f.requests.map((r) => JSON.parse(r.init.body).action);
+  assert.equal(actions.includes("stop_computer"), true);
+  assert.equal(actions.includes("stop_sharing"), false);
+});
+test("stopComputer of a walkthrough without computer control stops sharing, as its words say", async () => {
+  const f = fixture("phone_walkthrough");
+  await f.client.bindCaller("caller-one");
+  assert.match(await f.client.stopComputer(), /Sharing is stopped/);
+  const actions = f.requests.map((r) => JSON.parse(r.init.body).action);
+  assert.equal(actions.includes("stop_sharing"), true);
+  assert.equal(actions.includes("stop_computer"), false);
+  assert.equal(await f.client.windowFrame(), null);
+});
 test("hangup closes once and rejects later answers", async () => {
   const f = fixture();
   await f.client.bindCaller("caller-one");

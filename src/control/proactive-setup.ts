@@ -193,9 +193,14 @@ export function walkthroughComputer(deps: {
       if (computerCalls.has(intent.attemptId!)) phone.renew(intent.attemptId!);
     },
     stop(intent: ProactiveCallIntent) {
-      return computerCalls.has(intent.attemptId!)
-        ? phone.stop(intent.attemptId!).reply.text
-        : "No computer work is owned by this call.";
+      if (!computerCalls.has(intent.attemptId!))
+        return "No computer work is owned by this call.";
+      try {
+        return phone.stop(intent.attemptId!).reply.text;
+      } catch {
+        // The call's lease ended, and its end already stopped the call's work.
+        return "No computer work owned by this call is running. Coding jobs may continue.";
+      }
     },
     close(intent: ProactiveCallIntent) {
       told.delete(intent.attemptId!);

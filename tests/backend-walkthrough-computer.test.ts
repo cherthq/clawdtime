@@ -441,6 +441,17 @@ describe("the walkthrough's computer port", () => {
     expect(f.phone.hasOpenCall()).toBe(false);
   });
 
+  it("a Stop after the call's computer lease ended says that nothing runs, and does not fail", async () => {
+    const f = portFixture();
+    await f.port.submit(f.intent, "Search the fixture shop", "turn-1");
+    f.port.close(f.intent);
+    expect(f.runtime.stop).toHaveBeenCalledOnce();
+    expect(f.port.stop(f.intent)).toBe(
+      "No computer work owned by this call is running. Coding jobs may continue.",
+    );
+    expect(f.runtime.stop).toHaveBeenCalledOnce();
+  });
+
   it("a stop of a call that never used the computer touches no work", () => {
     const f = portFixture();
     f.set(running("local"));

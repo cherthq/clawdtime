@@ -102,9 +102,11 @@ example after a reply that said the request was still running, the next reply
 tells that question, and those words answer nothing. A question that comes
 again after an answer is told again before a yes can answer it.
 
-Stop cancels only computer work owned by that call and leaves video on.
-Hiding sharing, ending the call, revoking permission or losing the call lease
-also stops its computer work. Independent coding jobs keep their own lifecycle.
+Stop cancels only computer work owned by that call and leaves video on, also
+after computer control ended in that call. Hiding sharing, ending the call,
+revoking permission or losing the call lease also stops its computer work.
+On a walkthrough without computer control, Stop hides sharing and cancels no
+work. Independent coding jobs keep their own lifecycle.
 The configured call deadline still applies; continuation does not extend it.
 
 ## Verification and remaining limits

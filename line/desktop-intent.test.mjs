@@ -7,7 +7,7 @@ import {
 } from "./desktop-intent.mjs";
 import { makeCallerTools } from "./caller-tools.mjs";
 import { bindCallEnd } from "./call-end.mjs";
-import { syncCallView } from "./agent.mjs";
+import { proactiveInstructions, syncCallView } from "./agent.mjs";
 import { RoomEvent } from "@livekit/rtc-node";
 const { test } = process.env.VITEST
   ? await import("vitest")
@@ -1254,4 +1254,17 @@ test("use_computer and stop_computer do nothing after the call ended", async () 
   assert.equal(await r.invoke("stop_computer"), "The call has ended.");
   assert.equal(sent, 0);
   assert.deepEqual(r.calls, []);
+});
+
+test("the words for stop_computer match what it does on the call", () => {
+  const withComputer = proactiveInstructions({ computer: true });
+  assert.match(withComputer, /use_computer/);
+  assert.match(
+    withComputer,
+    /stop_computer stops only computer work owned by this call and leaves sharing on/,
+  );
+  const without = proactiveInstructions({ computer: false });
+  assert.doesNotMatch(without, /use_computer/);
+  assert.doesNotMatch(without, /leaves sharing on/);
+  assert.match(without, /stop_computer stops sharing only/);
 });
