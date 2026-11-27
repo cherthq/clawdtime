@@ -277,6 +277,8 @@ export function createSharedNumberApp(options: {
     if (calls.length !== 1)
       return c.json({ ok: false, code: "room_unavailable" }, 409);
     const call = calls[0]!;
+    const verifyBy =
+      call.state === "unknown_identity" ? router.verifyBy(call) : undefined;
     // The trusted voice worker gets only its binding, never another member's data.
     return c.json({
       id: call.id,
@@ -286,7 +288,18 @@ export function createSharedNumberApp(options: {
       participantId: call.participantId,
       callbackTaskId: call.callbackTaskId,
       awaitingAnswer: !!call.callbackTaskId && !call.activatedAt,
+      // The worker ends the call if it is not verified within this time.
+      ...(verifyBy !== undefined
+        ? { verifyInMs: Math.max(0, verifyBy - (options.now ?? Date.now)()) }
+        : {}),
     });
+  });
+  app.post("/line/release", async (c) => {
+    const { roomId } = z
+      .object({ roomId: routingId })
+      .strict()
+      .parse(await c.req.json());
+    return c.json({ ok: true, released: router.releaseRoom(roomId) });
   });
   app.post("/line/room/claim", async (c) => {
     const { roomId, workerId } = z

@@ -561,6 +561,40 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     expect(own.status).toBe(200);
   });
 
+  it("tells the voice worker when an unverified call must end and lets it release one", async () => {
+    const f = await fixture();
+    const a = await f.pair("+14155550100");
+    await f.post("/device/connect", { instanceId: "instance-a" }, a.credential);
+    const incoming = await f.post(
+      "/line/event",
+      f.event("call-a", "incoming", a.recipient),
+      lineToken,
+    );
+    const room = await f.post(
+      "/line/room",
+      { roomId: incoming.body.roomId },
+      lineToken,
+    );
+    expect(room.body.verifyInMs).toBeGreaterThan(0);
+    expect(room.body.verifyInMs).toBeLessThanOrEqual(120_000);
+    const released = await f.post(
+      "/line/release",
+      { roomId: incoming.body.roomId },
+      lineToken,
+    );
+    expect(released.body).toEqual({ ok: true, released: true });
+    expect((await f.post("/device/call-proof", {}, a.credential)).status).toBe(
+      409,
+    );
+    expect(
+      (await f.post("/line/room", { roomId: incoming.body.roomId }, lineToken))
+        .status,
+    ).toBe(409);
+    expect(
+      (await f.post("/line/release", { roomId: "other" }, a.credential)).status,
+    ).toBe(403);
+  });
+
   it("checks the device credential before reading a device body and keeps device bodies small", async () => {
     const f = await fixture();
     const a = await f.pair("+14155550100");

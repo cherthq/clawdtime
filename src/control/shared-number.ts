@@ -26,6 +26,9 @@ interface Invitation {
   consumedAt?: number;
 }
 const kind = (name: string) => `shared_number_${name}`;
+/** A caller who has not verified within this time is released, so one
+ * unverified call cannot hold the single line slot. */
+export const UNVERIFIED_LIMIT_MS = 90_000;
 const refused = () => new DomainError(403, "shared_number_unauthorized");
 const conflict = () => new DomainError(409, "shared_number_conflict");
 const notWaiting = () => new DomainError(409, "shared_call_not_waiting");
@@ -446,19 +449,76 @@ export class SharedNumber {
         connectionId: connection.id,
         digest: this.proofDigest(call.id, code),
         attempts: 0,
-        expiresAt: this.now() + 120_000,
+        expiresAt: Math.min(this.now() + 120_000, this.verifyBy(call)!),
       });
       return { callId: call.id, code, expiresAt: proof.expiresAt };
     });
   }
-  private waitingCall() {
+  private slotCall() {
     const slot = this.slot();
     const call = slot
       ? this.store.get<SharedCall>(kind("call"), slot)
       : undefined;
-    return call?.lineId === this.lineId && call.state === "unknown_identity"
-      ? call
-      : undefined;
+    return call?.lineId === this.lineId ? this.expireIfDue(call) : undefined;
+  }
+  private waitingCall() {
+    const call = this.slotCall();
+    return call?.state === "unknown_identity" ? call : undefined;
+  }
+  /** The deadline for verification. A callback's window opens on answer. */
+  verifyBy(call: SharedCall) {
+    const start = call.callbackTaskId ? call.activatedAt : call.createdAt;
+    return start === undefined ? undefined : start + UNVERIFIED_LIMIT_MS;
+  }
+  private expireIfDue(call: SharedCall) {
+    const by = this.verifyBy(call);
+    if (
+      call.state !== "unknown_identity" ||
+      by === undefined ||
+      by > this.now()
+    )
+      return call;
+    return this.release(call);
+  }
+  private release(call: SharedCall) {
+    const proof = this.store.get<SharedCallProof>(kind("proof"), call.id);
+    if (proof && proof.consumedAt === undefined)
+      this.store.put(kind("proof"), { ...proof, consumedAt: this.now() });
+    return this.store.put<SharedCall>(kind("call"), {
+      ...call,
+      state: "unauthorized",
+      releasedAt: this.now(),
+    });
+  }
+  /** The call that holds the slot but can no longer be verified: its window
+   * passed, its attempts ran out, or its Mac was offline. The trusted line
+   * adapter ends it by removing its room. The slot still frees only after the
+   * observed provider cleanup, as for every call. */
+  releaseUnverified() {
+    return this.store.transaction(() => {
+      const call = this.slotCall();
+      return call && ["unauthorized", "offline"].includes(call.state)
+        ? [
+            {
+              callId: call.id,
+              providerCallId: call.providerCallId,
+              roomId: call.roomId,
+            },
+          ]
+        : [];
+    });
+  }
+  /** The voice worker ends an unverified call in its room, for example at the
+   * deadline it was given. An admitted call is never released this way. */
+  releaseRoom(roomId: string) {
+    return this.store.transaction(() => {
+      const call = this.slotCall();
+      if (!call || call.roomId !== roomId) return false;
+      if (call.state === "unknown_identity") this.release(call);
+      return ["unknown_identity", "unauthorized", "offline"].includes(
+        call.state,
+      );
+    });
   }
 
   /** Caller binding is delivered by the authenticated call adapter, not model
@@ -472,15 +532,18 @@ export class SharedNumber {
     const callId = `shared_call_${hash(JSON.stringify([this.lineId, binding.providerCallId]))}`;
     const code = binding.code;
     return this.store.transaction(() => {
-      const call = this.call(callId);
+      const found = this.call(callId);
       if (
-        call.providerCallId !== binding.providerCallId ||
-        call.roomId !== binding.roomId ||
-        call.participantId !== binding.participantId
+        found.providerCallId !== binding.providerCallId ||
+        found.roomId !== binding.roomId ||
+        found.participantId !== binding.participantId
       )
         throw refused();
-      if (call.state !== "unknown_identity" || this.slot() !== call.id)
+      if (found.state !== "unknown_identity" || this.slot() !== found.id)
         throw refused();
+      const call = this.expireIfDue(found);
+      if (call.state !== "unknown_identity")
+        return { state: "unauthorized" as const };
       const turnKey = `shared-proof-turn:${hash(JSON.stringify([call.id, binding.turnId]))}`;
       const fingerprint = this.proofDigest(call.id, stableEvidence(binding));
       const prior = this.store.event(turnKey);

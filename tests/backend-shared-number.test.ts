@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SharedNumber } from "../src/control/shared-number.js";
+import {
+  SharedNumber,
+  UNVERIFIED_LIMIT_MS,
+} from "../src/control/shared-number.js";
 import { Store } from "../src/storage/store.js";
 import { hash } from "../src/storage/security.js";
 import type {
@@ -267,6 +270,53 @@ describe("staged shared-number identity and ownership", () => {
     expect(JSON.stringify(f.store.all("shared_number_call"))).not.toContain(
       "+13125550100",
     );
+  });
+
+  it("releases a caller who never verifies, and frees the slot after the observed cleanup", async () => {
+    const f = fixture();
+    const a = await f.pair();
+    f.router.connect(a.credential, "instance-a");
+    expect(UNVERIFIED_LIMIT_MS).toBeGreaterThanOrEqual(60_000);
+    expect(UNVERIFIED_LIMIT_MS).toBeLessThanOrEqual(120_000);
+    const stranger = await f.incoming("call-stranger", "+13125550100");
+    expect(f.router.releaseUnverified()).toEqual([]);
+    f.advance(UNVERIFIED_LIMIT_MS);
+    // The trusted line adapter ends this call. No code can admit it now.
+    expect(f.router.releaseUnverified()).toEqual([
+      {
+        callId: stranger.id,
+        providerCallId: "call-stranger",
+        roomId: "room:call-stranger",
+      },
+    ]);
+    expect(f.store.get<any>("shared_number_call", stranger.id)?.state).toBe(
+      "unauthorized",
+    );
+    // The provider call may still be live: the slot waits for its cleanup.
+    expect((await f.incoming("call-busy")).state).toBe("busy");
+    await f.cleanup("call-stranger");
+    expect(f.router.releaseUnverified()).toEqual([]);
+    // A code shown late in the window expires with the window.
+    const own = await f.incoming("call-own");
+    f.advance(UNVERIFIED_LIMIT_MS - 10_000);
+    f.router.connect(a.credential, "instance-a");
+    const late = f.router.issueCallProof(a.credential);
+    expect(late.expiresAt).toBe(own.createdAt + UNVERIFIED_LIMIT_MS);
+    f.advance(10_000);
+    expect(await f.prove(own, late.code)).toEqual({ state: "unauthorized" });
+    expect(f.router.releaseUnverified()).toHaveLength(1);
+  });
+
+  it("releases a verified caller's offline or failed call so the line can end it", async () => {
+    const f = fixture();
+    const a = await f.pair();
+    f.router.connect(a.credential, "instance-a");
+    const call = await f.incoming();
+    f.router.issueCallProof(a.credential);
+    for (let i = 0; i < 5; i++) await f.prove(call, "00000000");
+    expect(f.router.releaseUnverified()).toEqual([
+      expect.objectContaining({ callId: call.id }),
+    ]);
   });
 
   it("binds the proof to exact call, room and participant and consumes it once", async () => {

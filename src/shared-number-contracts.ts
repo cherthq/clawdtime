@@ -134,6 +134,8 @@ export interface SharedCall {
   expectedMemberId?: string;
   // Keyed digest of the observed caller handle; the handle is not stored.
   callerDigest?: string;
+  // Set when an unverified call is released for the line to end it.
+  releasedAt?: number;
 }
 export interface SharedCallProof {
   id: string;
