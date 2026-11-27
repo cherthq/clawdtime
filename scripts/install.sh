@@ -1,10 +1,25 @@
 #!/bin/sh
 # Installs ClawdTime on this Mac, or updates it. It is safe to run again.
 #
-#   curl -fsSL https://raw.githubusercontent.com/cherthq/clawdtime/main/scripts/install.sh | sh
-#   sh scripts/install.sh
+#   curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh
 #
-# Settings, all optional:
+# It installs the newest prebuilt release for Macs with Apple silicon and
+# macOS 14 or later. The Mac needs no Node, npm, Git or Xcode. The release goes
+# to ~/Library/Application Support/ClawdTime/runtime/VERSION, the link
+# "current" there switches to it in one step, and ~/.local/bin/clawdtime runs
+# it. Settings, keys and pairing stay where they are. Then, in a terminal, it
+# starts the guided setup: clawdtime onboard.
+#
+# Settings of the release, all optional:
+#   CLAWDTIME_RELEASE_BASE  the folder of latest.json and the archive. Default:
+#                           https://github.com/cherthq/clawdtime/releases/latest/download
+#   CLAWDTIME_NO_GLOBAL     1: no link in ~/.local/bin
+#   CLAWDTIME_NO_ONBOARD    1: no guided setup after the install
+#
+# To build from the source instead, as before (it needs Node 24, Git and Swift 6):
+#   curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh -s -- --source
+#   sh scripts/install.sh --source        (or CLAWDTIME_FROM_SOURCE=1)
+# Settings of the source build, all optional:
 #   CLAWDTIME_HOME       the folder of ClawdTime. Default: ~/clawdtime, or the
 #                        checkout that holds this file when you run it from one
 #   CLAWDTIME_REPO       the repository to clone. Default: the ClawdTime repository
@@ -243,7 +258,7 @@ next_steps() {
   say "The guide: $dir/INSTALL.md"
 }
 
-main() {
+source_main() {
   repo=${CLAWDTIME_REPO:-https://github.com/cherthq/clawdtime.git}
   branch=${CLAWDTIME_BRANCH:-main}
   no_global=${CLAWDTIME_NO_GLOBAL:-0}
@@ -271,6 +286,278 @@ main() {
   link_command
   chert_command
   next_steps
+}
+
+# The release route: a prebuilt runtime, with no Node, Git or Xcode.
+
+release_base=https://github.com/cherthq/clawdtime/releases/latest/download
+
+check_mac() {
+  step "Checking this Mac"
+  [ "$(uname -s)" = Darwin ] || fail "ClawdTime runs on a Mac with macOS 14 or later."
+  [ "$(id -u)" != 0 ] || fail "run this without sudo. ClawdTime installs in your own home folder."
+  macos=$(sw_vers -productVersion 2>/dev/null || echo 0)
+  macos_major=$(number "${macos%%.*}")
+  [ "$macos_major" -ge 14 ] ||
+    fail "ClawdTime needs macOS 14 or later. This Mac has $macos. Update it in System Settings, General, Software Update."
+  # A shell under Rosetta says x86_64; the chip still is Apple silicon.
+  if [ "$(uname -m)" != arm64 ] && [ "$(sysctl -in hw.optional.arm64 2>/dev/null)" != 1 ]; then
+    fail "this release is for Macs with Apple silicon. On this Mac, build from the source: sh install.sh --source"
+  fi
+  for tool in curl tar shasum plutil; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing. It comes with macOS."
+  done
+  say "macOS $macos on Apple silicon: ready."
+}
+
+# Downloads $1 to the file $2. Only https, except a local test release.
+fetch() {
+  if [ -t 2 ]; then progress=--progress-bar; else progress=--silent; fi
+  curl --fail --location --show-error "$progress" --retry 2 --proto "$protocols" --proto-redir "$protocols" \
+    --output "$2" "$1" </dev/null
+}
+
+# A field of latest.json, or nothing.
+field() { plutil -extract "$1" raw -o - "$tmp/latest.json" 2>/dev/null </dev/null || true; }
+
+valid_version() {
+  case $1 in '' | *[!0-9.]* | .* | *. | *..*) return 1 ;; esac
+  [ "$(printf '%s' "$1" | tr -cd . | wc -c | tr -d ' ')" = 2 ]
+}
+
+read_latest() {
+  step "Finding the newest release"
+  fetch "$base/latest.json" "$tmp/latest.json" ||
+    fail "latest.json did not download from $base. Check the network, then run this again."
+  version=$(field version)
+  commit=$(field commit)
+  sha256=$(field sha256)
+  url=$(field url)
+  minimum=$(field minimumMacOS)
+  valid_version "$version" || fail "latest.json names no valid version."
+  case $commit in *[!0-9a-f]* | '') fail "latest.json names no valid commit." ;; esac
+  [ ${#commit} = 40 ] || fail "latest.json names no valid commit."
+  case $sha256 in *[!0-9a-f]* | '') fail "latest.json has no valid SHA-256." ;; esac
+  [ ${#sha256} = 64 ] || fail "latest.json has no valid SHA-256."
+  [ "$(field arch)" = arm64 ] || fail "the newest release is not for Apple silicon."
+  [ "$(number "${minimum%%.*}")" -le "$macos_major" ] ||
+    fail "ClawdTime $version needs macOS $minimum or later. This Mac has $macos. Update it in System Settings, General, Software Update."
+  case $url in
+    https://* | file:///* | http://127.0.0.1[:/]*) archive_url=$url ;;
+    */* | .* | '') fail "latest.json has no valid url." ;;
+    *) archive_url=$base/$url ;;
+  esac
+  say "ClawdTime $version ($(printf '%s' "$commit" | cut -c 1-7))."
+}
+
+# Checks every file of the runtime in $1 against its manifest, with the Node
+# of that runtime. It needs nothing else on the Mac.
+# shellcheck disable=SC2016 # JavaScript, not shell.
+verify_js='
+const [dir, version, commit] = process.argv.slice(1);
+const { createHash } = require("node:crypto");
+const { lstatSync, readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const stop = (text) => { console.error(text); process.exit(1); };
+let manifest;
+try { manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")); }
+catch { stop("manifest.json cannot be read."); }
+if (manifest.name !== "clawdtime" || manifest.version !== version ||
+    manifest.commit !== commit || manifest.arch !== "arm64")
+  stop("manifest.json is for another release.");
+const files = Object.entries(manifest.files ?? {});
+if (!files.length) stop("manifest.json lists no files.");
+for (const [path, sha] of files) {
+  if (path.startsWith("/") || path.split("/").includes("..")) stop(`Bad path: ${path}`);
+  const stat = lstatSync(join(dir, path), { throwIfNoEntry: false });
+  if (!stat || !stat.isFile()) stop(`Missing: ${path}`);
+  if (createHash("sha256").update(readFileSync(join(dir, path))).digest("hex") !== sha)
+    stop(`Changed: ${path}`);
+}
+'
+verify() {
+  [ -x "$1/node/bin/node" ] && "$1/node/bin/node" -e "$verify_js" "$1" "$version" "$commit" </dev/null
+}
+
+take_lock() {
+  lock=$runtimes/.install-lock
+  if ! mkdir "$lock" 2>/dev/null; then
+    other=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
+      fail "another install runs now (process $other). Wait for it to end, then run this again."
+    fi
+    rm -rf "$lock"
+    mkdir "$lock" || fail "$lock cannot be made."
+  fi
+  echo $$ >"$lock/pid"
+}
+
+cleanup() {
+  [ -z "${incoming:-}" ] || rm -rf "$incoming"
+  [ -z "${tmp:-}" ] || rm -rf "$tmp"
+  [ -z "${lock:-}" ] || [ "$(cat "$lock/pid" 2>/dev/null)" != $$ ] || rm -rf "$lock"
+}
+
+install_runtime() {
+  if [ -d "$runtimes/$version" ] && verify "$runtimes/$version" 2>/dev/null; then
+    say "ClawdTime $version is installed already, and every file checks out."
+    return
+  fi
+  step "Downloading ClawdTime $version"
+  fetch "$archive_url" "$tmp/clawdtime.tar.gz" ||
+    fail "the release did not download. Check the network, then run this again. Nothing changed."
+  actual=$(shasum -a 256 "$tmp/clawdtime.tar.gz" | cut -d ' ' -f 1)
+  [ "$actual" = "$sha256" ] ||
+    fail "the download does not match the SHA-256 in latest.json. It is not installed, and nothing changed. Run this again later."
+  say "SHA-256 $actual: it matches latest.json."
+
+  step "Installing ClawdTime $version"
+  incoming=$(mktemp -d "$runtimes/.incoming.XXXXXX")
+  tar -xzf "$tmp/clawdtime.tar.gz" -C "$incoming" </dev/null ||
+    fail "the release did not unpack. Nothing changed."
+  verify "$incoming/runtime" || fail "the unpacked files do not match the release manifest. Nothing changed."
+  "$incoming/runtime/bin/clawdtime" --help </dev/null >/dev/null 2>&1 ||
+    fail "the new runtime does not start on this Mac. Nothing changed."
+  if [ -e "$runtimes/$version" ]; then
+    # An earlier copy of this version that is damaged: set it aside, then remove it.
+    mv "$runtimes/$version" "$incoming/replaced"
+  fi
+  mv "$incoming/runtime" "$runtimes/$version"
+  say "Unpacked and checked every file of ClawdTime $version."
+}
+
+switch_current() {
+  previous=$(readlink "$runtimes/current" 2>/dev/null || true)
+  if [ "$previous" != "$version" ]; then
+    ln -s "$version" "$runtimes/.current.$$"
+    # One rename: "current" names the old version or the new one, never neither.
+    mv -fh "$runtimes/.current.$$" "$runtimes/current" ||
+      fail "$runtimes/current cannot be switched. Move it away, then run this again."
+  fi
+  # Keep the new version and the one before it; remove older copies.
+  for old in "$runtimes"/*; do
+    name=${old##*/}
+    valid_version "$name" && [ -d "$old" ] || continue
+    [ "$name" = "$version" ] || [ "$name" = "$previous" ] || rm -rf "$old"
+  done
+  for old in "$runtimes"/.incoming.* "$runtimes"/.current.*; do
+    [ -e "$old" ] || [ -L "$old" ] || continue
+    [ "$old" = "${incoming:-}" ] || rm -rf "$old"
+  done
+  launcher=$runtimes/current/bin/clawdtime
+}
+
+link_release() {
+  step "The clawdtime command"
+  if [ "${CLAWDTIME_NO_GLOBAL:-0}" = 1 ]; then
+    say "Skipped the link in ~/.local/bin: CLAWDTIME_NO_GLOBAL=1. The command is $launcher"
+    command_name=$launcher
+    return
+  fi
+  link=$user_prefix/bin/clawdtime
+  mkdir -p "$user_prefix/bin"
+  command_name=clawdtime
+  if [ -e "$link" ] && [ ! -L "$link" ]; then
+    say "Kept $link: it is a file of your own, not a link. The command of this release is $launcher"
+    command_name=$launcher
+    return
+  fi
+  if [ "$(readlink "$link" 2>/dev/null || true)" != "$launcher" ]; then
+    ln -s "$launcher" "$user_prefix/bin/.clawdtime.$$"
+    mv -fh "$user_prefix/bin/.clawdtime.$$" "$link"
+  fi
+  found=$(command -v clawdtime 2>/dev/null || true)
+  case ":$PATH:" in
+    *":$user_prefix/bin:"*)
+      if [ -n "$found" ] && [ "$found" != "$link" ]; then
+        say "Note: $found comes before $link on your PATH, and it runs another copy. Remove it to use this release."
+      fi
+      ;;
+    *) need_path ;;
+  esac
+  say "Ready: $link runs ClawdTime $version."
+}
+
+release_next_steps() {
+  say ""
+  if [ -n "$previous" ] && [ "$previous" != "$version" ]; then
+    say "ClawdTime is updated from $previous to $version. Your settings, keys and pairing are kept."
+    if pgrep -f "/runtime/$previous/app/dist/scripts/task-server.js" >/dev/null 2>&1; then
+      say "The desktop of $previous still runs. It goes on until it stops. Then clawdtime start starts $version."
+    fi
+  else
+    say "ClawdTime $version is installed."
+  fi
+  if [ -n "$path_line" ]; then
+    say ""
+    say "First put the command on your PATH, now and in new terminals:"
+    say "  $path_line"
+  fi
+  say ""
+  if [ "${CLAWDTIME_NO_ONBOARD:-0}" != 1 ] && "$launcher" onboard --help </dev/null >/dev/null 2>&1; then
+    if (exec </dev/tty) 2>/dev/null; then
+      step "Guided setup (clawdtime onboard)"
+      "$launcher" onboard </dev/tty || {
+        say ""
+        say "Setup stopped before the end. To go on, run: $command_name onboard"
+      }
+    else
+      say "Run $command_name onboard in Terminal to finish setup."
+    fi
+    return
+  fi
+  panel=$runtimes/$version/app/native/ClawdTimeTaskPanel
+  say "Three steps need you. Run them in a terminal:"
+  say "  1. Add a model key: $command_name keys set openai"
+  say "     It reads the key from a hidden prompt. Other providers: $command_name keys help"
+  say "  2. Give the panel two permissions in System Settings, Privacy & Security:"
+  say "     Accessibility, and Screen & System Audio Recording. In each list, press +"
+  say "     and choose $panel"
+  say "     (press Command+Shift+G to type the path)."
+  say "  3. Start it: $command_name start"
+  say "The mascot appears. Click it to open the chat."
+  say ""
+  say "Check it: $command_name computer doctor"
+}
+
+release_main() {
+  base=${CLAWDTIME_RELEASE_BASE:-$release_base}
+  base=${base%/}
+  case $base in
+    https://*) protocols='=https' ;;
+    file:///*) protocols='=file' ;;
+    http://127.0.0.1 | http://127.0.0.1[:/]*) protocols='=http' ;;
+    *) fail "CLAWDTIME_RELEASE_BASE must be an https URL." ;;
+  esac
+  check_mac
+  runtimes="$HOME/Library/Application Support/ClawdTime/runtime"
+  mkdir -p "$runtimes"
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/clawdtime-install.XXXXXX")
+  incoming="" lock=""
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM
+  read_latest
+  take_lock
+  install_runtime
+  switch_current
+  link_release
+  release_next_steps
+}
+
+main() {
+  from_source=${CLAWDTIME_FROM_SOURCE:-0}
+  for argument in "$@"; do
+    case $argument in
+      --source) from_source=1 ;;
+      -h | --help)
+        sed -n '2,31p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' ||
+          say "See https://github.com/cherthq/clawdtime/blob/main/INSTALL.md"
+        return
+        ;;
+      *) fail "unknown option $argument. Use --source to build from the source." ;;
+    esac
+  done
+  if [ "$from_source" = 1 ]; then source_main; else release_main; fi
 }
 
 # The whole file is read before anything runs, also under "curl | sh".
