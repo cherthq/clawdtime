@@ -53,6 +53,8 @@ class PackageAppTests(unittest.TestCase):
         self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
         self.assertEqual(info["LSArchitecturePriority"], ["arm64"])
         self.assertIn("NSMicrophoneUsageDescription", info)
+        # The panel opens Settings and Stop in the app through clawdtime:// links.
+        self.assertEqual(info["CFBundleURLTypes"], [{"CFBundleURLName": "com.clawdtime.app", "CFBundleURLSchemes": ["clawdtime"], "CFBundleTypeRole": "Viewer"}])
         runtime = app / "Contents" / "Resources" / "runtime"
         for path in ["bin/clawdtime", "node/bin/node", "app/native/ClawdTimeTaskPanel", "app/native/ClawdTimeTaskCapture", "manifest.json", "app/dist/read me.txt"]:
             self.assertTrue((runtime / path).exists(), path)

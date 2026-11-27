@@ -8,23 +8,41 @@ public struct ManagedCommand: Equatable, Sendable {
   public var arguments: [String]
   /// The app waits for `{"type":"ready"}` on its stdout before it counts it as running.
   public var waitsForReady: Bool
-  public init(name: String, arguments: [String], waitsForReady: Bool) {
-    self.name = name; self.arguments = arguments; self.waitsForReady = waitsForReady
+  /// Added to the app's child environment for this command alone.
+  public var environment: [String: String]
+  public init(name: String, arguments: [String], waitsForReady: Bool, environment: [String: String] = [:]) {
+    self.name = name; self.arguments = arguments; self.waitsForReady = waitsForReady; self.environment = environment
   }
 
   /// The desktop: the service and the panel, in local mode. It stays in the
   /// foreground for the desktop's whole life and stops both on SIGTERM.
   public static let desktop = ManagedCommand(name: "desktop", arguments: ["start", "--tucked", "true", "--foreground"], waitsForReady: true)
+  /// The desktop of the app at `app`. `CLAWDTIME_APP_BUNDLE` reaches the panel
+  /// alone: the panel then adds Settings and Stop ClawdTime to its menu and
+  /// opens them in this app. Outside an app bundle nothing is added.
+  public static func desktop(app: URL?) -> ManagedCommand {
+    guard let app, app.pathExtension == "app" else { return desktop }
+    var command = desktop
+    command.environment = ["CLAWDTIME_APP_BUNDLE": app.standardizedFileURL.path]
+    return command
+  }
   /// The one shared connection. It needs a ready desktop and ends on SIGTERM.
   /// `--owned`: it also ends by itself when the app is gone, after a crash too,
   /// so it never stays connected with no owner and never keeps the lock.
   public static let connection = ManagedCommand(name: "connection", arguments: ["shared", "run", "--owned"], waitsForReady: false)
 
   /// A stdout line that says the command is ready.
-  public static func isReadyLine(_ line: String) -> Bool {
-    guard let data = line.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-    return object["type"] as? String == "ready"
+  public static func isReadyLine(_ line: String) -> Bool { object(line)?["type"] as? String == "ready" }
+
+  /// The desktop's stdout line that says its panel closed while it runs on.
+  public static func isPanelClosedLine(_ line: String) -> Bool {
+    guard let object = object(line) else { return false }
+    return object["type"] as? String == "panel" && object["state"] as? String == "closed"
+  }
+
+  private static func object(_ line: String) -> [String: Any]? {
+    guard let data = line.data(using: .utf8) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
   }
 }
 
@@ -52,6 +70,8 @@ public protocol ProcessOwning: AnyObject {
 public final class ProcessOwner: ObservableObject, ProcessOwning {
   @Published public private(set) var desktop: OwnedStatus = .off
   @Published public private(set) var connection: OwnedStatus = .off
+  /// The desktop said that its panel closed. The desktop and its work run on.
+  @Published private var panelClosed = false
 
   private let launcher: URL
   private let environment: [String: String]
@@ -82,6 +102,9 @@ public final class ProcessOwner: ObservableObject, ProcessOwning {
   }
 
   public var isActive: Bool { desktop.isLive || connection.isLive }
+  /// The panel of the running desktop is open: from the ready line, which
+  /// comes after the panel started, until the desktop says it closed.
+  public var panelOpen: Bool { desktop == .running && !panelClosed }
   public var desktopPID: pid_t? { desktopChild?.pid }
   public var connectionPID: pid_t? { connectionChild?.pid }
 
@@ -91,11 +114,16 @@ public final class ProcessOwner: ObservableObject, ProcessOwning {
     wantsConnection = wanted
     generation += 1
     let current = generation
+    panelClosed = false
     desktop = .starting
     do {
       desktopChild = try spawn(desktopCommand, onLine: { [weak self] line in
-        guard let self, current == self.generation, self.desktop == .starting, ManagedCommand.isReadyLine(line) else { return }
-        self.desktopReady()
+        guard let self, current == self.generation else { return }
+        if self.desktop == .starting, ManagedCommand.isReadyLine(line) {
+          self.desktopReady()
+        } else if self.desktop == .running, ManagedCommand.isPanelClosedLine(line) {
+          self.panelClosed = true
+        }
       }, onExit: { [weak self] ending in
         self?.desktopEnded(ending, generation: current)
       })
@@ -188,7 +216,7 @@ public final class ProcessOwner: ObservableObject, ProcessOwning {
 
   private func spawn(_ command: ManagedCommand, onLine: @escaping (String) -> Void, onExit: @escaping (ChildProcess.Ending) -> Void) throws -> ChildProcess {
     try ChildProcess.spawn(
-      executable: launcher, arguments: command.arguments, environment: environment,
+      executable: launcher, arguments: command.arguments, environment: environment.merging(command.environment) { $1 },
       log: logFile(command.name), queue: .main,
       onLine: { line in MainActor.assumeIsolated { onLine(line) } },
       onExit: { ending in MainActor.assumeIsolated { onExit(ending) } })
