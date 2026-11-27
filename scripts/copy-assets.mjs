@@ -10,3 +10,5 @@ for (const name of [
 ])
   cpSync(`media/${name}`, `dist/media/${name}`);
 cpSync("release-source.json", "dist/release-source.json");
+mkdirSync("dist/scripts", { recursive: true });
+cpSync("scripts/install.sh", "dist/scripts/install.sh");

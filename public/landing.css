@@ -2159,3 +2159,266 @@ dialog .dialog-note {
     padding: 22px;
   }
 }
+
+/* Install routes: the hero pair, the route cards and the copy buttons. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+html:not(.js) [data-copy-target] {
+  visibility: hidden;
+}
+.hero-install {
+  display: grid;
+  gap: 18px;
+  max-width: 520px;
+}
+.hero-install .hero-action {
+  flex-wrap: wrap;
+  row-gap: 14px;
+}
+.command-field {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 2px solid var(--ink);
+  background: #fbfaf4;
+  box-shadow: 4px 4px 0 #c0c6b0;
+}
+.command-prompt {
+  flex: none;
+  padding: 14px 0 0 14px;
+  font: 600 12px/1.6 var(--mono);
+  color: var(--green);
+  user-select: none;
+}
+.command-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 14px 12px 14px 9px;
+  font: 12px/1.6 var(--mono);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.copy-button {
+  flex: none;
+  min-width: 82px;
+  padding: 0 16px;
+  border: 0;
+  border-left: 2px solid var(--ink);
+  background: var(--mint);
+  font-size: 13px;
+  font-weight: 700;
+}
+.copy-button:hover {
+  background: #b7dba7;
+}
+.copy-button[data-state="copied"] {
+  background: var(--green);
+  color: var(--paper);
+}
+.command-field .copy-button:focus-visible {
+  outline-offset: -7px;
+}
+.install-requirements {
+  margin: 0;
+  font: 10px/1.7 var(--mono);
+  letter-spacing: 0.15px;
+  color: #5f665a;
+}
+.install-requirements .status-dot {
+  width: 5px;
+  height: 5px;
+  box-shadow: none;
+}
+.hero-install + .compatibility {
+  margin-top: 26px;
+}
+.get-section {
+  padding-block: 56px 72px;
+  border-top: 1px solid var(--line);
+}
+.route-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 2px solid var(--ink);
+  box-shadow: 5px 5px 0 #c0c6b0;
+}
+.route-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 30px;
+}
+.route-card:first-child {
+  background: #e1eaca;
+  border-right: 1px solid #aeb6a0;
+}
+.route-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font: 600 10px var(--mono);
+  letter-spacing: 1.2px;
+  color: var(--green);
+}
+.route-label svg {
+  width: 20px;
+  height: 20px;
+}
+.route-card h3 {
+  font-size: 28px;
+  letter-spacing: -1px;
+  margin: 16px 0 8px;
+}
+.route-card > p {
+  max-width: 440px;
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.route-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 28px;
+  padding: 0;
+  list-style: none;
+  counter-reset: route;
+}
+.route-steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: 15px;
+  counter-increment: route;
+}
+.route-steps li::before {
+  content: counter(route, decimal-leading-zero);
+  font: 10px var(--mono);
+  color: #6f7966;
+}
+.route-action {
+  margin-top: auto;
+}
+.route-action.button,
+.route-action > .button {
+  gap: 12px;
+}
+.route-card > .route-requirements {
+  max-width: none;
+  margin: 16px 0 0;
+  font: 10px/1.7 var(--mono);
+  color: #5f665a;
+}
+.agent-route {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 20px;
+  margin-top: 30px;
+  padding: 20px 24px;
+  border: 1px dashed #9aa58a;
+}
+.agent-route > svg {
+  width: 28px;
+  height: 28px;
+  color: var(--green);
+}
+.agent-route h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.agent-route p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.agent-route code {
+  padding: 1px 5px;
+  font: 12px var(--mono);
+  color: var(--ink);
+  background: #e8ecdd;
+}
+.agent-route .button-small {
+  margin-left: 0;
+  gap: 10px;
+  white-space: nowrap;
+}
+.agent-route details {
+  grid-column: 2 / -1;
+}
+.agent-route summary {
+  width: fit-content;
+  font: 10px var(--mono);
+  color: var(--green);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+.agent-route pre {
+  margin: 12px 0 0;
+  padding: 16px 18px;
+  border: 2px solid var(--ink);
+  background: #26302a;
+  color: #e7e9dc;
+  font: 12px/1.7 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 800px) {
+  .route-grid {
+    grid-template-columns: 1fr;
+  }
+  .route-card:first-child {
+    border-right: 0;
+    border-bottom: 1px solid #aeb6a0;
+  }
+  .agent-route {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .agent-route .button-small,
+  .agent-route details {
+    grid-column: 1 / -1;
+  }
+  .agent-route .button-small {
+    justify-self: start;
+  }
+}
+@media (max-width: 450px) {
+  .command-field {
+    flex-wrap: wrap;
+  }
+  .command-text {
+    flex-basis: 0;
+  }
+  .copy-button {
+    flex-basis: 100%;
+    min-height: 44px;
+    border-left: 0;
+    border-top: 2px solid var(--ink);
+  }
+  .agent-route {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agent-route > svg {
+    display: none;
+  }
+  .route-card {
+    padding: 22px;
+  }
+  .route-card h3 {
+    font-size: 25px;
+  }
+  .agent-route {
+    padding: 18px;
+  }
+}
