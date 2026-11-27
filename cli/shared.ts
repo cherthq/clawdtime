@@ -25,6 +25,10 @@ import { SharedDisplay } from "../connectors/shared/shared-display.js";
 import { sharedDisplayTargetSchema } from "../src/control/proactive-display-views.js";
 import { oneJSON } from "../src/control/proactive-views.js";
 import { sharedSignIn } from "./shared-sign-in.js";
+import type {
+  SharedOperation,
+  SharedResult,
+} from "../src/shared-relay-contracts.js";
 
 /** The private connection file of a paired Mac. It keeps the person's own
  * view and control answers, and this Mac enforces them whatever the
@@ -63,6 +67,23 @@ export function sharedAcceptance(answers: {
     allowView: answers.shareScreen,
     allowControl: answers.shareScreen && answers.control,
   };
+}
+
+/** The Mac's own answers decide what it runs, whatever the coordinator
+ * sends. Computer actions need both answers. Every other operation that
+ * opens, renews, shows or reports needs view. Stop, close and hide only end or
+ * reduce access, so they are never refused. */
+export function localRefusal(
+  answers: { allowView: boolean; allowControl: boolean },
+  operation: SharedOperation,
+): SharedResult | null {
+  const allowed =
+    operation.action === "stop" ||
+    operation.action === "close" ||
+    operation.action === "hide" ||
+    (answers.allowView &&
+      (operation.action !== "chat" || answers.allowControl));
+  return allowed ? null : { ok: false, code: "declined_on_this_mac" };
 }
 
 /** The paired Mac asks for the call code with its own device credential. The
@@ -179,6 +200,8 @@ export async function sharedCli(args: string[]) {
       store,
       instanceId,
       execute: async (command, signal) => {
+        const refusal = localRefusal(config, command.operation);
+        if (refusal) return refusal;
         if (command.operation.action === "walkthrough")
           return sharedWalkthrough({
             command,
@@ -243,7 +266,7 @@ export async function sharedCli(args: string[]) {
       },
     });
     console.log(
-      "Shared Mac connection starting. Press Ctrl+C to disconnect and close this connection's desktop calls.",
+      `Shared Mac connection starting. View ${config.allowView ? "allowed" : "declined"}, computer actions ${config.allowControl ? "allowed" : "declined"} on this Mac. Press Ctrl+C to disconnect and close this connection's desktop calls.`,
     );
     try {
       await client.run(controller.signal);

@@ -4,6 +4,7 @@ import {
   sharedCallProof,
   sharedConnectionSchema,
   sharedRotate,
+  localRefusal,
 } from "../cli/shared.js";
 
 const credential = `credential_${"a".repeat(36)}.${"b".repeat(43)}`;
@@ -90,4 +91,36 @@ it("sends the real view answer when pairing and saves both answers on the Mac", 
       displayId: "1",
     }),
   ).toMatchObject({ allowView: false, allowControl: false });
+});
+
+it("refuses on the Mac every command that the person declined, and never refuses Stop", () => {
+  const operations = [
+    { action: "chat", requestId: "turn", text: "Open a sample note" },
+    { action: "frame" },
+    { action: "walkthrough" },
+    { action: "open" },
+    { action: "renew" },
+    { action: "stop" },
+    { action: "close" },
+    { action: "hide" },
+  ] as const;
+  const refused = (allowView: boolean, allowControl: boolean) =>
+    operations
+      .filter((operation) =>
+        localRefusal({ allowView, allowControl }, operation),
+      )
+      .map((operation) => operation.action);
+  expect(refused(true, true)).toEqual([]);
+  expect(refused(true, false)).toEqual(["chat"]);
+  expect(refused(false, false)).toEqual([
+    "chat",
+    "frame",
+    "walkthrough",
+    "open",
+    "renew",
+  ]);
+  // A coordinator that claims control cannot override the Mac's own no.
+  expect(
+    localRefusal({ allowView: false, allowControl: true }, operations[0]),
+  ).toEqual({ ok: false, code: "declined_on_this_mac" });
 });
