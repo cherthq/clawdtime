@@ -1307,10 +1307,38 @@ export class OnboardEngine {
           ? "ClawdTime keeps the connection while the app runs. Calls from your verified phone can then reach this Mac."
           : "It stays connected in the background while the desktop runs. Calls from your verified phone can then reach this Mac.",
       );
-      if (go !== true)
+      if (go !== true) {
+        if (state === "stopped")
+          return skipped(
+            "This Mac is not connected. To connect it later, run clawdtime onboard.",
+          );
+        // No means not connected: the background connection that Terminal
+        // setup started (or one of an earlier desktop) ends now, checked by
+        // its process start and command. A report never says not connected
+        // while it runs.
+        await this.proceed();
+        this.step("connection", "in_progress", {
+          detail: "Ending the connection that runs in the background.",
+        });
+        try {
+          await this.ports.connection.stop();
+        } catch (error) {
+          if (error instanceof Cancelled) throw error;
+          if (
+            (await this.failed(
+              "connection",
+              "The connection that runs in the background did not stop. Try again.",
+            )) === "skip"
+          )
+            return skipped(
+              "A connection to the shared number still runs in the background. Run setup again to end it.",
+            );
+          continue;
+        }
         return skipped(
-          "This Mac is not connected. To connect it later, run clawdtime onboard.",
+          "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard.",
         );
+      }
       await this.proceed();
       this.step("connection", "in_progress", {
         detail: app

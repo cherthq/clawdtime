@@ -100,6 +100,10 @@ owner.
   `clawdtime shared run`. A background connection that Terminal setup started
   ends first. When the person stops setup in the app, setup ends the desktop
   that it started.
+- **A no to the connection.** In Terminal and in the app, a no (or a skip)
+  ends a background connection that Terminal setup started, after the same
+  check of its process. The report then says that it ended. When it does not
+  stop, the step fails with Try again, and a skip reports that it still runs.
 
 One connection runs on a Mac at a time. `clawdtime shared run` holds a lock
 (`~/.config/clawdtime/shared/connection.lock`) for its whole life, and a

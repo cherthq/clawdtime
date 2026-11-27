@@ -752,6 +752,67 @@ describe("clawdtime onboard --json", () => {
     ).toBe("ClawdTime connects this Mac to the shared number when setup ends.");
   });
 
+  it("in the app, a no to the connection ends the one that Terminal setup started, so the report is true", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const mac = fakeMac();
+    const yes = agree(() => coordinator.codeFor(member));
+    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    expect(mac.calls.connectionStarts).toBe(1);
+    const app = await runJson(
+      ["--coordinator", coordinator.origin, "--app"],
+      home,
+      mac.ports,
+      (event) =>
+        event.id === "connection" && event.state === "needs_input"
+          ? { type: "input", id: "connection", value: false }
+          : yes(event),
+    );
+    expect(stateOf(app.events, "connection")).toBe("skipped");
+    expect(
+      done(app.events).report.find((row) => row.id === "connection")!.detail,
+    ).toBe(
+      "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard.",
+    );
+    expect(mac.calls.connectionStops).toBe(1);
+    expect(await mac.ports.connection.status("desktop_1")).toBe("stopped");
+  });
+
+  it("a connection that does not stop after a no is reported as running, never as not connected", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const mac = fakeMac();
+    const yes = agree(() => coordinator.codeFor(member));
+    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    mac.ports.connection.stop = async () => {
+      throw Error("connection_did_not_stop");
+    };
+    const app = await runJson(
+      ["--coordinator", coordinator.origin, "--app"],
+      home,
+      mac.ports,
+      (event) =>
+        event.id === "connection"
+          ? event.state === "needs_input"
+            ? { type: "input", id: "connection", value: false }
+            : { type: "action", id: "connection", action: "skip" }
+          : yes(event),
+    );
+    const failed = steps(app.events).find(
+      (event) => event.id === "connection" && event.state === "failed",
+    )!;
+    expect(failed.detail).toBe(
+      "The connection that runs in the background did not stop. Try again.",
+    );
+    expect(
+      done(app.events).report.find((row) => row.id === "connection")!.detail,
+    ).toBe(
+      "A connection to the shared number still runs in the background. Run setup again to end it.",
+    );
+  });
+
   it("never starts a second connection: one that runs for this desktop is used", async () => {
     const coordinator = await fakeCoordinator();
     cleanup.push(coordinator.close);
