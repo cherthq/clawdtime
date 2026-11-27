@@ -129,12 +129,14 @@ mac/scripts/package-app.sh --runtime build/release/runtime --out build/release
 mac/scripts/sign-and-notarize.sh --app build/release/ClawdTime.app --out build/release
 ```
 
-- `package-app.sh` checks the runtime (layout, manifest, every hash, and that
-  every link is relative and stays inside it), builds the app in release mode,
+- `package-app.sh` checks the runtime (layout, the panel's font bundle next
+  to the panel, manifest, every hash, and that every link is relative and
+  stays inside it), builds the app in release mode,
   writes `Info.plist`, copies the runtime, signs ad hoc, checks the signature
   and runs the self-test. `CLAWDTIME_BUILD_NUMBER` sets `CFBundleVersion`.
-- `sign-and-notarize.sh` signs every Mach-O file in the app, deepest first,
-  then the app. With both `CLAWDTIME_SIGN_IDENTITY` (a Developer ID
+- `sign-and-notarize.sh` signs every Mach-O file in the app, deepest first:
+  Node, both helpers in `native/`, and every `.node` and `.dylib` file under
+  `app/node_modules`. Then it signs the app. With both `CLAWDTIME_SIGN_IDENTITY` (a Developer ID
   Application identity) and `CLAWDTIME_NOTARY_PROFILE` (a profile from
   `xcrun notarytool store-credentials`), it signs with the hardened runtime
   and a timestamp, makes the DMG, signs it, notarizes it, staples the ticket,
@@ -145,9 +147,14 @@ mac/scripts/sign-and-notarize.sh --app build/release/ClawdTime.app --out build/r
 - `make-dmg.sh --app PATH --out DIR` makes the DMG alone: the app, an
   Applications link, and a `.sha256` file.
 
-The hardened runtime gets these entitlements: the app may use the microphone
-and send Apple events for its children, Node may compile JavaScript, and the
-panel may use the microphone.
+The signatures carry these entitlements: the app may use the microphone and
+send Apple events for its children, Node may compile JavaScript
+(`allow-jit`, `allow-unsigned-executable-memory`) and load the native addons
+of its packages (`disable-library-validation`), and the panel may use the
+microphone. No file gets `get-task-allow`. An ad hoc signature carries the
+same entitlements, with no hardened runtime. After signing, the script checks
+the entitlements of Node and that the panel's font bundle
+(`app/native/*_ClawdTimeTaskPanel.bundle`) is still next to the panel.
 
 Publish the notarized `ClawdTime-<version>-arm64.dmg` on the release, and the
 same file as `ClawdTime-arm64.dmg` for the download button.

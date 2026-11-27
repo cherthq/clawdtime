@@ -52,8 +52,11 @@ entitlements() {
 }
 # The app is the responsible process for what its children ask macOS for.
 entitlements app com.apple.security.device.audio-input com.apple.security.automation.apple-events
-# Node compiles JavaScript as it runs.
-entitlements node com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory
+# Node compiles JavaScript as it runs, and loads the native addons of its
+# packages (.node and .dylib files), which another team signed. It never gets
+# com.apple.security.get-task-allow: no other process may attach to it.
+node_entitlements=(com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation)
+entitlements node "${node_entitlements[@]}"
 # The panel listens while the person talks to it.
 entitlements panel com.apple.security.device.audio-input
 
@@ -67,9 +70,25 @@ sign() {
     fi
   else
     # Ad hoc code cannot pass library validation, so it runs without the
-    # hardened runtime. It is for checks on this Mac only.
-    codesign --force --sign - "$file"
+    # hardened runtime. It is for checks on this Mac only. It gets the same
+    # entitlements, so the checks below see what a release gets.
+    if [ -n "$plist" ]; then
+      codesign --force --entitlements "$work/$plist.plist" --sign - "$file"
+    else
+      codesign --force --sign - "$file"
+    fi
   fi
+}
+
+# The entitlements that a signed file carries, one key per line.
+signed_entitlements() {
+  codesign -d --entitlements - --xml "$1" 2>/dev/null | /usr/bin/python3 -I -c '
+import plistlib, sys
+data = sys.stdin.buffer.read()
+start = data.find(b"<?xml")
+for key, value in (plistlib.loads(data[start:]) if start >= 0 else {}).items():
+    if value is True: print(key)
+'
 }
 
 xattr -cr "$app"
@@ -109,6 +128,17 @@ done < "$nested"
 sign "$app" app
 codesign --verify --deep --strict "$app"
 while IFS= read -r file; do codesign --verify --strict "$file"; done < "$nested"
+node="$app/Contents/Resources/runtime/node/bin/node"
+if [ -f "$node" ]; then
+  granted="$(signed_entitlements "$node")"
+  for key in "${node_entitlements[@]}"; do
+    printf '%s\n' "$granted" | grep -qx "$key" || fail "Node is signed without $key."
+  done
+  ! printf '%s\n' "$granted" | grep -qx com.apple.security.get-task-allow || fail "Node is signed with get-task-allow."
+fi
+fonts=("$app"/Contents/Resources/runtime/app/native/*_ClawdTimeTaskPanel.bundle)
+[ ! -e "$app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel" ] || [ -d "${fonts[0]}" ] ||
+  fail "The panel's font bundle is not next to the panel."
 printf 'Signed %s and %d nested executable(s) %s.\n' "$app" "$count" "$([ "$mode" = release ] && printf 'with %s' "$identity" || printf 'ad hoc')"
 [ "$sign_only" = 1 ] && exit 0
 

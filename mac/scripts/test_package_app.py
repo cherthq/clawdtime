@@ -64,6 +64,44 @@ class PackageAppTests(unittest.TestCase):
         addon = runtime / "app" / "node_modules" / "example-addon" / "build" / "Release" / "example.node"
         self.assertEqual(run("codesign", "--verify", "--strict", addon).returncode, 0, "the native addon is signed too")
 
+    def entitlements(self, path):
+        shown = run("codesign", "-d", "--entitlements", "-", "--xml", path)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        start = shown.stdout.find("<?xml")
+        return plistlib.loads(shown.stdout[start:].encode()) if start >= 0 else {}
+
+    def test_every_mach_o_file_of_the_runtime_is_signed_and_node_may_compile(self):
+        result = self.package()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime = self.out / "ClawdTime.app" / "Contents" / "Resources" / "runtime"
+        machos = [
+            "node/bin/node",
+            "app/native/ClawdTimeTaskPanel",
+            "app/native/ClawdTimeTaskCapture",
+            "app/node_modules/example-addon/build/Release/example.node",
+            "app/node_modules/example-sdk/libexample.dylib",
+        ]
+        for path in machos:
+            shown = run("codesign", "-dv", runtime / path)
+            self.assertEqual(shown.returncode, 0, path)
+            # Signed by the app's signing, not left with the linker's own signature.
+            self.assertNotIn("linker-signed", shown.stderr, path)
+            self.assertEqual(run("codesign", "--verify", "--strict", runtime / path).returncode, 0, path)
+        node = self.entitlements(runtime / "node" / "bin" / "node")
+        for key in ["com.apple.security.cs.allow-jit", "com.apple.security.cs.allow-unsigned-executable-memory",
+                    "com.apple.security.cs.disable-library-validation"]:
+            self.assertIs(node.get(key), True, key)
+        self.assertNotIn("com.apple.security.get-task-allow", node)
+        self.assertIs(self.entitlements(runtime / "app" / "native" / "ClawdTimeTaskPanel").get("com.apple.security.device.audio-input"), True)
+        # The panel finds its fonts next to it.
+        self.assertTrue((runtime / "app" / "native" / "ClawdTimeCompanion_ClawdTimeTaskPanel.bundle" / "Fonts" / "MadeUp.ttf").is_file())
+
+    def test_a_runtime_without_the_panel_fonts_is_refused(self):
+        shutil.rmtree(self.runtime / "app" / "native" / "ClawdTimeCompanion_ClawdTimeTaskPanel.bundle")
+        result = self.package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("font bundle", result.stderr)
+
     def test_a_changed_runtime_file_is_refused(self):
         (self.runtime / "app" / "package.json").write_text('{"name":"changed"}\n')
         result = self.package()
