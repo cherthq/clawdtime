@@ -95,6 +95,14 @@ the final report says is ready:
 | Connection | `clawdtime shared run`                       | the desktop prints its ready line, and `connection` is ready |
 
 - Each process starts in its own process group, with stdin from `/dev/null`.
+- `clawdtime start --foreground` takes over the desktop service that setup
+  started (or starts one), opens the panel in its own process group, and
+  stays. It prints `{"type":"ready"}` on stdout when the service answers its
+  authenticated readiness check, and nothing else on stdout. On SIGTERM it
+  closes the panel and sends SIGTERM to the service, which closes its calls
+  and its work. When the service ends by itself, it closes the panel and exits
+  with status 1. When the app is gone, it stops the desktop too. One
+  foreground owner holds a desktop at a time.
 - The desktop counts as running when it prints `{"type":"ready"}` on stdout.
   With no ready line in 120 seconds, the app ends it and starts no connection.
 - Stop and Quit send SIGTERM to the connection, then to the desktop. A process
@@ -182,6 +190,12 @@ python3 -m unittest discover -s mac/scripts -p 'test_package_app.py'
 The Swift tests run the protocol, the window state, the engine process against
 fake engine scripts, the runtime checks, the self-test and the process owner
 with real child processes. They build the views off screen: no window opens.
+To look at every setup screen in light and dark mode, draw them into a folder:
+
+```sh
+(cd mac && CLAWDTIME_APP_SHOTS=/tmp/clawdtime-shots swift test --filter SetupScreenshotTests)
+```
+
 The script tests package a stub app around a fake runtime and check the
 refusals and the unsigned DMG. Tests are not a check of a real call, a real
 permission prompt or a real install.
