@@ -5,7 +5,8 @@ import SwiftUI
 
 /// The app: the setup window on first launch, then the menu bar. It owns the
 /// engine during setup and, through `ProcessOwner`, the desktop and the
-/// connection afterward. Quit ends all of them.
+/// connection afterward. Quit ends all of them. It answers the `clawdtime://`
+/// links of `AppLink`, which the panel's menu opens.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   static let setupDoneKey = "ClawdTimeSetupDone"
@@ -20,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var settings: SettingsWindowController?
   private var watch: AnyCancellable?
   private var quitting = false
+  /// Links that came before the app finished launching.
+  private(set) var waitingLinks: [AppLink] = []
+  /// This app's bundle, passed to the panel so that it opens Settings and Stop here.
+  private let appBundle: URL? = Bundle.main.bundleURL.pathExtension == "app" ? Bundle.main.bundleURL : nil
 
   init(runtimeOverride: URL?, defaults: UserDefaults = .standard, loginItem: LoginItemControlling = AppLoginItem()) {
     self.runtimeOverride = runtimeOverride
@@ -44,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let launcher = layout?.launcher ?? URL(fileURLWithPath: "/nonexistent/clawdtime")
     let logs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
       .appendingPathComponent("Logs/ClawdTime", isDirectory: true)
-    owner = ProcessOwner(launcher: launcher, logs: logs)
+    owner = ProcessOwner(launcher: launcher, logs: logs, desktop: .desktop(app: appBundle))
     setup = SetupCoordinator(
       makeEngine: { local in
         guard let layout else { throw RuntimeProblem.missing("runtime folder") }
@@ -60,6 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     watch = setup.$state.sink { [weak self] state in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.stateChanged(state) } }
     }
+    // The app's own item, from the first launch: setup, Settings and Stop are always one click away.
+    installMenuBar()
+    defer { answerWaitingLinks() }
 
     if let problem {
       NSApp.setActivationPolicy(.regular)
@@ -70,7 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if setupDone {
       // Setup was done before: check it again quietly, and show the window only if a step needs the person.
       NSApp.setActivationPolicy(.accessory)
-      installMenuBar()
       setup.finishWhenReady = true
       setup.begin()
     } else {
@@ -81,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   private func stateChanged(_ state: SetupState) {
     guard !quitting else { return }
+    menuBar?.refresh()
     switch state.phase {
     case .running:
       if window?.isVisible != true, let step = state.current, step.state == .needsInput || step.state == .failed { showWindow() }
@@ -94,23 +102,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   private func didFinishSetup() {
     defaults.set(true, forKey: Self.setupDoneKey)
-    installMenuBar()
+    menuBar?.refresh()
     if setup.finishWhenReady && window?.isVisible != true { return }
     window?.close()
   }
 
   private func installMenuBar() {
     guard menuBar == nil else { return }
+    let owner: ProcessOwner = owner
+    let panelHasAppMenu = appBundle != nil
     menuBar = MenuBarController(
       owner: owner,
+      shown: { [weak self] in
+        OwnStatusItem.shown(setupDone: self?.setupDone ?? false, desktop: owner.desktop, panelOpen: owner.panelOpen, panelHasAppMenu: panelHasAppMenu)
+      },
+      busy: { [weak self] in self?.setup.engineIsRunning ?? false },
       openWindow: { [weak self] in self?.showWindow() },
       openSettings: { [weak self] in self?.showSettings(nil) },
       stop: { [weak self] in self?.setup.stop() },
       start: { [weak self] in
         guard let self else { return }
-        self.setup.finishWhenReady = true
+        // Before setup is done, Start runs setup in its window.
+        self.setup.finishWhenReady = self.setupDone
+        if !self.setupDone { self.showWindow() }
         self.setup.begin()
       })
+  }
+
+  /// `clawdtime://open`, `clawdtime://settings` and `clawdtime://stop`. Any other link does nothing.
+  func application(_ application: NSApplication, open urls: [URL]) {
+    let links = AppLink.links(in: urls)
+    guard setup != nil else { waitingLinks += links; return }
+    links.forEach(answer)
+  }
+
+  private func answerWaitingLinks() {
+    let links = waitingLinks
+    waitingLinks = []
+    links.forEach(answer)
+  }
+
+  private func answer(_ link: AppLink) {
+    guard !quitting else { return }
+    switch link {
+    case .open: showWindow()
+    case .settings: showSettings(nil)
+    case .stop: setup.stop()
+    }
   }
 
   func showWindow() {
@@ -138,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   func windowWillClose(_ notification: Notification) {
     // After setup the app lives in the menu bar alone.
-    if menuBar != nil && settings?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
+    if setupDone && settings?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
   }
 
   /// Settings… in both menus and the gear of the setup window. The main menu
@@ -165,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       },
       closed: { [weak self] in
         guard let self else { return }
-        if self.menuBar != nil && self.window?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
+        if self.setupDone && self.window?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
       })
   }
 

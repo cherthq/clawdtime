@@ -28,11 +28,18 @@ enum MenuText {
   }
 }
 
-/// The menu bar item after setup: Open ClawdTime, status, Stop (or Start), Quit.
+/// The app's menu bar item: Open ClawdTime, Settings…, status, Stop (or
+/// Start), Quit. It shows while setup is not done and while the app's desktop
+/// does not run with its panel. Once it does, the panel's item offers Settings
+/// and Stop ClawdTime too, so this one goes: one ClawdTime item, never two and
+/// never none.
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
-  private let item: NSStatusItem
+  private var item: NSStatusItem?
+  private let menu = NSMenu()
   private let owner: ProcessOwner
+  private let shown: () -> Bool
+  private let busy: () -> Bool
   private let openWindow: () -> Void
   private let openSettings: () -> Void
   private let stop: () -> Void
@@ -41,20 +48,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
   private let stopItem = NSMenuItem(title: "Stop", action: #selector(toggle), keyEquivalent: "")
   private var watch: AnyCancellable?
 
-  init(owner: ProcessOwner, openWindow: @escaping () -> Void, openSettings: @escaping () -> Void = {},
+  /// `shown`: the app's item shows now. `busy`: setup runs, so Stop has work to end.
+  init(owner: ProcessOwner, shown: @escaping () -> Bool, busy: @escaping () -> Bool = { false },
+       openWindow: @escaping () -> Void, openSettings: @escaping () -> Void = {},
        stop: @escaping () -> Void, start: @escaping () -> Void) {
     self.owner = owner
+    self.shown = shown
+    self.busy = busy
     self.openWindow = openWindow
     self.openSettings = openSettings
     self.stop = stop
     self.start = start
-    item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     super.init()
-    if let button = item.button {
-      button.image = NSImage(systemSymbolName: "video.circle", accessibilityDescription: "ClawdTime")
-      button.image?.isTemplate = true
-    }
-    let menu = NSMenu()
     menu.delegate = self
     let open = NSMenuItem(title: "Open ClawdTime", action: #selector(openClawdTime), keyEquivalent: "o")
     open.target = self
@@ -64,24 +69,42 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     stopItem.target = self
     let quit = NSMenuItem(title: "Quit ClawdTime", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     menu.items = [open, settings, .separator(), statusLine, stopItem, .separator(), quit]
-    item.menu = menu
     watch = owner.objectWillChange.sink { [weak self] _ in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.refresh() } }
     }
     refresh()
   }
 
+  var isShown: Bool { item != nil }
+
   func refresh() {
+    let active = owner.isActive || busy()
     statusLine.title = MenuText.summary(desktop: owner.desktop, connection: owner.connection)
-    stopItem.title = owner.isActive ? "Stop" : "Start"
+    stopItem.title = active ? "Stop" : "Start"
     stopItem.isEnabled = owner.desktop != .stopping && owner.connection != .stopping
-    item.button?.toolTip = "ClawdTime: \(statusLine.title)"
-    item.button?.appearsDisabled = !owner.isActive
+    if shown() {
+      if item == nil { item = makeItem() }
+    } else if let item {
+      NSStatusBar.system.removeStatusItem(item)
+      self.item = nil
+    }
+    item?.button?.toolTip = "ClawdTime: \(statusLine.title)"
+    item?.button?.appearsDisabled = !active
+  }
+
+  private func makeItem() -> NSStatusItem {
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    if let button = item.button {
+      button.image = NSImage(systemSymbolName: "video.circle", accessibilityDescription: "ClawdTime")
+      button.image?.isTemplate = true
+    }
+    item.menu = menu
+    return item
   }
 
   func menuWillOpen(_ menu: NSMenu) { refresh() }
 
   @objc private func openClawdTime() { openWindow() }
   @objc private func showSettings() { openSettings() }
-  @objc private func toggle() { owner.isActive ? stop() : start() }
+  @objc private func toggle() { owner.isActive || busy() ? stop() : start() }
 }

@@ -37,14 +37,20 @@ export const startHelp = `clawdtime start: start the ClawdTime desktop, the serv
                    later starts keep it. Without it, the first start uses ~/${defaultProjectName}
   --tucked true    start the panel as the mascot alone, with no focus
   --foreground     stay in the foreground and own the desktop: print {"type":"ready"} when it
-                   is ready, and stop the panel and the service on SIGTERM or Ctrl+C
+                   is ready, {"type":"panel","state":"closed"} when the panel closes, and
+                   stop the panel and the service on SIGTERM or Ctrl+C
 It starts the desktop as the README does, with CLAWDTIME_CHAT=agent and the state folder
 ~/.local/share/clawdtime/desktop (CLAWDTIME_DESKTOP_STATE changes it). When the service
 runs already, it opens the panel again.`;
 const usage =
   "Use: clawdtime start [--project PATH] [--tucked true|false] [--foreground]";
-/** The one line that --foreground writes on standard output. */
+/** The line that --foreground writes on standard output when the desktop is ready. */
 export const readyLine = JSON.stringify({ type: "ready" });
+/** The line that --foreground writes when the panel closes while the desktop runs. */
+export const panelClosedLine = JSON.stringify({
+  type: "panel",
+  state: "closed",
+});
 /** The lock of the one process that owns a desktop in the foreground. */
 export const foregroundLockName = "desktop-owner.lock";
 
@@ -321,6 +327,9 @@ async function holdDesktop(
     if (child && child.exitCode === null && child.signalCode == null)
       child.kill("SIGTERM");
   };
+  // While this owner holds the desktop, a panel that closes is told on
+  // standard output: the Mac app then shows its own menu again.
+  let holding = true;
   try {
     const started = await launch();
     if (!started) throw new Error("The desktop did not start.");
@@ -330,6 +339,13 @@ async function holdDesktop(
         "Click the mascot to open the chat. clawdtime computer doctor says what is ready.",
       );
       write(readyLine);
+      const panel = started.panel;
+      const closed = () => {
+        if (holding && !stop) write(panelClosedLine);
+      };
+      if (panel)
+        if (panel.exitCode !== null || panel.signalCode != null) closed();
+        else panel.once("exit", closed);
     }
     const ending = await new Promise<"stop" | "ended">((done) => {
       let timer: ReturnType<typeof setInterval> | undefined;
@@ -345,6 +361,7 @@ async function holdDesktop(
       check();
       timer = setInterval(check, pollMs);
     });
+    holding = false;
     endPanel(started);
     if (ending === "ended")
       throw new Error(
@@ -361,6 +378,7 @@ async function holdDesktop(
         : "The desktop stopped.",
     );
   } finally {
+    holding = false;
     for (const name of names) signals.off(name, onSignal);
     lock.release();
   }

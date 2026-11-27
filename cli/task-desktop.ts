@@ -184,6 +184,9 @@ export function childEnvironment(panel = false): NodeJS.ProcessEnv {
             "CLAWDTIME_DESKTOP_SWITCHING",
             // The pace of the guided cursor: calm or fast.
             "CLAWDTIME_CURSOR_PACE",
+            // The Mac app that owns this desktop. The panel then adds
+            // Settings and Stop ClawdTime to its menu, and opens them there.
+            "CLAWDTIME_APP_BUNDLE",
           ].includes(key)) ||
         key.startsWith("LC_"),
     ),

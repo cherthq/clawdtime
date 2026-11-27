@@ -120,6 +120,8 @@ info = {
     "NSSupportsSuddenTermination": False,
     "NSMicrophoneUsageDescription": "ClawdTime listens only while you talk to it, and sends what you said to be turned into text.",
     "NSAppleEventsUsageDescription": "ClawdTime works in an app on this Mac only for a task you asked for.",
+    # clawdtime://open, settings and stop: the panel's menu opens them in the app.
+    "CFBundleURLTypes": [{"CFBundleURLName": "com.clawdtime.app", "CFBundleURLSchemes": ["clawdtime"], "CFBundleTypeRole": "Viewer"}],
     "ClawdTimeRuntimeVersion": version,
     "ClawdTimeRuntimeCommit": commit,
     "ClawdTimeSourceRevision": source,

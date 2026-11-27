@@ -31,14 +31,21 @@ ClawdTime started. Nothing is shared after Stop. Stop stays available on the
 last screen while the desktop that setup started runs and Finish has not
 taken it over. Stop and Quit then end it, also after a second setup run.
 
-After setup, ClawdTime lives in the menu bar:
+ClawdTime has one item in the menu bar at a time. From the first launch, and
+whenever the desktop does not run, it is the item of the app:
 
 - **Open ClawdTime** shows the window with the readiness of each step.
 - **Settings…** opens the Settings window. See [Settings](#settings).
 - The status line says what runs: the desktop, and the phone connection.
-- **Stop** ends the connection first, then the desktop. **Start** starts them
-  again. Nothing starts again by itself.
+- **Stop** ends setup, the connection and then the desktop. **Start** starts
+  them again. Before setup is done, **Start** runs setup in its window.
+  Nothing starts again by itself.
 - **Quit ClawdTime** stops both and then quits.
+
+After setup, while the desktop runs, the mascot's item takes its place. It
+keeps all of its own rows, and adds **Settings…** (Command-comma) and **Stop
+ClawdTime**, which open in the app. When the desktop stops, or you quit the
+mascot while its work runs on, the item of the app comes back.
 
 **Open ClawdTime when you log in** is off until you turn it on in the
 readiness view. macOS may ask you to allow it in System Settings, Login Items.
@@ -52,8 +59,8 @@ The logs of the desktop and the connection are in `~/Library/Logs/ClawdTime/`.
 ## Settings
 
 Open the Settings window in one of three ways: the gear at the top right of
-the setup window, **Settings…** in the menu bar menu, or Command-comma. It has
-four pages.
+the setup window, **Settings…** in the menu bar menu (of the app or of the
+mascot), or Command-comma. It has four pages.
 
 - **Model keys** lists every provider and whether its key is set. **Add** or
   **Replace** opens a secure field for the key. **Remove** asks first. A key
@@ -84,7 +91,7 @@ not running uses the change when it starts.
 
 ```text
 ClawdTime.app/Contents/
-  Info.plist                 com.clawdtime.app, arm64, macOS 14.0 or later
+  Info.plist                 com.clawdtime.app, arm64, macOS 14.0 or later, the clawdtime: link scheme
   MacOS/ClawdTime            the SwiftUI app
   Resources/AppIcon.icns     from mac/Resources/AppIcon.icns, when it exists
   Resources/runtime/         the release runtime, exactly as the runtime builder makes it
@@ -164,13 +171,16 @@ the final report says is ready:
 - `clawdtime start --foreground` takes over the desktop service that setup
   started (or starts one), opens the panel in its own process group, and
   stays. It prints `{"type":"ready"}` on stdout when the service answers its
-  authenticated readiness check, and nothing else on stdout. On SIGTERM it
+  authenticated readiness check, then only the panel line below. On SIGTERM it
   closes the panel and sends SIGTERM to the service, which closes its calls
   and its work. When the service ends by itself, it closes the panel and exits
   with status 1. When the app is gone, it stops the desktop too. One
   foreground owner holds a desktop at a time.
 - The desktop counts as running when it prints `{"type":"ready"}` on stdout.
   With no ready line in 120 seconds, the app ends it and starts no connection.
+- When the panel closes while the service runs on, `start --foreground`
+  prints `{"type":"panel","state":"closed"}` on stdout. A panel that a stop
+  closes is not reported.
 - Stop and Quit send SIGTERM to the connection, then to the desktop. A process
   still there after 10 seconds gets SIGKILL with its whole group.
 - When the desktop ends, the app ends the connection too: a connection belongs
@@ -183,6 +193,24 @@ the final report says is ready:
   choice.
 - Sleep changes nothing in the app. The connection keeps its own rules for a
   lost network.
+
+### One menu bar item
+
+- The app starts the desktop with `CLAWDTIME_APP_BUNDLE` set to its own
+  bundle. `clawdtime start --foreground` gives it to the panel alone, not to
+  the service or the connection. With it, the panel adds **Settings…** and
+  **Stop ClawdTime** to its menu. Only an absolute path to an `.app` bundle
+  counts. A desktop started from Terminal or a source checkout has no such
+  variable, and its panel menu has no Settings row.
+- The app shows its own item unless setup is done, the desktop runs, its
+  panel is open (from the ready line until the panel line), and the panel has
+  the app's rows. It removes the item then, and adds it again as soon as one
+  of these changes.
+- The app answers three links: `clawdtime://open` (the setup window),
+  `clawdtime://settings` (the Settings window) and `clawdtime://stop` (the
+  same Stop as in its menu). The panel opens them in the app at
+  `CLAWDTIME_APP_BUNDLE`, not in another copy. A link with a path, a query or
+  another name does nothing. No link starts anything or changes a setting.
 
 ### Settings: the runtime commands
 
