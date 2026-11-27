@@ -34,8 +34,50 @@ final class RuntimeLayoutTests: XCTestCase {
     let prerelease = try FakeRuntime.make(at: temporaryFolder(self).appendingPathComponent("runtime"), engine: "exit 0\n", version: "0.4.0-beta.1")
     XCTAssertThrowsError(try RuntimeLayout.load(prerelease)) { XCTAssertEqual($0 as? RuntimeProblem, .badManifest("version is 0.4.0-beta.1")) }
     XCTAssertTrue(RuntimeLayout.isReleaseVersion("12.0.3"))
+    XCTAssertTrue(RuntimeLayout.isReleaseVersion("0.4.0"))
     XCTAssertFalse(RuntimeLayout.isReleaseVersion("1.2"))
     XCTAssertFalse(RuntimeLayout.isReleaseVersion("1..2"))
+    // The same rule as the runtime builder and package-app.sh: no leading zero, at most four digits.
+    XCTAssertFalse(RuntimeLayout.isReleaseVersion("01.4.0"))
+    XCTAssertFalse(RuntimeLayout.isReleaseVersion("0.4.00"))
+    XCTAssertFalse(RuntimeLayout.isReleaseVersion("10000.0.0"))
+  }
+
+  /// The contract between the runtime builder and the app: a manifest that
+  /// scripts/release/manifest.mjs writes loads and verifies here.
+  func testAManifestOfTheRuntimeBuilderLoadsAndVerifies() throws {
+    let node = ["/opt/homebrew/bin/node", "/usr/local/bin/node"].first { FileManager.default.isExecutableFile(atPath: $0) }
+      ?? ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":").map { "\($0)/node" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    let nodePath = try XCTUnwrap(node, "Node is needed to run the manifest writer of the runtime builder")
+    let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../scripts/release/manifest.mjs").standardizedFileURL
+    let root = try temporaryFolder(self).appendingPathComponent("Application Support/runtime")
+    let files = FileManager.default
+    for folder in ["bin", "node/bin", "app/native/ClawdTimeCompanion_ClawdTimeTaskPanel.bundle/Fonts", "app/dist/cli", "app/node_modules/made-up"] {
+      try files.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+    }
+    for (path, text) in [
+      ("bin/clawdtime", "#!/bin/sh\nexit 0\n"), ("node/bin/node", "#!/bin/sh\nexit 0\n"),
+      ("app/package.json", "{\"version\":\"0.4.1\"}"), ("app/release.json", "{}"),
+      ("app/dist/cli/main.js", "console.log(1)"), ("app/dist/read me.txt", "spaces"),
+      ("app/native/ClawdTimeCompanion_ClawdTimeTaskPanel.bundle/Fonts/Made Up.ttf", "font"),
+      ("app/node_modules/made-up/index.js", "module.exports = 1"),
+    ] {
+      try text.write(to: root.appendingPathComponent(path), atomically: true, encoding: .utf8)
+    }
+    for executable in ["bin/clawdtime", "node/bin/node"] {
+      try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appendingPathComponent(executable).path)
+    }
+    let writer = Process()
+    writer.executableURL = URL(fileURLWithPath: nodePath)
+    writer.arguments = [script.path, root.path, "0.4.1", String(repeating: "c", count: 40), "v24.22.3"]
+    writer.standardOutput = FileHandle.nullDevice
+    try writer.run()
+    writer.waitUntilExit()
+    XCTAssertEqual(writer.terminationStatus, 0)
+    let layout = try RuntimeLayout.load(root)
+    XCTAssertEqual(layout.manifest.version, "0.4.1")
+    XCTAssertEqual(layout.manifest.node, "v24.22.3")
+    XCTAssertEqual(try layout.verification(), RuntimeLayout.Verification(hashed: 8, signed: 0))
   }
 
   func testAChangedFileFailsVerification() throws {

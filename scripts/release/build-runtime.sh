@@ -132,7 +132,9 @@ step "Source of commit $commit"
 mkdir -p "$work/src"
 git -C "$root" archive --format=tar "$commit" | tar -xf - -C "$work/src"
 version=$("$node" -p 'require(process.argv[1]).version' "$work/src/package.json")
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "package.json version $version is not MAJOR.MINOR.PATCH."
+# The rule of the app's runtime check: three numbers, no leading zero, at most four digits.
+[[ $version =~ ^(0|[1-9][0-9]{0,3})(\.(0|[1-9][0-9]{0,3})){2}$ ]] ||
+  fail "package.json version $version is not MAJOR.MINOR.PATCH, each with no leading zero and at most four digits."
 printf '{ "sourceRevision": "%s" }\n' "$commit" >"$work/src/release-source.json"
 say "ClawdTime $version"
 
