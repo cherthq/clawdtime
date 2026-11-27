@@ -136,7 +136,7 @@ describe("shared sign-in texts", () => {
     expect(f.texts.some((t) => t.recipient === stranger)).toBe(false);
   });
 
-  it("does not text a revoked member", async () => {
+  it("texts a member whose Mac was unpaired, but not a member who asked for a ban", async () => {
     const store = new Store();
     cleanup.push(() => store.close());
     const first = await coordinator(store, [member]);
@@ -147,10 +147,47 @@ describe("shared sign-in texts", () => {
         code: first.codeFor(member),
       })
     ).body;
-    await first.post("/account/invite", {}, { token });
+    const invitation = await first.post("/account/invite", {}, { token });
+    const paired = await first.post("/pair/accept", {
+      invitation: invitation.body.invitation,
+      acceptance: {
+        localAccepted: true,
+        displayId: "display",
+        allowView: true,
+        allowControl: false,
+      },
+    });
+    // Revoke unpairs the Mac. The member stays enrolled and can pair again.
     expect((await first.post("/account/revoke", {}, { token })).status).toBe(
       200,
     );
+    const again = await coordinator(store, []);
+    expect((await again.start(member, memberMac)).status).toBe(200);
+    expect(again.texts).toHaveLength(1);
+    const repaired = await first.post("/pair/accept", {
+      invitation: (await first.post("/account/invite", {}, { token })).body
+        .invitation,
+      acceptance: {
+        localAccepted: true,
+        displayId: "display",
+        allowView: true,
+        allowControl: false,
+      },
+    });
+    expect(paired.status).toBe(200);
+    // A ban needs the sign-in and the paired Mac's credential together.
+    expect(
+      (
+        await first.post(
+          "/account/revoke",
+          {
+            permanent: true,
+            deviceCredential: repaired.body.credential,
+          },
+          { token },
+        )
+      ).status,
+    ).toBe(200);
     const f = await coordinator(store, []);
     expect((await f.start(member, memberMac)).status).toBe(200);
     expect(f.texts).toEqual([]);

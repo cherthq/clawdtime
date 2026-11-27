@@ -20,8 +20,9 @@ call is in this repository. It has passed automated tests only.
 Do not publish a shared number to real users while this status holds. A
 health response with mode `enabled` is not readiness.
 
-Changes in progress: call proofs bound to the paired Mac, sign-in limits, call
-liveness, re-pair and revoke.
+The code now includes call codes bound to the paired Mac, sign-in limits,
+call liveness, the release of unverified callers, re-pair, credential rotation
+and revoke. These parts have passed automated tests only.
 
 ## Coordinator
 
@@ -120,10 +121,10 @@ call codes and screen frames. Keep every inspector off.
   refuses events signed with the old secret (403).
 - Rotate `lineToken`, `messaging.key` and `provider.media.secret` the same way
   after an exposure. A new `lineToken` also goes to the voice worker.
-- There is no route yet to rotate a Mac's device credential. A revoke
-  (`POST /account/revoke` with a session token) ends that account, its
-  pairing and its device credentials for good, and the same phone number
-  cannot pair again.
+- A Mac replaces its own device credential with `shared rotate`. If a device
+  credential may be stolen, pair the Mac again with `shared pair ORIGIN
+--replace`. That revokes the old pairing and every credential of it. See
+  [Replace, rotate and revoke](#replace-rotate-and-revoke).
 - If a sign-in code, session token or device credential may be exposed, set
   `enabled` to `false` and restart. Standby refuses every route except health.
 
@@ -149,6 +150,19 @@ Run `node line/shared-agent.mjs start` with a private environment containing:
 - `CLAWDTIME_SHARED_ORIGIN`, the public HTTPS coordinator origin.
 - `CLAWDTIME_SHARED_LINE_TOKEN`, matching `lineToken`.
 - Optional `CLAWDTIME_SHARED_WORKER_PORT`, default 3320, for local health.
+
+The coordinator passes the webhook's `data.from` to the router as the
+caller. The provider must send it in the same form that the member verified
+at sign-in, for example `+14155550100`. The router keeps only a keyed digest
+of it. The caller handle never authorizes a Mac. It only selects whose paired
+Mac may be shown the call code. A call with no caller handle, or a handle that
+matches no member, gives no code to any Mac.
+
+A caller who does not verify within 90 seconds is released. The voice worker
+removes the call's room, and the coordinator removes it on its next pass as
+well. Removing the room ends the provider call. The line slot frees only after
+the provider reports the call ended and cleaned up and the room is gone. The
+same applies to a call whose code attempts ran out or whose Mac was offline.
 
 Only central processes receive provider, voice and line credentials. Mac
 participants receive their own device credential. Keep the provider control
@@ -185,38 +199,89 @@ Pairing asks, in order, for:
 3. The display ID to pair.
 4. The absolute path to `ClawdTimeTaskCapture`, or Enter to turn sharing off.
    With a path, it asks whether this exact display may be shown during your
-   verified calls.
+   verified calls. This is your view answer.
 5. Whether ClawdTime may open an inert task result report during your
    verified callbacks.
-6. Whether this account may request computer actions on this Mac.
+6. Whether this account may request computer actions on this Mac. Pairing
+   asks this only when you allowed view. Computer actions need view.
 7. A final yes to pair.
 
-The display answer is kept on this Mac. With no capture path, or a no, the
-Mac sends no frames. The coordinator records view permission for every
-pairing.
+Pairing sends your real view and control answers to the coordinator. This Mac
+also keeps both answers in its `connection.json` and enforces them itself,
+whatever the coordinator sends. It refuses chat and every other computer
+request that you declined. Stop, close and hide always run.
+
+View is the base permission of a shared call. With view declined, a call
+cannot open, renew, show or report anything on this Mac, and computer actions
+stay off. `shared doctor` and `shared run` show both answers.
+
+A `connection.json` from an earlier release has no saved answers, so this Mac
+allows nothing. Pair it again with `shared pair ORIGIN --replace` to record
+your answers.
 
 Use `mac/.build/debug/ClawdTimeTaskCapture --list-displays` to list displays.
 The capture binary needs Screen Recording permission. The panel needs its
 Accessibility and Screen Recording permissions.
 
 One Mac per account. `shared pair` refuses to run when this Mac is already
-paired, and the coordinator refuses a second Mac for the same account. There
-is no route yet to replace a Mac.
+paired, and the coordinator refuses a second Mac for the same account unless
+you ask to replace it. See [Replace, rotate and revoke](#replace-rotate-and-revoke).
 
 Keep `shared run` open. Ctrl+C disconnects the Mac and closes its call and
 capture process. A desktop restart needs a fresh connection. Uncertain actions
 are not replayed. `shared doctor` checks the local configuration and desktop.
 
-Call the shared number. In another terminal, run:
+Call the shared number from your verified phone. The voice agent asks you to
+run `shared prove` on your paired Mac. Keep `shared run` open, and in another
+terminal on that Mac, run:
 
 ```sh
 node dist/cli/index.js shared prove
 ```
 
-Each run sends a new sign-in text. Sign in, confirm that you are on the call,
-then say the separate eight-digit call code. It expires within two minutes.
-Never speak the sign-in code to the voice agent. Only the verified account's
-current paired Mac can be selected.
+Confirm that you are on the call. The command shows an eight-digit call code.
+Say it on the call. It sends no sign-in text.
+
+- Only your paired Mac gets the code. It asks with its own device credential,
+  over its live `shared run` connection. A sign-in alone never gets a code.
+- The coordinator gives the code only when the waiting call comes from your
+  verified number. Another member's Mac gets no code for your call, so no one
+  can take or block it.
+- The code admits the call only to the connection that showed it. It works
+  once and expires within two minutes, and never after the 90-second window.
+- When `shared prove` says that no code was given, check that `shared run` is
+  open and that you called from your verified number, then run it again.
+
+## Replace, rotate and revoke
+
+**Replace a lost Mac.** On the new Mac, run:
+
+```sh
+node dist/cli/index.js shared pair https://coordinator.example --replace
+```
+
+Sign in with your phone and accept the pairing on the new Mac. Accepting it
+revokes the old pairing and all of its device credentials. The old Mac can no
+longer connect. Its open call ends, and its tasks get no callback. Without
+`--replace`, the coordinator refuses a second Mac for your number.
+
+**Rotate a device credential.** On the paired Mac, run:
+
+```sh
+node dist/cli/index.js shared rotate
+```
+
+The Mac gets a new credential and the old one stops working at once. Start
+`shared run` again. If the answer is lost, pair the Mac again with
+`--replace`. If a credential may be stolen, use `--replace`, not `rotate`:
+the person with the stolen credential could rotate it first, but cannot sign
+in with your phone.
+
+**Revoke.** `POST /account/revoke` with a session token unpairs your Mac and
+revokes its credentials. Your number stays a member and can pair again. One
+sign-in code alone never bans a number. To ban your number for good, send
+`{"permanent": true, "deviceCredential": "..."}` with the current credential
+of your paired Mac. The coordinator then refuses that number from then on.
 
 ## Demo and callback
 
@@ -249,7 +314,10 @@ receipts and reconcile the exact recorded call before freeing the slot.
 The shared tests run two simulated Macs over loopback HTTP with signed
 provider events and fake provider effects. They cover replay and identity
 rejection, answer gating, callback cleanup, exact result ownership, report
-escaping, expired leases and same-call actions. They send no real texts,
+escaping, expired leases and same-call actions. One end-to-end test sends a
+signed incoming call from a member's number. That member's Mac gets the code
+and the call opens only on it, another member's Mac gets no code, and a
+stranger is released after 90 seconds and its room removed. They send no real texts,
 place no calls and capture no screens. They do not prove handset audio,
 picture or native input.
 

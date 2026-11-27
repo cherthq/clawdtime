@@ -24,10 +24,17 @@ interface Invitation {
   memberId: string;
   expiresAt: number;
   consumedAt?: number;
+  // An explicit replacement names the pairing it replaces.
+  replace?: boolean;
+  replacesPairingId?: string;
 }
 const kind = (name: string) => `shared_number_${name}`;
+/** A caller who has not verified within this time is released, so one
+ * unverified call cannot hold the single line slot. */
+export const UNVERIFIED_LIMIT_MS = 90_000;
 const refused = () => new DomainError(403, "shared_number_unauthorized");
 const conflict = () => new DomainError(409, "shared_number_conflict");
+const notWaiting = () => new DomainError(409, "shared_call_not_waiting");
 // Verifiers may refresh the lifetime of their attestation on redelivery.
 // Check that lifetime separately, but fingerprint only the stable event/turn.
 const stableEvidence = <T extends { expiresAt: number }>(evidence: T) => {
@@ -153,17 +160,22 @@ export class SharedNumber {
     });
   }
 
-  async invite(accountProof: unknown) {
+  /** One selected Mac per member, with no implicit replacement. A member who
+   * lost a Mac, or whose device credential was stolen, asks for an explicit
+   * replacement: accepting it on the new Mac revokes the old pairing. */
+  async invite(accountProof: unknown, options: { replace?: boolean } = {}) {
     const account = await this.account(accountProof);
     return this.store.transaction(() => {
       const member = this.member(account.memberId);
-      // First release has one selected Mac, with no implicit replacement.
-      if (member.pairingId) throw conflict();
+      if (member.pairingId && options.replace !== true) throw conflict();
       const secret = token();
       const invitation = this.store.put<Invitation>(kind("invite"), {
         id: hash(secret),
         memberId: member.id,
         expiresAt: this.now() + 300_000,
+        ...(member.pairingId
+          ? { replace: true, replacesPairingId: member.pairingId }
+          : {}),
       });
       return { invitation: secret, expiresAt: invitation.expiresAt };
     });
@@ -182,7 +194,9 @@ export class SharedNumber {
       )
         throw refused();
       const member = this.member(invite.memberId);
-      if (member.pairingId) throw conflict();
+      // The pairing must still be the one this invitation was issued against.
+      if (member.pairingId !== invite.replacesPairingId) throw conflict();
+      if (member.pairingId) this.unpair(member);
       const pair: Pairing = {
         id: id("pair"),
         memberId: member.id,
@@ -234,6 +248,11 @@ export class SharedNumber {
       throw refused();
     return { record, pair };
   }
+  /** A cheap credential check that runs before a device request body is read. */
+  authenticateDevice(credential: string) {
+    if (credential.length > 512) throw refused();
+    this.authenticate(credential);
+  }
   rotateCredential(credential: string) {
     return this.store.transaction(() => {
       const { record, pair } = this.authenticate(credential);
@@ -243,21 +262,45 @@ export class SharedNumber {
       return this.issueCredential(pair);
     });
   }
-  async revoke(accountProof: unknown) {
+  /** Revoke unpairs the Mac and revokes its credentials. The number stays
+   * enrolled and can pair again, so one sign-in code alone never bans it. A
+   * permanent ban is the member's own request: it needs the signed-in account
+   * and the current credential of the paired Mac together. */
+  async revoke(
+    accountProof: unknown,
+    options: { permanent?: boolean; deviceCredential?: string } = {},
+  ) {
     const account = await this.account(accountProof);
     this.store.transaction(() => {
       const member = this.member(account.memberId);
-      this.store.put(kind("member"), { ...member, revokedAt: this.now() });
-      if (!member.pairingId) return;
-      const pair = this.store.get<Pairing>(kind("pairing"), member.pairingId)!;
-      this.store.put(kind("pairing"), { ...pair, revokedAt: this.now() });
+      if (options.permanent) {
+        const { pair } = this.authenticate(options.deviceCredential ?? "");
+        if (pair.memberId !== member.id || pair.id !== member.pairingId)
+          throw refused();
+      }
+      const unpaired = this.unpair(member);
+      if (options.permanent)
+        this.store.put(kind("member"), {
+          ...unpaired,
+          revokedAt: this.now(),
+        });
+    });
+  }
+  private unpair(member: SharedMember) {
+    if (!member.pairingId) return member;
+    const pair = this.store.get<Pairing>(kind("pairing"), member.pairingId);
+    if (pair) {
+      if (pair.revokedAt === undefined)
+        this.store.put(kind("pairing"), { ...pair, revokedAt: this.now() });
       for (const c of this.store.all<SharedDeviceCredential>(
         kind("credential"),
       ))
         if (c.pairingId === pair.id && c.revokedAt === undefined)
           this.store.put(kind("credential"), { ...c, revokedAt: this.now() });
       this.fenceDevice(pair.deviceId);
-    });
+    }
+    const { pairingId: _pairingId, ...rest } = member;
+    return this.store.put<SharedMember>(kind("member"), rest);
   }
 
   /** Device IDs are derived from the credential, never from a header. A fresh
@@ -346,6 +389,9 @@ export class SharedNumber {
           participantId: event.participantId,
           state: this.slot() ? "busy" : "unknown_identity",
           createdAt: this.now(),
+          ...(event.caller
+            ? { callerDigest: this.callerDigest(event.caller) }
+            : {}),
         };
         if (!old && call.state !== "busy")
           this.store.saveState(this.slotKey(), call.id);
@@ -382,49 +428,134 @@ export class SharedNumber {
     if (!call || call.lineId !== this.lineId) throw refused();
     return call;
   }
+  private callerDigest(handle: string) {
+    return createHmac("sha256", Buffer.from(this.options.proofKey, "hex"))
+      .update(JSON.stringify(["caller", this.lineId, handle]))
+      .digest("hex");
+  }
+  /** Only the member whose verified number placed the call may be shown its
+   * code. A callback is bound to its original member instead. Selection only:
+   * the code from the paired Mac still has to be spoken on this call. */
+  private callerIs(call: SharedCall, memberId: string) {
+    if (call.expectedMemberId) return call.expectedMemberId === memberId;
+    if (!call.callerDigest) return false;
+    const member = this.member(memberId);
+    return equal(call.callerDigest, this.callerDigest(member.alias.recipient));
+  }
   private proofDigest(callId: string, code: string) {
     return createHmac("sha256", Buffer.from(this.options.proofKey, "hex"))
       .update(JSON.stringify([this.lineId, callId, code]))
       .digest("hex");
   }
 
-  /** Return the code only to the authenticated account. The voice model must
-   * never generate it, select a member, or receive account credentials. */
-  async issueCallProof(accountProof: unknown, callId: string) {
-    const account = await this.account(accountProof);
+  /** The paired Mac itself asks for the code, with its own device credential
+   * and over its live connection, and shows it to the person at that Mac. A
+   * sign-in session alone never receives a call code. The voice model must
+   * never generate it, select a member, or receive any credential. */
+  issueCallProof(credential: string, callId?: string) {
+    if (callId !== undefined) routingId.parse(callId);
     return this.store.transaction(() => {
-      const call = this.call(callId);
-      const pair = this.pairing(account.memberId);
-      if (call.expectedMemberId && call.expectedMemberId !== account.memberId)
-        throw refused();
+      const { record, pair } = this.authenticate(credential);
+      const connection = this.connections.get(pair.deviceId);
       if (
-        call.state !== "unknown_identity" ||
-        this.slot() !== call.id ||
-        this.store.get(kind("proof"), call.id)
+        !connection ||
+        connection.credentialId !== record.id ||
+        connection.expiresAt <= this.now()
       )
-        throw conflict();
+        throw notWaiting();
+      const call = this.waitingCall();
+      // The same answer for no call and another member's call: one member
+      // can neither take, block nor detect another member's waiting call.
+      if (
+        !call ||
+        (callId !== undefined && callId !== call.id) ||
+        !this.callerIs(call, pair.memberId)
+      )
+        throw notWaiting();
+      // A callback has no verification window, and no code, until answered.
+      const verifyBy = this.verifyBy(call);
+      if (verifyBy === undefined) throw notWaiting();
+      if (this.store.get(kind("proof"), call.id)) throw conflict();
       const code = randomInt(100_000_000).toString().padStart(8, "0");
       const proof = this.store.put<SharedCallProof>(kind("proof"), {
         id: call.id,
         callId: call.id,
-        memberId: account.memberId,
+        memberId: pair.memberId,
         pairing: pair,
+        credentialId: record.id,
+        connectionId: connection.id,
         digest: this.proofDigest(call.id, code),
         attempts: 0,
-        expiresAt: Math.min(account.expiresAt, this.now() + 120_000),
+        expiresAt: Math.min(this.now() + 120_000, verifyBy),
       });
-      return { code, expiresAt: proof.expiresAt };
+      return { callId: call.id, code, expiresAt: proof.expiresAt };
     });
   }
-  /** The single waiting call locator is not authority. A code is delivered only
-   * to this authenticated account and must be presented on the pinned call. */
-  async pendingCall(accountProof: unknown) {
-    const account = await this.account(accountProof);
-    this.pairing(account.memberId);
-    const id = this.slot();
-    if (!id) return null;
-    const call = this.call(id);
-    return call.state === "unknown_identity" ? { callId: call.id } : null;
+  private slotCall() {
+    const slot = this.slot();
+    const call = slot
+      ? this.store.get<SharedCall>(kind("call"), slot)
+      : undefined;
+    return call?.lineId === this.lineId ? this.expireIfDue(call) : undefined;
+  }
+  private waitingCall() {
+    const call = this.slotCall();
+    return call?.state === "unknown_identity" ? call : undefined;
+  }
+  /** The deadline for verification. A callback's window opens on answer. */
+  verifyBy(call: SharedCall) {
+    const start = call.callbackTaskId ? call.activatedAt : call.createdAt;
+    return start === undefined ? undefined : start + UNVERIFIED_LIMIT_MS;
+  }
+  private expireIfDue(call: SharedCall) {
+    const by = this.verifyBy(call);
+    if (
+      call.state !== "unknown_identity" ||
+      by === undefined ||
+      by > this.now()
+    )
+      return call;
+    return this.release(call);
+  }
+  private release(call: SharedCall) {
+    const proof = this.store.get<SharedCallProof>(kind("proof"), call.id);
+    if (proof && proof.consumedAt === undefined)
+      this.store.put(kind("proof"), { ...proof, consumedAt: this.now() });
+    return this.store.put<SharedCall>(kind("call"), {
+      ...call,
+      state: "unauthorized",
+      releasedAt: this.now(),
+    });
+  }
+  /** The call that holds the slot but can no longer be verified: its window
+   * passed, its attempts ran out, or its Mac was offline. The trusted line
+   * adapter ends it by removing its room. The slot still frees only after the
+   * observed provider cleanup, as for every call. */
+  releaseUnverified() {
+    return this.store.transaction(() => {
+      const call = this.slotCall();
+      return call && ["unauthorized", "offline"].includes(call.state)
+        ? [
+            {
+              callId: call.id,
+              providerCallId: call.providerCallId,
+              roomId: call.roomId,
+            },
+          ]
+        : [];
+    });
+  }
+  /** The voice worker ends an unverified call in its room, for example at the
+   * deadline it was given. An admitted call is never released this way. */
+  releaseRoom(roomId: string) {
+    return this.store.transaction(() => {
+      const call = this.slotCall();
+      if (!call || call.roomId !== roomId) return false;
+      if (call.state === "unknown_identity") this.release(call);
+      return ["unknown_identity", "unauthorized", "offline"].includes(
+        call.state,
+      );
+    });
   }
 
   /** Caller binding is delivered by the authenticated call adapter, not model
@@ -438,15 +569,18 @@ export class SharedNumber {
     const callId = `shared_call_${hash(JSON.stringify([this.lineId, binding.providerCallId]))}`;
     const code = binding.code;
     return this.store.transaction(() => {
-      const call = this.call(callId);
+      const found = this.call(callId);
       if (
-        call.providerCallId !== binding.providerCallId ||
-        call.roomId !== binding.roomId ||
-        call.participantId !== binding.participantId
+        found.providerCallId !== binding.providerCallId ||
+        found.roomId !== binding.roomId ||
+        found.participantId !== binding.participantId
       )
         throw refused();
-      if (call.state !== "unknown_identity" || this.slot() !== call.id)
+      if (found.state !== "unknown_identity" || this.slot() !== found.id)
         throw refused();
+      const call = this.expireIfDue(found);
+      if (call.state !== "unknown_identity")
+        return { state: "unauthorized" as const };
       const turnKey = `shared-proof-turn:${hash(JSON.stringify([call.id, binding.turnId]))}`;
       const fingerprint = this.proofDigest(call.id, stableEvidence(binding));
       const prior = this.store.event(turnKey);
@@ -504,6 +638,14 @@ export class SharedNumber {
       if (!connection || connection.expiresAt <= this.now()) {
         this.store.put(kind("call"), { ...call, state: "offline" });
         return { state: "offline" as const };
+      }
+      // Admit only to the exact Mac connection that was shown the code.
+      if (
+        connection.id !== proof.connectionId ||
+        connection.credentialId !== proof.credentialId
+      ) {
+        this.store.put(kind("call"), { ...call, state: "unauthorized" });
+        return { state: "unauthorized" as const };
       }
       const admitted: SharedCall = {
         ...call,

@@ -25,13 +25,22 @@ import { SharedDisplay } from "../connectors/shared/shared-display.js";
 import { sharedDisplayTargetSchema } from "../src/control/proactive-display-views.js";
 import { oneJSON } from "../src/control/proactive-views.js";
 import { sharedSignIn } from "./shared-sign-in.js";
+import type {
+  SharedOperation,
+  SharedResult,
+} from "../src/shared-relay-contracts.js";
 
-const configuration = z
+/** The private connection file of a paired Mac. It keeps the person's own
+ * view and control answers, and this Mac enforces them whatever the
+ * coordinator sends. A file without the answers allows neither. */
+export const sharedConnectionSchema = z
   .object({
     origin: z.string(),
     credential: z.string().min(32),
     deviceId: routingId,
     displayId: routingId,
+    allowView: z.boolean().default(false),
+    allowControl: z.boolean().default(false),
     walkthroughReports: z.boolean().default(false),
     capture: z
       .object({
@@ -42,13 +51,109 @@ const configuration = z
       .optional(),
   })
   .strict();
+const configuration = sharedConnectionSchema;
+
+/** The acceptance that pairing sends: the person's real answers. Viewing is
+ * allowed only when they agreed to share the display. Computer actions need
+ * viewing, as on the coordinator. */
+export function sharedAcceptance(answers: {
+  displayId: string;
+  shareScreen: boolean;
+  control: boolean;
+}) {
+  return {
+    localAccepted: true as const,
+    displayId: routingId.parse(answers.displayId),
+    allowView: answers.shareScreen,
+    allowControl: answers.shareScreen && answers.control,
+  };
+}
+
+/** The Mac's own answers decide what it runs, whatever the coordinator
+ * sends. Computer actions need both answers. Every other operation that
+ * opens, renews, shows or reports needs view. Stop, close and hide only end or
+ * reduce access, so they are never refused. */
+export function localRefusal(
+  answers: { allowView: boolean; allowControl: boolean },
+  operation: SharedOperation,
+): SharedResult | null {
+  const allowed =
+    operation.action === "stop" ||
+    operation.action === "close" ||
+    operation.action === "hide" ||
+    (answers.allowView &&
+      (operation.action !== "chat" || answers.allowControl));
+  return allowed ? null : { ok: false, code: "declined_on_this_mac" };
+}
+
+/** The paired Mac asks for the call code with its own device credential. The
+ * coordinator gives it only while this Mac's `shared run` connection is live,
+ * so a sign-in session alone never yields a code. */
+export async function sharedCallProof(
+  config: { origin: string; credential: string },
+  callId?: string,
+  request: typeof fetch = fetch,
+) {
+  const response = await request(
+    `${sharedOrigin(config.origin)}/device/call-proof`,
+    {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.credential}`,
+      },
+      body: JSON.stringify(callId ? { callId: routingId.parse(callId) } : {}),
+      signal: AbortSignal.timeout(20_000),
+    },
+  );
+  const body = (await response.json().catch(() => ({}))) as unknown;
+  if (!response.ok)
+    throw Error(
+      z.object({ code: z.string().max(100) }).safeParse(body).data?.code ??
+        "shared_call_proof_refused",
+    );
+  return z
+    .object({
+      callId: routingId,
+      code: z.string().regex(/^\d{8}$/),
+      expiresAt: z.number(),
+    })
+    .parse(body);
+}
+
+/** The Mac replaces its own device credential. The old one stops working at
+ * once. If the answer is lost, pair again with --replace. */
+export async function sharedRotate(
+  config: { origin: string; credential: string },
+  request: typeof fetch = fetch,
+) {
+  const response = await request(
+    `${sharedOrigin(config.origin)}/device/rotate`,
+    {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.credential}`,
+      },
+      body: "{}",
+      signal: AbortSignal.timeout(20_000),
+    },
+  );
+  if (!response.ok) throw Error("shared_rotation_refused");
+  return z
+    .object({ credential: z.string().min(32).max(512) })
+    .parse(await response.json()).credential;
+}
+
 export async function sharedCli(args: string[]) {
   const directory = join(homedir(), ".config", "clawdtime", "shared");
   const file = join(directory, "connection.json");
   const system = { env: process.env, home: homedir() };
-  if (!["pair", "run", "prove", "doctor"].includes(args[0] ?? "")) {
+  if (!["pair", "run", "prove", "rotate", "doctor"].includes(args[0] ?? "")) {
     console.log(
-      "clawdtime shared pair HTTPS_ORIGIN\nclawdtime shared run\nclawdtime shared prove [CALL_ID]\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
+      "clawdtime shared pair HTTPS_ORIGIN [--replace]   (--replace pairs this Mac in place of a lost one)\nclawdtime shared run\nclawdtime shared rotate   (replace this Mac's device credential)\nclawdtime shared prove [CALL_ID]   (on the paired Mac, while shared run is open)\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
     );
     return;
   }
@@ -59,7 +164,7 @@ export async function sharedCli(args: string[]) {
   const service = state ? findDesktopService(state) : null;
   if (args[0] === "doctor") {
     console.log(
-      `Shared pairing: ${config ? "configured" : "missing"}. Desktop: ${service ? "available" : "missing"}. Live shared-call acceptance: not qualified.`,
+      `Shared pairing: ${config ? `configured, view ${config.allowView ? "allowed" : "declined"}, control ${config.allowControl ? "allowed" : "declined"}` : "missing"}. Desktop: ${service ? "available" : "missing"}. Live shared-call acceptance: not qualified.`,
     );
     return;
   }
@@ -95,6 +200,8 @@ export async function sharedCli(args: string[]) {
       store,
       instanceId,
       execute: async (command, signal) => {
+        const refusal = localRefusal(config, command.operation);
+        if (refusal) return refusal;
         if (command.operation.action === "walkthrough")
           return sharedWalkthrough({
             command,
@@ -159,7 +266,7 @@ export async function sharedCli(args: string[]) {
       },
     });
     console.log(
-      "Shared Mac connection starting. Press Ctrl+C to disconnect and close this connection's desktop calls.",
+      `Shared Mac connection starting. View ${config.allowView ? "allowed" : "declined"}, computer actions ${config.allowControl ? "allowed" : "declined"} on this Mac. Press Ctrl+C to disconnect and close this connection's desktop calls.`,
     );
     try {
       await client.run(controller.signal);
@@ -176,11 +283,65 @@ export async function sharedCli(args: string[]) {
     }
     return;
   }
-  if (args[0] === "pair" && config)
-    throw Error("shared_pairing_already_exists");
-  const origin = sharedOrigin(
-    args[0] === "pair" ? (args[1] ?? "") : (config?.origin ?? ""),
-  );
+  if (args[0] === "prove") {
+    if (!config) throw Error("shared_pairing_required");
+    if (!process.stdin.isTTY) throw Error("shared_setup_requires_terminal");
+    const terminal = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    try {
+      if (
+        (
+          await terminal.question(
+            "Are you on the ClawdTime call from your verified phone now? Type yes: ",
+          )
+        ).trim() !== "yes"
+      )
+        return;
+      let proof: Awaited<ReturnType<typeof sharedCallProof>>;
+      try {
+        proof = await sharedCallProof(config, args[1]);
+      } catch {
+        console.error(
+          "No code was given. Keep clawdtime shared run open on this Mac, call the shared number from your verified phone, then run this again.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      console.log(
+        `Say this code on the ClawdTime call: ${proof.code}. It works once, only for this Mac, and expires within two minutes.`,
+      );
+    } finally {
+      terminal.close();
+    }
+    return;
+  }
+  if (args[0] === "rotate") {
+    if (!config) throw Error("shared_pairing_required");
+    let credential: string;
+    try {
+      credential = await sharedRotate(config);
+    } catch {
+      console.error(
+        "The credential was not replaced, or its answer was lost. If this Mac can no longer connect, run clawdtime shared pair HTTPS_ORIGIN --replace.",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    writePrivateJSON(file, { ...config, credential });
+    console.log(
+      "This Mac has a new device credential. The old one no longer works. Start clawdtime shared run again.",
+    );
+    return;
+  }
+  const replace = args.includes("--replace");
+  const pairArgs = args.slice(1).filter((arg) => arg !== "--replace");
+  if (config && !replace)
+    throw Error(
+      "shared_pairing_already_exists: to pair this Mac again, add --replace",
+    );
+  const origin = sharedOrigin(pairArgs[0] ?? "");
   if (!process.stdin.isTTY) throw Error("shared_setup_requires_terminal");
   const terminal = createInterface({
     input: process.stdin,
@@ -197,45 +358,21 @@ export async function sharedCli(args: string[]) {
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(20_000),
     });
+    if (response.status === 409 && path === "/account/invite" && !replace)
+      throw Error(
+        "shared_pairing_exists: this number already has a paired Mac. To pair this Mac in its place, add --replace",
+      );
     if (!response.ok) throw Error("shared_setup_refused");
     return response.json();
   };
   try {
+    // Only pairing signs in. A call is proved by the paired Mac itself.
     const session = await sharedSignIn({
       origin,
       ask: (question) => terminal.question(question),
       post,
-      ...(args[0] === "prove" && {
-        keep: {
-          file: join(directory, "session.json"),
-          check: (token: string) => post("/account/pending-call", {}, token),
-        },
-      }),
     });
     if (!session) return;
-    if (args[0] === "prove") {
-      if (
-        (
-          await terminal.question(
-            "Are you currently on the ClawdTime call you want to authorize? Type yes: ",
-          )
-        ).trim() !== "yes"
-      )
-        return;
-      const callId = args[1]
-        ? routingId.parse(args[1])
-        : z
-            .object({ callId: routingId })
-            .parse(await post("/account/pending-call", {}, session.token))
-            .callId;
-      const proof = z
-        .object({ code: z.string(), expiresAt: z.number() })
-        .parse(await post("/account/proof", { callId }, session.token));
-      console.log(
-        `Say this code only on the ClawdTime call you started: ${proof.code}. It expires within two minutes.`,
-      );
-      return;
-    }
     if (!service) throw Error("shared_desktop_required");
     const displayId = routingId.parse(
       (await terminal.question("Display ID to pair: ")).trim(),
@@ -269,12 +406,21 @@ export async function sharedCli(args: string[]) {
           "Allow ClawdTime to open an inert task result report during your verified callbacks? Type yes: ",
         )
       ).trim() === "yes";
-    const allowControl =
-      (
-        await terminal.question(
-          "Allow this paired account to request computer actions on this Mac? Type yes: ",
-        )
-      ).trim() === "yes";
+    if (!capture)
+      console.log(
+        "This display is not shared, so calls cannot view or use this Mac. Computer actions stay off.",
+      );
+    const acceptance = sharedAcceptance({
+      displayId,
+      shareScreen: !!capture,
+      control:
+        !!capture &&
+        (
+          await terminal.question(
+            "Allow this paired account to request computer actions on this Mac? Type yes: ",
+          )
+        ).trim() === "yes",
+    });
     if (
       (
         await terminal.question(
@@ -283,31 +429,30 @@ export async function sharedCli(args: string[]) {
       ).trim() !== "yes"
     )
       return;
+    // A replacement revokes the old pairing of this number when it is accepted.
     const invitation = z
       .object({ invitation: z.string() })
-      .parse(await post("/account/invite", {}, session.token));
+      .parse(
+        await post(
+          "/account/invite",
+          replace ? { replace: true } : {},
+          session.token,
+        ),
+      );
     const accepted = z
       .object({
         credential: z.string(),
         pairing: z.object({ deviceId: routingId }),
       })
-      .parse(
-        await post("/pair/accept", {
-          ...invitation,
-          acceptance: {
-            localAccepted: true,
-            displayId,
-            allowView: true,
-            allowControl,
-          },
-        }),
-      );
+      .parse(await post("/pair/accept", { ...invitation, acceptance }));
     privateFolder(directory);
     writePrivateJSON(file, {
       origin,
       credential: accepted.credential,
       deviceId: accepted.pairing.deviceId,
       displayId,
+      allowView: acceptance.allowView,
+      allowControl: acceptance.allowControl,
       walkthroughReports,
       ...(capture ? { capture } : {}),
     });

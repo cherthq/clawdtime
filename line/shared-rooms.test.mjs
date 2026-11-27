@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { sharedRooms } from "./shared-rooms.mjs";
+import { endSharedRoom, sharedRooms } from "./shared-rooms.mjs";
 const { test } = process.env.VITEST
   ? await import("vitest")
   : await import("node:test");
@@ -82,4 +82,25 @@ test("claims one room once when two requests race a prune", async () => {
   release();
   assert.deepEqual((await Promise.all([first, second])).sort(), [false, true]);
   assert.equal(lookups, 1);
+});
+test("ending a shared call removes exactly its room, then stops the job", async () => {
+  const steps = [];
+  await endSharedRoom({
+    roomId: "room-a",
+    rooms: { deleteRoom: async (room) => steps.push(`delete ${room}`) },
+    shutdown: () => steps.push("shutdown"),
+  });
+  assert.deepEqual(steps, ["delete room-a", "shutdown"]);
+  // A failed removal still stops the job; the coordinator removes the room too.
+  const stopped = [];
+  await endSharedRoom({
+    roomId: "room-b",
+    rooms: {
+      deleteRoom: async () => {
+        throw Error("media unavailable");
+      },
+    },
+    shutdown: () => stopped.push("shutdown"),
+  });
+  assert.deepEqual(stopped, ["shutdown"]);
 });

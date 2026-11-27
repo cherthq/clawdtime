@@ -40,7 +40,15 @@ test("shared voice requires the exact caller and proof before remote actions, th
     assert.equal(await desk.bindCaller("wrong"), false);
     assert.match(await desk.ask("Click", { requestId: "one" }), /unavailable/);
     assert.equal(await desk.bindCaller("bridge"), true);
-    assert.match(await desk.ask("Click", { requestId: "two" }), /verification/);
+    // The greeting and the refusal say how the paired Mac verifies this call.
+    assert.match(
+      desk.greeting(),
+      /on your paired Mac, run clawdtime shared prove/i,
+    );
+    assert.match(
+      await desk.ask("Click", { requestId: "two" }),
+      /on your paired Mac, run clawdtime shared prove/i,
+    );
     assert.equal(commands.length, 0);
     assert.match(
       await desk.ask("12345678", { requestId: "proof" }),
@@ -133,3 +141,85 @@ test("callback waits for answer, opens the original result, and retains the late
     await desk.close();
   }
 }, 10000);
+
+test("an unverified call is released at its deadline and the line ends it", async () => {
+  const posted = [];
+  const ended = [];
+  const desk = await makeSharedDesk({
+    origin: "https://coordinator.example",
+    token: "t".repeat(32),
+    roomId: "room",
+    end: (reason) => ended.push(reason),
+    request: async (url, init) => {
+      const input = JSON.parse(init.body);
+      posted.push([new URL(url).pathname, input]);
+      if (url.endsWith("/room"))
+        return Response.json({
+          id: "call",
+          lineId: "line",
+          providerCallId: "provider",
+          roomId: "room",
+          participantId: "bridge",
+          verifyInMs: 50,
+        });
+      return Response.json({ ok: true, released: true });
+    },
+  });
+  try {
+    assert.equal(await desk.bindCaller("bridge"), true);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(ended, ["verification_expired"]);
+    assert(
+      posted.some(
+        ([path, input]) => path === "/line/release" && input.roomId === "room",
+      ),
+    );
+    assert.match(
+      await desk.ask("12345678", { requestId: "late" }),
+      /unavailable/,
+    );
+    assert(!posted.some(([path]) => path === "/line/proof-turn"));
+  } finally {
+    await desk.close();
+  }
+});
+test("a call verified before its deadline is not released", async () => {
+  const ended = [];
+  const posted = [];
+  const desk = await makeSharedDesk({
+    origin: "https://coordinator.example",
+    token: "t".repeat(32),
+    roomId: "room",
+    end: (reason) => ended.push(reason),
+    request: async (url, init) => {
+      posted.push(new URL(url).pathname);
+      if (url.endsWith("/room"))
+        return Response.json({
+          id: "call",
+          lineId: "line",
+          providerCallId: "provider",
+          roomId: "room",
+          participantId: "bridge",
+          verifyInMs: 100,
+        });
+      if (url.endsWith("/proof-turn"))
+        return Response.json({
+          state: "admitted",
+          call: { scope: { grantId: "grant" } },
+        });
+      return Response.json({ ok: true, expiresAt: Date.now() + 30000 });
+    },
+  });
+  try {
+    assert.equal(await desk.bindCaller("bridge"), true);
+    assert.match(
+      await desk.ask("12345678", { requestId: "proof" }),
+      /connected/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(ended, []);
+    assert(!posted.includes("/line/release"));
+  } finally {
+    await desk.close();
+  }
+});

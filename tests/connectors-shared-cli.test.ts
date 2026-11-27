@@ -1,0 +1,126 @@
+import { expect, it, vi } from "vitest";
+import {
+  sharedAcceptance,
+  sharedCallProof,
+  sharedConnectionSchema,
+  sharedRotate,
+  localRefusal,
+} from "../cli/shared.js";
+
+const credential = `credential_${"a".repeat(36)}.${"b".repeat(43)}`;
+
+it("asks for the call code with this Mac's device credential and never sends a sign-in text", async () => {
+  const request = vi.fn(async () =>
+    Response.json({ callId: "call", code: "12345678", expiresAt: 1 }),
+  );
+  const proof = await sharedCallProof(
+    { origin: "https://coordinator.example", credential },
+    undefined,
+    request as unknown as typeof fetch,
+  );
+  expect(proof.code).toBe("12345678");
+  expect(request).toHaveBeenCalledOnce();
+  const [url, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toBe("https://coordinator.example/device/call-proof");
+  expect((init.headers as Record<string, string>).authorization).toBe(
+    `Bearer ${credential}`,
+  );
+  expect(init.redirect).toBe("error");
+  expect(JSON.parse(init.body as string)).toEqual({});
+});
+
+it("reports a refused call code without a code", async () => {
+  const request = vi.fn(async () =>
+    Response.json(
+      { ok: false, code: "shared_call_not_waiting" },
+      { status: 409 },
+    ),
+  );
+  await expect(
+    sharedCallProof(
+      { origin: "https://coordinator.example", credential },
+      "call",
+      request as unknown as typeof fetch,
+    ),
+  ).rejects.toThrow("shared_call_not_waiting");
+});
+
+it("rotates the device credential with the current device credential", async () => {
+  const next = `credential_${"c".repeat(36)}.${"d".repeat(43)}`;
+  const request = vi.fn(async () => Response.json({ credential: next }));
+  expect(
+    await sharedRotate(
+      { origin: "https://coordinator.example", credential },
+      request as unknown as typeof fetch,
+    ),
+  ).toBe(next);
+  const [url, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toBe("https://coordinator.example/device/rotate");
+  expect((init.headers as Record<string, string>).authorization).toBe(
+    `Bearer ${credential}`,
+  );
+});
+
+it("sends the real view answer when pairing and saves both answers on the Mac", () => {
+  expect(
+    sharedAcceptance({ displayId: "1", shareScreen: false, control: true }),
+  ).toEqual({
+    localAccepted: true,
+    displayId: "1",
+    allowView: false,
+    allowControl: false,
+  });
+  expect(
+    sharedAcceptance({ displayId: "1", shareScreen: true, control: false }),
+  ).toMatchObject({ allowView: true, allowControl: false });
+  const saved = sharedConnectionSchema.parse({
+    origin: "https://coordinator.example",
+    credential,
+    deviceId: "mac_1",
+    displayId: "1",
+    allowView: true,
+    allowControl: false,
+  });
+  expect(saved).toMatchObject({ allowView: true, allowControl: false });
+  // A connection file from before these answers were saved allows nothing.
+  expect(
+    sharedConnectionSchema.parse({
+      origin: "https://coordinator.example",
+      credential,
+      deviceId: "mac_1",
+      displayId: "1",
+    }),
+  ).toMatchObject({ allowView: false, allowControl: false });
+});
+
+it("refuses on the Mac every command that the person declined, and never refuses Stop", () => {
+  const operations = [
+    { action: "chat", requestId: "turn", text: "Open a sample note" },
+    { action: "frame" },
+    { action: "walkthrough" },
+    { action: "open" },
+    { action: "renew" },
+    { action: "stop" },
+    { action: "close" },
+    { action: "hide" },
+  ] as const;
+  const refused = (allowView: boolean, allowControl: boolean) =>
+    operations
+      .filter((operation) =>
+        localRefusal({ allowView, allowControl }, operation),
+      )
+      .map((operation) => operation.action);
+  expect(refused(true, true)).toEqual([]);
+  expect(refused(true, false)).toEqual(["chat"]);
+  expect(refused(false, false)).toEqual([
+    "chat",
+    "frame",
+    "walkthrough",
+    "open",
+    "renew",
+  ]);
+  // A coordinator that claims control cannot override the Mac's own no.
+  expect(
+    localRefusal({ allowView: false, allowControl: true }, operations[0]),
+  ).toEqual({ ok: false, code: "declined_on_this_mac" });
+});

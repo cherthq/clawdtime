@@ -3,8 +3,14 @@ import jpeg from "jpeg-js";
 import { makeProactiveVideo } from "./proactive-outbound.mjs";
 import { WIDTH, HEIGHT } from "./screen.mjs";
 
+/** A caller who has not verified within this time is released (the
+ * coordinator gives each call its own deadline, never longer than this). */
+export const VERIFY_LIMIT_MS = 90_000;
+
 /** Trusted voice adapter. The caller supplies speech only, never routing IDs.
- * It has no local CLI, memory, job watcher, or desktop fallback. */
+ * It has no local CLI, memory, job watcher, or desktop fallback.
+ * `end(reason)` ends the call (for example, removes its room). The desk calls
+ * it when the caller does not verify before the deadline. */
 export async function makeSharedDesk({
   origin,
   token,
@@ -12,6 +18,8 @@ export async function makeSharedDesk({
   request = fetch,
   now = Date.now,
   claim = true,
+  end = null,
+  verifyLimitMs = VERIFY_LIMIT_MS,
 }) {
   const url = new URL(origin);
   if (
@@ -54,7 +62,9 @@ export async function makeSharedDesk({
     renewTimer = null,
     renewing = false,
     lastTaskId = null,
-    activeVideo = null;
+    activeVideo = null,
+    verifyTimer = null,
+    proving = null;
   const command = async (operation, requestId = randomUUID()) => {
     if (!bound || closed || !grantId) throw Error("shared_call_not_authorized");
     return post("/line/command", {
@@ -64,10 +74,27 @@ export async function makeSharedDesk({
       operation,
     });
   };
+  // The single line slot is never held by a caller who does not verify.
+  const release = async () => {
+    if (proving) await proving.catch(() => {});
+    if (grantId || closed) return;
+    closed = true;
+    try {
+      await post("/line/release", { roomId });
+    } catch {
+      /* the coordinator also releases the call at its own deadline */
+    }
+    try {
+      await end?.("verification_expired");
+    } catch {
+      /* the provider cleanup still ends the call */
+    }
+  };
   let closing;
   const close = () => {
     if (closing) return closing;
     closed = true;
+    clearTimeout(verifyTimer);
     clearInterval(renewTimer);
     const closingGrant = grantId;
     grantId = null;
@@ -105,6 +132,16 @@ export async function makeSharedDesk({
         !!call.id &&
         call.roomId === roomId &&
         identity === call.participantId;
+      if (bound) {
+        const given = Number.isFinite(call.verifyInMs)
+          ? call.verifyInMs
+          : verifyLimitMs;
+        verifyTimer = setTimeout(
+          () => void release(),
+          Math.max(0, Math.min(verifyLimitMs, given)),
+        );
+        verifyTimer.unref?.();
+      }
       return bound;
     },
     async open() {
@@ -112,10 +149,10 @@ export async function makeSharedDesk({
     },
     close,
     greeting() {
-      return "This is ClawdTime. Verify this call from your paired Mac before asking me to use it.";
+      return "This is ClawdTime. No Mac is connected yet. On your paired Mac, run clawdtime shared prove, then say the eight-digit code that it shows.";
     },
-    // This identifier is displayed by the authenticated setup flow. It grants
-    // no authority on its own; the account receives a separate short-lived code.
+    // This identifier grants no authority on its own. Only the paired Mac,
+    // over its own device connection, receives the short-lived call code.
     callId: call.id,
     video: () => {
       const video = makeProactiveVideo({
@@ -180,8 +217,8 @@ export async function makeSharedDesk({
             text,
           )?.[1];
         if (!code)
-          return "Complete call verification in ClawdTime on your Mac, then say the eight-digit call code. No computer is connected yet.";
-        const proof = await post("/line/proof-turn", {
+          return "On your paired Mac, run clawdtime shared prove, then say the eight-digit code that it shows. No computer is connected yet.";
+        proving = post("/line/proof-turn", {
           lineId: call.lineId,
           providerCallId: call.providerCallId,
           roomId: call.roomId,
@@ -190,9 +227,16 @@ export async function makeSharedDesk({
           code,
           expiresAt: now() + 10_000,
         });
-        if (proof.state !== "admitted")
-          return "Call verification did not authorize an online Mac. No action was sent.";
+        let proof;
+        try {
+          proof = await proving;
+        } finally {
+          proving = null;
+        }
+        if (proof.state !== "admitted" || closed)
+          return "That code did not connect your paired Mac. No action was sent.";
         grantId = proof.call.scope.grantId;
+        clearTimeout(verifyTimer);
         const result = await command({ action: "open" });
         if (!result.ok) {
           await close();
