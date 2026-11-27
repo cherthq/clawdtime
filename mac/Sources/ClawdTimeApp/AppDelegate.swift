@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private(set) var owner: ProcessOwner!
   private var window: NSWindow?
   private var menuBar: MenuBarController?
+  private var settings: SettingsWindowController?
   private var watch: AnyCancellable?
   private var quitting = false
 
@@ -55,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       // even with a slow double-click setting (capped at 1.5 seconds).
       answerDelay: min(1.5, max(SetupCoordinator.defaultAnswerDelay, NSEvent.doubleClickInterval + 0.1)))
     setup.onFinish = { [weak self] in self?.didFinishSetup() }
+    settings = makeSettings(layout)
     watch = setup.$state.sink { [weak self] state in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.stateChanged(state) } }
     }
@@ -102,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     menuBar = MenuBarController(
       owner: owner,
       openWindow: { [weak self] in self?.showWindow() },
+      openSettings: { [weak self] in self?.showSettings(nil) },
       stop: { [weak self] in self?.setup.stop() },
       start: { [weak self] in
         guard let self else { return }
@@ -125,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       window.isReleasedWhenClosed = false
       window.delegate = self
       window.center()
+      SettingsGearButton.attach(to: window) { [weak self] in self?.showSettings(nil) }
       self.window = window
     }
     if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
@@ -134,7 +138,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   func windowWillClose(_ notification: Notification) {
     // After setup the app lives in the menu bar alone.
-    if menuBar != nil { NSApp.setActivationPolicy(.accessory) }
+    if menuBar != nil && settings?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
+  }
+
+  /// Settings… in both menus and the gear of the setup window. The main menu
+  /// sends it with no target, so it reaches this delegate.
+  @objc func showSettings(_ sender: Any?) { settings?.show() }
+
+  private func makeSettings(_ layout: RuntimeLayout?) -> SettingsWindowController {
+    let model = SettingsModel(
+      runner: ProcessCommandRunner(), launcher: layout?.launcher,
+      native: layout?.root.appendingPathComponent("app/native", isDirectory: true),
+      desktop: owner, about: AboutInfo.current(layout), open: { NSWorkspace.shared.open($0) })
+    let actions = SettingsActions(
+      runSetup: { [weak self] in
+        guard let self else { return }
+        self.setup.finishWhenReady = false
+        self.showWindow()
+        self.setup.begin()
+      },
+      stop: { [weak self] in self?.setup.stop() })
+    return SettingsWindowController(
+      model: model,
+      makeView: { [unowned self] in
+        SettingsRootView(model: model, owner: self.owner, setup: self.setup, loginItem: self.loginItem, actions: actions)
+      },
+      closed: { [weak self] in
+        guard let self else { return }
+        if self.menuBar != nil && self.window?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
+      })
   }
 
   func applicationDidBecomeActive(_ notification: Notification) { setup?.applicationDidBecomeActive() }

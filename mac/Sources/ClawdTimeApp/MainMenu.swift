@@ -20,6 +20,8 @@ enum MainMenu {
     submenu("ClawdTime", [
       item("About ClawdTime", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
       .separator(),
+      item("Settings…", #selector(AppDelegate.showSettings(_:)), ","),
+      .separator(),
       item("Hide ClawdTime", #selector(NSApplication.hide(_:)), "h"),
       item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
       item("Show All", #selector(NSApplication.unhideAllApplications(_:)), ""),
