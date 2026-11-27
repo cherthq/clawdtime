@@ -19,8 +19,10 @@ Requirements: macOS 14 or later on a Mac with Apple silicon.
    Choose **Open System Settings**, turn the item on, and come back. The app
    checks the step again when you return. **Check again** does the same.
    **Details** shows the full path of each item, when you need it.
-6. You can skip your phone, the pairing, the connection and computer use, and
-   come back to them later. ClawdTime then works on this Mac only.
+6. **Skip for now** is on every step, also while the desktop starts. A skip
+   is never a yes. Setup goes on, and the last screen says what each skipped
+   step leaves undone and how to finish it. Run setup again to come back to
+   it.
 7. The last screen shows what is ready. Choose **Finish**.
 
 **Stop** is at the top of the window from the first screen, before anything
@@ -86,8 +88,10 @@ panel, and starts no background connection.
 - A consent question (computer use, a sign-in text, view, computer actions,
   reports, the pairing, a replacement, the connection) has no default
   button: Return does not answer it.
-- The app offers **Skip for now** only on `phone`, `pairing`, `connection` and
-  `computer`.
+- The app offers a quiet **Skip for now** on every step but `ready`, while
+  the engine reads a skip: at a question, at a failure, and on a step in
+  progress that has a `question` id (the desktop start). The report marks
+  each skipped step and shows its line.
 - A recovery may open only a System Settings pane (`x-apple.systempreferences:`)
   or an `https` page. The app refuses any other link.
 - A line that is not protocol JSON is counted and ignored. A line over 1 MB is
@@ -124,7 +128,7 @@ the final report says is ready:
 | Process    | Command                                      | Starts when                                                  |
 | ---------- | -------------------------------------------- | ------------------------------------------------------------ |
 | Desktop    | `clawdtime start --tucked true --foreground` | `desktop` is ready                                           |
-| Connection | `clawdtime shared run`                       | the desktop prints its ready line, and `connection` is ready |
+| Connection | `clawdtime shared run --owned`               | the desktop prints its ready line, and `connection` is ready |
 
 - Each process starts in its own process group, with stdin from `/dev/null`.
 - `clawdtime start --foreground` takes over the desktop service that setup
@@ -141,6 +145,10 @@ the final report says is ready:
   still there after 10 seconds gets SIGKILL with its whole group.
 - When the desktop ends, the app ends the connection too: a connection belongs
   to one desktop lifetime.
+- With `--owned`, the connection checks its parent. When the app is gone,
+  also after a crash, it disconnects, frees the connection lock and leaves,
+  as `clawdtime start --foreground` does. A connection that Terminal setup
+  starts has no `--owned`: it keeps running after setup ends.
 - Nothing restarts by itself. The menu says what ended, and Start is your
   choice.
 - Sleep changes nothing in the app. The connection keeps its own rules for a

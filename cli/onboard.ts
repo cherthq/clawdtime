@@ -112,6 +112,8 @@ export class TerminalWizard implements OnboardIO {
   private stopped = false;
   /** Ends the line that is being read now, if any. */
   private interrupt: (() => void) | null = null;
+  /** Wakes a `next` that waits for the next question. */
+  private wake: (() => void) | null = null;
   /**
    * @param settleMs Before each question the wizard drops what was typed so
    * far, then waits this long and drops what comes in meanwhile: a second
@@ -127,6 +129,7 @@ export class TerminalWizard implements OnboardIO {
   stop() {
     this.stopped = true;
     this.interrupt?.();
+    this.wake?.();
   }
 
   private write(line: string) {
@@ -149,9 +152,14 @@ export class TerminalWizard implements OnboardIO {
           ? "Setup is done."
           : "Setup is not finished. Run clawdtime onboard again to continue.",
       );
+      // A skipped or failed step says what does not work and how to finish it.
       for (const row of event.report)
         if (row.id !== "ready")
-          this.write(`  ${row.id.padEnd(12)} ${row.state.replace("_", " ")}`);
+          this.write(
+            `  ${row.id.padEnd(12)} ${row.state.replace("_", " ")}${(row.state === "skipped" || row.state === "failed") && row.detail ? `. ${row.detail}` : ""}`,
+          );
+      const ready = event.report.find((row) => row.id === "ready");
+      if (ready?.detail) this.write(ready.detail);
       return;
     }
     if (event.state === "pending") return;
@@ -169,7 +177,10 @@ export class TerminalWizard implements OnboardIO {
         }
       }
       // Only a question is answered: a failure that waits for nothing is not.
-      if (event.question) this.pending = event;
+      if (event.question) {
+        this.pending = event;
+        this.wake?.();
+      }
       return;
     }
     if (!said) return;
@@ -186,6 +197,11 @@ export class TerminalWizard implements OnboardIO {
   }
 
   async next(): Promise<OnboardCommand> {
+    // Setup may wait for a command while a step runs (a skip, in the app):
+    // here the next command answers the next question.
+    while (!this.pending && !this.stopped)
+      await new Promise<void>((done) => (this.wake = done));
+    this.wake = null;
     const event = this.pending;
     this.pending = null;
     let command: OnboardCommand;
@@ -206,7 +222,11 @@ export class TerminalWizard implements OnboardIO {
   private async answer(event: StepEvent): Promise<OnboardCommand> {
     const id = event.id;
     const question = event.question!;
+    // Every step but ready can be skipped: skip, or s, at any prompt.
     const skip = skippableSteps.has(id);
+    const later = skip ? " Type skip to do this later" : "";
+    const skips = (reply: string) =>
+      skip && ["skip", "s"].includes(reply.trim().toLowerCase());
     const action = (value: "retry" | "recheck" | "skip"): OnboardCommand => ({
       type: "action",
       id,
@@ -222,49 +242,55 @@ export class TerminalWizard implements OnboardIO {
     if (event.state === "failed") {
       const reply = (
         await this.line(
-          `Press Enter to ${(event.recovery?.label ?? "try again").toLowerCase()}${skip ? ", type skip to skip this step" : ""}, or type quit to stop: `,
+          `Press Enter to ${(event.recovery?.label ?? "try again").toLowerCase()}${skip ? ", type skip to do this later" : ""}, or type quit to stop: `,
         )
       )
         .trim()
         .toLowerCase();
       if (reply === "quit") return { type: "cancel" };
-      return action(skip && reply === "skip" ? "skip" : "retry");
+      return action(skips(reply) ? "skip" : "retry");
     }
     const asked = event.input!;
     if (event.recovery?.action === "open_settings" && event.recovery.url) {
       const first = (
         await this.line(
-          "Press Enter to open System Settings, or type quit to stop: ",
+          `Press Enter to open System Settings${skip ? ", type skip to do this later" : ""}, or type quit to stop: `,
         )
       ).trim();
       if (first === "quit") return { type: "cancel" };
+      if (skips(first)) return action("skip");
       await this.openUrl(event.recovery.url).catch(() =>
         this.write(
           "  System Settings did not open. Open it yourself: Privacy & Security.",
         ),
       );
       const second = (
-        await this.line("Press Enter when you are done, to check again: ")
+        await this.line(
+          `Press Enter when you are done, to check again${skip ? ", or type skip to do this later" : ""}: `,
+        )
       ).trim();
       if (second === "quit") return { type: "cancel" };
+      if (skips(second)) return action("skip");
       return action("recheck");
     }
-    if (asked.kind === "secret")
-      return input(await this.hidden(`${asked.prompt} (it is not shown): `));
+    if (asked.kind === "secret") {
+      const secret = await this.hidden(
+        `${asked.prompt} (it is not shown).${later}: `,
+      );
+      return skips(secret) ? action("skip") : input(secret);
+    }
     if (asked.kind === "confirm")
       for (;;) {
         const reply = (
-          await this.line(
-            `${asked.prompt} Type yes or no${skip ? ", or skip" : ""}: `,
-          )
+          await this.line(`${asked.prompt} Type yes or no.${later}: `)
         )
           .trim()
           .toLowerCase();
         if (reply === "yes" || reply === "y") return input(true);
-        // Enter alone gives no consent.
+        // Enter alone gives no consent. A skip is never a yes.
         if (reply === "no" || reply === "n" || (asked.consent && reply === ""))
           return input(false);
-        if (skip && reply === "skip") return action("skip");
+        if (skips(reply)) return action("skip");
         if (reply === "quit") return { type: "cancel" };
       }
     if (asked.kind === "choice") {
@@ -276,19 +302,15 @@ export class TerminalWizard implements OnboardIO {
         ),
       );
       for (;;) {
-        const reply = (
-          await this.line(`Type a number${skip ? ", or skip" : ""}: `)
-        ).trim();
+        const reply = (await this.line(`Type a number.${later}: `)).trim();
         const option = options[Number(reply) - 1];
         if (option && /^\d+$/.test(reply)) return input(option.id);
-        if (skip && reply === "skip") return action("skip");
+        if (skips(reply)) return action("skip");
         if (reply === "quit") return { type: "cancel" };
       }
     }
-    const reply = (
-      await this.line(`${asked.prompt}${skip ? " (or skip)" : ""}: `)
-    ).trim();
-    if (skip && reply === "skip") return action("skip");
+    const reply = (await this.line(`${asked.prompt}.${later}: `)).trim();
+    if (skips(reply)) return action("skip");
     return input(reply);
   }
 

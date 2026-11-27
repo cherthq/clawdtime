@@ -29,13 +29,13 @@ export type StepId = (typeof stepIds)[number];
 export type StepState =
   "pending" | "in_progress" | "needs_input" | "ready" | "failed" | "skipped";
 
-/** Only these steps accept a skip from the person. */
-export const skippableSteps: ReadonlySet<StepId> = new Set([
-  "phone",
-  "pairing",
-  "connection",
-  "computer",
-]);
+/**
+ * Every step but `ready` accepts a skip, so that nobody is stuck at setup. A
+ * skip is never a yes: at a consent question it means no.
+ */
+export const skippableSteps: ReadonlySet<StepId> = new Set(
+  stepIds.filter((id) => id !== "ready"),
+);
 
 export interface Recovery {
   label: string;

@@ -50,8 +50,8 @@ final class ProcessOwnerTests: XCTestCase {
     waitUntil { owner.connection == .running }
     XCTAssertEqual(owner.desktop, .running)
     XCTAssertTrue(owner.isActive)
-    waitUntil { events(folder).contains("connection shared run") }
-    XCTAssertEqual(events(folder), ["connection shared run"])
+    waitUntil { events(folder).contains("connection shared run --owned") }
+    XCTAssertEqual(events(folder), ["connection shared run --owned"])
 
     var stopped = false
     owner.stop { stopped = true }
@@ -61,7 +61,7 @@ final class ProcessOwnerTests: XCTestCase {
     XCTAssertEqual(owner.desktop, .off)
     XCTAssertEqual(owner.connection, .off)
     XCTAssertFalse(owner.isActive)
-    XCTAssertEqual(events(folder), ["connection shared run", "connection-term", "term"], "the connection ends before the desktop")
+    XCTAssertEqual(events(folder), ["connection shared run --owned", "connection-term", "term"], "the connection ends before the desktop")
     // The desktop's own child, in its process group, is gone too.
     let child = try XCTUnwrap(pid(folder.appendingPathComponent("desktop-child.pid")))
     waitUntil { !alive(child) }
@@ -120,7 +120,7 @@ final class ProcessOwnerTests: XCTestCase {
     let folder = try temporaryFolder(self)
     let owner = ProcessOwner(launcher: try launcher(folder), grace: 3)
     owner.start(connection: true)
-    waitUntil { owner.connection == .running && events(folder).contains("connection shared run") }
+    waitUntil { owner.connection == .running && events(folder).contains("connection shared run --owned") }
     let desktop = try XCTUnwrap(owner.desktopPID)
     kill(desktop, SIGKILL)
     waitUntil { if case .ended = owner.connection { return true } else { return false } }
@@ -146,7 +146,8 @@ final class ProcessOwnerTests: XCTestCase {
   func testTheCommandsAreTheOnesTheRuntimeMustProvide() {
     XCTAssertEqual(ManagedCommand.desktop.arguments, ["start", "--tucked", "true", "--foreground"])
     XCTAssertTrue(ManagedCommand.desktop.waitsForReady)
-    XCTAssertEqual(ManagedCommand.connection.arguments, ["shared", "run"])
+    // --owned: the connection ends by itself when the app is gone, also after a crash.
+    XCTAssertEqual(ManagedCommand.connection.arguments, ["shared", "run", "--owned"])
     XCTAssertTrue(ManagedCommand.isReadyLine(#"{"type":"ready"}"#))
     XCTAssertTrue(ManagedCommand.isReadyLine(#"{"type":"ready","origin":"http://127.0.0.1:13326"}"#))
     XCTAssertFalse(ManagedCommand.isReadyLine("Desktop ready"))

@@ -85,9 +85,9 @@ final class SetupProtocolTests: XCTestCase {
     XCTAssertEqual(SetupProtocol.arguments(local: true), ["onboard", "--json", "--app", "--local"])
   }
 
-  func testStepsHaveTheirFixedOrderAndOnlySomeMayBeSkipped() {
+  func testStepsHaveTheirFixedOrderAndEveryStepButReadyMayBeSkipped() {
     XCTAssertEqual(StepID.order.map(\.rawValue), ["preflight", "model", "desktop", "computer", "permissions", "phone", "pairing", "connection", "ready"])
-    XCTAssertEqual(StepID.order.filter(\.isSkippable), [.computer, .phone, .pairing, .connection])
+    XCTAssertEqual(StepID.order.filter(\.isSkippable), [.preflight, .model, .desktop, .computer, .permissions, .phone, .pairing, .connection])
     for id in StepID.order { XCTAssertFalse(id.fallbackTitle.isEmpty) }
     XCTAssertEqual(StepID(rawValue: "voice").fallbackTitle, "Voice")
   }

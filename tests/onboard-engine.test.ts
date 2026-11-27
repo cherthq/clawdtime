@@ -33,6 +33,7 @@ import {
 } from "../src/onboard/pairing.js";
 import {
   jsonLinesIO,
+  skippableSteps,
   stepIds,
   type OnboardCommand,
   type OnboardEvent,
@@ -84,6 +85,11 @@ function fakeMac(
     darwinMajor?: number;
     /** The ports remember the desktop that an app setup started, as the real ones do. */
     remembers?: boolean;
+    /** The panel is missing from this install. */
+    panelMissing?: boolean;
+    /** The desktop start fails, or takes this long. */
+    startFails?: boolean;
+    startMs?: number;
   } = {},
 ) {
   const call = (port: string) => options.onCall?.(port);
@@ -118,7 +124,7 @@ function fakeMac(
       darwinMajor: options.darwinMajor ?? 25,
       appleSilicon: true,
     }),
-    helpers: () => ({ panel: true, capture: true }),
+    helpers: () => ({ panel: !options.panelMissing, capture: true }),
     desktop: {
       status: async () => {
         call("desktop.status");
@@ -147,6 +153,9 @@ function fakeMac(
       start: async (log) => {
         call("desktop.start");
         calls.desktopStarts++;
+        if (options.startMs)
+          await new Promise((done) => setTimeout(done, options.startMs));
+        if (options.startFails) throw Error("The desktop did not start.");
         log("Desktop panel requested.");
         desktop = "connected";
         if (options.remembers) setupStarted = true;
@@ -255,7 +264,13 @@ async function runJson(
   home: string,
   ports: OnboardPorts,
   respond: Responder,
-  extra: { now?: () => number; root?: string; cancelAtHello?: boolean } = {},
+  extra: {
+    now?: () => number;
+    root?: string;
+    cancelAtHello?: boolean;
+    /** Answers a step that is in progress and may be skipped. */
+    progress?: (event: StepEvent) => Reply | undefined;
+  } = {},
 ) {
   const stdin = new PassThrough();
   const lines: string[] = [];
@@ -284,6 +299,15 @@ async function runJson(
         const event = JSON.parse(line) as OnboardEvent;
         if (event.type === "hello" && extra.cancelAtHello)
           setImmediate(() => stdin.end('{"type":"cancel"}\n'));
+        if (
+          event.type === "step" &&
+          event.state === "in_progress" &&
+          event.question &&
+          extra.progress
+        ) {
+          const answer = extra.progress(event);
+          if (answer) send(answer, event);
+        }
         if (
           event.type === "step" &&
           (event.state === "needs_input" || event.state === "failed")
@@ -517,9 +541,9 @@ describe("clawdtime onboard --json", () => {
       (event) => {
         if (event.id === "permissions" && first) {
           first = false;
-          // Permissions cannot be skipped: the skip is refused and the
-          // question comes again with a new id. Then the recheck works.
-          return { type: "action", id: "permissions", action: "skip" };
+          // A check again before the person acted: the question comes again
+          // with a new id. Then the recheck works.
+          return { type: "action", id: "permissions", action: "recheck" };
         }
         return yes(event);
       },
@@ -527,8 +551,8 @@ describe("clawdtime onboard --json", () => {
     const asking = steps(events).filter(
       (event) => event.id === "permissions" && event.state === "needs_input",
     );
-    // Asked, asked again after the refused skip, asked after a denied recheck.
-    expect(asking).toHaveLength(3);
+    // Asked, then asked again after the recheck that found it still denied.
+    expect(asking).toHaveLength(2);
     expect(asking[1]!.detail).toBe(asking[0]!.detail);
     expect(asking[1]!.question).not.toBe(asking[0]!.question);
     expect(asking[0]!.recovery).toEqual({
@@ -542,13 +566,6 @@ describe("clawdtime onboard --json", () => {
     expect(asking[0]!.details).toEqual([
       "ClawdTimeTaskPanel: /Applications/Made Up/ClawdTimeTaskPanel",
     ]);
-    expect(
-      events.some(
-        (event) =>
-          event.type === "log" &&
-          event.message === "This step cannot be skipped.",
-      ),
-    ).toBe(true);
     expect(mac.calls.permissionChecks).toBe(3);
     expect(stateOf(events, "permissions")).toBe("ready");
   });
@@ -1137,6 +1154,202 @@ describe("clawdtime onboard --json", () => {
   });
 });
 
+describe("skip, so that nobody is stuck at setup", () => {
+  const skip = (id: StepEvent["id"]): Reply => ({
+    type: "action",
+    id,
+    action: "skip",
+  });
+  /** Says yes to everything, and skips the first question of one step. */
+  const skipAt =
+    (id: string, codeFor: () => string | undefined = () => undefined) =>
+    (event: StepEvent) =>
+      event.id === id ? skip(event.id) : agree(codeFor)(event);
+  const row = (events: OnboardEvent[], id: string) =>
+    done(events).report.find((one) => one.id === id)!;
+  const later = {
+    preflight:
+      "The ClawdTime panel is missing, so the desktop cannot start. Install ClawdTime again, then run clawdtime onboard.",
+    model:
+      "No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.",
+    desktop:
+      "The desktop does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard.",
+    computer: "Computer use stays off. Turn it on later: clawdtime computer on",
+    permissions:
+      "Screen Recording and Accessibility are not on yet, so ClawdTime cannot see or use this Mac. Turn them on in System Settings, then run clawdtime onboard.",
+    phone:
+      "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+    pairing:
+      "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+    connection:
+      "This Mac is not connected, so calls from your phone cannot reach it. To connect it later, run clawdtime onboard.",
+  };
+
+  it("every step but ready takes a skip", () => {
+    for (const id of stepIds)
+      expect(skippableSteps.has(id)).toBe(id !== "ready");
+  });
+
+  it("a skip at each step goes on to the next step, and the skipped step says what does not work and how to finish it", async () => {
+    const denied: PermissionFacts = {
+      panel: { path: "/x/P", accessibility: false, screenRecording: false },
+      capture: { path: "/x/C", screenRecording: true },
+    };
+    const cases = [
+      { id: "preflight", mac: { panelMissing: true }, ready: false },
+      { id: "model", mac: {}, ready: false },
+      { id: "desktop", mac: { startFails: true }, ready: false },
+      { id: "computer", mac: {}, ready: true },
+      { id: "permissions", mac: { permissions: [denied] }, ready: true },
+      { id: "phone", mac: {}, ready: true, shared: true },
+      { id: "pairing", mac: {}, ready: true, shared: true },
+      { id: "connection", mac: {}, ready: true, shared: true },
+    ] as const;
+    for (const one of cases) {
+      const coordinator = await fakeCoordinator();
+      cleanup.push(coordinator.close);
+      const mac = fakeMac({ ...one.mac } as Parameters<typeof fakeMac>[0]);
+      const home = folder();
+      const root = join(home, ".local", "share", "clawdtime");
+      if (one.id === "permissions") setComputerSwitch(root, true, Date.now());
+      const { events, code } = await runJson(
+        "shared" in one ? ["--coordinator", coordinator.origin] : ["--local"],
+        home,
+        mac.ports,
+        skipAt(one.id, () => coordinator.codeFor(member)),
+      );
+      expect(row(events, one.id), one.id).toEqual({
+        id: one.id,
+        state: "skipped",
+        detail: later[one.id],
+      });
+      // Setup went on: the steps after it ran, and no failure screen.
+      expect(done(events).ready, one.id).toBe(one.ready);
+      expect(row(events, "ready").state, one.id).toBe(
+        one.ready ? "ready" : "skipped",
+      );
+      expect(code, one.id).toBe(one.ready ? 0 : 2);
+      const next = stepIds[stepIds.indexOf(one.id) + 1]!;
+      expect(row(events, next).state, one.id).not.toBe("pending");
+      if (one.id === "model")
+        expect(
+          keyRows({}, root).rows.some((key) => key.from?.kind === "store"),
+        ).toBe(false);
+      void one;
+    }
+  });
+
+  it("the report lists each skipped step with its line", async () => {
+    const { events } = await runJson(
+      ["--local"],
+      folder(),
+      fakeMac().ports,
+      skipAt("computer"),
+    );
+    expect(row(events, "computer").state).toBe("skipped");
+    expect(row(events, "ready").detail).toBe(
+      "ClawdTime is ready on this Mac. Click the mascot to open the chat. Skipped for now: Computer use. Run clawdtime onboard to finish it.",
+    );
+    const model = await runJson(
+      ["--local"],
+      folder(),
+      fakeMac().ports,
+      skipAt("model"),
+    );
+    expect(row(model.events, "ready")).toEqual({
+      id: "ready",
+      state: "skipped",
+      detail:
+        "ClawdTime cannot work on this Mac yet. Skipped for now: Model key. Run clawdtime onboard to finish it.",
+    });
+  });
+
+  it("a skip on a consent question grants nothing", async () => {
+    // Computer use stays off.
+    const home = folder();
+    await runJson(["--local"], home, fakeMac().ports, skipAt("computer"));
+    expect(
+      readComputerSwitch(join(home, ".local", "share", "clawdtime")).enabled,
+    ).toBe(false);
+    // No sign-in text goes out.
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    await runJson(
+      ["--coordinator", coordinator.origin],
+      folder(),
+      fakeMac().ports,
+      (event) =>
+        event.input?.prompt === "Send a sign-in code to this number now?"
+          ? skip("phone")
+          : agree(() => coordinator.codeFor(member))(event),
+    );
+    expect(coordinator.texts).toHaveLength(0);
+    // A skip at the view question pairs nothing.
+    const paired = folder();
+    await runJson(
+      ["--coordinator", coordinator.origin],
+      paired,
+      fakeMac().ports,
+      (event) =>
+        event.input?.prompt.startsWith("Allow this display")
+          ? skip("pairing")
+          : agree(() => coordinator.codeFor(member))(event),
+    );
+    expect(readSharedPairing(sharedPairingPaths(paired).file).kind).toBe(
+      "none",
+    );
+    // A skip at the connection question connects nothing.
+    const mac = fakeMac();
+    await runJson(
+      ["--coordinator", coordinator.origin],
+      folder(),
+      mac.ports,
+      skipAt("connection", () => coordinator.codeFor(member)),
+    );
+    expect(mac.calls.connectionStarts).toBe(0);
+  });
+
+  it("a skip while the desktop starts ends that start, and leaves no desktop", async () => {
+    for (const args of [["--local"], ["--local", "--app"]]) {
+      const mac = fakeMac({ startMs: 150 });
+      const { events, code } = await runJson(
+        args,
+        folder(),
+        mac.ports,
+        agree(),
+        {
+          progress: (event) =>
+            event.id === "desktop" ? skip("desktop") : undefined,
+        },
+      );
+      expect(row(events, "desktop")).toEqual({
+        id: "desktop",
+        state: "skipped",
+        detail: later.desktop,
+      });
+      expect(mac.calls.desktopStarts).toBe(1);
+      expect(mac.calls.desktopStops).toBe(1);
+      expect((await mac.ports.desktop.status()).service).toBe("absent");
+      expect(code).toBe(2);
+    }
+  });
+
+  it("a rerun asks a skipped step again", async () => {
+    const home = folder();
+    const mac = fakeMac();
+    const first = await runJson(
+      ["--local"],
+      home,
+      mac.ports,
+      skipAt("computer"),
+    );
+    expect(row(first.events, "computer").state).toBe("skipped");
+    const second = await runJson(["--local"], home, mac.ports, agree());
+    expect(asked(second.events, "computer")).toBe(1);
+    expect(row(second.events, "computer").state).toBe("ready");
+  });
+});
+
 describe("clawdtime onboard in a terminal", () => {
   it("prints the one line and exits 3 with no terminal at all", async () => {
     const out: string[] = [];
@@ -1188,8 +1401,11 @@ describe("clawdtime onboard in a terminal", () => {
     const named: (string | undefined)[] = [];
     const io = {
       emit: (event: OnboardEvent) => {
+        // The questions that wait for an answer; a step in progress may carry
+        // one for a skip in the app, which the terminal does not offer.
         const question = (event as { question?: string }).question;
-        if (question) asked.push(question);
+        const state = (event as { state?: string }).state;
+        if (question && state !== "in_progress") asked.push(question);
         wizard.emit(event);
       },
       next: async () => {

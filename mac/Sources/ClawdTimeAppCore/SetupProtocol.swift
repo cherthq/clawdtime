@@ -41,8 +41,8 @@ public struct StepID: RawRepresentable, Hashable, Codable, Sendable, Expressible
 
   /// The steps in the order the engine runs them.
   public static let order: [StepID] = [.preflight, .model, .desktop, .computer, .permissions, .phone, .pairing, .connection, .ready]
-  /// Only these steps accept `skip`.
-  public static let skippable: Set<StepID> = [.phone, .pairing, .connection, .computer]
+  /// Every step but `ready` accepts `skip`, so that nobody is stuck at setup.
+  public static let skippable: Set<StepID> = Set(order.filter { $0 != .ready })
   public var isSkippable: Bool { Self.skippable.contains(self) }
 
   /// The title the app shows until the engine sends its own.

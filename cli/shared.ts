@@ -126,7 +126,7 @@ export async function sharedCli(args: string[]) {
   const system = { env: process.env, home: homedir() };
   if (!["pair", "run", "prove", "rotate", "doctor"].includes(args[0] ?? "")) {
     console.log(
-      "clawdtime shared pair HTTPS_ORIGIN [--replace]   (--replace pairs this Mac in place of a lost one)\nclawdtime shared run\nclawdtime shared rotate   (replace this Mac's device credential)\nclawdtime shared prove [CALL_ID]   (on the paired Mac, while shared run is open)\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
+      "clawdtime shared pair HTTPS_ORIGIN [--replace]   (--replace pairs this Mac in place of a lost one)\nclawdtime shared run [--owned]   (--owned: disconnect when the program that started it is gone)\nclawdtime shared rotate   (replace this Mac's device credential)\nclawdtime shared prove [CALL_ID]   (on the paired Mac, while shared run is open)\nclawdtime shared doctor\nShared calls remain unavailable until the provider, media, and callback integrations are qualified.",
     );
     return;
   }
@@ -161,6 +161,23 @@ export async function sharedCli(args: string[]) {
     const stop = () => controller.abort();
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
+    // --owned: the program that started this one (the Mac app) owns it. When
+    // that program is gone, also after a crash, this connection ends too and
+    // frees the lock, as `clawdtime start --foreground` does.
+    const parent = process.ppid;
+    const orphaned = () => process.ppid !== parent || process.ppid === 1;
+    let ownerGone = false;
+    const watch = args.includes("--owned")
+      ? setInterval(() => {
+          if (!orphaned()) return;
+          ownerGone = true;
+          stop();
+        }, 250)
+      : undefined;
+    if (watch && orphaned()) {
+      ownerGone = true;
+      stop();
+    }
     const display = config.capture
       ? new SharedDisplay({
           ...config.capture,
@@ -261,11 +278,15 @@ export async function sharedCli(args: string[]) {
           "Shared connection ended. No uncertain input was retried. Check the desktop before reconnecting.",
         );
     } finally {
+      if (watch) clearInterval(watch);
       await display?.close();
       store.close();
       lock.release();
       process.removeListener("SIGINT", stop);
       process.removeListener("SIGTERM", stop);
+      // No owner is left to end this process: it leaves even if a request
+      // that was cut off still holds a handle.
+      if (ownerGone) setTimeout(() => process.exit(0), 500).unref();
     }
     return;
   }
