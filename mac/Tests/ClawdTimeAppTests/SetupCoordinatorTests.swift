@@ -70,16 +70,28 @@ final class SetupCoordinatorTests: XCTestCase {
     XCTAssertTrue(engine.sent.isEmpty)
   }
 
-  func testOnlyPhonePairingConnectionAndComputerMayBeSkipped() {
+  func testEveryStepButReadyMayBeSkippedSoNobodyIsStuck() {
     let setup = coordinator()
-    ask("permissions", "permissions-question-1", #""input":{"kind":"confirm"}"#)
-    setup.perform(.skip)
-    XCTAssertTrue(engine.sent.isEmpty)
-    for id in ["phone", "pairing", "connection", "computer"] {
+    for id in ["preflight", "model", "desktop", "computer", "permissions", "phone", "pairing", "connection"] {
       ask(id, "\(id)-question-000001", #""input":{"kind":"confirm"}"#)
       setup.perform(.skip)
-      XCTAssertEqual(engine.sent.last, .action(id: StepID(rawValue: id), question: "\(id)-question-000001", action: .skip))
+      XCTAssertEqual(engine.sent.last, .action(id: StepID(rawValue: id), question: "\(id)-question-000001", action: .skip), id)
     }
+    let sent = engine.sent.count
+    engine.emit(#"{"type":"step","id":"ready","state":"failed","question":"ready-question-00001"}"#)
+    setup.perform(.skip)
+    XCTAssertEqual(engine.sent.count, sent, "ready is never skipped")
+  }
+
+  func testAStepInProgressCanBeSkippedByItsQuestion() {
+    let setup = coordinator()
+    engine.emit(#"{"type":"step","id":"desktop","state":"in_progress","question":"desktop-start-00001","detail":"Starting the desktop."}"#)
+    setup.perform(.skip)
+    XCTAssertEqual(engine.sent, [.action(id: .desktop, question: "desktop-start-00001", action: .skip)])
+    // A step in progress with no question cannot be skipped: nothing would read it.
+    engine.emit(#"{"type":"step","id":"permissions","state":"in_progress","detail":"Checking."}"#)
+    setup.perform(.skip)
+    XCTAssertEqual(engine.sent.count, 1)
   }
 
   func testOpenSettingsOpensOnlyASettingsPaneAndRechecksWhenThePersonComesBack() {

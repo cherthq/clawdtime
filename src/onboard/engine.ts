@@ -187,6 +187,25 @@ function plain(error: unknown, fallback: string) {
     : fallback;
 }
 
+/** What a skipped step leaves undone, and the command that finishes it. */
+const later = {
+  preflight:
+    "The ClawdTime panel is missing, so the desktop cannot start. Install ClawdTime again, then run clawdtime onboard.",
+  model:
+    "No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.",
+  desktop:
+    "The desktop does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard.",
+  computer: "Computer use stays off. Turn it on later: clawdtime computer on",
+  permissions:
+    "Screen Recording and Accessibility are not on yet, so ClawdTime cannot see or use this Mac. Turn them on in System Settings, then run clawdtime onboard.",
+  phone:
+    "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+  pairing:
+    "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+  connection:
+    "This Mac is not connected, so calls from your phone cannot reach it. To connect it later, run clawdtime onboard.",
+} satisfies Record<Exclude<StepId, "ready">, string>;
+
 const answers = (view: boolean, control: boolean, reports: boolean) =>
   `View ${view ? "allowed" : "declined"}. Computer actions ${control ? "allowed" : "declined"}. Reports ${reports ? "allowed" : "declined"}.`;
 
@@ -204,6 +223,13 @@ export class OnboardEngine {
   private computerOn = false;
   /** Every question id of this run. */
   private asked = new Set<string>();
+  /**
+   * The one read of the next command. A skip that waits during an operation
+   * and the next question share it, so no command is ever lost.
+   */
+  private pendingNext: Promise<OnboardCommand> | null = null;
+  /** The steps that the person skipped in this run. */
+  private skippedByPerson = new Set<StepId>();
   /** The Darwin major version that preflight read (24 is macOS 15). */
   private darwin: number | null = null;
   private readonly now: () => number;
@@ -338,7 +364,8 @@ export class OnboardEngine {
     question: string,
   ): Promise<Exclude<OnboardCommand, { type: "cancel" }>> {
     for (;;) {
-      const command = await this.io.next();
+      const command = await this.nextCommand();
+      this.pendingNext = null;
       if (command.type === "cancel") throw new Cancelled();
       if (command.question !== question) {
         this.log(
@@ -356,6 +383,66 @@ export class OnboardEngine {
       }
       return command;
     }
+  }
+
+  private nextCommand() {
+    return (this.pendingNext ??= this.io.next());
+  }
+
+  /** Skips a step with its line. The report lists the steps that the person skipped. */
+  private skipStep(id: Exclude<StepId, "ready">, detail: string = later[id]) {
+    this.skippedByPerson.add(id);
+    this.step(id, "skipped", { detail });
+  }
+
+  /**
+   * Runs an operation of a step while the person may skip the step: the
+   * step shows in progress with a question id that a skip names. The
+   * operation is never abandoned: the caller decides what a skip ends.
+   */
+  private async whileSkippable<T>(
+    id: StepId,
+    detail: string,
+    operation: Promise<T>,
+  ): Promise<{ value: T } | { error: unknown } | "skip" | "cancel"> {
+    const question = this.newQuestion();
+    this.step(id, "in_progress", { detail, question });
+    let over = false;
+    const settled = operation.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    const skipped = (async () => {
+      for (;;) {
+        const command = await this.nextCommand();
+        // The operation ended first: the command is the next question's.
+        if (over) return null;
+        this.pendingNext = null;
+        if (command.type === "cancel") return "cancel" as const;
+        if (
+          command.type === "action" &&
+          command.action === "skip" &&
+          command.id === id &&
+          command.question === question
+        )
+          return "skip" as const;
+        this.log(
+          "warn",
+          "That answer is not for the question that is open now. It was ignored.",
+        );
+      }
+    })();
+    const first = await Promise.race([settled, skipped]);
+    over = true;
+    return first ?? (await settled);
+  }
+
+  /** Ends the desktop that this setup started, as a skip of the desktop does. */
+  private async endStartedDesktop() {
+    await this.ports.desktop.stop?.().catch(() => {
+      this.log("warn", "The desktop that setup started did not stop.");
+    });
+    this.startedDesktop = false;
   }
 
   private log(level: "info" | "warn", message: string) {
@@ -444,12 +531,18 @@ export class OnboardEngine {
     }
   }
 
-  private async waitForDesktop(): Promise<DesktopReadiness> {
+  private async waitForDesktop(
+    until: { over: boolean } = { over: false },
+  ): Promise<DesktopReadiness> {
     const deadline = this.now() + (this.settings.desktopWaitMs ?? 30_000);
     for (;;) {
       await this.proceed();
       const status = await this.ports.desktop.status();
-      if (status.service === "connected" || this.now() >= deadline)
+      if (
+        status.service === "connected" ||
+        this.now() >= deadline ||
+        until.over
+      )
         return status;
       await new Promise((done) =>
         setTimeout(done, this.settings.pollMs ?? 500),
@@ -474,11 +567,17 @@ export class OnboardEngine {
       });
       return false;
     }
+    let panelSkipped = false;
     while (!this.ports.helpers().panel)
-      await this.failed(
-        "preflight",
-        "The ClawdTime panel is missing from this install. Install ClawdTime again, then try again.",
-      );
+      if (
+        (await this.failed(
+          "preflight",
+          "The ClawdTime panel is missing from this install. Install ClawdTime again, then try again.",
+        )) === "skip"
+      ) {
+        panelSkipped = true;
+        break;
+      }
     let mode: string;
     if (this.settings.local) mode = "Local mode: no phone pairing.";
     else {
@@ -535,9 +634,11 @@ export class OnboardEngine {
         "warn",
         "The capture helper is missing, so this Mac cannot show its screen on calls. Install ClawdTime again to fix it.",
       );
-    this.step("preflight", "ready", {
-      detail: `macOS and Apple silicon checked. ${mode}`,
-    });
+    if (panelSkipped) this.skipStep("preflight");
+    else
+      this.step("preflight", "ready", {
+        detail: `macOS and Apple silicon checked. ${mode}`,
+      });
     return true;
   }
 
@@ -557,7 +658,11 @@ export class OnboardEngine {
         return;
       }
       if (setup.reason === "invalid") {
-        await this.failed("model", `${setup.problem} Then try again.`);
+        if (
+          (await this.failed("model", `${setup.problem} Then try again.`)) ===
+          "skip"
+        )
+          return this.skipStep("model");
         continue;
       }
       const choice = await this.ask(
@@ -576,14 +681,18 @@ export class OnboardEngine {
             "ClawdTime plans each action with a language model. Your key stays on this Mac. For another provider, run clawdtime keys set PROVIDER, then run this again.",
         },
       );
-      if ("action" in choice) continue;
+      if ("action" in choice) {
+        if (choice.action === "skip") return this.skipStep("model");
+        continue;
+      }
       const provider = providerById(choice.value as string)!;
-      await this.takeKey(provider);
+      if ((await this.takeKey(provider)) === "skip")
+        return this.skipStep("model");
     }
   }
 
   /** Reads, checks and stores one key. It returns to the provider choice on retry. */
-  private async takeKey(provider: Provider) {
+  private async takeKey(provider: Provider): Promise<"skip" | undefined> {
     let detail = `Paste your ${provider.name} API key. It is not shown.`;
     for (;;) {
       const answer = await this.ask(
@@ -591,7 +700,8 @@ export class OnboardEngine {
         { kind: "secret", prompt: `${provider.name} API key` },
         { detail },
       );
-      if ("action" in answer) return;
+      if ("action" in answer)
+        return answer.action === "skip" ? "skip" : undefined;
       let key: string;
       try {
         key = checkKey(answer.value as string);
@@ -629,11 +739,12 @@ export class OnboardEngine {
             model: `${provider.id}/${provider.defaultModel}`,
           });
       } catch (error) {
-        await this.failed(
+        return (await this.failed(
           "model",
           plain(error, "The key could not be stored. Nothing was changed."),
-        );
-        return;
+        )) === "skip"
+          ? "skip"
+          : undefined;
       }
       const desktop = await this.ports.desktop.status().catch(() => null);
       if (desktop?.service === "connected")
@@ -641,7 +752,7 @@ export class OnboardEngine {
           "info",
           "The desktop runs already. It reads the new key the next time it starts.",
         );
-      return;
+      return undefined;
     }
   }
 
@@ -650,33 +761,73 @@ export class OnboardEngine {
       let status = await this.ports.desktop.status();
       if (status.service === "absent") {
         await this.proceed();
-        this.step("desktop", "in_progress", {
-          detail: "Starting the desktop.",
-        });
-        try {
-          await this.ports.desktop.start((message) =>
-            this.log("info", message),
-          );
-          this.startedDesktop = true;
-        } catch (error) {
+        // A start can be skipped while it runs: it goes to its end, so that
+        // its service is known, and then that desktop ends.
+        const starting = this.ports.desktop.start((message) =>
+          this.log("info", message),
+        );
+        const started = await this.whileSkippable(
+          "desktop",
+          "Starting the desktop.",
+          starting,
+        );
+        if (started === "skip" || started === "cancel") {
+          await starting.catch(() => {});
+          if (started === "cancel") {
+            this.stoppedWhileStarting = true;
+            throw new Cancelled();
+          }
+          await this.endStartedDesktop();
+          return this.skipStep("desktop");
+        }
+        if ("error" in started) {
           await new Promise((done) => setImmediate(done));
           if (this.io.cancelled()) {
             // A start that failed may still have left its service.
             this.stoppedWhileStarting = true;
             throw new Cancelled();
           }
-          await this.failed(
-            "desktop",
-            plain(error, "The desktop did not start. Nothing was replaced."),
-          );
+          if (
+            (await this.failed(
+              "desktop",
+              plain(
+                started.error,
+                "The desktop did not start. Nothing was replaced.",
+              ),
+            )) === "skip"
+          ) {
+            await this.endStartedDesktop();
+            return this.skipStep("desktop");
+          }
           continue;
         }
+        this.startedDesktop = true;
         await new Promise((done) => setImmediate(done));
         if (this.io.cancelled()) {
           this.stoppedWhileStarting = true;
           throw new Cancelled();
         }
-        status = await this.waitForDesktop();
+        const until = { over: false };
+        const waited = await this.whileSkippable(
+          "desktop",
+          "Waiting for the desktop to answer.",
+          this.waitForDesktop(until),
+        );
+        until.over = true;
+        if (waited === "cancel") {
+          this.stoppedWhileStarting = true;
+          throw new Cancelled();
+        }
+        if (waited === "skip") {
+          await this.endStartedDesktop();
+          return this.skipStep("desktop");
+        }
+        if ("error" in waited) {
+          if (waited.error instanceof Cancelled)
+            this.stoppedWhileStarting = true;
+          throw waited.error;
+        }
+        status = waited.value;
       }
       if (status.service === "connected") {
         this.step("desktop", "ready", {
@@ -684,12 +835,17 @@ export class OnboardEngine {
         });
         return;
       }
-      await this.failed(
-        "desktop",
-        status.service === "identity_mismatch"
-          ? "The running desktop does not match its own files. Nothing was replaced. Quit ClawdTime, then try again."
-          : "The desktop did not answer its readiness check. Nothing was replaced. Wait a moment, then try again.",
-      );
+      if (
+        (await this.failed(
+          "desktop",
+          status.service === "identity_mismatch"
+            ? "The running desktop does not match its own files. Nothing was replaced. Quit ClawdTime, then try again."
+            : "The desktop did not answer its readiness check. Nothing was replaced. Wait a moment, then try again.",
+        )) === "skip"
+      ) {
+        if (this.startedDesktop) await this.endStartedDesktop();
+        return this.skipStep("desktop");
+      }
     }
   }
 
@@ -698,9 +854,7 @@ export class OnboardEngine {
       const chosen = readComputerSwitch(this.root);
       if (chosen.problem) {
         if ((await this.failed("computer", chosen.problem)) === "skip")
-          return this.step("computer", "skipped", {
-            detail: "Computer use stays off.",
-          });
+          return this.skipStep("computer");
         continue;
       }
       if (!chosen.enabled) {
@@ -713,7 +867,8 @@ export class OnboardEngine {
           },
         );
         if ("action" in answer && answer.action !== "skip") continue;
-        if ("action" in answer || answer.value !== true)
+        if ("action" in answer) return this.skipStep("computer");
+        if (answer.value !== true)
           return this.step("computer", "skipped", {
             detail:
               "Computer use stays off. Turn it on later: clawdtime computer on",
@@ -785,10 +940,13 @@ export class OnboardEngine {
       try {
         facts = await this.ports.permissions();
       } catch {
-        await this.failed(
-          "permissions",
-          "The panel could not report its permissions. Install ClawdTime again, then try again.",
-        );
+        if (
+          (await this.failed(
+            "permissions",
+            "The panel could not report its permissions. Install ClawdTime again, then try again.",
+          )) === "skip"
+        )
+          return this.skipStep("permissions");
         continue;
       }
       // Each list of System Settings once, as the person sees it there, with
@@ -823,7 +981,7 @@ export class OnboardEngine {
         return this.step("permissions", "ready", {
           detail: `${this.computerOn ? "Accessibility and Screen Recording are on for the panel." : "Computer use is off, so the panel needs no permission."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for the capture helper." : ""}`,
         });
-      await this.ask(
+      const again = await this.ask(
         "permissions",
         { kind: "confirm", prompt: "Check again" },
         {
@@ -838,6 +996,8 @@ export class OnboardEngine {
           },
         },
       );
+      if ("action" in again && again.action === "skip")
+        return this.skipStep("permissions");
     }
   }
 
@@ -866,9 +1026,7 @@ export class OnboardEngine {
             `${this.pairingFiles.file} cannot be used. Look at it, then try again.`,
           )) === "skip"
         )
-          return this.step("phone", "skipped", {
-            detail: "This Mac is not paired.",
-          });
+          return this.skipStep("phone");
         continue;
       }
       if (saved.kind === "paired") {
@@ -923,8 +1081,7 @@ export class OnboardEngine {
           { detail },
         );
         if ("action" in answer) {
-          if (answer.action === "skip")
-            return skipped("This Mac is not paired.");
+          if (answer.action === "skip") return this.skipStep("phone");
           continue;
         }
         recipient = normalizePhone(answer.value as string);
@@ -947,7 +1104,7 @@ export class OnboardEngine {
       );
       if ("action" in consent) {
         if (consent.action === "skip")
-          return skipped("No text was sent. This Mac is not paired.");
+          return this.skipStep("phone", `No text was sent. ${later.phone}`);
         recipient = null;
         continue;
       }
@@ -974,11 +1131,11 @@ export class OnboardEngine {
           (await this.failed("phone", text, retry("Send a new code"))) ===
           "skip"
         )
-          return skipped("This Mac is not paired.");
+          return this.skipStep("phone");
         continue;
       }
       const result = await this.enterCode(challenge);
-      if (result === "skip") return skipped("This Mac is not paired.");
+      if (result === "skip") return this.skipStep("phone");
       if (result === "ready")
         return this.step("phone", "ready", {
           detail: "Your phone is verified.",
@@ -1076,7 +1233,7 @@ export class OnboardEngine {
             "ClawdTime cannot list the displays of this Mac. Install ClawdTime again so that it has its capture helper, then try again.",
           )) === "skip"
         )
-          return skipped("This Mac is not paired.");
+          return this.skipStep("pairing");
         continue;
       }
       const picked = await this.ask(
@@ -1096,7 +1253,7 @@ export class OnboardEngine {
         },
       );
       if ("action" in picked) {
-        if (picked.action === "skip") return skipped("This Mac is not paired.");
+        if (picked.action === "skip") return this.skipStep("pairing");
         continue;
       }
       const displayId = picked.value as string;
@@ -1104,7 +1261,7 @@ export class OnboardEngine {
         "pairing",
         "Allow this display to be shown during your verified calls?",
       );
-      if (view === "skip") return skipped("This Mac is not paired.");
+      if (view === "skip") return this.skipStep("pairing");
       let target: SharedDisplayTarget | undefined;
       if (view)
         try {
@@ -1116,7 +1273,7 @@ export class OnboardEngine {
               "That display is not there now. Try again to choose a display.",
             )) === "skip"
           )
-            return skipped("This Mac is not paired.");
+            return this.skipStep("pairing");
           continue;
         }
       const control = view
@@ -1126,12 +1283,12 @@ export class OnboardEngine {
             "Every action is still checked in code on this Mac.",
           )
         : false;
-      if (control === "skip") return skipped("This Mac is not paired.");
+      if (control === "skip") return this.skipStep("pairing");
       const reports = await this.confirm(
         "pairing",
         "Allow ClawdTime to open a task result report on this Mac during your verified callbacks?",
       );
-      if (reports === "skip") return skipped("This Mac is not paired.");
+      if (reports === "skip") return this.skipStep("pairing");
       const summary = answers(view, control, reports);
       const go = await this.confirm(
         "pairing",
@@ -1174,7 +1331,7 @@ export class OnboardEngine {
     for (;;) {
       if (!this.session) {
         await this.verifyPhone();
-        if (!this.session) return skipped("This Mac is not paired.");
+        if (!this.session) return this.skipStep("pairing");
       }
       await this.proceed();
       this.step("pairing", "in_progress", { detail: "Pairing this Mac." });
@@ -1222,7 +1379,7 @@ export class OnboardEngine {
               "Your sign-in expired. Try again to verify your phone again.",
             )) === "skip"
           )
-            return skipped("This Mac is not paired.");
+            return this.skipStep("pairing");
           continue;
         }
         if (
@@ -1233,7 +1390,7 @@ export class OnboardEngine {
               : "The coordinator refused the pairing. Try again.",
           )) === "skip"
         )
-          return skipped("This Mac is not paired.");
+          return this.skipStep("pairing");
         continue;
       }
       // The pairing that the coordinator makes next is saved even if the
@@ -1259,7 +1416,9 @@ export class OnboardEngine {
               : "The coordinator refused the pairing. Try again.",
           )) === "skip"
         )
-          return skipped("This Mac may not be paired.");
+          return skipped(
+            "This Mac may not be paired. Run clawdtime onboard to check it.",
+          );
         continue;
       }
       const connection: SharedConnection = {
@@ -1307,7 +1466,7 @@ export class OnboardEngine {
             "The desktop does not run, so this Mac cannot connect. Start it with clawdtime start, then try again.",
           )) === "skip"
         )
-          return skipped("This Mac is not connected.");
+          return this.skipStep("connection");
         continue;
       }
       // One connection per Mac: `shared run` holds a lock, and setup never
@@ -1321,7 +1480,7 @@ export class OnboardEngine {
             "Another connection to the shared number runs on this Mac, for an earlier desktop. End that clawdtime shared run, then try again.",
           )) === "skip"
         )
-          return skipped("This Mac is not connected.");
+          return this.skipStep("connection");
         continue;
       }
       const state = await this.ports.connection.status(instanceId);
@@ -1337,9 +1496,11 @@ export class OnboardEngine {
       );
       if (go !== true) {
         if (state === "stopped")
-          return skipped(
-            "This Mac is not connected. To connect it later, run clawdtime onboard.",
-          );
+          return go === "skip"
+            ? this.skipStep("connection")
+            : skipped(
+                "This Mac is not connected. To connect it later, run clawdtime onboard.",
+              );
         // No means not connected: the background connection that Terminal
         // setup started (or one of an earlier desktop) ends now, checked by
         // its process start and command. A report never says not connected
@@ -1393,30 +1554,47 @@ export class OnboardEngine {
             "The connection did not start. Try again.",
           )) === "skip"
         )
-          return skipped("This Mac is not connected.");
+          return this.skipStep("connection");
         continue;
       }
       return connected();
     }
   }
 
-  /** The readiness report: ready when every step is ready or skipped. */
+  /**
+   * The readiness report: ready when every step is ready or skipped and the
+   * Mac can work (a check, a model key and a desktop). It lists each skipped
+   * step: a skip is never a failure.
+   */
   private finish() {
     const rows = stepIds
       .filter((id) => id !== "ready")
       .map((id) => this.rows.get(id)!);
     const required: StepId[] = ["preflight", "model", "desktop"];
+    const settled = rows.every(
+      (row) => row.state === "ready" || row.state === "skipped",
+    );
     const ready =
-      rows.every((row) => row.state === "ready" || row.state === "skipped") &&
-      required.every((id) => this.rows.get(id)!.state === "ready");
+      settled && required.every((id) => this.rows.get(id)!.state === "ready");
     const paired = this.rows.get("pairing")!.state === "ready";
     const connected = this.rows.get("connection")!.state === "ready";
-    this.step("ready", ready ? "ready" : "failed", {
+    const skipped = rows
+      .filter(
+        (row) => row.state === "skipped" && this.skippedByPerson.has(row.id),
+      )
+      .map((row) => titles[row.id]);
+    const list = skipped.length
+      ? ` Skipped for now: ${skipped.join(", ")}. Run clawdtime onboard to finish ${skipped.length === 1 ? "it" : "them"}.`
+      : "";
+    this.step("ready", ready ? "ready" : settled ? "skipped" : "failed", {
       detail: ready
-        ? paired && connected
-          ? "ClawdTime is ready on this Mac and paired with your phone. To try a call, call the shared number from your verified phone, then run clawdtime shared prove on this Mac."
-          : "ClawdTime is ready on this Mac. Click the mascot to open the chat."
-        : "Setup is not finished. Run clawdtime onboard again to continue where it stopped.",
+        ? (paired && connected
+            ? "ClawdTime is ready on this Mac and paired with your phone. To try a call, call the shared number from your verified phone, then run clawdtime shared prove on this Mac."
+            : "ClawdTime is ready on this Mac. Click the mascot to open the chat.") +
+          list
+        : settled
+          ? `ClawdTime cannot work on this Mac yet.${list}`
+          : "Setup is not finished. Run clawdtime onboard again to continue where it stopped.",
     });
     return ready;
   }

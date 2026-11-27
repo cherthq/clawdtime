@@ -84,6 +84,19 @@ final class SetupViewTests: XCTestCase {
     XCTAssertNil(StepCard.retryLabel(try step(#"{"type":"step","id":"model","state":"needs_input","input":{"kind":"secret"}}"#)))
   }
 
+  func testEveryStepScreenOffersSkipForNowAlsoWhileItRuns() throws {
+    func step(_ line: String) throws -> StepEvent {
+      guard case .step(let step) = try EngineEvent.decode(line: line) else { throw CocoaError(.coderInvalidValue) }
+      return step
+    }
+    XCTAssertTrue(StepCard.offersSkip(try step(#"{"type":"step","id":"model","state":"needs_input","question":"model-question-0001","input":{"kind":"secret"}}"#)))
+    XCTAssertTrue(StepCard.offersSkip(try step(#"{"type":"step","id":"permissions","state":"needs_input","question":"settings-question-01","input":{"kind":"confirm","prompt":"Check again"}}"#)))
+    XCTAssertTrue(StepCard.offersSkip(try step(#"{"type":"step","id":"desktop","state":"failed","question":"desktop-failed-0001"}"#)))
+    XCTAssertTrue(StepCard.offersSkip(try step(#"{"type":"step","id":"desktop","state":"in_progress","question":"desktop-start-00001"}"#)), "a desktop start that hangs can be skipped")
+    XCTAssertFalse(StepCard.offersSkip(try step(#"{"type":"step","id":"desktop","state":"in_progress"}"#)), "no question: the engine reads no skip now")
+    XCTAssertFalse(StepCard.offersSkip(try step(#"{"type":"step","id":"ready","state":"failed","question":"ready-question-00001"}"#)))
+  }
+
   func testEachQuestionHasItsOwnScreen() throws {
     func step(_ line: String) throws -> StepEvent {
       guard case .step(let step) = try EngineEvent.decode(line: line) else { throw CocoaError(.coderInvalidValue) }

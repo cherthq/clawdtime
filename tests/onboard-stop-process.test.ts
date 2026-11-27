@@ -133,3 +133,45 @@ it("in Terminal, Ctrl+C outside a question during the desktop start ends the des
   expect(code).toBe(0);
   expect(run.output().stderr).toContain("EXIT 1");
 }, 30_000);
+
+it("in the app, Skip for now during the desktop start ends the desktop of that start, and setup goes on", async () => {
+  const run = setup("app");
+  // The person skips every question, and the desktop while it starts.
+  let partial = "";
+  run.child.stdout.on("data", (chunk: Buffer) => {
+    partial += chunk.toString();
+    let end: number;
+    while ((end = partial.indexOf("\n")) >= 0) {
+      const line = partial.slice(0, end);
+      partial = partial.slice(end + 1);
+      const event = JSON.parse(line) as {
+        type: string;
+        id?: string;
+        state?: string;
+        question?: string;
+      };
+      if (
+        event.type === "step" &&
+        event.question &&
+        (event.state === "needs_input" ||
+          event.state === "failed" ||
+          (event.state === "in_progress" && event.id === "desktop"))
+      )
+        run.child.stdin.write(
+          `${JSON.stringify({ type: "action", id: event.id, question: event.question, action: "skip" })}\n`,
+        );
+      if (event.type === "done") run.child.stdin.end();
+    }
+  });
+  await run.when("SERVICE ");
+  const service = run.service();
+  cleanup.push(() => alive(service) && process.kill(service, "SIGKILL"));
+  const code = await run.exited;
+  expect(code).toBe(0);
+  expect(run.output().stderr).toContain("STOP");
+  expect(alive(service)).toBe(false);
+  expect(run.output().stderr).toContain("EXIT 2");
+  expect(run.output().stdout).toContain(
+    '{"id":"desktop","state":"skipped","detail":"The desktop does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard."}',
+  );
+}, 30_000);

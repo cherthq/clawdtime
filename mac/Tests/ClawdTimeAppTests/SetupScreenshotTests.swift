@@ -43,7 +43,7 @@ final class SetupScreenshotTests: XCTestCase {
       #"{"type":"step","id":"model","state":"needs_input","title":"Model key","question":"shot-question-0003","detail":"OpenAI refused this key. Nothing was stored. Paste another key.","input":{"kind":"secret","prompt":"OpenAI API key"}}"#,
     ]),
     Shot(name: "07-desktop-starting", lines: [hello] + pending + ready(["preflight", "model"]) + [
-      #"{"type":"step","id":"desktop","state":"in_progress","title":"Desktop","detail":"Starting the desktop."}"#,
+      #"{"type":"step","id":"desktop","state":"in_progress","title":"Desktop","question":"shot-question-0003","detail":"Starting the desktop."}"#,
     ]),
     Shot(name: "08-desktop-failed", lines: [hello] + pending + ready(["preflight", "model"]) + [
       #"{"type":"step","id":"desktop","state":"failed","title":"Desktop","question":"shot-question-0004","detail":"The desktop did not answer its readiness check. Nothing was replaced. Wait a moment, then try again.","recovery":{"label":"Try again","action":"retry"}}"#,
@@ -87,7 +87,29 @@ final class SetupScreenshotTests: XCTestCase {
     Shot(name: "23-engine-stopped", lines: [hello] + pending, after: { _ in }),
     Shot(name: "24-runtime-missing", lines: [], after: { $0.reportRuntimeProblem("The runtime has no bin/clawdtime.") }),
     Shot(name: "25-stopped", lines: [hello] + pending, after: { $0.stop() }),
+    Shot(name: "26-finished-with-skips", lines: [hello] + pending + skippedLines(ready: true)),
+    Shot(name: "27-finished-model-skipped", lines: [hello] + pending + skippedLines(ready: false)),
   ]
+
+  /// A run where the person skipped steps: the report says what is left and how to finish it.
+  private static func skippedLines(ready: Bool) -> [String] {
+    let paired = "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard."
+    let rows: [(String, String, String)] = [
+      ("preflight", "ready", "macOS and Apple silicon checked. Shared mode with https://coordinator.example."),
+      ready ? ("model", "ready", "A key for OpenAI is in the protected key store.")
+        : ("model", "skipped", "No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER."),
+      ("desktop", "ready", "The desktop started. It has no model key yet. It reads one the next time it starts."),
+      ("computer", "skipped", "Computer use stays off. Turn it on later: clawdtime computer on"),
+      ("permissions", "skipped", "Computer use is off, so no permission is needed."),
+      ("phone", "skipped", paired),
+      ("pairing", "skipped", "Your phone is not verified, so this Mac is not paired. To pair it later, run clawdtime onboard."),
+      ("connection", "skipped", "This Mac is not paired with this coordinator."),
+      ready ? ("ready", "ready", "ClawdTime is ready on this Mac. Click the mascot to open the chat. Skipped for now: Computer use, Your phone. Run clawdtime onboard to finish them.")
+        : ("ready", "skipped", "ClawdTime cannot work on this Mac yet. Skipped for now: Model key, Computer use, Your phone. Run clawdtime onboard to finish them."),
+    ]
+    let report = rows.map { #"{"id":"\#($0.0)","state":"\#($0.1)","detail":"\#($0.2)"}"# }.joined(separator: ",")
+    return [#"{"type":"done","ready":\#(ready),"report":[\#(report)]}"#]
+  }
 
   private static func finishedLines(ready: Bool) -> [String] {
     let rows: [(String, String, String)] = [

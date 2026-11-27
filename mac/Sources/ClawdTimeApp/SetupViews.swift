@@ -378,8 +378,12 @@ struct StepCard: View {
 
   private var actions: some View {
     HStack(spacing: 10) {
-      if step.id.isSkippable && (step.state == .needsInput || step.state == .failed) {
-        Button("Skip for now") { perform(.skip) }.buttonStyle(PillStyle(kind: .secondary)).disabled(locked)
+      // Quiet, and on every step screen, also while the step runs.
+      if Self.offersSkip(step) {
+        Button("Skip for now") { perform(.skip) }
+          .buttonStyle(.plain).font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
+          .disabled(locked)
+          .help("Do this later. Setup goes on, and the report says how to finish it.")
       }
       // A retry is the primary button on the right; other recoveries sit here.
       if let recovery = step.recovery, recovery.action != .retry, step.state == .needsInput || step.state == .failed {
@@ -392,6 +396,12 @@ struct StepCard: View {
       Spacer(minLength: 0)
       primary
     }
+  }
+
+  /// Skip for now shows on every step but ready while the engine reads a
+  /// skip: at a question, a failure, or a step in progress with a question id.
+  static func offersSkip(_ step: StepEvent) -> Bool {
+    step.id.isSkippable && step.question != nil && [.needsInput, .failed, .inProgress].contains(step.state)
   }
 
   /// Return presses this button only when it is the step's default.
@@ -552,7 +562,12 @@ struct FinishedView: View {
             HStack(alignment: .top, spacing: 10) {
               StateBadge(state: entry.state).scaleEffect(0.72).frame(width: 22, height: 22)
               VStack(alignment: .leading, spacing: 1) {
-                Text(state.steps[entry.id]?.displayTitle ?? entry.id.fallbackTitle).font(.system(size: 13, weight: .semibold))
+                HStack(spacing: 6) {
+                  Text(state.steps[entry.id]?.displayTitle ?? entry.id.fallbackTitle).font(.system(size: 13, weight: .semibold))
+                  if entry.state == .skipped {
+                    Text("Skipped").font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
+                  }
+                }
                 if let detail = entry.detail, !detail.isEmpty {
                   Text(detail).font(.system(size: 12)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
                 }

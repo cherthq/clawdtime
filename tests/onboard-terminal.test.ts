@@ -132,29 +132,31 @@ describe("the terminal wizard and consent", () => {
       answer(
         screen,
         type,
-        "Turn on computer use? Type yes or no, or skip: ",
+        "Turn on computer use? Type yes or no. Type skip to do this later: ",
         () => type("yes\r"),
       );
       answer(
         screen,
         type,
-        "Your own phone number, with country code (or skip): ",
+        "Your own phone number, with country code. Type skip to do this later: ",
         () => type(`${member}\r`),
       );
       answer(
         screen,
         type,
-        "Send a sign-in code to this number now? Type yes or no, or skip: ",
+        "Send a sign-in code to this number now? Type yes or no. Type skip to do this later: ",
         () => type("yes\r"),
       );
-      answer(screen, type, "Sign-in code (or skip): ", () =>
+      answer(screen, type, "Sign-in code. Type skip to do this later: ", () =>
         type(`${coordinator.codeFor(member)}\r`),
       );
-      answer(screen, type, "Type a number, or skip: ", () => type("1\r"));
+      answer(screen, type, "Type a number. Type skip to do this later: ", () =>
+        type("1\r"),
+      );
       answer(
         screen,
         type,
-        "Allow this display to be shown during your verified calls? Type yes or no, or skip: ",
+        "Allow this display to be shown during your verified calls? Type yes or no. Type skip to do this later: ",
         () => {
           // The person sees nothing happen for a moment and types it again.
           type("yes\r");
@@ -165,25 +167,25 @@ describe("the terminal wizard and consent", () => {
       answer(
         screen,
         type,
-        "Allow your verified phone to ask for computer actions on this Mac? Type yes or no, or skip: ",
+        "Allow your verified phone to ask for computer actions on this Mac? Type yes or no. Type skip to do this later: ",
         () => type("\r"),
       );
       answer(
         screen,
         type,
-        "Allow ClawdTime to open a task result report on this Mac during your verified callbacks? Type yes or no, or skip: ",
+        "Allow ClawdTime to open a task result report on this Mac during your verified callbacks? Type yes or no. Type skip to do this later: ",
         () => type("\r"),
       );
       answer(
         screen,
         type,
-        "Pair this Mac with your verified account? Type yes or no, or skip: ",
+        "Pair this Mac with your verified account? Type yes or no. Type skip to do this later: ",
         () => type("yes\r"),
       );
       answer(
         screen,
         type,
-        "Connect this Mac to the shared number now? Type yes or no, or skip: ",
+        "Connect this Mac to the shared number now? Type yes or no. Type skip to do this later: ",
         () => type("no\r"),
       );
     });
@@ -206,6 +208,42 @@ describe("the terminal wizard and consent", () => {
       allowControl: false,
       walkthroughReports: false,
     });
+  }, 20_000);
+
+  it("in Terminal, skip or s at any prompt skips that step, the hint says so, and the report lists what is left", async () => {
+    const home = folder();
+    const terminal = fakeTerminal((screen, type) => {
+      if (screen.endsWith("Type a number. Type skip to do this later: "))
+        setImmediate(() => type("skip\r"));
+      if (
+        screen.endsWith(
+          "Turn on computer use? Type yes or no. Type skip to do this later: ",
+        )
+      )
+        setImmediate(() => type("s\r"));
+    });
+    const code = await onboardCli(["--local"], {
+      env: {},
+      home,
+      root: folder(),
+      stdin: terminal.input,
+      stdout: terminal.output,
+      ports: fakePorts(),
+      pollMs: 0,
+    });
+    const screen = terminal.screen();
+    expect(code).toBe(2);
+    expect(screen).toContain(
+      "  model        skipped. No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.",
+    );
+    expect(screen).toContain(
+      "  computer     skipped. Computer use stays off. Turn it on later: clawdtime computer on",
+    );
+    expect(screen).toContain(
+      "ClawdTime cannot work on this Mac yet. Skipped for now: Model key, Computer use. Run clawdtime onboard to finish them.",
+    );
+    // A skip is never a yes: computer use stays off.
+    expect(screen).not.toContain("Computer use is on");
   }, 20_000);
 
   it("in a real terminal, a yes typed twice 50 ms apart at the display question answers only that question", async () => {
@@ -271,18 +309,18 @@ def until(pat, t=20):
             except OSError: break
     sys.stdout.write("TIMEOUT %r %r\\n" % (pat, buf[-400:])); sys.exit(2)
 def say(s): os.write(fd, s.encode())
-until(rb"Turn on computer use\\? Type yes or no, or skip: "); say("yes\\r")
-until(rb"\\(or skip\\): "); say("${member}\\r")
-until(rb"Send a sign-in code to this number now\\? Type yes or no, or skip: "); say("yes\\r")
-until(rb"Sign-in code \\(or skip\\): ")
+until(rb"Turn on computer use\\? Type yes or no\\. Type skip to do this later: "); say("yes\\r")
+until(rb"country code\\. Type skip to do this later: "); say("${member}\\r")
+until(rb"Send a sign-in code to this number now\\? Type yes or no\\. Type skip to do this later: "); say("yes\\r")
+until(rb"Sign-in code\\. Type skip to do this later: ")
 for _ in range(200):
     if os.path.exists(code_file) and open(code_file).read().strip(): break
     time.sleep(0.05)
 code = open(code_file).read().strip(); say(code + "\\r")
-until(rb"Type a number, or skip: "); say("1\\r")
-until(rb"Allow this display to be shown during your verified calls\\? Type yes or no, or skip: ")
+until(rb"Type a number. Type skip to do this later: "); say("1\\r")
+until(rb"Allow this display to be shown during your verified calls\\? Type yes or no\\. Type skip to do this later: ")
 say("yes\\r"); time.sleep(0.05); say("yes\\r")
-out = until(rb"\\? Type yes or no, or skip: ")
+out = until(rb"\\? Type yes or no\\. Type skip to do this later: ")
 sys.stdout.write("NEXT " + out.decode(errors="replace").replace("\\r", "").strip().splitlines()[-1] + "\\n")
 say("no\\r")
 until(rb"Allow ClawdTime to open a task result report[^\\n]*: "); say("no\\r")
@@ -313,7 +351,7 @@ sys.stdout.write(until(rb"SAVED[^\\n]*\\n").decode(errors="replace").replace("\\
     // The question after the view question is the one about computer actions,
     // and the second yes did not answer it.
     expect(output).toContain(
-      "NEXT Allow your verified phone to ask for computer actions on this Mac? Type yes or no, or skip:",
+      "NEXT Allow your verified phone to ask for computer actions on this Mac? Type yes or no. Type skip to do this later:",
     );
     expect(output).toContain(
       "EXIT 0 SAVED view=true control=false reports=false",

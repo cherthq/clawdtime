@@ -70,11 +70,11 @@ The step ids and their order are fixed.
 
 | Id            | What it does                                                                                                                                                                                                                                                              | Skip |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                                                                               | no   |
-| `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                                                                     | no   |
-| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                                                              | no   |
+| `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                                                                               | yes  |
+| `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                                                                     | yes  |
+| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                                                              | yes  |
 | `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off. A desktop that started before the yes starts again while it is idle, so that it uses computer use now.                                                          | yes  |
-| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each list of System Settings and each binary as the person sees them there, offers the System Settings pane, and checks again. |
+| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each list of System Settings and each binary as the person sees them there, offers the System Settings pane, and checks again. | yes  |
 | `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                                                                       | yes  |
 | `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                                                                            | yes  |
 | `connection`  | Starts one shared connection in the background, bound to the running desktop. It reuses a connection of the same desktop. A connection of an earlier desktop ends first. With `--app` it starts none: see [Owners](#owners).                                              | yes  |
@@ -82,6 +82,28 @@ The step ids and their order are fixed.
 
 In local mode, `phone`, `pairing` and `connection` are skipped. With computer
 use off in local mode, `permissions` is skipped too.
+
+## Skip
+
+Nobody is stuck at setup. Every step but `ready` can be skipped: at a
+question, at a failure, and while the desktop starts.
+
+- A skip is never a yes. At a consent question it means no, and grants
+  nothing: no text, no pairing, no connection, computer use off.
+- A skipped step says in one line what does not work and the command that
+  finishes it, for example
+  `No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.`
+- A skip of the desktop while it starts lets that start end, then ends the
+  desktop that it made. No process is left.
+- `clawdtime onboard` asks a skipped step again on the next run.
+- The report lists each skipped step with its line, and the `ready` row
+  names the steps that the person skipped. It is not a failure. `ready` is
+  false only when ClawdTime cannot work: the check, the model key or the
+  desktop was skipped. Then the `ready` row is `skipped` and the exit code
+  is 2.
+- In Terminal, type `skip` (or `s`) at any prompt. Each prompt says
+  `Type skip to do this later`.
+- In the app, **Skip for now** is on every step screen.
 
 ## Owners
 
@@ -149,8 +171,9 @@ example a pairing that the coordinator made.
   `open_url`, with a `url` for the last two. The interface opens the URL.
 - `question` is the one-time id of the question that the step asks. A
   `needs_input` step has one. A `failed` step that waits for a retry or a skip
-  has one too. Each question has a new id, also when the same question comes
-  again.
+  has one too. An `in_progress` step has one while it may be skipped (the
+  desktop start): its only answer is a skip. Each question has a new id, also
+  when the same question comes again.
 - `input` has a `kind`: `secret`, `text`, `choice`, `confirm`, `phone` or
   `code`, a `prompt`, and for a choice its `options`, each with an `id`, a
   `label` and an optional `detail`. `consent: true` marks a question whose
@@ -173,8 +196,8 @@ example a pairing that the coordinator made.
 - `input` answers the question that is open. The value is a string, a
   boolean for `confirm`, or an array of option ids for a choice with
   `multiple`.
-- `action` is `retry`, `recheck` or `skip`. Only `computer`, `phone`,
-  `pairing` and `connection` accept `skip`.
+- `action` is `retry`, `recheck` or `skip`. Every step but `ready` accepts
+  `skip`.
 - Every `input` and `action` names the `question` it answers. A command for
   an earlier question, a repeated answer, an unknown id or no id is ignored
   with a warning and has no effect. So a double click or a second Return
@@ -191,7 +214,7 @@ example a pairing that the coordinator made.
 | Step and state                        | Answer                                                                 |
 | ------------------------------------- | ---------------------------------------------------------------------- |
 | Any step, `failed`                    | `action` `retry`, or `skip` where the step accepts it                  |
-| `permissions`, `needs_input`          | Open the `recovery` URL, then `action` `recheck` or `input` `true`     |
+| `permissions`, `needs_input`          | Open the `recovery` URL, then `action` `recheck` or `input` `true`     | yes |
 | `phone`, `confirm` to send a code     | `input` `true` sends one text. `false` sends nothing and skips         |
 | `phone`, `code`                       | `input` with the digits. `action` `retry` asks for a new code          |
 | `pairing`, choice for a paired number | `replace` pairs this Mac in place of the other. `keep` changes nothing |

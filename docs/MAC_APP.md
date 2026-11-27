@@ -19,8 +19,10 @@ Requirements: macOS 14 or later on a Mac with Apple silicon.
    Choose **Open System Settings**, turn the item on, and come back. The app
    checks the step again when you return. **Check again** does the same.
    **Details** shows the full path of each item, when you need it.
-6. You can skip your phone, the pairing, the connection and computer use, and
-   come back to them later. ClawdTime then works on this Mac only.
+6. **Skip for now** is on every step, also while the desktop starts. A skip
+   is never a yes. Setup goes on, and the last screen says what each skipped
+   step leaves undone and how to finish it. Run setup again to come back to
+   it.
 7. The last screen shows what is ready. Choose **Finish**.
 
 **Stop** is at the top of the window from the first screen, before anything
@@ -86,8 +88,10 @@ panel, and starts no background connection.
 - A consent question (computer use, a sign-in text, view, computer actions,
   reports, the pairing, a replacement, the connection) has no default
   button: Return does not answer it.
-- The app offers **Skip for now** only on `phone`, `pairing`, `connection` and
-  `computer`.
+- The app offers a quiet **Skip for now** on every step but `ready`, while
+  the engine reads a skip: at a question, at a failure, and on a step in
+  progress that has a `question` id (the desktop start). The report marks
+  each skipped step and shows its line.
 - A recovery may open only a System Settings pane (`x-apple.systempreferences:`)
   or an `https` page. The app refuses any other link.
 - A line that is not protocol JSON is counted and ignored. A line over 1 MB is
