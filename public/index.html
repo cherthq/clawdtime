@@ -45,6 +45,19 @@
           fill="currentColor"
         />
       </symbol>
+      <symbol id="pixel-download" viewBox="0 0 24 24">
+        <path
+          d="M10 2h4v8h4v2h-2v2h-2v2h-4v-2H8v-2H6v-2h4z M2 15h3v4h14v-4h3v7H2z"
+          fill="currentColor"
+        />
+      </symbol>
+      <symbol id="pixel-terminal" viewBox="0 0 24 24">
+        <path
+          d="M2 3h20v18H2z M4 7h16v12H4z M6 9h2v2H6z M8 11h2v2H8z M6 13h2v2H6z M11 14h6v2h-6z"
+          fill="currentColor"
+          fill-rule="evenodd"
+        />
+      </symbol>
       <symbol id="pixel-arrow" viewBox="0 0 24 24">
         <path
           d="M12 3h3v3h3v3h3v6h-3v3h-3v3h-3v-6H2V9h10zm3 6v6h3V9z"
@@ -66,9 +79,9 @@
       </nav>
       <a
         class="button button-small"
-        href="#availability"
+        href="#get-clawdtime"
         data-metric-action="availability"
-        >Pilot availability <span aria-hidden="true">↗</span></a
+        >Get ClawdTime <span aria-hidden="true">↗</span></a
       >
     </header>
     <main id="main">
@@ -85,27 +98,36 @@
             brings the question and screen to your phone, so you can review the
             work and respond.
           </p>
-          <div class="hero-action">
-            <a
-              class="button button-primary"
-              href="#availability"
-              data-metric-action="availability"
-              ><svg><use href="#pixel-message" /></svg> See pilot availability
-              <span class="button-arrow" aria-hidden="true">↗</span></a
-            ><span class="handwritten"
-              >a quick call,<br />a clear next step
-              <span aria-hidden="true">↙</span></span
-            >
+          <div class="hero-install">
+            <div class="hero-action">
+              <a class="button button-primary" href="/download"
+                ><svg><use href="#pixel-download" /></svg> Download for Mac</a
+              ><span class="handwritten" aria-hidden="true"
+                >or paste<br />one line <span>↙</span></span
+              >
+            </div>
+            <div class="command-field">
+              <span class="command-prompt" aria-hidden="true">$</span>
+              <pre class="command-text" id="hero-command">
+curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
+              <button
+                type="button"
+                class="copy-button"
+                data-copy-target="hero-command"
+              >
+                <span data-copy-label>Copy</span
+                ><span class="visually-hidden"> the install command</span>
+              </button>
+            </div>
+            <p class="install-requirements">
+              <span class="status-dot"></span> macOS 14 or later, Apple silicon.
+            </p>
           </div>
           <p class="compatibility">
             For <strong>Codex</strong> &amp; <strong>Claude Code</strong
             ><br /><a class="text-link" href="#compatibility"
               >See tested agents and limitations ↗</a
             >
-          </p>
-          <p class="preview-note">
-            <span class="status-dot"></span> Invited pilot · Mac companion
-            required
           </p>
         </div>
         <div class="hero-visual">
@@ -245,8 +267,8 @@
         <p>
           ClawdTime connects a paired coding-agent session to its human through
           FaceTime and iMessage. The pilot lets an agent request attention,
-          share the selected Mac screen, and receive feedback. Setup requires an
-          invitation, a Mac companion and explicit permissions.
+          share the selected Mac screen, and receive feedback. Setup needs macOS
+          14 or later on Apple silicon, and your explicit permissions.
         </p>
         <p>
           Built on Chert’s communications infrastructure. Support depends on the
@@ -269,10 +291,10 @@
           <li>
             <span class="step-number">01</span
             ><svg><use href="#pixel-message" /></svg>
-            <h3>Start with an invitation.</h3>
+            <h3>Install ClawdTime.</h3>
             <p>
-              Invited testers receive the pilot instructions and a private setup
-              link. Public self-serve access is not open yet.
+              Download the Mac app or paste one command. The guided setup asks
+              for your model key and each permission.
             </p>
           </li>
           <li>
@@ -296,13 +318,113 @@
           </li>
         </ol>
         <p class="section-footnote">
-          The pilot needs an operator-provided build and supervised setup.
-          Public downloads and broader live-call validation are still in
-          progress.
+          Broader live-call validation is still in progress.
           <a class="text-link" href="/guides/getting-started"
             >See the setup steps ↗</a
           >
         </p>
+      </section>
+      <section
+        class="section-wrap get-section"
+        id="get-clawdtime"
+        aria-labelledby="get-clawdtime-title"
+      >
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">INSTALL / ONE GUIDED SETUP</p>
+            <h2 id="get-clawdtime-title">Get ClawdTime.<br />Two ways in.</h2>
+          </div>
+          <p>
+            Both routes run the same guided setup.<br />It asks for your model
+            key and each permission.
+          </p>
+        </div>
+        <div class="route-grid">
+          <article class="route-card">
+            <span class="route-label"
+              ><svg aria-hidden="true"><use href="#pixel-download" /></svg> THE
+              MAC APP</span
+            >
+            <h3>Download for Mac.</h3>
+            <p>
+              Native setup screens, then a menu bar app. Everything it needs is
+              inside. No Terminal.
+            </p>
+            <ol class="route-steps" role="list">
+              <li>Download ClawdTime.</li>
+              <li>Drag it to Applications and open it.</li>
+              <li>Follow the setup.</li>
+            </ol>
+            <div class="route-action">
+              <a class="button" href="/download"
+                ><svg><use href="#pixel-download" /></svg> Download for Mac</a
+              >
+            </div>
+            <p class="route-requirements">macOS 14 or later, Apple silicon.</p>
+          </article>
+          <article class="route-card">
+            <span class="route-label"
+              ><svg aria-hidden="true"><use href="#pixel-terminal" /></svg> ONE
+              COMMAND</span
+            >
+            <h3>Paste one line.</h3>
+            <p>
+              Installs for your user, without sudo, then starts the same setup
+              in Terminal. No Node, Git or Xcode needed.
+            </p>
+            <ol class="route-steps" role="list">
+              <li>Open Terminal.</li>
+              <li>Paste the command.</li>
+              <li>Follow the setup.</li>
+            </ol>
+            <div class="route-action command-field">
+              <span class="command-prompt" aria-hidden="true">$</span>
+              <pre class="command-text" id="route-command">
+curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
+              <button
+                type="button"
+                class="copy-button"
+                data-copy-target="route-command"
+              >
+                <span data-copy-label>Copy</span
+                ><span class="visually-hidden"> the install command</span>
+              </button>
+            </div>
+            <p class="route-requirements">macOS 14 or later, Apple silicon.</p>
+          </article>
+        </div>
+        <div class="agent-route">
+          <svg aria-hidden="true"><use href="#pixel-message" /></svg>
+          <div>
+            <h3>Or use a coding agent.</h3>
+            <p>
+              Give Claude Code or Codex this prompt. It runs the install. Then
+              you run <code>clawdtime onboard</code> in your own Terminal for
+              your key and permissions.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="button button-small copy-prompt"
+            data-copy-target="agent-prompt"
+          >
+            <span data-copy-label>Copy prompt</span>
+          </button>
+          <details>
+            <summary>See the prompt</summary>
+            <pre id="agent-prompt">
+Install ClawdTime on this Mac. It needs macOS 14 or later on Apple silicon.
+
+1. Run this command in your shell:
+   curl -fsSL https://www.clawdtime.com/install.sh | sh
+2. If the installer prints a line to add to PATH, show it to me.
+3. Do not run the setup yourself, and never ask me for a key. Tell me to
+   open Terminal and run this there:
+   clawdtime onboard
+   The setup asks for my model key in hidden entry, and for macOS
+   permissions that only I can grant.</pre>
+          </details>
+        </div>
       </section>
       <section class="section-wrap compatibility-section" id="compatibility">
         <div class="section-heading">
@@ -455,8 +577,7 @@
           ><span>ILLUSTRATED WORKFLOW</span>
           <p>
             A real, approved demonstration will be added when it is ready to
-            share. Public onboarding and wider physical validation are still in
-            progress.
+            share. Wider physical validation is still in progress.
           </p>
         </div>
       </section>
@@ -464,7 +585,7 @@
         <div class="section-heading">
           <div>
             <p class="eyebrow">04 / A SMALL PRICE FOR YOUR AFTERNOON BACK</p>
-            <h2>Invited pilot.<br />Pricing comes next.</h2>
+            <h2>Install today.<br />Pricing comes next.</h2>
           </div>
           <span class="outline-label">PLANNED LAUNCH PRICING</span>
         </div>
@@ -558,9 +679,8 @@
               Do I need a Mac and iPhone? <span aria-hidden="true">+</span>
             </summary>
             <p>
-              The pilot requires macOS 14 or later, Node 24 or later, an
-              operator-provided Mac companion and the intended invited
-              iMessage/FaceTime handset. Android and Windows joining have not
+              ClawdTime needs macOS 14 or later on Apple silicon, and a phone
+              with FaceTime and iMessage. Android and Windows joining have not
               been validated.
               <a href="/guides/getting-started">Check setup requirements</a>.
             </p>
@@ -614,13 +734,14 @@
           </details>
           <details>
             <summary>
-              Can I sign up today? <span aria-hidden="true">+</span>
+              Can I install it today? <span aria-hidden="true">+</span>
             </summary>
             <p>
-              Access is invitation-only. There is no public signup, public
-              notarized Mac download or active subscription. Invited testers can
-              follow the <a href="/guides/getting-started">setup guide</a>;
-              everyone else can review
+              Yes.
+              <a href="#get-clawdtime"
+                >Download the Mac app or paste one command</a
+              >, then follow the guided setup. There is no paid plan or active
+              subscription yet. Pilot testers can check
               <a href="#availability">pilot availability</a>.
             </p>
           </details>
@@ -629,24 +750,20 @@
       <section class="final-cta section-wrap">
         <svg aria-hidden="true"><use href="#pixel-facetime" /></svg>
         <h2>Your agent’s got a question.<br />You’ve got a life.</h2>
-        <a
-          class="button button-primary"
-          href="#availability"
-          data-metric-action="availability"
-          ><svg><use href="#pixel-message" /></svg> See pilot availability
-          <span class="button-arrow" aria-hidden="true">↗</span></a
+        <a class="button button-primary" href="/download"
+          ><svg><use href="#pixel-download" /></svg> Download for Mac</a
         ><span class="micro-label"
-          >INVITED PILOT. YOUR EXISTING CODING WORKFLOW.</span
+          >MACOS 14 OR LATER, APPLE SILICON. YOUR EXISTING CODING
+          WORKFLOW.</span
         >
       </section>
       <section id="availability" class="section-wrap availability-section">
         <div>
-          <p class="eyebrow">CURRENT AVAILABILITY</p>
-          <h2>An invited pilot,<br />with a guided start.</h2>
+          <p class="eyebrow">PILOT TESTERS</p>
+          <h2>Already in the pilot?<br />Pick up where you left off.</h2>
           <p>
-            Public signup and downloads are not open yet. If you have an
-            invitation, your pilot contact provides the trusted build and setup
-            instructions.
+            Start setup from here. Everyone else can use either route in
+            <a href="#get-clawdtime">Get ClawdTime</a>.
           </p>
         </div>
         <div>
@@ -655,7 +772,7 @@
             href="/guides/getting-started"
             data-pilot-setup
             data-metric-action="setup"
-            >Invited? Start setup <span aria-hidden="true">↗</span></a
+            >Start setup <span aria-hidden="true">↗</span></a
           >
           <p class="availability-note">
             The setup guide explains prerequisites. When texting is enabled,
@@ -663,14 +780,12 @@
           </p>
           <div id="text-it" class="text-fallback">
             <!-- TEXT_CONTACT -->
-            <p>
-              Texting is not enabled on this instance. Use the instructions
-              supplied with your invitation.
-            </p>
+            <p>Texting is not enabled on this instance.</p>
             <!-- /TEXT_CONTACT -->
           </div>
         </div>
       </section>
+      <p class="visually-hidden" role="status" id="copy-status"></p>
     </main>
     <footer class="site-footer section-wrap">
       <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>

@@ -201,6 +201,54 @@ describe("install routes", () => {
   });
 });
 
+describe("homepage install routes", () => {
+  it("leads the homepage with both routes and a prompt for a coding agent", async () => {
+    // A word break hint changes the line breaks, never the copied text.
+    const html = (await (await fixture().app.request("/")).text()).replace(
+      /<wbr \/>/g,
+      "",
+    );
+    const hero = html.slice(
+      html.indexOf('<section class="hero'),
+      html.indexOf("</section>", html.indexOf('<section class="hero')),
+    );
+    expect(hero).toContain('href="/download"');
+    expect(hero).toContain(installCommand);
+    expect(hero).toContain("macOS 14 or later, Apple silicon.");
+    expect(hero).not.toMatch(/invited|invitation/i);
+    const routes = html.slice(html.indexOf('id="get-clawdtime"'));
+    expect(routes).toContain('href="/download"');
+    expect(routes).toContain(installCommand);
+    // Each copy button copies an element that exists on the page.
+    const targets = [...html.matchAll(/data-copy-target="([^"]+)"/g)].map(
+      (match) => match[1]!,
+    );
+    expect(targets.length).toBeGreaterThanOrEqual(3);
+    for (const id of targets) expect(html).toContain(`id="${id}"`);
+    // A copy button copies the exact command: one line, nothing around it.
+    for (const id of ["hero-command", "route-command"])
+      expect(html).toContain(`id="${id}">\n${installCommand}</pre>`);
+    const prompt = html.match(/<pre id="agent-prompt">([\s\S]*?)<\/pre>/)![1]!;
+    expect(prompt).toContain(installCommand);
+    expect(prompt).toContain("clawdtime onboard");
+    // The pricing copy no longer says the product is invitation only.
+    const pricing = html.slice(html.indexOf('id="pricing"'));
+    expect(pricing.slice(0, pricing.indexOf("</h2>"))).not.toMatch(/invited/i);
+  });
+
+  it("keeps em and en dashes and contact instructions out of the changed pages", async () => {
+    const runtime = fixture();
+    for (const path of ["/", "/pricing", "/guides/getting-started"]) {
+      const html = await (await runtime.app.request(path)).text();
+      expect(html, path).not.toMatch(/[\u2013\u2014]/);
+      expect(html, path).not.toMatch(/pilot contact|contact that person/i);
+    }
+    expect(
+      readFileSync(new URL("../public/landing.js", import.meta.url), "utf8"),
+    ).not.toMatch(/[\u2013\u2014]/);
+  });
+});
+
 describe("first-party measurement boundary", () => {
   it("handles HTTPS terminated at a proxy without trusting forwarded hosts", async () => {
     const runtime = fixture();
