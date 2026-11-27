@@ -62,6 +62,7 @@ function fixture(path?: string) {
   const options = {
     lineId: "line",
     proofKey: "ab".repeat(32),
+    identityKey: "cd".repeat(32),
     verifiers,
     now: () => now,
   };
@@ -733,8 +734,11 @@ describe("staged shared-number identity and ownership", () => {
       "result-a",
     );
     expect(ca.scope.deviceId).toBe(a.pairing.deviceId);
-    expect(ca.scope.recipient).toBe("+14155550100");
-    expect(cb.scope.recipient).toBe("+12125550100");
+    // Each callback dials its own member's number, kept only sealed.
+    expect(f.router.callbackRecipient(ca.id)).toBe("+14155550100");
+    expect(f.router.callbackRecipient(cb.id)).toBe("+12125550100");
+    expect(ca.scope.recipientDigest).not.toBe(cb.scope.recipientDigest);
+    expect(JSON.stringify([ca, cb])).not.toMatch(/4155550100|2125550100/);
     expect(ca.callId).toBe(a.call.id);
     expect(
       f.router.completeTask(a.credential, a.connection.id, task.id, "result-a"),

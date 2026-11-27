@@ -90,6 +90,7 @@ export class SharedProvider {
         dial(
           callback: SharedCallbackOwnership,
           media: TaskAudioCredentials,
+          recipient: string,
         ): Promise<{ providerCallId: string }>;
       };
     },
@@ -118,8 +119,8 @@ export class SharedProvider {
             deadlineAt: this.now() + 20000,
             video: true,
           }),
-        dial: (callback, media) =>
-          options.api.dial(callback, media as TaskAudioCredentials),
+        dial: (callback, media, recipient) =>
+          options.api.dial(callback, media as TaskAudioCredentials, recipient),
         inspect: async (callback, id, activate = true) => {
           const observed = await options.api.observe(id);
           if (activate && observed.answered && !observed.terminal) {

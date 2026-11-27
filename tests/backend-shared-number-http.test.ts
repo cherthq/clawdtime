@@ -7,6 +7,7 @@ import { SharedMac } from "../connectors/shared/shared-mac.js";
 import { SharedPhoneIdentity } from "../src/pairing/shared-phone-identity.js";
 import { sharedVerificationText } from "../src/transport/shared-verification-text.js";
 import { Store } from "../src/storage/store.js";
+import { SharedNumberKeys } from "../src/pairing/shared-number-keys.js";
 import type { SharedCommand } from "../src/shared-relay-contracts.js";
 
 const cleanup: (() => Promise<unknown> | void)[] = [];
@@ -139,7 +140,7 @@ async function fixture(
     expect(admitted.body.state).toBe("admitted");
     return admitted.body.call;
   };
-  return { store, service, origin, post, pair, event, admit };
+  return { store, service, origin, post, pair, event, admit, codes };
 }
 
 describe("shared coordinator over real HTTP with simulated line and Mac execution", () => {
@@ -215,8 +216,11 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     );
     await Promise.all([worker.pump(), worker.pump()]);
     expect(dial).toHaveBeenCalledOnce();
-    const callback = (dial.mock.calls as unknown as [any, unknown][])[0]![0];
-    expect(callback.scope.recipient).toBe("+14155550100");
+    const [callback, , recipient] = (
+      dial.mock.calls as unknown as [any, unknown, string][]
+    )[0]!;
+    expect(recipient).toBe("+14155550100");
+    expect(JSON.stringify(callback)).not.toContain("4155550100");
     expect(callback.scope.deviceId).toBe(a.deviceId);
     const binding = await f.post(
       "/line/room",
@@ -762,7 +766,10 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     ).toBe("queued");
     const callbacks = f.store.all<any>("shared_number_callback");
     expect(callbacks[0].scope.deviceId).toBe(a.deviceId);
-    expect(callbacks[0].scope.recipient).toBe("+14155550100");
+    expect(f.service.router.callbackRecipient(callbacks[0].id)).toBe(
+      "+14155550100",
+    );
+    expect(JSON.stringify(callbacks)).not.toContain("4155550100");
     expect(JSON.stringify(f.store.all("shared_relay"))).not.toContain(
       "blue whales",
     );
@@ -844,6 +851,148 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
     expect(
       (await f.post("/line/release", { roomId: "other" }, a.credential)).status,
     ).toBe(403);
+  });
+
+  it("moves numbers stored in the clear by an earlier release to digests and sealed copies on start", async () => {
+    const f = await fixture(2000, true);
+    const memberA = "+14155550100",
+      memberB = "+12125550100";
+    const a = await f.pair(memberA);
+    const connection = await f.post(
+      "/device/connect",
+      { instanceId: "instance-a" },
+      a.credential,
+    );
+    const call = await f.admit(a, "call-a");
+    f.service.router.createTask(call.id, call.scope.grantId, {
+      taskId: "task-a",
+      userTurnId: "turn-a",
+      requestDigest: "a".repeat(64),
+    });
+    f.service.router.requestCallback(call.id, call.scope.grantId, "task-a");
+    const callback = f.service.router.completeTask(
+      a.credential,
+      connection.body.id,
+      "task-a",
+      "result-a",
+    );
+    await f.post(
+      "/line/event",
+      f.event("call-a", "cleanup_complete"),
+      lineToken,
+    );
+    // Member B has a texted code that is not verified yet.
+    const pending = await f.post("/auth/start", { recipient: memberB });
+
+    // Write every row back in the earlier shape, with the numbers in the clear.
+    const keys = new SharedNumberKeys("bb".repeat(32), "line");
+    const plain = new Map<string, string>();
+    for (const number of [memberA, memberB]) {
+      plain.set(keys.digest(number), number);
+      plain.set(keys.digest(`iMessage;-;${number}`), `iMessage;-;${number}`);
+    }
+    const earlier = (value: any): any => {
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        return value;
+      const out: any = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (key === "recipientDigest" || key === "number")
+          out.recipient = plain.get(item as string);
+        else if (key === "conversationDigest")
+          out.conversationId = plain.get(item as string);
+        else if (key !== "sealedRecipient" && key !== "sealed")
+          out[key] = earlier(item);
+      }
+      return out;
+    };
+    for (const row of f.store.db
+      .prepare("SELECT kind, id, body FROM entities")
+      .all())
+      f.store.db
+        .prepare("UPDATE entities SET body = ? WHERE kind = ? AND id = ?")
+        .run(
+          JSON.stringify(earlier(JSON.parse(String(row.body)))),
+          String(row.kind),
+          String(row.id),
+        );
+    for (const name of ["member", "pairing", "proof", "call", "callback"])
+      expect(
+        JSON.stringify(f.store.all(`shared_number_${name}`)),
+        name,
+      ).toContain(memberA);
+    expect(JSON.stringify(f.store.all("shared_identity_session"))).toContain(
+      memberA,
+    );
+    expect(JSON.stringify(f.store.all("shared_identity_challenge"))).toContain(
+      memberB,
+    );
+
+    // The coordinator starts again on the same database.
+    const codes = new Map<string, string>();
+    const service = createSharedNumberApp({
+      store: f.store,
+      lineId: "line",
+      proofKey: "aa".repeat(32),
+      identityKey: "bb".repeat(32),
+      lineToken,
+      callbacksEnabled: true,
+      sendCode: async (phone, code) => {
+        codes.set(phone, code);
+        return true;
+      },
+    });
+    cleanup.push(() => service.close());
+    const post = async (path: string, data: unknown, token = "") => {
+      const response = await service.app.fetch(
+        new Request(`https://coordinator.example${path}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(data),
+        }),
+      );
+      return { status: response.status, body: (await response.json()) as any };
+    };
+    const text = JSON.stringify(
+      f.store.db.prepare("SELECT * FROM entities").all(),
+    );
+    for (const number of [memberA, memberB])
+      expect(text).not.toContain(number.slice(2));
+    // A pairing and its proof snapshot still match.
+    const pairing = f.store.all<any>("shared_number_pairing")[0];
+    expect(
+      JSON.stringify(f.store.all<any>("shared_number_proof")[0].pairing),
+    ).toBe(JSON.stringify(pairing));
+    // B's texted code still verifies, and B enrolls.
+    const verified = await post("/auth/verify", {
+      challengeId: pending.body.challengeId,
+      code: f.codes.get(memberB),
+    });
+    expect(verified.status).toBe(200);
+    expect(
+      (await post("/account/invite", {}, verified.body.token)).status,
+    ).toBe(200);
+    // A's sign-in from before the start still works, and A is still a member.
+    expect(
+      (await post("/account/invite", { replace: true }, a.account)).status,
+    ).toBe(200);
+    expect((await post("/auth/start", { recipient: memberA })).status).toBe(
+      200,
+    );
+    expect(codes.has(memberA)).toBe(true);
+    // A call from A's number waits for A's Mac, and the callback dials A.
+    expect(
+      (
+        await post(
+          "/line/event",
+          f.event("call-next", "incoming", memberA),
+          lineToken,
+        )
+      ).body.state,
+    ).toBe("unknown_identity");
+    expect(service.router.callbackRecipient(callback.id)).toBe(memberA);
   });
 
   it("rotates a device credential and re-pairs a Mac through authenticated routes", async () => {

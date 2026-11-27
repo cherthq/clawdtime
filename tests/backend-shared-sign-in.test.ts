@@ -418,9 +418,22 @@ describe("shared sign-in limits and storage", () => {
     expect(store.get("shared_identity_challenge", stale.challengeId)).toBe(
       undefined,
     );
-    expect(store.get("shared_identity_challenge", fresh.challengeId)).toEqual(
-      expect.objectContaining({ recipient: member }),
-    );
+    // The challenge names the number by its keyed digest. A stranger's keeps
+    // nothing more; a texted code keeps a sealed copy until it expires.
+    const kept = store.get<any>("shared_identity_challenge", fresh.challengeId);
+    expect(kept.number).toMatch(/^[a-f0-9]{64}$/);
+    expect(kept.sealed).toMatch(/^v1\./);
+    expect(JSON.stringify(kept)).not.toContain("4155550100");
+    const strangerStart = await identity.start(stranger, memberMac);
+    expect(
+      store.get<any>("shared_identity_challenge", strangerStart.challengeId)
+        .sealed,
+    ).toBeUndefined();
+    now += 5 * 60_000;
+    await identity.start(invited, memberMac).catch(() => undefined);
+    expect(
+      store.get<any>("shared_identity_challenge", fresh.challengeId).sealed,
+    ).toBeUndefined();
   });
 
   it("does not undo a consumed challenge when the text receipt arrives late", async () => {

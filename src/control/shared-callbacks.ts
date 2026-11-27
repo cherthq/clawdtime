@@ -41,9 +41,11 @@ export class SharedCallbacks {
       acquire(id: string): Promise<void>;
       verify(id: string): Promise<boolean>;
       prepare(callback: SharedCallbackOwnership): Promise<unknown>;
+      /** The recipient is the member's number, opened only for this dial. */
       dial(
         callback: SharedCallbackOwnership,
         media: unknown,
+        recipient: string,
       ): Promise<{ providerCallId: string }>;
       /** A read for reconciliation passes `activate` false: it never answers. */
       inspect(
@@ -179,9 +181,10 @@ export class SharedCallbacks {
       if (!(await this.ports.verify(callback.id))) throw Error("owner_changed");
       // Recheck the Mac, then mark the dial. From here it may reach the provider.
       this.router.callbackDialing(callback.id);
+      const recipient = this.router.callbackRecipient(callback.id);
       dialed = true;
       attempt = this.put({ id: callback.id, phase: "dial" });
-      const result = await this.ports.dial(callback, media);
+      const result = await this.ports.dial(callback, media, recipient);
       // Save the returned identity before binding it to a voice worker.
       attempt = this.put({
         id: callback.id,

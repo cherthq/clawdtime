@@ -8,6 +8,7 @@ import { SharedMac } from "../connectors/shared/shared-mac.js";
 import { sharedCallProof } from "../cli/shared.js";
 import { makeSharedDesk } from "../line/shared-desk.mjs";
 import { Store } from "../src/storage/store.js";
+import { hash } from "../src/storage/security.js";
 import type { SharedCommand } from "../src/shared-relay-contracts.js";
 
 // Made-up numbers and hosts only. No real text, call, room or screen.
@@ -23,7 +24,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 
-it("routes a signed incoming call to the caller's own paired Mac, gives other members no code, declines a stranger at once, and releases an unverified caller after 90 s", async () => {
+it("routes a signed incoming call to the caller's own paired Mac, gives other members no code, declines a stranger at once, releases an unverified caller after 90 s, and stores no number in the clear", async () => {
   let clock = Date.now();
   const now = () => clock;
   const lineId = randomUUID();
@@ -38,6 +39,7 @@ it("routes a signed incoming call to the caller's own paired Mac, gives other me
     lineToken,
     invited: [memberA, memberB],
     now,
+    callbacksEnabled: true,
     sendCode: async (recipient, code) => {
       texts.set(recipient, code);
       return true;
@@ -95,7 +97,11 @@ it("routes a signed incoming call to the caller's own paired Mac, gives other me
         ? { answered: true, terminal: true, cleanupComplete: true }
         : { answered: true, terminal: false, cleanupComplete: false },
     ),
-    dial: vi.fn(async () => ({ providerCallId: randomUUID() })),
+    dial: vi.fn(
+      async (_callback: unknown, _media: unknown, _recipient: string) => ({
+        providerCallId: randomUUID(),
+      }),
+    ),
   };
   const provider = new SharedProvider({
     store,
@@ -160,10 +166,10 @@ it("routes a signed incoming call to the caller's own paired Mac, gives other me
   // Each paired Mac keeps its own outbound device connection open.
   const seen: Record<string, SharedCommand[]> = { a: [], b: [] };
   let connected = 0;
-  for (const [name, device] of [
-    ["a", a],
-    ["b", b],
-  ] as const) {
+  const run = (
+    name: "a" | "b",
+    device: { credential: string; deviceId: string },
+  ) => {
     const controller = new AbortController(),
       local = new Store();
     const mac = new SharedMac({
@@ -189,7 +195,9 @@ it("routes a signed incoming call to the caller's own paired Mac, gives other me
       await running;
       local.close();
     });
-  }
+  };
+  run("a", a);
+  run("b", b);
   await vi.waitFor(() => expect(connected).toBe(2));
   const prove = (device: { credential: string }) =>
     sharedCallProof(
@@ -231,8 +239,11 @@ it("routes a signed incoming call to the caller's own paired Mac, gives other me
   await provider.pump();
   expect(media.cleanup).toHaveBeenCalledWith(callA.roomId);
 
-  // 2. A stranger calls. No Mac could verify it: it is declined at once,
-  // gets no room and does not hold the slot.
+  // 2. A stranger asks for a sign-in text and gets none, then calls. No Mac
+  // could verify the call: it is declined at once, gets no room and does not
+  // hold the slot.
+  expect((await post("/auth/start", { recipient: stranger })).status).toBe(200);
+  expect(texts.has(stranger)).toBe(false);
   const prepared = media.prepare.mock.calls.length;
   const strangerCall = await incoming(stranger);
   expect(strangerCall.action).toBe("decline");
@@ -264,5 +275,103 @@ it("routes a signed incoming call to the caller's own paired Mac, gives other me
     store.get<{ phase: string }>("shared_provider_incoming", unverified.callId)
       ?.phase,
   ).toBe("ended");
-  expect((await incoming(memberA)).action).toBe("accept");
+  const again = await incoming(memberA);
+  expect(again.action).toBe("accept");
+
+  // 5. Member A starts shared run again: its connection lapsed while the
+  // clock moved on. A proves this call, starts a task and asks for a callback.
+  run("a", a);
+  await vi.waitFor(() => expect(connected).toBe(3));
+  const secondDesk = await makeSharedDesk({
+    origin: publicOrigin,
+    token: lineToken,
+    roomId: again.roomId,
+    request: request as (url: string, init: RequestInit) => Promise<Response>,
+    now,
+  });
+  cleanup.push(() => secondDesk.close());
+  expect(await secondDesk.bindCaller("shared-bridge")).toBe(true);
+  expect(
+    await secondDesk.ask((await prove(a)).code, { requestId: "turn-again" }),
+  ).toMatch(/paired Mac is connected/);
+  const call = store
+    .all<any>("shared_number_call")
+    .find((c) => c.roomId === again.roomId);
+  service.router.createTask(call.id, call.scope.grantId, {
+    taskId: "task-a",
+    userTurnId: "turn-task",
+    requestDigest: "a".repeat(64),
+  });
+  expect(
+    (
+      await post(
+        "/line/callback-request",
+        { callId: call.id, grantId: call.scope.grantId, taskId: "task-a" },
+        lineToken,
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await post(
+        "/device/completion",
+        {
+          connectionId: call.scope.connectionId,
+          taskId: "task-a",
+          resultId: "result-a",
+        },
+        a.credential,
+      )
+    ).status,
+  ).toBe(200);
+  await secondDesk.close();
+  ended.add(again.callId);
+  await provider.pump();
+  await provider.pump();
+  // The callback dials member A's own number, opened only for the dial.
+  expect(api.dial).toHaveBeenCalledOnce();
+  expect.soft(api.dial.mock.calls[0]![2]).toBe(memberA);
+
+  // 6. No table holds a number in the clear, or a plain hash of one.
+  const forms = (number: string) => [
+    number,
+    number.slice(1),
+    number.slice(2),
+    hash(number),
+    hash(`iMessage;-;${number}`),
+  ];
+  const tables = store.db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+    .all()
+    .map((row) => String(row.name));
+  expect(tables).toEqual(
+    expect.arrayContaining([
+      "entities",
+      "operational_state",
+      "effects",
+      "events",
+    ]),
+  );
+  const kinds = new Set<string>();
+  for (const table of tables) {
+    const rows = store.db.prepare(`SELECT * FROM ${table}`).all();
+    if (table === "entities")
+      for (const row of rows) kinds.add(String(row.kind));
+    const text = JSON.stringify(rows);
+    for (const number of [memberA, memberB, stranger])
+      for (const form of forms(number))
+        expect.soft(text.includes(form), `${table} holds ${form}`).toBe(false);
+  }
+  // The scan covered every record that holds or held a number.
+  for (const kind of [
+    "shared_identity_challenge",
+    "shared_identity_session",
+    "shared_number_member",
+    "shared_number_pairing",
+    "shared_number_proof",
+    "shared_number_call",
+    "shared_number_task",
+    "shared_number_callback",
+  ])
+    expect(kinds.has(kind), kind).toBe(true);
 }, 20_000);

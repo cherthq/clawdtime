@@ -63,6 +63,7 @@ export function createSharedNumberApp(options: {
   const router = new SharedNumber(options.store, {
     lineId: options.lineId,
     proofKey: options.proofKey,
+    identityKey: options.identityKey,
     now: options.now,
     verifiers: {
       account: (proof) => identity.account(proof),

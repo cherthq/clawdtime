@@ -71,11 +71,21 @@ node dist/scripts/shared-number-server.js
 
 Health shows the mode and whether the provider is configured, not secrets.
 All other routes return 503 in standby. Back up the database and persistent
-keys together. Changing the identity key changes account subjects. A second
+keys together. Changing the identity key changes account subjects and number
+digests, and the coordinator can no longer open the sealed numbers. A second
 process refuses the database's `.owner` lock. After an unclean exit,
 reconcile pending provider and media effects before you remove a stale lock.
 Its `owner.json` identifies the process that created it. Never remove a live
 process's lock.
+
+The database keeps phone numbers and caller handles only as keyed digests
+under `identityKey`. A number is kept sealed, with a key derived from
+`identityKey`, only where the coordinator must use it again: a texted sign-in
+code until it is used or expires, a sign-in session for its hour, and a
+member's own record, to dial that member's callbacks. A permanent ban drops
+the sealed copy. A stranger's sign-in keeps only the digest. At startup, the
+coordinator moves rows from an earlier release that held numbers in the clear
+to this form.
 
 ## Operations
 
