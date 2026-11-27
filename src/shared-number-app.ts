@@ -3,7 +3,10 @@ import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { SharedNumber } from "./control/shared-number.js";
 import { SharedNumberRelay } from "./control/shared-number-relay.js";
-import { SharedPhoneIdentity } from "./pairing/shared-phone-identity.js";
+import {
+  SharedPhoneIdentity,
+  signInClient,
+} from "./pairing/shared-phone-identity.js";
 import { Store } from "./storage/store.js";
 import { DomainError, equal, hash } from "./storage/security.js";
 import {
@@ -26,6 +29,8 @@ export function createSharedNumberApp(options: {
   identityKey: string;
   lineToken: string;
   sendCode(recipient: string, code: string, key: string): Promise<boolean>;
+  /** Numbers that may get a sign-in text. Current members need no entry. */
+  invited?: readonly string[];
   now?: () => number;
   relayTimeoutMs?: number;
   callbacksEnabled?: boolean;
@@ -34,6 +39,7 @@ export function createSharedNumberApp(options: {
   const identity = new SharedPhoneIdentity(options.store, {
     lineId: options.lineId,
     key: options.identityKey,
+    invited: options.invited,
     send: options.sendCode,
     now: options.now,
   });
@@ -114,7 +120,15 @@ export function createSharedNumberApp(options: {
       .object({ recipient: z.string().max(32) })
       .strict()
       .parse(await c.req.json());
-    return c.json(await identity.start(recipient));
+    const peer = (
+      c.env as { incoming?: { socket?: { remoteAddress?: string } } }
+    )?.incoming?.socket?.remoteAddress;
+    return c.json(
+      await identity.start(
+        recipient,
+        signInClient(peer, c.req.header("x-forwarded-for")),
+      ),
+    );
   });
   app.post("/auth/verify", async (c) => {
     const input = z

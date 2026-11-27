@@ -1,4 +1,5 @@
 import { createHmac, randomInt } from "node:crypto";
+import { BlockList, isIP } from "node:net";
 import { z } from "zod";
 import { Store } from "../storage/store.js";
 import { DomainError, equal, hash, token } from "../storage/security.js";
@@ -6,11 +7,15 @@ import { DomainError, equal, hash, token } from "../storage/security.js";
 interface Challenge {
   id: string;
   recipient: string;
+  /** Keyed digest of the client address, never the address itself. */
+  client?: string;
+  /** False when no text was sent: the number is not invited or a member. */
+  eligible?: boolean;
   digest: string;
   createdAt: number;
   expiresAt: number;
   attempts: number;
-  state: "sending" | "sent" | "unknown" | "consumed";
+  state: "sending" | "sent" | "unknown" | "consumed" | "withheld";
 }
 interface Session {
   id: string;
@@ -20,16 +25,84 @@ interface Session {
 }
 const phone = z.string().regex(/^\+[1-9]\d{7,14}$/);
 const denied = () => new DomainError(403, "identity_refused");
+const challenges = "shared_identity_challenge";
+const minute = 60_000;
+// One client, and one number from one client, each have their own allowance,
+// so one abuser cannot spend a member's. The number and text ceilings bound
+// what many clients can do together. Only real texts count for the line.
+const limits = {
+  numberFromClient: { count: 3, window: 10 * minute },
+  client: { count: 10, window: 60 * minute },
+  number: { count: 15, window: 60 * minute },
+  texts: { count: 100, window: 60 * minute },
+};
+// A challenge older than every window is expired and counts for nothing.
+const kept = 60 * minute;
+
+const proxies = new BlockList();
+for (const [subnet, bits] of [
+  ["127.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+  ["100.64.0.0", 10],
+  ["169.254.0.0", 16],
+] as const)
+  proxies.addSubnet(subnet, bits, "ipv4");
+proxies.addAddress("::1", "ipv6");
+proxies.addSubnet("fc00::", 7, "ipv6");
+proxies.addSubnet("fe80::", 10, "ipv6");
+const plain = (address: string) =>
+  address.replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, "");
+const prefix64 = (address: string) => {
+  const [head = "", tail] = address.toLowerCase().split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups =
+    tail === undefined
+      ? left
+      : [
+          ...left,
+          ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill(
+            "0",
+          ),
+          ...right,
+        ];
+  return `${groups
+    .slice(0, 4)
+    .map((group) => parseInt(group, 16).toString(16))
+    .join(":")}::/64`;
+};
+
+/** The rate-limit key of one sign-in client. A loopback or private peer is the
+ * HTTPS proxy of the setup guide, so the last X-Forwarded-For entry, which that
+ * proxy added, names the client. A public peer is the client itself. An IPv6
+ * client counts by its /64, which one person can rotate within. */
+export function signInClient(peer?: string, forwarded?: string) {
+  if (!peer || !isIP(plain(peer))) return "unknown";
+  let address = plain(peer);
+  const family = (value: string) => (isIP(value) === 6 ? "ipv6" : "ipv4");
+  if (forwarded && proxies.check(address, family(address))) {
+    const last = plain(forwarded.split(",").at(-1)?.trim() ?? "");
+    if (isIP(last)) address = last;
+  }
+  return isIP(address) === 6 ? prefix64(address) : address;
+}
 
 /** Passwordless phone possession proof. Only the requested recipient receives
- * the code. No inbound masked sender or caller metadata is treated as identity.
- * Delivery and verification have separate durable receipts and bounded rates. */
+ * the code, and only when the operator invited that number or it belongs to a
+ * current member. Every other number gets the same answer and no text. No
+ * inbound masked sender or caller metadata is treated as identity. Delivery
+ * and verification have separate durable receipts and bounded rates. */
 export class SharedPhoneIdentity {
+  private readonly invited: ReadonlySet<string>;
   constructor(
     private store: Store,
     private options: {
       lineId: string;
       key: string;
+      /** Exact numbers the operator invites. Current members need no entry. */
+      invited?: readonly string[];
       now?: () => number;
       send(
         recipient: string,
@@ -40,6 +113,10 @@ export class SharedPhoneIdentity {
   ) {
     if (!/^[a-f0-9]{64}$/i.test(options.key))
       throw Error("identity_key_required");
+    const invited = options.invited ?? [];
+    if (!invited.every((number) => phone.safeParse(number).success))
+      throw Error("identity_invited_number_invalid");
+    this.invited = new Set(invited);
   }
   private now() {
     return (this.options.now ?? Date.now)();
@@ -49,59 +126,106 @@ export class SharedPhoneIdentity {
       .update(JSON.stringify(values))
       .digest("hex");
   }
-  async start(raw: string) {
+  /** Invited, or a current member of this line (see SharedMember). */
+  private eligible(recipient: string) {
+    return (
+      this.invited.has(recipient) ||
+      this.store.db
+        .prepare(
+          `SELECT 1 FROM entities WHERE kind = 'shared_number_member'
+           AND json_extract(body, '$.alias.lineId') = ?
+           AND json_extract(body, '$.alias.recipient') = ?
+           AND json_extract(body, '$.revokedAt') IS NULL LIMIT 1`,
+        )
+        .get(this.options.lineId, recipient) !== undefined
+    );
+  }
+  async start(raw: string, client = "unknown") {
     const recipient = phone.parse(raw);
     const code = randomInt(100_000_000).toString().padStart(8, "0");
+    const now = this.now();
     const challenge = this.store.transaction(() => {
-      const recent = this.store
-        .all<Challenge>("shared_identity_challenge")
-        .filter((c) => c.createdAt > this.now() - 3_600_000);
+      this.store.db
+        .prepare(
+          `DELETE FROM entities WHERE kind = '${challenges}'
+           AND json_extract(body, '$.createdAt') <= ?`,
+        )
+        .run(now - kept);
+      const from = this.digest("client", client);
+      const eligible = this.eligible(recipient);
+      const used = this.store.db
+        .prepare(
+          `SELECT coalesce(sum(client = ?1), 0) AS client,
+             coalesce(sum(client = ?1 AND recipient = ?2 AND createdAt > ?3), 0) AS numberFromClient,
+             coalesce(sum(recipient = ?2), 0) AS number,
+             coalesce(sum(eligible), 0) AS texts
+           FROM (SELECT json_extract(body, '$.client') AS client,
+               json_extract(body, '$.recipient') AS recipient,
+               json_extract(body, '$.createdAt') AS createdAt,
+               coalesce(json_extract(body, '$.eligible'), 1) AS eligible
+             FROM entities WHERE kind = '${challenges}'
+             AND json_extract(body, '$.createdAt') > ?4)`,
+        )
+        .get(
+          from,
+          recipient,
+          now - limits.numberFromClient.window,
+          now - kept,
+        ) as Record<keyof typeof limits, number>;
+      // The text ceiling refuses every start, so a stranger's answer matches.
       if (
-        recent.length >= 100 ||
-        recent.filter(
-          (c) =>
-            c.recipient === recipient && c.createdAt > this.now() - 600_000,
-        ).length >= 3
+        (Object.keys(limits) as (keyof typeof limits)[]).some(
+          (name) => used[name] >= limits[name].count,
+        )
       )
         throw new DomainError(429, "identity_rate_limited");
       const id = token();
-      return this.store.put<Challenge>("shared_identity_challenge", {
+      return this.store.put<Challenge>(challenges, {
         id,
         recipient,
+        client: from,
+        eligible,
         digest: this.digest(id, code),
-        createdAt: this.now(),
-        expiresAt: this.now() + 300_000,
+        createdAt: now,
+        expiresAt: now + 300_000,
         attempts: 0,
-        state: "sending",
+        state: eligible ? "sending" : "withheld",
       });
     });
+    // The answer never waits for the provider, so its timing does not tell
+    // a member from anyone else.
+    if (challenge.eligible) void this.deliver(challenge, code);
+    return { challengeId: challenge.id, expiresAt: challenge.expiresAt };
+  }
+  private async deliver(challenge: Challenge, code: string) {
     let sent = false;
     try {
       sent = await this.options.send(
-        recipient,
+        challenge.recipient,
         code,
         `shared-verify-${challenge.id}`,
       );
     } catch {
       /* A timeout is unknown, never evidence to resend. */
     }
-    this.store.put("shared_identity_challenge", {
-      ...challenge,
-      state: sent ? "sent" : "unknown",
-    });
-    return {
-      challengeId: challenge.id,
-      expiresAt: challenge.expiresAt,
-      delivery: sent ? "submitted" : "unknown",
-    };
+    try {
+      this.store.transaction(() => {
+        const current = this.store.get<Challenge>(challenges, challenge.id);
+        // Verification may already have consumed it; never undo that.
+        if (current?.state === "sending")
+          this.store.put(challenges, {
+            ...current,
+            state: sent ? "sent" : "unknown",
+          });
+      });
+    } catch {
+      /* The receipt stays "sending", as uncertain as "unknown". */
+    }
   }
   verify(challengeId: string, code: string) {
     // Return denial from the transaction so failed attempts actually commit.
     const result = this.store.transaction(() => {
-      const c = this.store.get<Challenge>(
-        "shared_identity_challenge",
-        challengeId,
-      );
+      const c = this.store.get<Challenge>(challenges, challengeId);
       if (
         !c ||
         c.state === "consumed" ||
@@ -109,9 +233,12 @@ export class SharedPhoneIdentity {
         c.attempts >= 5
       )
         return null;
+      // A withheld challenge was never texted, so no code matches it.
       const valid =
-        /^\d{8}$/.test(code) && equal(c.digest, this.digest(c.id, code));
-      this.store.put("shared_identity_challenge", {
+        c.eligible !== false &&
+        /^\d{8}$/.test(code) &&
+        equal(c.digest, this.digest(c.id, code));
+      this.store.put(challenges, {
         ...c,
         attempts: c.attempts + 1,
         state: valid || c.attempts >= 4 ? "consumed" : c.state,
