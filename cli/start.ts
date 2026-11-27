@@ -22,6 +22,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { linkedDesktopFolder } from "../connectors/agents/desktop-chat.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { desktopCli, type DesktopLaunch } from "./task-desktop.js";
 import { findNativeHelper } from "../src/native-helpers.js";
@@ -40,8 +41,10 @@ export const startHelp = `clawdtime start: start the ClawdTime desktop, the serv
                    is ready, {"type":"panel","state":"closed"} when the panel closes, and
                    stop the panel and the service on SIGTERM or Ctrl+C
 It starts the desktop as the README does, with CLAWDTIME_CHAT=agent and the state folder
-~/.local/share/clawdtime/desktop (CLAWDTIME_DESKTOP_STATE changes it). When the service
-runs already, it opens the panel again.`;
+~/.local/share/clawdtime/desktop (CLAWDTIME_DESKTOP_STATE changes it, and so does the choice
+of setup to use the ClawdTime of another install). When the service runs already, it opens
+the panel again. When it does not start, it says why; the service log is desktop-start.log
+in the state folder.`;
 const usage =
   "Use: clawdtime start [--project PATH] [--tucked true|false] [--foreground]";
 /** The line that --foreground writes on standard output when the desktop is ready. */
@@ -206,7 +209,10 @@ export async function startCli(
   const named = env.CLAWDTIME_DESKTOP_STATE;
   if (named && !isAbsolute(named))
     throw new Error("CLAWDTIME_DESKTOP_STATE must be an absolute path.");
-  const state = named || join(stateRoot({ env, home }), "desktop");
+  const configRoot = stateRoot({ env, home });
+  // A link that setup saved names the desktop of another install to use.
+  const state =
+    named || linkedDesktopFolder(configRoot) || join(configRoot, "desktop");
 
   const panel = findNativeHelper("ClawdTimeTaskPanel", { root, env });
   if (!panel)

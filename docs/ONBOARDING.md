@@ -105,6 +105,33 @@ question, at a failure, and while the desktop starts.
   `Type skip to do this later`.
 - In the app, **Skip for now** is on every step screen.
 
+## When the desktop does not start
+
+The `desktop` step says why, in plain words, and offers the recovery that
+fits. Its details name the desktop folder and the service log. The service
+writes its output to `desktop-start.log` in the desktop folder, for its owner
+only, with keys, tokens, phone numbers and email addresses masked. A log over
+256 KiB moves to `desktop-start.log.1` at the next start.
+
+- **ClawdTime runs from another install.** Its desktop holds the port of
+  this desktop (13326 unless an earlier start chose another). Setup asks:
+  **Use the running ClawdTime**, **Stop it and try again**, or **Try again**.
+  Use saves the folder of that desktop in `desktop-link.json` in the state
+  folder, so every command of this install uses it. Stop ends it only when
+  the owner lock and the descriptor of its folder name its process and the
+  port, and never while its app or a foreground Terminal holds it. When its
+  own files do not confirm it, setup offers only Try again.
+- **Another program holds the port.** A desktop with no explicit `--port`
+  moves to the next free port after 13326, keeps it in `desktop-port.json`,
+  and keeps its identity. With an explicit port the step says which program
+  holds it.
+- **The task session expired.** It lasts 24 hours. A start after that renews
+  it with the same identity while no task, call or voice is open, and the log
+  says so. While one is open, nothing is changed, and the details give the
+  command that moves the desktop folder aside to start a new one.
+- **Any other stop.** The step names what the service said, with its paths
+  in the details.
+
 ## Owners
 
 The desktop and the shared connection run long after setup. Each has one

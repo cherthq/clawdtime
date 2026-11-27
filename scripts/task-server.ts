@@ -1,3 +1,6 @@
+// First: the startup log of the desktop gets masked output and a marked
+// error line before any other module runs.
+import "../src/service-output.js";
 import { serve } from "@hono/node-server";
 import {
   mkdirSync,
@@ -76,6 +79,7 @@ import {
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
   prepareTaskDesktop,
+  renewDesktopSession,
   writeDesktopPrivateJSON,
   readDesktopPrivateBytes,
 } from "../src/control/task-desktop-config.js";
@@ -300,6 +304,16 @@ if (
   ).includes(port)
 )
   throw Error("Desktop and call runtime ports must be distinct.");
+// The desktop's own session expires 24 hours after it was made or renewed. A
+// start after that renews it while no work is open, else it says why not.
+if (
+  flags.has("--desktop") &&
+  !flags.has("--session-file") &&
+  renewDesktopSession(service, { directory }) === "renewed"
+)
+  console.log(
+    "The task session of this desktop had expired. It was renewed for 24 hours: no task, call or voice was open.",
+  );
 const desktopSetup = flags.has("--desktop")
   ? prepareTaskDesktop(service, {
       directory,

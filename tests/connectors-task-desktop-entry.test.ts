@@ -21,7 +21,7 @@ it("runs desktop help through a stable installation-directory symlink", async ()
     );
     expect(result.stdout).toContain("task:desktop --state PRIVATE_DIR");
     expect(result.stdout).toContain(
-      "Startup does not call, capture, or renew authorization",
+      "Startup does not call or capture. It renews the desktop's own expired task session only while no task, call or voice is open.",
     );
   } finally {
     rmSync(temporary, { recursive: true, force: true });

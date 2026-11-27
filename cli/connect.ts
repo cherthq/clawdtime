@@ -51,7 +51,10 @@ import {
 } from "../connectors/shared/private-file.js";
 import { computerCli } from "./computer.js";
 import { proactivePolicySchema } from "../src/attention/proactive-policy.js";
-import { findDesktopService } from "../connectors/agents/desktop-chat.js";
+import {
+  findDesktopService,
+  linkedDesktopFolder,
+} from "../connectors/agents/desktop-chat.js";
 import {
   connectPolicy,
   consentQuestion,
@@ -338,7 +341,10 @@ export async function connectCli(
     nodeBinary: deps.nodeBinary ?? process.execPath,
     retention: deps.retention,
     chertHome: named(env.CHERT_HOME) ?? join(home, ".chert"),
-    desktopFolder: named(env.CLAWDTIME_DESKTOP_STATE) ?? join(root, "desktop"),
+    desktopFolder:
+      named(env.CLAWDTIME_DESKTOP_STATE) ??
+      linkedDesktopFolder(root) ??
+      join(root, "desktop"),
     restart: false,
   };
   if (ctx.check)

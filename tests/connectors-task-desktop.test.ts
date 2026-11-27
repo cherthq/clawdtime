@@ -18,6 +18,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { desktopCli } from "../cli/task-desktop.js";
 import { desktopConfigurationFingerprint } from "../src/control/task-desktop-config.js";
 import { processLockHolder, takeProcessLock } from "../src/process-lock.js";
+import type { PortTools } from "../src/desktop-start.js";
+
+/** Every port is free: no test reads the ports of this Mac. */
+const freePorts: PortTools = {
+  bindable: async () => true,
+  health: async () => null,
+  listener: async () => null,
+  command: async () => null,
+};
 
 const directories: string[] = [];
 afterEach(() => {
@@ -127,6 +136,7 @@ function fixture() {
       print,
       startupMs: 25,
       pollMs: 1,
+      ports: freePorts,
     });
   return {
     root,
@@ -462,7 +472,16 @@ describe("independent desktop service launcher", () => {
       "--desktop",
       "true",
     ]);
-    expect(service[2]).toMatchObject({ detached: true, stdio: "ignore" });
+    expect(service[2]).toMatchObject({ detached: true });
+    // The service writes its own output, masked, to the startup log.
+    const stdio = (service[2] as { stdio: unknown[] }).stdio;
+    expect(stdio[0]).toBe("ignore");
+    expect(typeof stdio[1]).toBe("number");
+    expect(stdio[2]).toBe(stdio[1]);
+    expect(
+      (service[2] as { env: Record<string, string> }).env
+        .CLAWDTIME_SERVICE_OUTPUT,
+    ).toBe("log");
     expect(f.spawnMock.mock.calls[1]![1]).toEqual(["--config", f.panelPath]);
     const [url, options] = f.request.mock.calls[0] as unknown as [
       string,
@@ -490,6 +509,7 @@ describe("independent desktop service launcher", () => {
       startupMs: 25,
       pollMs: 1,
       foreground: true,
+      ports: freePorts,
     });
     expect(launch?.service.pid).toBe(f.descriptor.pid);
     expect(launch?.service.child).toBe(f.children[0]);
@@ -506,6 +526,7 @@ describe("independent desktop service launcher", () => {
       startupMs: 25,
       pollMs: 1,
       panel: false,
+      ports: freePorts,
     });
     expect(attached).toEqual({ service: { pid: f.descriptor.pid } });
     expect(f.spawnMock).toHaveBeenCalledTimes(2);
@@ -520,6 +541,7 @@ describe("independent desktop service launcher", () => {
       startupMs: 25,
       pollMs: 1,
       panel: false,
+      ports: freePorts,
     });
     expect(f.spawnMock).toHaveBeenCalledTimes(1);
     expect(f.spawnMock.mock.calls[0]![0]).toBe(process.execPath);
@@ -605,6 +627,7 @@ describe("independent desktop service launcher", () => {
 const { desktopCli } = await import(${JSON.stringify(resolve("cli/task-desktop.ts"))});
 await desktopCli(["--state", ${JSON.stringify(f.state)}, "--project", ${JSON.stringify(f.project)}, "--panel-binary", "/bin/sleep"], {
   root: ${JSON.stringify(f.root)}, print: () => {}, panel: false, startupMs: 60000,
+  ports: { bindable: async () => true, health: async () => null, listener: async () => null, command: async () => null },
   spawn: ((_c, _a, o) => { const c = spawn("/bin/sleep", ["30"], { ...o, stdio: "ignore" }); console.log("SERVICE " + c.pid); return c; }),
 });
 `,
