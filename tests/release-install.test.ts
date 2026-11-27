@@ -336,6 +336,42 @@ describe("the release route of the installer", () => {
     expect(fourth.output).not.toContain("still runs");
   });
 
+  it("refuses a release older than the installed one, unless CLAWDTIME_ALLOW_DOWNGRADE=1", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.10.0" });
+    expect((await f.install()).status).toBe(0);
+    // 0.9.0 is older than 0.10.0: the versions compare as numbers, not as text.
+    publish(f.releases, { version: "0.9.0" });
+    const older = await f.install();
+    expect(older.status, older.output).toBe(1);
+    expect(older.output).toContain(
+      "Stopped: ClawdTime 0.10.0 is installed, and the newest release, 0.9.0, is older. Nothing changed. To go back to 0.9.0, run this again with CLAWDTIME_ALLOW_DOWNGRADE=1.",
+    );
+    expect(older.output).not.toContain("Downloading");
+    expect(f.current()).toBe("0.10.0");
+    expect(f.versions()).toEqual(["0.10.0", "current"]);
+
+    const back = await f.install({ env: { CLAWDTIME_ALLOW_DOWNGRADE: "1" } });
+    expect(back.status, back.output).toBe(0);
+    expect(back.output).toContain(
+      "Going back from ClawdTime 0.10.0 to 0.9.0: CLAWDTIME_ALLOW_DOWNGRADE=1.",
+    );
+    expect(back.output).toContain(
+      "ClawdTime is back on 0.9.0 from 0.10.0. Your settings, keys and pairing are kept.",
+    );
+    expect(f.current()).toBe("0.9.0");
+    expect(f.versions()).toEqual(["0.10.0", "0.9.0", "current"]);
+
+    // A newer release needs no setting.
+    publish(f.releases, { version: "0.10.1" });
+    const forward = await f.install();
+    expect(forward.status, forward.output).toBe(0);
+    expect(forward.output).toContain(
+      "ClawdTime is updated from 0.9.0 to 0.10.1.",
+    );
+    expect(f.current()).toBe("0.10.1");
+  });
+
   it("refuses an archive whose SHA-256 differs and switches nothing", async () => {
     const f = setup();
     publish(f.releases, { version: "0.4.1" });
@@ -475,6 +511,16 @@ describe("the source route of the installer", () => {
       );
       expect(existsSync(f.runtimes)).toBe(false);
     }
+    // --help prints the whole comment at the top, with every setting.
+    const help = await f.install({ args: ["--help"] });
+    expect(help.status).toBe(0);
+    for (const line of [
+      "Installs ClawdTime on this Mac, or updates it.",
+      "CLAWDTIME_ALLOW_DOWNGRADE",
+      "uses sudo. The steps that need you come at the end.",
+    ])
+      expect(help.output).toContain(line);
+    expect(help.output).not.toContain("set -eu");
     const unknown = await f.install({ args: ["--sauce"] });
     expect(unknown.status).toBe(1);
     expect(unknown.output).toContain("unknown option --sauce");

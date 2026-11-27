@@ -15,6 +15,8 @@
 #                           https://github.com/cherthq/clawdtime/releases/latest/download
 #   CLAWDTIME_NO_GLOBAL     1: no link in ~/.local/bin
 #   CLAWDTIME_NO_ONBOARD    1: no guided setup after the install
+#   CLAWDTIME_ALLOW_DOWNGRADE  1: install the newest release even when it is
+#                           older than the installed one
 #
 # To build from the source instead, as before (it needs Node 24, Git and Swift 6):
 #   curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh -s -- --source
@@ -320,9 +322,25 @@ fetch() {
 # A field of latest.json, or nothing.
 field() { plutil -extract "$1" raw -o - "$tmp/latest.json" 2>/dev/null </dev/null || true; }
 
+# MAJOR.MINOR.PATCH, each part a number of at most 9 digits.
 valid_version() {
-  case $1 in '' | *[!0-9.]* | .* | *. | *..*) return 1 ;; esac
+  case $1 in '' | *[!0-9.]* | .* | *. | *..* | *[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*) return 1 ;; esac
   [ "$(printf '%s' "$1" | tr -cd . | wc -c | tr -d ' ')" = 2 ]
+}
+
+# True when the valid version $1 is older than the valid version $2, part by
+# part as numbers: 0.9.0 is older than 0.10.0.
+older() {
+  a=$1. b=$2.
+  while [ -n "$a" ]; do
+    x=${a%%.*} y=${b%%.*}
+    [ "$x" -eq "$y" ] || {
+      [ "$x" -lt "$y" ]
+      return
+    }
+    a=${a#*.} b=${b#*.}
+  done
+  return 1
 }
 
 read_latest() {
@@ -396,6 +414,17 @@ cleanup() {
   [ -z "${incoming:-}" ] || rm -rf "$incoming"
   [ -z "${tmp:-}" ] || rm -rf "$tmp"
   [ -z "${lock:-}" ] || [ "$(cat "$lock/pid" 2>/dev/null)" != $$ ] || rm -rf "$lock"
+}
+
+# An older release than the installed one goes in only on request.
+check_order() {
+  installed=$(readlink "$runtimes/current" 2>/dev/null || true)
+  downgrade=0
+  valid_version "$installed" && older "$version" "$installed" || return 0
+  [ "${CLAWDTIME_ALLOW_DOWNGRADE:-0}" = 1 ] ||
+    fail "ClawdTime $installed is installed, and the newest release, $version, is older. Nothing changed. To go back to $version, run this again with CLAWDTIME_ALLOW_DOWNGRADE=1."
+  downgrade=1
+  say "Going back from ClawdTime $installed to $version: CLAWDTIME_ALLOW_DOWNGRADE=1."
 }
 
 install_runtime() {
@@ -497,7 +526,11 @@ link_release() {
 release_next_steps() {
   say ""
   if [ -n "$previous" ] && [ "$previous" != "$version" ]; then
-    say "ClawdTime is updated from $previous to $version. Your settings, keys and pairing are kept."
+    if [ "$downgrade" = 1 ]; then
+      say "ClawdTime is back on $version from $previous. Your settings, keys and pairing are kept."
+    else
+      say "ClawdTime is updated from $previous to $version. Your settings, keys and pairing are kept."
+    fi
     pid=$(running_from "$previous")
     if [ -n "$pid" ]; then
       say "ClawdTime $previous still runs (process $pid). It goes on until it stops. Then $command_name start starts $version."
@@ -557,6 +590,7 @@ release_main() {
   trap 'exit 130' INT TERM
   read_latest
   take_lock
+  check_order
   install_runtime
   switch_current
   link_release
@@ -569,8 +603,11 @@ main() {
     case $argument in
       --source) from_source=1 ;;
       -h | --help)
-        sed -n '2,31p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' ||
-          say "See https://github.com/cherthq/clawdtime/blob/main/INSTALL.md"
+        # The comment at the top of this file. Under "curl | sh" there is no file.
+        case $0 in
+          *install.sh) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' ;;
+          *) say "See https://github.com/cherthq/clawdtime/blob/main/INSTALL.md" ;;
+        esac
         return
         ;;
       *) fail "unknown option $argument. Use --source to build from the source." ;;

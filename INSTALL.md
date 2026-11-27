@@ -44,6 +44,14 @@ to it:
 ln -sfh 0.4.0 ~/Library/Application\ Support/ClawdTime/runtime/current
 ```
 
+The installer does not install a release that is older than the one you have.
+It stops and says so. To install the older release on purpose, set
+`CLAWDTIME_ALLOW_DOWNGRADE=1`:
+
+```sh
+curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | CLAWDTIME_ALLOW_DOWNGRADE=1 sh
+```
+
 macOS gives each panel build its own permissions. After an update, give the
 new panel Accessibility and Screen & System Audio Recording again. The guided
 setup checks this.
