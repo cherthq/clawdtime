@@ -7,7 +7,13 @@ let package = Package(name: "ClawdTimeCompanion", platforms: [.macOS(.v14)], pro
     .executable(name: "ClawdTimeTaskPanel", targets: ["ClawdTimeTaskPanel"]),
     .executable(name: "ClawdTimeReviewWindow", targets: ["ClawdTimeReviewWindow"]),
     .executable(name: "PanelPreview", targets: ["PanelPreview"]),
+    // The downloadable app: setup window, menu bar and process owner.
+    .executable(name: "ClawdTime", targets: ["ClawdTimeApp"]),
 ], targets: [
+    .target(name: "ClawdTimeAppCore"),
+    .executableTarget(name: "ClawdTimeApp", dependencies: ["ClawdTimeAppCore"]),
+    // The protocol, the runtime checks and the owner run against a fake engine; the views are built off screen.
+    .testTarget(name: "ClawdTimeAppTests", dependencies: ["ClawdTimeAppCore", "ClawdTimeApp"]),
     .target(name: "DeviceCore"),
     .target(name: "TaskPanelCore"),
     .executableTarget(name: "ClawdTimeReviewWindow", dependencies: ["TaskPanelCore"]),
