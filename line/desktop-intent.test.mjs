@@ -76,6 +76,7 @@ function runtime(options = {}) {
       requests.push({ text, context });
       return options.ask ? options.ask(text, context) : "accepted";
     },
+    ...(options.computer ? { computer: options.computer } : {}),
     stop: async () => {
       calls.push("stop");
       return "Stopped owned work.";
@@ -1187,4 +1188,70 @@ test("syncCallView prefers /desktop/view over CLI fallback and uses clearManual 
     0,
   );
   assert.equal(actions.length, 2);
+});
+
+test("use_computer exists only when the call has computer control", () => {
+  assert.equal(
+    runtime().tools.some((tool) => tool.name === "use_computer"),
+    false,
+  );
+  const r = runtime({ computer: async () => "done" });
+  assert.equal(
+    r.tools.some((tool) => tool.name === "use_computer"),
+    true,
+  );
+});
+
+test("use_computer forwards the caller's complete original words once and takes no model argument", async () => {
+  const sent = [];
+  const r = runtime({
+    computer: async (text, context) => {
+      sent.push({ text, context });
+      return "Requested on the Mac; not verified.";
+    },
+  });
+  const words = "Open the Stonepad page and click Save, please.";
+  r.turn(words);
+  assert.equal(
+    await r.invoke("use_computer"),
+    "Requested on the Mac; not verified.",
+  );
+  await r.invoke("use_computer");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, words);
+  assert.match(sent[0].context.requestId, /\S/);
+  // The supervisor receives nothing of a computer request.
+  assert.deepEqual(r.calls, []);
+});
+
+test("use_computer reports an unknown outcome and never resends a lost request", async () => {
+  let sent = 0;
+  const r = runtime({
+    computer: async () => {
+      sent++;
+      throw Error("lost response");
+    },
+  });
+  r.turn("Click the Riverchat tab.");
+  assert.equal(
+    await r.invoke("use_computer"),
+    "The computer request has an unknown outcome. It was not sent again.",
+  );
+  assert.equal(sent, 1);
+});
+
+test("use_computer and stop_computer do nothing after the call ended", async () => {
+  let sent = 0;
+  const r = runtime({
+    computer: async () => {
+      sent++;
+      return "done";
+    },
+  });
+  r.turn("Click Save.");
+  r.end();
+  assert.equal(await r.invoke("use_computer"), "The call has ended.");
+  assert.equal(await r.invoke("stop_computer"), "The call has ended.");
+  assert.equal(sent, 0);
+  assert.deepEqual(r.calls, []);
 });

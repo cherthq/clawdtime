@@ -69,7 +69,10 @@ import {
 } from "../src/control/desktop-executor.js";
 import { TaskDesktopCalls } from "../src/control/task-desktop-calls.js";
 import { TaskReviewService } from "../src/control/task-review-service.js";
-import { createProactiveSetup } from "../src/control/proactive-setup.js";
+import {
+  createProactiveSetup,
+  walkthroughScreenGuard,
+} from "../src/control/proactive-setup.js";
 import { desktopCallsConfigSchema } from "../src/control/task-desktop-calls-config.js";
 import {
   prepareTaskDesktop,
@@ -585,18 +588,15 @@ if (calls && proactive)
   };
 if (proactive)
   chosen?.computer.worker?.setOwnershipGuard(
-    (authority) =>
-      (phoneDesktop?.ownsExecution(authority) === true &&
-        !!authority &&
-        proactive.permitsComputer(authority.callId)) ||
-      (!proactive.viewOccupied() &&
-        !proactive.coordinator.list().some(
-          (i) =>
-            ["dispatching", "connected", "unknown"].includes(i.state) &&
-            // A call of the reach only talks: it shares no screen, so the
-            // worker keeps the screen and can take the answer said on it.
-            !voiceOnlyCall(i),
-        )),
+    walkthroughScreenGuard({
+      phone: phoneDesktop,
+      permitsComputer: (attemptId) => proactive.permitsComputer(attemptId),
+      viewOccupied: () => proactive.viewOccupied(),
+      intents: () => proactive.coordinator.list(),
+      // A call of the reach only talks: it shares no screen, so the
+      // worker keeps the screen and can take the answer said on it.
+      voiceOnly: voiceOnlyCall,
+    }),
   );
 // The reach and the routines of the computer worker. The reach calls the
 // owner on the line when a question waits too long in the chat, and texts

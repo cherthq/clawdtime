@@ -34,7 +34,10 @@ import {
   managedReviewTrigger,
   type TaskReviewService,
 } from "./task-review-service.js";
-import type { DesktopExecutionSnapshot } from "./desktop-executor.js";
+import type {
+  DesktopExecutionAuthority,
+  DesktopExecutionSnapshot,
+} from "./desktop-executor.js";
 import type { PhoneDesktop } from "./phone-desktop.js";
 import {
   validateVerificationPlan,
@@ -96,6 +99,110 @@ export interface ProactiveComputerSource {
   answer(intent: ProactiveCallIntent, words: string): Promise<string>;
   /** The owner asked on the call to stop the computer work. Stop only reduces control. */
   stop(intent: ProactiveCallIntent): void;
+}
+
+/**
+ * The computer port of a walkthrough call with computer control. It runs the
+ * caller's exact words on the native worker under the call's own phone lease,
+ * so only this call's requests can use the shared screen.
+ */
+export function walkthroughComputer(deps: {
+  phone: Pick<
+    PhoneDesktop,
+    "open" | "renew" | "run" | "stop" | "close" | "execution"
+  >;
+  /** The call still has computer control and owns the selected display. */
+  owns(intent: ProactiveCallIntent): boolean;
+  /** How long a request waits for an observed result or a question. */
+  waitMs?: number;
+  pollMs?: number;
+}) {
+  const { phone } = deps;
+  const waitMs = deps.waitMs ?? 45000,
+    pollMs = deps.pollMs ?? 200;
+  const computerCalls = new Set<string>();
+  return {
+    async submit(intent: ProactiveCallIntent, words: string, turnId: string) {
+      const callId = intent.attemptId!;
+      if (!deps.owns(intent))
+        return "This call no longer owns the shared display. No action was sent.";
+      phone.open(callId);
+      computerCalls.add(callId);
+      phone.renew(callId);
+      // Provider speech identity, not model arguments, supplies these words.
+      const requestId = `turn_${hash(turnId)}`;
+      try {
+        return await phone.run(callId, requestId, words, async () => {
+          const before = phone.execution.snapshot();
+          const result =
+            before.state === "waiting_for_person" &&
+            before.canStop &&
+            phone.execution.answer
+              ? await phone.execution.answer(words)
+              : await phone.execution.submit(requestId, words);
+          if (result.message) return result.message;
+          // Await observed completion or a question while independent
+          // status heartbeats maintain the call lease. Never resubmit.
+          const deadline = Date.now() + waitMs;
+          while (Date.now() < deadline) {
+            const state = phone.execution.snapshot();
+            if (state.state !== "running" && state.state !== "queued")
+              return state.message;
+            await new Promise((resolve) => setTimeout(resolve, pollMs));
+          }
+          return (
+            phone.execution.snapshot().message ||
+            "The computer request is still running; completion is not confirmed."
+          );
+        });
+      } catch (error) {
+        if (
+          error instanceof DomainError &&
+          error.message === "phone_request_cancelled"
+        )
+          return "This call's computer request was stopped.";
+        throw error;
+      }
+    },
+    renew(intent: ProactiveCallIntent) {
+      if (computerCalls.has(intent.attemptId!)) phone.renew(intent.attemptId!);
+    },
+    stop(intent: ProactiveCallIntent) {
+      return computerCalls.has(intent.attemptId!)
+        ? phone.stop(intent.attemptId!).reply.text
+        : "No computer work is owned by this call.";
+    },
+    close(intent: ProactiveCallIntent) {
+      if (computerCalls.has(intent.attemptId!)) phone.close(intent.attemptId!);
+    },
+  };
+}
+
+/**
+ * Who may use the screen of the native worker. A walkthrough call with
+ * computer control uses it only through its own reserved phone requests.
+ * Every other request waits while a call shares or may share the screen.
+ * A call of the reach only talks, so it blocks nothing.
+ */
+export function walkthroughScreenGuard(deps: {
+  phone?: Pick<PhoneDesktop, "ownsExecution">;
+  permitsComputer(attemptId: string): boolean;
+  viewOccupied(): boolean;
+  intents(): ProactiveCallIntent[];
+  voiceOnly(intent: ProactiveCallIntent): boolean;
+}) {
+  return (authority?: DesktopExecutionAuthority) =>
+    (deps.phone?.ownsExecution(authority) === true &&
+      !!authority &&
+      deps.permitsComputer(authority.callId)) ||
+    (!deps.viewOccupied() &&
+      !deps
+        .intents()
+        .some(
+          (i) =>
+            ["dispatching", "connected", "unknown"].includes(i.state) &&
+            !deps.voiceOnly(i),
+        ));
 }
 
 export function createProactiveSetup(options: {
@@ -376,76 +483,17 @@ export function createProactiveSetup(options: {
     // actual frame age immediately before dialing and on every exported frame.
     5000,
   );
-  const computerCalls = new Set<string>();
   const phone = options.phoneDesktop;
   const line = new ProactiveLineSessions(authority, {
     ...(phone && config.sharedDisplay
       ? {
-          computer: {
-            async submit(
-              intent: ProactiveCallIntent,
-              words: string,
-              turnId: string,
-            ) {
-              const callId = intent.attemptId!;
-              if (
-                !line.permitsComputer(callId) ||
-                !(views instanceof ProactiveDisplayViews) ||
-                !views.owns(intent.id)
-              )
-                return "This call no longer owns the shared display. No action was sent.";
-              phone.open(callId);
-              computerCalls.add(callId);
-              phone.renew(callId);
-              // Provider speech identity, not model arguments, supplies these words.
-              const requestId = `turn_${hash(turnId)}`;
-              try {
-                return await phone.run(callId, requestId, words, async () => {
-                  const before = phone.execution.snapshot();
-                  const result =
-                    before.state === "waiting_for_person" &&
-                    before.canStop &&
-                    phone.execution.answer
-                      ? await phone.execution.answer(words)
-                      : await phone.execution.submit(requestId, words);
-                  if (result.message) return result.message;
-                  // Await observed completion or a question while independent
-                  // status heartbeats maintain the call lease. Never resubmit.
-                  const deadline = Date.now() + 45000;
-                  while (Date.now() < deadline) {
-                    const state = phone.execution.snapshot();
-                    if (state.state !== "running" && state.state !== "queued")
-                      return state.message;
-                    await new Promise((resolve) => setTimeout(resolve, 200));
-                  }
-                  return (
-                    phone.execution.snapshot().message ||
-                    "The computer request is still running; completion is not confirmed."
-                  );
-                });
-              } catch (error) {
-                if (
-                  error instanceof DomainError &&
-                  error.message === "phone_request_cancelled"
-                )
-                  return "This call's computer request was stopped.";
-                throw error;
-              }
-            },
-            renew(intent: ProactiveCallIntent) {
-              if (computerCalls.has(intent.attemptId!))
-                phone.renew(intent.attemptId!);
-            },
-            stop(intent: ProactiveCallIntent) {
-              return computerCalls.has(intent.attemptId!)
-                ? phone.stop(intent.attemptId!).reply.text
-                : "No computer work is owned by this call.";
-            },
-            close(intent: ProactiveCallIntent) {
-              if (computerCalls.has(intent.attemptId!))
-                phone.close(intent.attemptId!);
-            },
-          },
+          computer: walkthroughComputer({
+            phone,
+            owns: (intent) =>
+              line.permitsComputer(intent.attemptId!) &&
+              views instanceof ProactiveDisplayViews &&
+              views.owns(intent.id),
+          }),
         }
       : {}),
     sourceCurrent: current,

@@ -182,6 +182,56 @@ test("Stop sharing is sticky without canceling work", async () => {
     false,
   );
 });
+test("a walkthrough with computer control forwards computer words as their own action", async () => {
+  const f = fixture("phone_walkthrough");
+  f.state.computerAllowed = true;
+  await f.client.bindCaller("caller-one");
+  assert.equal(
+    await f.client.computer("Click Save on the fixture page", {
+      requestId: "turn-one",
+    }),
+    f.state.message,
+  );
+  // The same speech turn cannot also become an answer.
+  assert.match(
+    await f.client.answer("Click Save on the fixture page", {
+      requestId: "turn-one",
+    }),
+    /conflicts/,
+  );
+  const sent = f.requests
+    .map((r) => JSON.parse(r.init.body))
+    .filter((r) => r.action === "computer" || r.action === "answer");
+  assert.deepEqual(
+    sent.map((r) => [r.action, r.text, r.turnId, r.callerIdentity]),
+    [["computer", "Click Save on the fixture page", "turn-one", "caller-one"]],
+  );
+});
+test("a walkthrough without computer control sends no computer words", async () => {
+  const f = fixture("phone_walkthrough");
+  await f.client.bindCaller("caller-one");
+  assert.equal(
+    await f.client.computer("Click Save", { requestId: "turn-one" }),
+    "Computer control is not enabled for this walkthrough. No action was sent.",
+  );
+  assert.equal(
+    f.requests.some((r) => JSON.parse(r.init.body).action === "computer"),
+    false,
+  );
+});
+test("stopComputer stops the call's computer work and leaves sharing on", async () => {
+  const f = fixture("phone_walkthrough");
+  f.state.computerAllowed = true;
+  await f.client.bindCaller("caller-one");
+  f.state.message = "Stop requested for this call's computer work.";
+  assert.equal(
+    await f.client.stopComputer(),
+    "Stop requested for this call's computer work.",
+  );
+  const actions = f.requests.map((r) => JSON.parse(r.init.body).action);
+  assert.equal(actions.includes("stop_computer"), true);
+  assert.equal(actions.includes("stop_sharing"), false);
+});
 test("hangup closes once and rejects later answers", async () => {
   const f = fixture();
   await f.client.bindCaller("caller-one");
