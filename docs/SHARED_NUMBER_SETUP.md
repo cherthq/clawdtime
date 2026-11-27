@@ -44,6 +44,7 @@ Create an owner-only JSON file in an owner-only directory. Set
 | `identityKey`                     | A different persistent 32-byte hex key                                                                                        |
 | `lineToken`                       | A separate random server credential, at least 32 characters                                                                   |
 | `host`                            | `127.0.0.1` (the default). See [Operations](#operations)                                                                      |
+| `behindProxy`                     | `true` only when a proxy or tunnel on this host appends the client address to `X-Forwarded-For`. Default `false`              |
 | `port`                            | Local port, default 3318                                                                                                      |
 | `messaging.origin`                | Exact HTTPS provider API origin                                                                                               |
 | `messaging.projectId`             | Exact project UUID                                                                                                            |
@@ -87,6 +88,16 @@ process's lock.
   the port.
 - The tunnel or proxy must allow ten-second device polls and 125-second chat
   responses.
+- Sign-in limits count each client by its address. With `behindProxy` at
+  `false`, the coordinator ignores `X-Forwarded-For` and uses the socket
+  address. Behind a tunnel or proxy on the same host, that address is the
+  proxy's, so every person shares one allowance.
+- Set `behindProxy` to `true` when the coordinator listens on `127.0.0.1`
+  behind a tunnel or reverse proxy that appends the client address to
+  `X-Forwarded-For`. The coordinator then uses the last entry of that header,
+  and only on a request from a loopback or private address. A client cannot
+  choose that entry, because the proxy adds it after any value the client
+  sent. Never set it when clients can reach the port directly.
 - Turn off request and response body logging in the proxy.
 - Do not expose the local desktop API. Participant Macs connect outward.
 

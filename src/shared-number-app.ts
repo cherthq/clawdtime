@@ -37,6 +37,10 @@ export function createSharedNumberApp(options: {
   now?: () => number;
   relayTimeoutMs?: number;
   callbacksEnabled?: boolean;
+  /** True only when every request comes through a proxy on this host that
+   * appends the client address to X-Forwarded-For. Otherwise the header is
+   * ignored and the client is the socket address. */
+  behindProxy?: boolean;
 }) {
   if (options.lineToken.length < 32) throw Error("shared_line_token_required");
   const identity = new SharedPhoneIdentity(options.store, {
@@ -135,11 +139,12 @@ export function createSharedNumberApp(options: {
     const peer = (
       c.env as { incoming?: { socket?: { remoteAddress?: string } } }
     )?.incoming?.socket?.remoteAddress;
+    // Anyone can send this header. Only a proxy that appends it is trusted.
+    const forwarded = options.behindProxy
+      ? c.req.header("x-forwarded-for")
+      : undefined;
     return c.json(
-      await identity.start(
-        recipient,
-        signInClient(peer, c.req.header("x-forwarded-for")),
-      ),
+      await identity.start(recipient, signInClient(peer, forwarded)),
     );
   });
   app.post("/auth/verify", async (c) => {

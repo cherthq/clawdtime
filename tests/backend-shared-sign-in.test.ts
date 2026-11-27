@@ -20,7 +20,11 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 
-async function coordinator(store: Store, invitedNumbers: string[]) {
+async function coordinator(
+  store: Store,
+  invitedNumbers: string[],
+  behindProxy = true,
+) {
   const texts: { recipient: string; code: string }[] = [];
   const service = createSharedNumberApp({
     store,
@@ -29,6 +33,7 @@ async function coordinator(store: Store, invitedNumbers: string[]) {
     identityKey: "bb".repeat(32),
     lineToken,
     invited: invitedNumbers,
+    behindProxy,
     sendCode: async (recipient, code) => {
       texts.push({ recipient, code });
       return true;
@@ -53,7 +58,8 @@ async function coordinator(store: Store, invitedNumbers: string[]) {
         if ("closeAllConnections" in server) server.closeAllConnections();
       }),
   );
-  // The loopback peer stands in for the HTTPS proxy of the setup guide.
+  // The loopback peer stands in for the HTTPS proxy of the setup guide,
+  // which appends the client address to X-Forwarded-For.
   const post = async (
     path: string,
     data: unknown,
@@ -218,6 +224,20 @@ describe("shared sign-in texts", () => {
     });
     expect(verified.status).toBe(200);
     expect(typeof verified.body.token).toBe("string");
+  });
+
+  it("ignores a forwarded address unless the coordinator is behind a proxy", async () => {
+    const store = new Store();
+    cleanup.push(() => store.close());
+    const others = Array.from(
+      { length: 11 },
+      (_, i) => `+1312555${String(2000 + i)}`,
+    );
+    const f = await coordinator(store, [], false);
+    // Every start comes from the loopback socket, whatever the header says.
+    for (const [i, number] of others.slice(0, 10).entries())
+      expect((await f.start(number, `203.0.113.${i + 1}`)).status).toBe(200);
+    expect((await f.start(others[10]!, memberMac)).status).toBe(429);
   });
 
   it("refuses simple-request content types and grants no cross-origin access", async () => {
