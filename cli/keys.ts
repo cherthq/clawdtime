@@ -3,6 +3,7 @@ import { stateRoot } from "../connectors/agents/hooks.js";
 import {
   keyRows,
   KeyStoreError,
+  type KeyRow,
   keyStoreFile,
   removeStoredKey,
   storeKey,
@@ -11,14 +12,15 @@ import {
 import { providerById, providerIds } from "../connectors/computer/providers.js";
 
 export const keysHelp = `clawdtime keys: the keys of the language model providers that computer use can plan with
-  keys list              each provider: set or not set, and where its key comes from
+  keys list [--json]     each provider: set or not set, and where its key comes from.
+                         --json prints one JSON object for the Mac app, with no key in it
   keys set PROVIDER      read a key from a hidden prompt, or from standard input, and store it
   keys remove PROVIDER   remove the stored key of a provider
 Providers: ${providerIds.join(", ")}.
 The store is a file in the state folder for its owner only. A key in the environment
 of the service wins over the stored one. A key is never printed, not even a part of it.
 Then choose a model when the provider has no default: clawdtime computer model PROVIDER/MODEL`;
-const usage = "Use: clawdtime keys list|set PROVIDER|remove PROVIDER";
+const usage = "Use: clawdtime keys list [--json]|set PROVIDER|remove PROVIDER";
 
 export interface KeysCliDependencies {
   env?: Record<string, string | undefined>;
@@ -81,6 +83,22 @@ const where = (row: ReturnType<typeof keyRows>["rows"][number]) =>
       ? `set, in the environment (${row.from.name})${row.shadowed ? ". It wins over the stored key" : ""}`
       : "set, in the key store";
 
+/**
+ * One provider for the Mac app: whether a key is set, where it comes from,
+ * whether the store holds one, and its default model. It never holds a key.
+ */
+const keyEntry = (row: KeyRow) => ({
+  id: row.provider.id,
+  name: row.provider.name,
+  set: row.from !== null,
+  source: row.from?.kind ?? null,
+  variable: row.from?.kind === "environment" ? row.from.name : null,
+  stored: row.from?.kind === "store" || row.shadowed,
+  defaultModel: row.provider.defaultModel,
+  needsModel: row.provider.defaultModel === null,
+  needsBaseUrl: row.provider.id === "custom",
+});
+
 /** The keys of the providers: list, set and remove. Nothing here prints a key. */
 export async function keysCli(
   args: string[],
@@ -92,8 +110,18 @@ export async function keysCli(
   const command = args[0] ?? "list";
   if (command === "help" || command === "--help") return print(keysHelp);
   if (command === "list") {
-    if (args.length > 1) throw new Error(usage);
+    const json = args[1] === "--json";
+    if (args.length > (json ? 2 : 1)) throw new Error(usage);
     const { rows, problem, file } = keyRows(env, root);
+    if (json)
+      return print(
+        JSON.stringify({
+          version: 1,
+          store: file,
+          problem,
+          providers: rows.map(keyEntry),
+        }),
+      );
     print(
       "Keys of the language model providers. The environment wins over the store.",
     );

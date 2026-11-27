@@ -34,15 +34,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
   private let item: NSStatusItem
   private let owner: ProcessOwner
   private let openWindow: () -> Void
+  private let openSettings: () -> Void
   private let stop: () -> Void
   private let start: () -> Void
   private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
   private let stopItem = NSMenuItem(title: "Stop", action: #selector(toggle), keyEquivalent: "")
   private var watch: AnyCancellable?
 
-  init(owner: ProcessOwner, openWindow: @escaping () -> Void, stop: @escaping () -> Void, start: @escaping () -> Void) {
+  init(owner: ProcessOwner, openWindow: @escaping () -> Void, openSettings: @escaping () -> Void = {},
+       stop: @escaping () -> Void, start: @escaping () -> Void) {
     self.owner = owner
     self.openWindow = openWindow
+    self.openSettings = openSettings
     self.stop = stop
     self.start = start
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -55,10 +58,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     menu.delegate = self
     let open = NSMenuItem(title: "Open ClawdTime", action: #selector(openClawdTime), keyEquivalent: "o")
     open.target = self
+    let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+    settings.target = self
     statusLine.isEnabled = false
     stopItem.target = self
     let quit = NSMenuItem(title: "Quit ClawdTime", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-    menu.items = [open, .separator(), statusLine, stopItem, .separator(), quit]
+    menu.items = [open, settings, .separator(), statusLine, stopItem, .separator(), quit]
     item.menu = menu
     watch = owner.objectWillChange.sink { [weak self] _ in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.refresh() } }
@@ -77,5 +82,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
   func menuWillOpen(_ menu: NSMenu) { refresh() }
 
   @objc private func openClawdTime() { openWindow() }
+  @objc private func showSettings() { openSettings() }
   @objc private func toggle() { owner.isActive ? stop() : start() }
 }

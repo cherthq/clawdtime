@@ -46,13 +46,14 @@ export const computerHelp = `clawdtime computer: ClawdTime does a task on this M
   computer timing   the time of the newest steps: the look, the plan and the action of each
   computer model [PROVIDER/MODEL] [--base-url URL]   show or choose the model of the planner.
                     "auto" goes back to the first provider with a key. Keys: clawdtime keys
+  computer model --json   the model of the planner and where the choice comes from, as one JSON object
 When a question waits and you do not answer in the chat, ClawdTime calls you on
 the line, or texts you when the call does not get through. doctor says whether
 it can. Routines: clawdtime routine help.
 It is off until you turn it on. Every action is checked in code, and a click that
 cannot be undone needs your yes. See docs/COMPUTER_USE.md.`;
 const usage =
-  "Use: clawdtime computer status|on|off|doctor|clear|timing|model [PROVIDER/MODEL] [--base-url URL]";
+  "Use: clawdtime computer status|on|off|doctor|clear|timing|model [PROVIDER/MODEL] [--base-url URL]|model --json";
 
 export interface ComputerCliDependencies {
   /** The environment. It says where the state folder is and whether a key is there. */
@@ -464,6 +465,50 @@ function speedLine(settings: PlannerSettings) {
     : `standard.${provider.id === "anthropic" ? " CLAWDTIME_COMPUTER_SPEED=fast turns on fast mode on the models that take it." : ""}${fallback}`;
 }
 
+/**
+ * The model of the planner for the Mac app, as one JSON object: the provider,
+ * the model, where the choice comes from and where the key comes from. It
+ * never holds a key, nor a model setting or an address that looks like one.
+ */
+function modelReport(env: Record<string, string | undefined>, root: string) {
+  const setup = plannerSetup(env, root);
+  const fromEnvironment = env.CLAWDTIME_COMPUTER_MODEL?.trim();
+  const stored = readModelChoice(root).choice;
+  const from = fromEnvironment ? "environment" : stored ? "store" : "default";
+  const text = fromEnvironment || stored?.model;
+  const parsed = text ? parseModel(text, looksSecret) : null;
+  const chosen = setup.ok
+    ? { provider: setup.settings.provider, model: setup.settings.model }
+    : parsed?.ok
+      ? { provider: parsed.provider, model: parsed.model }
+      : null;
+  const provider = chosen?.provider ?? (setup.ok ? null : setup.provider);
+  const base =
+    provider?.id === "custom"
+      ? env.CLAWDTIME_CUSTOM_BASE_URL?.trim() || stored?.baseUrl
+      : undefined;
+  const keyFrom = setup.ok ? setup.settings.keyFrom : null;
+  return {
+    version: 1,
+    ok: setup.ok,
+    reason: setup.ok ? null : setup.reason,
+    problem: setup.ok ? null : setup.problem,
+    provider: provider?.id ?? null,
+    providerName: provider?.name ?? null,
+    model: chosen?.model ?? null,
+    name: chosen ? modelName(chosen.provider, chosen.model) : null,
+    from,
+    variable: from === "environment" ? "CLAWDTIME_COMPUTER_MODEL" : null,
+    baseUrl: base && chatEndpoint(base) && !looksSecret(base) ? base : null,
+    key: setup.ok
+      ? {
+          source: keyFrom?.kind ?? null,
+          variable: keyFrom?.kind === "environment" ? keyFrom.name : null,
+        }
+      : null,
+  };
+}
+
 /** `clawdtime computer model`: show the model of the planner, or choose one. */
 function modelCommand(
   args: string[],
@@ -472,6 +517,10 @@ function modelCommand(
   print: (line: string) => void,
 ) {
   const [value, flag, base, ...rest] = args;
+  if (value === "--json") {
+    if (args.length > 1) throw new Error(usage);
+    return print(JSON.stringify(modelReport(env, root)));
+  }
   if (rest.length || (flag !== undefined && (flag !== "--base-url" || !base)))
     throw new Error(usage);
   const shadow = env.CLAWDTIME_COMPUTER_MODEL?.trim()

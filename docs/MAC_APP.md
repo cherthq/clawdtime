@@ -34,6 +34,7 @@ taken it over. Stop and Quit then end it, also after a second setup run.
 After setup, ClawdTime lives in the menu bar:
 
 - **Open ClawdTime** shows the window with the readiness of each step.
+- **Settings…** opens the Settings window. See [Settings](#settings).
 - The status line says what runs: the desktop, and the phone connection.
 - **Stop** ends the connection first, then the desktop. **Start** starts them
   again. Nothing starts again by itself.
@@ -47,6 +48,35 @@ It shows the window only when a step needs you. A step that is ready is
 checked again, not asked again.
 
 The logs of the desktop and the connection are in `~/Library/Logs/ClawdTime/`.
+
+## Settings
+
+Open the Settings window in one of three ways: the gear at the top right of
+the setup window, **Settings…** in the menu bar menu, or Command-comma. It has
+four pages.
+
+- **Model keys** lists every provider and whether its key is set. **Add** or
+  **Replace** opens a secure field for the key. **Remove** asks first. A key
+  from the environment shows as **Environment**: change it where it is set,
+  not here.
+- **Planner model** shows the model in use and what chose it. Choose a
+  provider and a model, or **Automatic**: the first provider with a key, with
+  its default model. The custom provider also takes a base address. A model
+  set in the environment (`CLAWDTIME_COMPUTER_MODEL`) wins over a choice here,
+  and the page says so.
+- **Permissions** shows whether the panel has Accessibility and Screen
+  Recording, and whether the capture helper has Screen Recording. The page
+  checks again every few seconds while it is open, and when you come back to
+  it. **Open System Settings** opens the right list.
+- **General** has **Open ClawdTime when you log in**, **Run setup again**,
+  **Stop**, and the versions of the app and of its runtime, with the runtime
+  commit.
+
+After you change a key or the model, the page says that the desktop restarts
+to use it. The desktop starts again by itself only while it is idle: no task
+runs and the phone connection is off. Otherwise the page shows **Restart
+now**, and the desktop keeps running until you choose it. A desktop that is
+not running uses the change when it starts.
 
 ## How the app works
 
@@ -154,6 +184,39 @@ the final report says is ready:
 - Sleep changes nothing in the app. The connection keeps its own rules for a
   lost network.
 
+### Settings: the runtime commands
+
+The Settings window reads and changes settings only through the runtime's own
+commands and its two helpers. It reads their JSON:
+
+| Page          | Reads                                                                                         | Changes                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Model keys    | `clawdtime keys list --json`                                                                  | `clawdtime keys set PROVIDER` (the key on stdin), `clawdtime keys remove PROVIDER`          |
+| Planner model | `clawdtime computer model --json`                                                             | `clawdtime computer model PROVIDER/MODEL [--base-url URL]`, `clawdtime computer model auto` |
+| Permissions   | `app/native/ClawdTimeTaskPanel --check-access`, `app/native/ClawdTimeTaskCapture --preflight` | nothing: **Open System Settings** opens `x-apple.systempreferences:` on the right list      |
+
+- A key goes to `clawdtime keys set PROVIDER` on stdin, and nowhere else: not
+  in an argument, the environment, a file or a log. The field lets go of the
+  key as soon as it is sent.
+- `keys list --json` gives, for each provider, its id, its name, whether a key
+  is set, where it comes from (`store`, or `environment` with the variable),
+  whether the store holds one, its default model, and whether it needs a
+  chosen model or a base address. `computer model --json` gives the provider,
+  the model, where the choice comes from (`environment`, `store` or
+  `default`), the base address of a custom service, and where the key comes
+  from. Neither ever holds a key, nor a model setting that looks like one.
+- The app checks a provider id against the list, a model name against the
+  runtime's own shape, and refuses a model that looks like a key, before
+  anything runs.
+- A failed command shows its last line of stderr, a fixed sentence of the
+  runtime. A line that holds the key is never shown.
+- The permission checks ask macOS with no prompt. A helper that is not in the
+  runtime shows **Not found**.
+- After a change, the app reads `clawdtime computer doctor --json`. It starts
+  the desktop again, with its connection as it was, only when the service
+  answers, takes new work and runs none, and the phone connection is off: the
+  same rule as setup.
+
 ### The self-test
 
 `ClawdTime.app/Contents/MacOS/ClawdTime --self-test` checks the app with no
@@ -238,11 +301,15 @@ python3 -m unittest discover -s mac/scripts -p 'test_package_app.py'
 The Swift tests run the protocol, the window state, the engine process against
 fake engine scripts, the runtime checks, the self-test and the process owner
 with real child processes. They build the views off screen: no window opens.
-To look at every setup screen in light and dark mode, draw them into a folder:
+To look at every setup screen and every Settings page in light and dark
+mode, draw them into a folder:
 
 ```sh
-(cd mac && CLAWDTIME_APP_SHOTS=/tmp/clawdtime-shots swift test --filter SetupScreenshotTests)
+(cd mac && CLAWDTIME_APP_SHOTS=/tmp/clawdtime-shots swift test --filter 'SetupScreenshotTests|SettingsScreenshotTests')
 ```
+
+The settings tests run against a fake runtime. They check the arguments and
+the stdin of each command: the key is only ever on stdin.
 
 The script tests package a stub app around a fake runtime and check the
 refusals and the unsigned DMG. Tests are not a check of a real call, a real

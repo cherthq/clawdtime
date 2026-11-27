@@ -31,7 +31,7 @@ import {
   computerDirectory,
   setComputerSwitch,
 } from "../connectors/computer/journal.js";
-import { providerById } from "../connectors/computer/providers.js";
+import { providerById, providerIds } from "../connectors/computer/providers.js";
 import { buildComputer, noKeyText } from "../connectors/computer/service.js";
 
 const secret = "fixture-stored-key-9f8e7d6c5b4a";
@@ -466,6 +466,194 @@ describe("clawdtime computer model", () => {
     expect(bad).toMatch(
       /model +none\. CLAWDTIME_COMPUTER_EFFORT is not low, medium, high or xhigh/,
     );
+  });
+});
+
+describe("the machine readable answers for the Mac app", () => {
+  const never = (text: string, ...keys: string[]) => {
+    for (const key of keys) {
+      expect(text).not.toContain(key);
+      expect(text).not.toContain(key.slice(0, 10));
+      expect(text).not.toContain(key.slice(-8));
+    }
+  };
+
+  it("keys list --json names each provider, where its key comes from and its default model, and never a key", async () => {
+    const { root, keys } = cli({ TOGETHER_API_KEY: other });
+    await keys("set", "anthropic");
+    await keys("set", "together");
+    const text = await keys("list", "--json");
+    expect(text.split("\n")).toHaveLength(1);
+    const report = JSON.parse(text) as {
+      version: number;
+      store: string;
+      problem: string | null;
+      providers: Record<string, unknown>[];
+    };
+    expect(report).toMatchObject({
+      version: 1,
+      store: keyStoreFile(root),
+      problem: null,
+    });
+    expect(report.providers.map((row) => row.id)).toEqual([...providerIds]);
+    const row = (id: string) => report.providers.find((p) => p.id === id);
+    expect(row("openai")).toEqual({
+      id: "openai",
+      name: "OpenAI",
+      set: false,
+      source: null,
+      variable: null,
+      stored: false,
+      defaultModel: "gpt-6.2-astra",
+      needsModel: false,
+      needsBaseUrl: false,
+    });
+    expect(row("anthropic")).toEqual({
+      id: "anthropic",
+      name: "Anthropic",
+      set: true,
+      source: "store",
+      variable: null,
+      stored: true,
+      defaultModel: "claude-opus-5-5",
+      needsModel: false,
+      needsBaseUrl: false,
+    });
+    // The environment wins, and the stored key under it is still there.
+    expect(row("together")).toEqual({
+      id: "together",
+      name: "Together AI",
+      set: true,
+      source: "environment",
+      variable: "TOGETHER_API_KEY",
+      stored: true,
+      defaultModel: null,
+      needsModel: true,
+      needsBaseUrl: false,
+    });
+    expect(row("custom")).toMatchObject({
+      set: false,
+      needsModel: true,
+      needsBaseUrl: true,
+    });
+    never(text, secret, other);
+  });
+
+  it("keys list --json says when the store cannot be used, and takes no other word", async () => {
+    const { root, keys } = cli();
+    storeKey(root, openai, other);
+    chmodSync(keyStoreFile(root), 0o604);
+    const text = await keys("list", "--json");
+    const report = JSON.parse(text) as {
+      problem: string;
+      providers: { id: string; set: boolean }[];
+    };
+    expect(report.problem).toMatch(
+      /not a regular file of this user for its owner only/,
+    );
+    expect(report.providers.find((p) => p.id === "openai")?.set).toBe(false);
+    never(text, other);
+    await expect(keys("list", "--yaml")).rejects.toThrow(/Use: clawdtime keys/);
+    await expect(keys("list", "--json", "more")).rejects.toThrow(
+      /Use: clawdtime keys/,
+    );
+  });
+
+  it("computer model --json says the provider, the model and where the choice comes from", async () => {
+    const { keys, computer } = cli();
+    const read = async (...extra: string[]) => {
+      const text = await computer("model", "--json", ...extra);
+      expect(text.split("\n")).toHaveLength(1);
+      never(text, secret, other);
+      return JSON.parse(text) as Record<string, unknown>;
+    };
+    expect(await read()).toEqual({
+      version: 1,
+      ok: false,
+      reason: "no_key",
+      problem: expect.stringMatching(/^No key for a language model is set\./),
+      provider: null,
+      providerName: null,
+      model: null,
+      name: null,
+      from: "default",
+      variable: null,
+      baseUrl: null,
+      key: null,
+    });
+    await keys("set", "anthropic");
+    expect(await read()).toEqual({
+      version: 1,
+      ok: true,
+      reason: null,
+      problem: null,
+      provider: "anthropic",
+      providerName: "Anthropic",
+      model: "claude-opus-5-5",
+      name: "anthropic/claude-opus-5-5",
+      from: "default",
+      variable: null,
+      baseUrl: null,
+      key: { source: "store", variable: null },
+    });
+    await computer("model", "groq/a-vision-model");
+    expect(await read()).toMatchObject({
+      ok: false,
+      reason: "missing_key",
+      provider: "groq",
+      providerName: "Groq",
+      model: "a-vision-model",
+      name: "groq/a-vision-model",
+      from: "store",
+      key: null,
+    });
+    await computer(
+      "model",
+      "custom/local-vision",
+      "--base-url",
+      "http://127.0.0.1:8080/v1",
+    );
+    expect(await read()).toMatchObject({
+      ok: true,
+      provider: "custom",
+      model: "local-vision",
+      from: "store",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      key: { source: null, variable: null },
+    });
+    await expect(computer("model", "--json", "more")).rejects.toThrow(
+      /Use: clawdtime computer/,
+    );
+  });
+
+  it("computer model --json names the variable that wins, and never a model setting that looks like a key", async () => {
+    const chosen = cli({
+      OPENAI_API_KEY: other,
+      CLAWDTIME_COMPUTER_MODEL: "gpt-4.1",
+    });
+    await chosen.computer("model", "anthropic/claude-opus-5-5");
+    const text = await chosen.computer("model", "--json");
+    expect(JSON.parse(text)).toMatchObject({
+      ok: true,
+      provider: "openai",
+      model: "gpt-4.1",
+      name: "gpt-4.1",
+      from: "environment",
+      variable: "CLAWDTIME_COMPUTER_MODEL",
+      key: { source: "environment", variable: "OPENAI_API_KEY" },
+    });
+    never(text, other);
+    const pasted = cli({ CLAWDTIME_COMPUTER_MODEL: `sk-ant-${secret}` });
+    const refused = await pasted.computer("model", "--json");
+    expect(JSON.parse(refused)).toMatchObject({
+      ok: false,
+      reason: "invalid",
+      provider: null,
+      model: null,
+      name: null,
+      from: "environment",
+    });
+    never(refused, secret);
   });
 });
 
