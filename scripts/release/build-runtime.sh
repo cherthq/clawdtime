@@ -66,8 +66,11 @@ if [ -n "$coordinator" ] &&
     $coordinator =~ ^http://127\.0\.0\.1(:[0-9]{1,5})?$ ]]; then
   fail "--coordinator must be an https origin with no path, such as https://coordinator.example (or http://127.0.0.1:PORT for tests)."
 fi
-if [ -n "$download_base" ] && ! [[ $download_base =~ ^https://[^[:space:]]+$ ]]; then
-  fail "--download-base must be an https URL."
+# The installer reads this url with the same rules: an https host and port, no
+# user name or password, no query or fragment.
+if [ -n "$download_base" ] &&
+  ! [[ $download_base =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%+@/-]*)?$ ]]; then
+  fail "--download-base must be an https URL with no user name or password, such as https://downloads.example/clawdtime."
 fi
 [[ $node_version =~ ^24\.[0-9]+\.[0-9]+$ ]] || fail "CLAWDTIME_NODE_VERSION must be a Node 24 version, such as 24.22.3."
 

@@ -421,9 +421,51 @@ describe("the release route of the installer", () => {
     const plain = await f.install({ base: "http://shop.example/releases" });
     expect(plain.status).toBe(1);
     expect(plain.output).toContain(
-      "Stopped: CLAWDTIME_RELEASE_BASE must be an https URL.",
+      "Stopped: CLAWDTIME_RELEASE_BASE must be an https URL with no user name or password",
     );
     expect(existsSync(join(f.runtimes, "current"))).toBe(false);
+  });
+
+  it("parses each URL strictly: https with no user name or password, and 127.0.0.1 alone for a local test", async () => {
+    const f = setup();
+    publish(f.releases, { version: "0.4.1" });
+    for (const base of [
+      "http://127.0.0.1:80@shop.example/releases",
+      "http://127.0.0.1@shop.example/releases",
+      "http://127.0.0.1.shop.example/releases",
+      "http://localhost:8080/releases",
+      "https://made-up:secret@shop.example/releases",
+      "https://shop.example:443@other.example/releases",
+      "https://shop.example\\@other.example/releases",
+      "https://shop.example/rel eases",
+      "https:///releases",
+      "https://shop.example:99999/releases",
+      "https://-shop.example/releases",
+      "ftp://shop.example/releases",
+    ]) {
+      const result = await f.install({ base });
+      expect(result.status, base).toBe(1);
+      expect(result.output, base).toContain(
+        "Stopped: CLAWDTIME_RELEASE_BASE must be an https URL with no user name or password, such as https://downloads.example/clawdtime. A local test may use http://127.0.0.1:PORT or file:///PATH.",
+      );
+    }
+    for (const url of [
+      "http://127.0.0.1:80@shop.example/clawdtime-0.4.1-darwin-arm64.tar.gz",
+      "https://made-up@shop.example/clawdtime-0.4.1-darwin-arm64.tar.gz",
+      // An https archive for a release on file:///: another kind of URL.
+      "https://shop.example/clawdtime-0.4.1-darwin-arm64.tar.gz",
+      "clawdtime 0.4.1.tar.gz",
+      "@shop.example",
+    ]) {
+      publish(f.releases, { version: "0.4.1", latest: { url } });
+      const result = await f.install();
+      expect(result.status, url).toBe(1);
+      expect(result.output, url).toContain(
+        "Stopped: latest.json has no valid url.",
+      );
+    }
+    expect(existsSync(join(f.runtimes, "current"))).toBe(false);
+    expect(f.recorded()).toBe("");
   });
 
   it("never runs as root", async () => {

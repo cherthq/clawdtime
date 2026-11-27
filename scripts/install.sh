@@ -11,7 +11,8 @@
 # starts the guided setup: clawdtime onboard.
 #
 # Settings of the release, all optional:
-#   CLAWDTIME_RELEASE_BASE  the folder of latest.json and the archive. Default:
+#   CLAWDTIME_RELEASE_BASE  the folder of latest.json and the archive: an https
+#                           URL with no user name or password. Default:
 #                           https://github.com/cherthq/clawdtime/releases/latest/download
 #   CLAWDTIME_NO_GLOBAL     1: no link in ~/.local/bin
 #   CLAWDTIME_NO_ONBOARD    1: no guided setup after the install
@@ -294,6 +295,40 @@ source_main() {
 
 release_base=https://github.com/cherthq/clawdtime/releases/latest/download
 
+# Letters and digits, listed one by one: in some locales a range such as a-z
+# also matches other letters.
+alnum=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+
+# Prints the kind of a URL that the installer may download from, or fails:
+#   https  a host name and an optional port: no user name, no password
+#   http   127.0.0.1 and an optional port, for a local test release
+#   file   an absolute path, for a local test release
+# A URL has no space, query, fragment or backslash.
+url_kind() {
+  case $1 in '' | *[!"$alnum._~:/%+@-"]*) return 1 ;; esac
+  case $1 in
+    https://*) kind=https rest=${1#https://} ;;
+    http://*) kind=http rest=${1#http://} ;;
+    file:///*)
+      echo file
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+  authority=${rest%%/*}
+  host=${authority%%:*}
+  case $host in '' | *[!"$alnum.-"]* | [.-]* | *[.-]) return 1 ;; esac
+  case $authority in
+    *:*)
+      port=${authority#*:}
+      case $port in '' | *[!0-9]* | ??????*) return 1 ;; esac
+      [ "$port" -le 65535 ] || return 1
+      ;;
+  esac
+  [ "$kind" = https ] || [ "$host" = 127.0.0.1 ] || return 1
+  echo "$kind"
+}
+
 check_mac() {
   step "Checking this Mac"
   [ "$(uname -s)" = Darwin ] || fail "ClawdTime runs on a Mac with macOS 14 or later."
@@ -360,9 +395,13 @@ read_latest() {
   [ "$(field arch)" = arm64 ] || fail "the newest release is not for Apple silicon."
   [ "$(number "${minimum%%.*}")" -le "$macos_major" ] ||
     fail "ClawdTime $version needs macOS $minimum or later. This Mac has $macos. Update it in System Settings, General, Software Update."
+  # An absolute url of the same kind as the base, or a file name next to latest.json.
   case $url in
-    https://* | file:///* | http://127.0.0.1[:/]*) archive_url=$url ;;
-    */* | .* | '') fail "latest.json has no valid url." ;;
+    *://*)
+      [ "$(url_kind "$url" || true)" = "$base_kind" ] || fail "latest.json has no valid url."
+      archive_url=$url
+      ;;
+    '' | .* | *[!"$alnum._-"]*) fail "latest.json has no valid url." ;;
     *) archive_url=$base/$url ;;
   esac
   say "ClawdTime $version ($(printf '%s' "$commit" | cut -c 1-7))."
@@ -573,12 +612,10 @@ release_next_steps() {
 release_main() {
   base=${CLAWDTIME_RELEASE_BASE:-$release_base}
   base=${base%/}
-  case $base in
-    https://*) protocols='=https' ;;
-    file:///*) protocols='=file' ;;
-    http://127.0.0.1 | http://127.0.0.1[:/]*) protocols='=http' ;;
-    *) fail "CLAWDTIME_RELEASE_BASE must be an https URL." ;;
-  esac
+  base_kind=$(url_kind "$base") ||
+    fail "CLAWDTIME_RELEASE_BASE must be an https URL with no user name or password, such as https://downloads.example/clawdtime. A local test may use http://127.0.0.1:PORT or file:///PATH."
+  # curl takes this kind alone, also for each redirect.
+  protocols="=$base_kind"
   check_mac
   runtimes="$HOME/Library/Application Support/ClawdTime/runtime"
   mkdir -p "$runtimes"

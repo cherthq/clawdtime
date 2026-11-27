@@ -361,6 +361,17 @@ describe("the runtime builder", () => {
         "https://coordinator.example/path",
       ).stderr,
     ).toContain("--coordinator must be an https origin with no path");
+    for (const downloadBase of [
+      "https://made-up@downloads.example/clawdtime",
+      "https://downloads.example:443@other.example/clawdtime",
+      "http://downloads.example/clawdtime",
+    ])
+      expect(
+        build("--out", join(base, "a"), "--download-base", downloadBase).stderr,
+        downloadBase,
+      ).toContain(
+        "--download-base must be an https URL with no user name or password",
+      );
     mkdirSync(join(base, "full"));
     writeFileSync(join(base, "full", "kept.txt"), "kept");
     const full = build("--out", join(base, "full"));
