@@ -24,6 +24,7 @@ import { routingId } from "../src/shared-number-contracts.js";
 import { SharedDisplay } from "../connectors/shared/shared-display.js";
 import { sharedDisplayTargetSchema } from "../src/control/proactive-display-views.js";
 import { oneJSON } from "../src/control/proactive-views.js";
+import { sharedSignIn } from "./shared-sign-in.js";
 
 const configuration = z
   .object({
@@ -200,26 +201,18 @@ export async function sharedCli(args: string[]) {
     return response.json();
   };
   try {
-    const recipient = (
-      await terminal.question("Your own phone number, with country code: ")
-    ).trim();
-    if (
-      (
-        await terminal.question(
-          `Send a sign-in code to that number through ${origin}? Type yes: `,
-        )
-      ).trim() !== "yes"
-    )
-      return;
-    const challenge = z
-      .object({ challengeId: z.string() })
-      .parse(await post("/auth/start", { recipient }));
-    const code = (
-      await terminal.question("Enter the sign-in code from your phone: ")
-    ).trim();
-    const session = z
-      .object({ token: z.string() })
-      .parse(await post("/auth/verify", { ...challenge, code }));
+    const session = await sharedSignIn({
+      origin,
+      ask: (question) => terminal.question(question),
+      post,
+      ...(args[0] === "prove" && {
+        keep: {
+          file: join(directory, "session.json"),
+          check: (token: string) => post("/account/pending-call", {}, token),
+        },
+      }),
+    });
+    if (!session) return;
     if (args[0] === "prove") {
       if (
         (
