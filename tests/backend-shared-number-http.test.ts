@@ -218,6 +218,17 @@ describe("shared coordinator over real HTTP with simulated line and Mac executio
       { roomId: callback.roomId },
       lineToken,
     );
+    // No code exists for a callback that nobody has answered yet.
+    expect(
+      (
+        await f.post(
+          "/device/call-proof",
+          { callId: binding.body.id },
+          a.credential,
+        )
+      ).status,
+    ).toBe(409);
+    f.service.router.activateCallback(callback.id);
     expect(
       (
         await f.post(

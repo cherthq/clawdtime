@@ -472,6 +472,9 @@ export class SharedNumber {
         !this.callerIs(call, pair.memberId)
       )
         throw notWaiting();
+      // A callback has no verification window, and no code, until answered.
+      const verifyBy = this.verifyBy(call);
+      if (verifyBy === undefined) throw notWaiting();
       if (this.store.get(kind("proof"), call.id)) throw conflict();
       const code = randomInt(100_000_000).toString().padStart(8, "0");
       const proof = this.store.put<SharedCallProof>(kind("proof"), {
@@ -483,7 +486,7 @@ export class SharedNumber {
         connectionId: connection.id,
         digest: this.proofDigest(call.id, code),
         attempts: 0,
-        expiresAt: Math.min(this.now() + 120_000, this.verifyBy(call)!),
+        expiresAt: Math.min(this.now() + 120_000, verifyBy),
       });
       return { callId: call.id, code, expiresAt: proof.expiresAt };
     });
