@@ -94,6 +94,13 @@ task that runs." It never says that something was done. Words from another
 call or from the chat do not steer this call's task: they get the busy reply.
 The same rule holds on an ordinary call to the line.
 
+A spoken yes or no answers only the newest question that this call told the
+caller, as a plain yes in the chat answers only the newest question the owner
+saw. When the computer task asks a question after the caller's last words, for
+example after a reply that said the request was still running, the next reply
+tells that question, and those words answer nothing. A question that comes
+again after an answer is told again before a yes can answer it.
+
 Stop cancels only computer work owned by that call and leaves video on.
 Hiding sharing, ending the call, revoking permission or losing the call lease
 also stops its computer work. Independent coding jobs keep their own lifecycle.

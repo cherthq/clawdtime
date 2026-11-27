@@ -453,6 +453,115 @@ describe("the walkthrough's computer port", () => {
   });
 });
 
+describe("a spoken yes in a walkthrough call", () => {
+  const ask = (f: ReturnType<typeof portFixture>, message: string) =>
+    f.set({
+      ...f.get(),
+      state: "waiting_for_person",
+      canStop: true,
+      waiting: "approval",
+      message,
+    });
+  const first = "Send the note to Riverchat? Say yes or no.";
+  const second = "Delete the draft in Stonepad? Say yes or no.";
+  const unheard = (question: string) =>
+    `This question came after your last words, so they did not answer it: ${question}`;
+
+  it("answers the question that this call told the caller", async () => {
+    const f = portFixture();
+    f.runtime.submit.mockImplementationOnce(async (id) => {
+      f.set(running(id));
+      ask(f, first);
+      return { message: "" };
+    });
+    expect(await f.port.submit(f.intent, "Send the note", "turn-1")).toBe(
+      first,
+    );
+    f.runtime.answer.mockImplementationOnce(async () => {
+      f.set({ ...f.get(), state: "running", waiting: undefined });
+      return { message: "Thank you. I go on." };
+    });
+    expect(await f.port.submit(f.intent, "yes", "turn-2")).toBe(
+      "Thank you. I go on.",
+    );
+    expect(f.runtime.answer).toHaveBeenCalledOnce();
+    expect(f.runtime.answer).toHaveBeenCalledWith("yes");
+  });
+
+  it("does not answer a newer question that the caller has not heard: it tells it first", async () => {
+    const f = portFixture();
+    f.runtime.submit.mockImplementationOnce(async (id) => {
+      f.set(running(id));
+      ask(f, first);
+      return { message: "" };
+    });
+    expect(await f.port.submit(f.intent, "Send the note", "turn-1")).toBe(
+      first,
+    );
+    // The task moved on to another question before the caller spoke again.
+    ask(f, second);
+    expect(await f.port.submit(f.intent, "yes", "turn-2")).toBe(
+      unheard(second),
+    );
+    expect(f.runtime.answer).not.toHaveBeenCalled();
+    // Now the caller heard it: their next yes answers it.
+    expect(await f.port.submit(f.intent, "yes", "turn-3")).toBe(
+      "Thank you. I go on.",
+    );
+    expect(f.runtime.answer).toHaveBeenCalledOnce();
+  });
+
+  it("does not answer a question that came after a request was still running", async () => {
+    const f = portFixture();
+    expect(await f.port.submit(f.intent, "Send the note", "turn-1")).toBe(
+      "Working on it.",
+    );
+    ask(f, first);
+    expect(await f.port.submit(f.intent, "ok", "turn-2")).toBe(unheard(first));
+    expect(f.runtime.answer).not.toHaveBeenCalled();
+    expect(f.runtime.submit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a told question answerable after words that did not answer it", async () => {
+    const f = portFixture();
+    f.runtime.submit.mockImplementationOnce(async (id) => {
+      f.set(running(id));
+      ask(f, first);
+      return { message: "" };
+    });
+    await f.port.submit(f.intent, "Send the note", "turn-1");
+    f.runtime.answer.mockImplementationOnce(async () => ({
+      message: `Please say yes or no. ${first}`,
+    }));
+    expect(await f.port.submit(f.intent, "hmm", "turn-2")).toBe(
+      `Please say yes or no. ${first}`,
+    );
+    expect(await f.port.submit(f.intent, "yes", "turn-3")).toBe(
+      "Thank you. I go on.",
+    );
+    expect(f.runtime.answer).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks again before a yes for the same words once the first question was answered", async () => {
+    const f = portFixture();
+    f.runtime.submit.mockImplementationOnce(async (id) => {
+      f.set(running(id));
+      ask(f, first);
+      return { message: "" };
+    });
+    await f.port.submit(f.intent, "Send the note", "turn-1");
+    f.runtime.answer.mockImplementationOnce(async () => {
+      f.set({ ...f.get(), state: "running", waiting: undefined });
+      return { message: "Thank you. I go on." };
+    });
+    await f.port.submit(f.intent, "yes", "turn-2");
+    // The task asks the same words again for a second send.
+    ask(f, first);
+    expect(await f.port.submit(f.intent, "yes", "turn-3")).toBe(unheard(first));
+    expect(f.runtime.answer).toHaveBeenCalledOnce();
+  });
+});
+
 describe("the screen guard of the native worker", () => {
   const intent = (
     state: ProactiveCallIntent["state"],

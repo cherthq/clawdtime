@@ -121,6 +121,26 @@ export function walkthroughComputer(deps: {
   const waitMs = deps.waitMs ?? 45000,
     pollMs = deps.pollMs ?? 200;
   const computerCalls = new Set<string>();
+  // A spoken yes answers only the newest question that this call told the
+  // caller, as a plain yes in the chat answers only the newest question the
+  // owner saw. Per call: the question that its last reply said.
+  const told = new Map<string, string>();
+  const asks = (state: DesktopExecutionSnapshot) =>
+    state.state === "waiting_for_person" && state.canStop;
+  const question = (state: DesktopExecutionSnapshot) =>
+    JSON.stringify([
+      state.requestId ?? null,
+      state.waiting ?? null,
+      state.pendingAction?.id ?? null,
+      state.message,
+    ]);
+  /** The reply the caller hears: it tells a waiting question when it says it. */
+  const reply = (callId: string, message: string) => {
+    const now = phone.execution.snapshot();
+    if (!asks(now)) told.delete(callId);
+    else if (now.message === message) told.set(callId, question(now));
+    return message;
+  };
   return {
     async submit(intent: ProactiveCallIntent, words: string, turnId: string) {
       const callId = intent.attemptId!;
@@ -134,25 +154,30 @@ export function walkthroughComputer(deps: {
       try {
         return await phone.run(callId, requestId, words, async () => {
           const before = phone.execution.snapshot();
-          const result =
-            before.state === "waiting_for_person" &&
-            before.canStop &&
-            phone.execution.answer
-              ? await phone.execution.answer(words)
-              : await phone.execution.submit(requestId, words);
-          if (result.message) return result.message;
+          if (asks(before) && phone.execution.answer) {
+            // A question that came after the caller's last words is told
+            // now. These words answer nothing.
+            if (told.get(callId) !== question(before)) {
+              told.set(callId, question(before));
+              return `This question came after your last words, so they did not answer it: ${before.message}`;
+            }
+            return reply(callId, (await phone.execution.answer(words)).message);
+          }
+          const result = await phone.execution.submit(requestId, words);
+          if (result.message) return reply(callId, result.message);
           // Await observed completion or a question while independent
           // status heartbeats maintain the call lease. Never resubmit.
           const deadline = Date.now() + waitMs;
           while (Date.now() < deadline) {
             const state = phone.execution.snapshot();
             if (state.state !== "running" && state.state !== "queued")
-              return state.message;
+              return reply(callId, state.message);
             await new Promise((resolve) => setTimeout(resolve, pollMs));
           }
-          return (
+          return reply(
+            callId,
             phone.execution.snapshot().message ||
-            "The computer request is still running; completion is not confirmed."
+              "The computer request is still running; completion is not confirmed.",
           );
         });
       } catch (error) {
@@ -173,6 +198,7 @@ export function walkthroughComputer(deps: {
         : "No computer work is owned by this call.";
     },
     close(intent: ProactiveCallIntent) {
+      told.delete(intent.attemptId!);
       if (computerCalls.has(intent.attemptId!)) phone.close(intent.attemptId!);
     },
   };
