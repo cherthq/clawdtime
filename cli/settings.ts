@@ -19,7 +19,7 @@
  * Nothing here holds or prints a key.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -238,7 +238,7 @@ function serviceSetting(
   variable: string,
   spec: Pick<Definition, "kind" | "choices" | "min" | "max" | "step"> & {
     default: SettingValue;
-    /** The variable as the service reads it. */
+    /** The variable, as it is, read as the service reads it. */
     fromVariable: (text: string) => SettingValue;
     toVariable: (value: SettingValue) => string | undefined;
   },
@@ -250,8 +250,8 @@ function serviceSetting(
     applies: "restart",
     variable,
     read: ({ env, store }) => {
-      const set = env[variable]?.trim();
-      if (set) return { value: fromVariable(set), from: "environment" };
+      const raw = env[variable];
+      if (raw?.trim()) return { value: fromVariable(raw), from: "environment" };
       const stored = store[id];
       if (stored !== undefined && fitsStored(definition, stored))
         return { value: stored, from: "store" };
@@ -276,8 +276,8 @@ function fitsStored(definition: Definition, value: unknown) {
   )
     return false;
   try {
-    parseValue(definition, String(value));
-    return true;
+    // The type counts too: "off" is not off, and "on " is not on.
+    return parseValue(definition, String(value)) === value;
   } catch {
     return false;
   }
@@ -331,8 +331,11 @@ const definitions: Definition[] = [
     kind: "choice",
     choices: ["auto", "calm", "fast"],
     default: "auto",
-    fromVariable: (text) =>
-      text === "calm" || text === "fast" ? text : "auto",
+    // The panel reads it in any case, with no space around it.
+    fromVariable: (text) => {
+      const pace = text.trim().toLowerCase();
+      return pace === "calm" || pace === "fast" ? pace : "auto";
+    },
     toVariable: (value) => (value === "auto" ? undefined : String(value)),
   }),
   // Assistant
@@ -413,6 +416,9 @@ const definitions: Definition[] = [
       const plain =
         preset.planner === defaultComputerModel &&
         preset.chat === defaultChatAgentModel;
+      // Both files change, or neither: the store is checked first.
+      const { problem } = readStore(context.root);
+      if (problem) throw new Error(problem);
       storeModelChoice(context.root, plain ? null : { model: preset.planner });
       writeStore(context.root, (values) => {
         if (plain) delete values["model.chat"];
@@ -449,7 +455,7 @@ const definitions: Definition[] = [
   serviceSetting("model.chat", "CLAWDTIME_SUPERVISOR_MODEL", {
     kind: "model",
     default: defaultChatAgentModel,
-    fromVariable: (text) => text,
+    fromVariable: (text) => text.trim(),
     toVariable: (value) => String(value),
   }),
   // Computer use
@@ -479,8 +485,9 @@ const definitions: Definition[] = [
     kind: "choice",
     choices: ["off", "on", "own"],
     default: "off",
+    // "auto" is ClawdTime's own browser when one is found, else off.
     fromVariable: (text) =>
-      text === "on" ? "on" : text === "own" || text === "auto" ? "own" : "off",
+      text === "on" || text === "own" || text === "auto" ? text : "off",
     toVariable: (value) => (value === "off" ? undefined : String(value)),
   }),
   // Phone
@@ -498,11 +505,21 @@ const definitions: Definition[] = [
     default: 45,
     fromVariable: (text) => {
       const value = Number(text);
-      return Number.isFinite(value) ? value : 45;
+      return Number.isFinite(value) && value >= 0 && value <= 600 ? value : 45;
     },
     toVariable: (value) => String(value),
   }),
 ];
+
+const keyWord =
+  /(?:^|[\s,/])(?:sk-|sk_|gsk_|xai-|fw_|AIza|tgp_|r8_|pplx-|nvapi-)/;
+/** Shown for a value that looks like a key: a key is never printed. */
+export const hiddenValue = "(hidden: it looks like a key)";
+/** A value as it may be shown. A text that looks like a key is never shown. */
+const visible = (value: SettingValue): SettingValue =>
+  typeof value === "string" && (looksSecret(value) || keyWord.test(value))
+    ? hiddenValue
+    : value;
 
 /** Every id, in the order of the Settings window. */
 export const settingIds = definitions.map((definition) => definition.id);
@@ -688,7 +705,7 @@ function report(context: Context, problem: string | null) {
       return {
         id: definition.id,
         kind: definition.kind,
-        value,
+        value: visible(value),
         default: definition.default,
         from,
         applies: definition.applies,
@@ -771,12 +788,12 @@ export async function settingsCli(
         version: 1,
         ok: true,
         id,
-        value: now.value,
+        value: visible(now.value),
         from: now.from,
         applies,
         shadowed,
       },
-      `${id} is now ${shown(now.value)}. ${applies === "now" ? "It works now." : "The desktop uses it when it starts again."}${shadowed ? ` ${shadowed} is set in this environment, and it wins.` : ""}`,
+      `${id} is now ${shown(visible(now.value))}. ${applies === "now" ? "It works now." : "The desktop uses it when it starts again."}${shadowed ? ` ${shadowed} is set in this environment, and it wins.` : ""}`,
     );
   }
 
@@ -946,6 +963,8 @@ const chatName = /^chat(-[0-9TZ-]+)?\.jsonl$/;
 /** The files that delete-history moves: the chats, the spoken replies and the step times. */
 function historyFiles(root: string): string[] {
   const agents = join(root, "agents");
+  const voice = join(agents, "voice");
+  const computer = computerDirectory(root);
   const files: string[] = [];
   const regular = (path: string) => {
     try {
@@ -954,22 +973,39 @@ function historyFiles(root: string): string[] {
       return false;
     }
   };
+  // A folder that is a link, or that leads out of the state folder, is not read.
+  let base: string;
   try {
-    for (const name of readdirSync(agents).sort())
+    base = realpathSync(root);
+  } catch {
+    return [];
+  }
+  const own = (folder: string) => {
+    try {
+      return (
+        lstatSync(folder).isDirectory() &&
+        realpathSync(folder).startsWith(base + sep)
+      );
+    } catch {
+      return false;
+    }
+  };
+  const names = (folder: string) => {
+    try {
+      return readdirSync(folder).sort();
+    } catch {
+      return [];
+    }
+  };
+  if (own(agents))
+    for (const name of names(agents))
       if (chatName.test(name) && regular(join(agents, name)))
         files.push(join(agents, name));
-  } catch {
-    // No chat yet.
-  }
-  try {
-    const voice = join(agents, "voice");
-    for (const name of readdirSync(voice).sort())
+  if (own(agents) && own(voice))
+    for (const name of names(voice))
       if (regular(join(voice, name))) files.push(join(voice, name));
-  } catch {
-    // No spoken reply yet.
-  }
-  const timing = join(computerDirectory(root), "timing.json");
-  if (regular(timing)) files.push(timing);
+  const timing = join(computer, "timing.json");
+  if (own(computer) && regular(timing)) files.push(timing);
   return files;
 }
 
@@ -1105,23 +1141,31 @@ const older = (a: string, b: string) => {
   return false;
 };
 
-/** The base of latest.json: https, or http to 127.0.0.1 for a test release. */
-function releaseBase(env: Record<string, string | undefined>) {
-  const raw = env.CLAWDTIME_RELEASE_BASE?.trim() || defaultReleaseBase;
+/** Why an address of the release cannot be used, or null: https, or http to 127.0.0.1 for a test release. */
+function releaseUrlProblem(raw: string): string | null {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    url = new URL("invalid:");
+    return "not an address";
   }
   const loopback = url.protocol === "http:" && url.hostname === "127.0.0.1";
-  if (
-    (url.protocol !== "https:" && !loopback) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  )
+  if (url.protocol !== "https:" && !loopback) return "not https";
+  if (url.username || url.password) return "a name or a password";
+  return null;
+}
+
+/** The base of latest.json, with no query or fragment. */
+function releaseBase(env: Record<string, string | undefined>) {
+  const raw = env.CLAWDTIME_RELEASE_BASE?.trim() || defaultReleaseBase;
+  let query = true;
+  try {
+    const url = new URL(raw);
+    query = Boolean(url.search || url.hash);
+  } catch {
+    query = true;
+  }
+  if (releaseUrlProblem(raw) || query)
     throw new Error(
       "CLAWDTIME_RELEASE_BASE must be an https address, or http to 127.0.0.1. Nothing was checked.",
     );
@@ -1148,6 +1192,9 @@ async function checkUpdate(
   const unreadable =
     "latest.json of the release cannot be read. Try again later.";
   if (!response.ok) throw new Error(unreadable);
+  // A redirect may not leave https, also when the answer looks right.
+  if (response.url && releaseUrlProblem(response.url))
+    throw new Error(unreadable);
   let body: { version?: unknown; commit?: unknown };
   try {
     body = (await response.json()) as typeof body;
@@ -1166,32 +1213,42 @@ async function checkUpdate(
     current,
     latest: body.version,
     commit: body.commit,
-    newer: threeNumbers.test(current) ? older(current, body.version) : true,
+    // Null: this runtime does not know its own version.
+    newer: threeNumbers.test(current) ? older(current, body.version) : null,
     page: base === defaultReleaseBase ? releasePage : null,
   };
 }
 
 // MARK: phone
 
-function connectionRunning(home: string) {
+/** Whether a `clawdtime shared run` holds the pairing now. "unknown" when the lock cannot be read. */
+function connectionState(home: string): "running" | "off" | "unknown" {
   try {
-    return processLockHolder(sharedConnectionLock(home)) !== null;
+    return processLockHolder(sharedConnectionLock(home)) !== null
+      ? "running"
+      : "off";
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
 function phone(context: Context) {
   const pairing = readSharedPairing(sharedPairingPaths(context.home).file);
   const { owner } = readOwner(context.root);
-  const reach = reachSummary(context.root, context.env, context.now());
+  // The settings that the service gets at its start, as it will read them.
+  const env = { ...context.env };
+  applyStoredSettings(env, context.root);
+  const off = env.CLAWDTIME_COMPUTER_REACH === "off";
+  const reach = off
+    ? { calls: "off", texts: "off" }
+    : reachSummary(context.root, env, context.now());
   return {
     version: 1,
     pairing: pairing.kind,
     origin: pairing.kind === "paired" ? pairing.connection.origin : null,
     view: pairing.kind === "paired" ? pairing.connection.allowView : null,
     control: pairing.kind === "paired" ? pairing.connection.allowControl : null,
-    connection: connectionRunning(context.home) ? "running" : "off",
+    connection: connectionState(context.home),
     owner: owner
       ? {
           ending: phoneEnding(owner.phone),
@@ -1204,9 +1261,12 @@ function phone(context: Context) {
 }
 
 async function unpair(context: Context, dependencies: SettingsCliDependencies) {
-  if (connectionRunning(context.home))
+  const state = connectionState(context.home);
+  if (state !== "off")
     throw new Error(
-      "The phone connection is on, and it uses the pairing. Stop it first.",
+      state === "running"
+        ? "The phone connection is on, and it uses the pairing. Stop it first."
+        : "ClawdTime cannot tell whether the phone connection is on, so nothing was changed. Stop ClawdTime, then try again.",
     );
   const file = sharedPairingPaths(context.home).file;
   const pairing = readSharedPairing(file);

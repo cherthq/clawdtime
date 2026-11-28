@@ -5,6 +5,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -61,7 +62,10 @@ class FakePanel implements PanelDefaults {
 }
 
 /** The command with a state folder and a home of its own, a fake panel, trash and network. */
-function cli(env: Record<string, string | undefined> = {}) {
+function cli(
+  env: Record<string, string | undefined> = {},
+  options: { version?: string } = {},
+) {
   const home = folder();
   const root = join(home, "state");
   const panel = new FakePanel();
@@ -85,7 +89,7 @@ function cli(env: Record<string, string | undefined> = {}) {
       requests.push(url);
       return answer(url);
     }) as typeof fetch,
-    version: "0.4.0",
+    version: options.version ?? "0.4.0",
     now: () => Date.UTC(2026, 10, 28, 9),
   });
   const run = async (...args: string[]) => {
@@ -727,5 +731,165 @@ describe("settings and the other commands", () => {
       value: true,
       from: "store",
     });
+  });
+});
+
+describe("what an independent review found", () => {
+  const key = "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+
+  it("never prints a key that sits where a model or a name should be", async () => {
+    for (const env of [
+      { CLAWDTIME_COMPUTER_MODEL: key },
+      { CLAWDTIME_SUPERVISOR_MODEL: key },
+      { CLAWDTIME_VOCABULARY: `Brightwave, ${key}` },
+    ]) {
+      const { json, run } = cli(env);
+      expect(JSON.stringify(await json()), Object.keys(env)[0]).not.toContain(
+        key,
+      );
+      expect(await run()).not.toContain(key);
+    }
+    const shadowed = cli({ CLAWDTIME_SUPERVISOR_MODEL: key });
+    expect(
+      JSON.stringify(await shadowed.json("set", "model.chat", "gpt-4.1-mini")),
+    ).not.toContain(key);
+    const { root, json } = cli();
+    mkdirSync(join(root, "computer"), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(root, "computer", "model.json"),
+      JSON.stringify({ version: 1, model: key }),
+      { mode: 0o600 },
+    );
+    expect(JSON.stringify(await json())).not.toContain(key);
+  });
+
+  it("moves nothing that a link leads to outside the state folder", async () => {
+    const { root, home, json, trashed } = cli();
+    const outside = join(home, "Documents");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "taxes.pdf"), "x");
+    writeFileSync(join(outside, "chat.jsonl"), "{}");
+    mkdirSync(join(root, "agents"), { recursive: true, mode: 0o700 });
+    symlinkSync(outside, join(root, "agents", "voice"));
+    expect((await json("delete-history", "--yes")).moved).toEqual([]);
+    rmSync(join(root, "agents"), { recursive: true });
+    symlinkSync(outside, join(root, "agents"));
+    mkdirSync(join(root, "computer"), { recursive: true });
+    symlinkSync(
+      join(outside, "taxes.pdf"),
+      join(root, "computer", "timing.json"),
+    );
+    expect((await json("delete-history", "--yes")).moved).toEqual([]);
+    expect(trashed).toEqual([]);
+    expect(existsSync(join(outside, "taxes.pdf"))).toBe(true);
+  });
+
+  it("ignores a stored value of the wrong type, in the report and for the service alike", async () => {
+    const { root, json } = cli();
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      settingsFile(root),
+      JSON.stringify({
+        version: 1,
+        values: { reach: "off", "computer.browser": "on ", "reach.wait": "90" },
+      }),
+      { mode: 0o600 },
+    );
+    const report = await json();
+    const env: Record<string, string | undefined> = {};
+    applyStoredSettings(env, root);
+    expect(env).toEqual({});
+    expect(row(report, "reach")).toMatchObject({
+      value: true,
+      from: "default",
+    });
+    expect(row(report, "computer.browser")).toMatchObject({
+      value: "off",
+      from: "default",
+    });
+    expect(row(report, "reach.wait")).toMatchObject({
+      value: 45,
+      from: "default",
+    });
+  });
+
+  it("reads a variable as the service reads it", async () => {
+    const read = async (env: Record<string, string>, id: string) =>
+      row(await cli(env).json(), id);
+    expect(
+      await read({ CLAWDTIME_COMPUTER_TRUST: " on" }, "computer.ask"),
+    ).toMatchObject({
+      value: "risky",
+      from: "environment",
+    });
+    expect(
+      await read({ CLAWDTIME_COMPUTER_TRUST: "on" }, "computer.ask"),
+    ).toMatchObject({ value: "never" });
+    expect(
+      await read({ CLAWDTIME_COMPUTER_BROWSER: "auto" }, "computer.browser"),
+    ).toMatchObject({ value: "auto" });
+    expect(
+      await read({ CLAWDTIME_COMPUTER_BROWSER: "On" }, "computer.browser"),
+    ).toMatchObject({ value: "off" });
+    expect(
+      await read({ CLAWDTIME_CURSOR_PACE: "CALM" }, "cursor.pace"),
+    ).toMatchObject({ value: "calm" });
+    expect(
+      await read({ CLAWDTIME_COMPUTER_REACH_SECONDS: "9000" }, "reach.wait"),
+    ).toMatchObject({ value: 45 });
+    expect(
+      await read({ CLAWDTIME_COMPUTER_REACH: "OFF" }, "reach"),
+    ).toMatchObject({ value: true });
+  });
+
+  it("changes no model when settings.json cannot be used", async () => {
+    const { root, run } = cli({ OPENAI_API_KEY: "sk-fixture-env-key-1234" });
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    writeFileSync(settingsFile(root), "not json", { mode: 0o600 });
+    await expect(run("set", "speed", "fast")).rejects.toThrow("settings.json");
+    expect(readModelChoice(root).choice).toBeNull();
+  });
+
+  it("refuses to unpair when it cannot tell whether the phone connection runs", async () => {
+    const { home, json, run, requests } = cli();
+    const directory = join(home, ".config", "clawdtime", "shared");
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    // A lock that points at itself cannot be opened: ELOOP.
+    symlinkSync(
+      join(directory, "connection.lock"),
+      join(directory, "connection.lock"),
+    );
+    await expect(run("phone", "unpair", "--yes")).rejects.toThrow(
+      "phone connection",
+    );
+    expect(requests).toEqual([]);
+    expect((await json("phone")).connection).toBe("unknown");
+  });
+
+  it("says that calls are off when Settings turned them off", async () => {
+    const { json } = cli();
+    await json("set", "reach", "off");
+    const report = await json("phone");
+    expect(report.calls).toBe("off");
+    expect(report.texts).toBe("off");
+  });
+
+  it("trusts no redirect to http, and says when this version is not known", async () => {
+    const latest = new Response(
+      JSON.stringify({ version: "0.5.0", commit: "a".repeat(40) }),
+      { status: 200 },
+    );
+    const moved = cli();
+    moved.answer(async () => {
+      const response = latest.clone();
+      Object.defineProperty(response, "url", {
+        value: "http://releases.example/latest.json",
+      });
+      return response;
+    });
+    await expect(moved.run("update")).rejects.toThrow("latest.json");
+    const unknown = cli({}, { version: "unknown" });
+    unknown.answer(async () => latest.clone());
+    expect((await unknown.json("update")).newer).toBeNull();
   });
 });

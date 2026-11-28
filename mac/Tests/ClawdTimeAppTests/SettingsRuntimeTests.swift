@@ -151,6 +151,11 @@ final class SettingsRuntimeTests: XCTestCase {
     await model.checkUpdate()
     XCTAssertNil(model.updatePage)
     XCTAssertFalse(model.openUpdatePage())
+    // A runtime that does not know its own version says so: null, not a guess.
+    runtime.answer(["settings", "update", "--json"], #"{"version":1,"current":"unknown","latest":"0.5.0","commit":"\#(String(repeating: "a", count: 40))","newer":null,"page":null}"#)
+    let unknown = await model.checkUpdate()
+    XCTAssertTrue(unknown)
+    XCTAssertNil(model.update?.newer)
   }
 
   func testUnpairEndsThePhoneConnectionFirst() async throws {

@@ -823,7 +823,7 @@ struct PhonePage: View {
               .accessibilityLabel("Seconds before the call")
           }
         }
-        if let phone = model.phone {
+        if let phone = model.phone, phone.calls != "off" {
           RowDivider()
           VStack(alignment: .leading, spacing: 4) {
             Text("Calls: \(phone.calls).").font(.system(size: 11)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
@@ -844,8 +844,8 @@ struct PhonePage: View {
     case .paired:
       SettingRow("Paired", detail: pairedDetail(phone), anchor: "pairing") {
         HStack(spacing: 8) {
-          StatusTag(text: phone.connection == "running" ? "Connected" : "Connection off", look: phone.connection == "running" ? .on : .neutral,
-                    symbol: phone.connection == "running" ? "checkmark" : nil)
+          StatusTag(text: phone.connection == "running" ? "Connected" : phone.connection == "off" ? "Connection off" : "Connection unknown",
+                    look: phone.connection == "running" ? .on : .neutral, symbol: phone.connection == "running" ? "checkmark" : nil)
           if confirming != "unpair" {
             Button("Unpair…") { withAnimation(spring) { confirming = "unpair" } }.buttonStyle(SmallPill(kind: .danger))
           }
@@ -1031,6 +1031,10 @@ struct AboutPage: View {
 
   private var updateLine: String {
     guard let update = model.update else { return "ClawdTime looks for a newer release only when you ask." }
-    return update.newer ? "ClawdTime \(update.latest) is out. This Mac has \(update.current)." : "ClawdTime \(update.current) is the newest release."
+    switch update.newer {
+    case true?: return "ClawdTime \(update.latest) is out. This Mac has \(update.current)."
+    case false?: return "ClawdTime \(update.current) is the newest release."
+    case nil: return "The newest release is ClawdTime \(update.latest). This copy does not know its own version."
+    }
   }
 }

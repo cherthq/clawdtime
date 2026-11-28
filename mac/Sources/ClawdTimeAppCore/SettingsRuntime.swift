@@ -117,7 +117,8 @@ public struct UpdateReport: Decodable, Equatable, Sendable {
   public var current: String
   public var latest: String
   public var commit: String
-  public var newer: Bool
+  /// Nil: this runtime does not know its own version.
+  public var newer: Bool?
   /// The release page, an https address. Nil for a release of another base.
   public var page: String?
 }
@@ -135,6 +136,7 @@ public struct PhoneReport: Decodable, Equatable, Sendable {
   public var origin: String?
   public var view: Bool?
   public var control: Bool?
+  /// running, off, or unknown when its lock cannot be read.
   public var connection: String
   public var owner: Owner?
   /// Plain sentences of the desktop's reach: can it call or text you now.
