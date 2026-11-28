@@ -189,17 +189,21 @@ describe("the terminal wizard and consent", () => {
         () => type("no\r"),
       );
     });
-    const code = await onboardCli(["--coordinator", coordinator.origin], {
-      env: { OPENAI_API_KEY: key },
-      home,
-      root: folder(),
-      stdin: terminal.input,
-      stdout: terminal.output,
-      ports: fakePorts(),
-      allowLoopback: true,
-      pollMs: 0,
-    });
-    expect(code).toBe(0);
+    const code = await onboardCli(
+      ["--phone", "--coordinator", coordinator.origin],
+      {
+        env: { OPENAI_API_KEY: key },
+        home,
+        root: folder(),
+        stdin: terminal.input,
+        stdout: terminal.output,
+        ports: fakePorts(),
+        allowLoopback: true,
+        pollMs: 0,
+      },
+    );
+    // The person said no to the connection: the phone run is not done.
+    expect(code).toBe(2);
     const saved = readSharedPairing(sharedPairingPaths(home).file);
     if (saved.kind !== "paired")
       throw Error(`not paired:\n${terminal.screen()}`);
@@ -213,7 +217,11 @@ describe("the terminal wizard and consent", () => {
   it("in Terminal, skip or s at any prompt skips that step, the hint says so, and the report lists what is left", async () => {
     const home = folder();
     const terminal = fakeTerminal((screen, type) => {
-      if (screen.endsWith("Type a number. Type skip to do this later: "))
+      if (
+        screen.endsWith(
+          "Type a number, or press Enter for 1. Type skip to do this later: ",
+        )
+      )
         setImmediate(() => type("skip\r"));
       if (
         screen.endsWith(
@@ -233,11 +241,12 @@ describe("the terminal wizard and consent", () => {
     });
     const screen = terminal.screen();
     expect(code).toBe(2);
+    // The report names each step by its title, not by its id.
     expect(screen).toContain(
-      "  model        skipped. No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.",
+      "  Model key:         skipped. No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.",
     );
     expect(screen).toContain(
-      "  computer     skipped. Computer use stays off. Turn it on later: clawdtime computer on",
+      "  Computer use:      skipped. Computer use stays off. Turn it on later: clawdtime computer on",
     );
     expect(screen).toContain(
       "ClawdTime cannot work on this Mac yet. Skipped for now: Model key, Computer use. Run clawdtime onboard to finish them.",
@@ -279,7 +288,7 @@ const ports = {
   validateKey: async () => "valid",
   request: fetch,
 };
-const code = await onboardCli(["--coordinator", ${JSON.stringify(coordinator.origin)}], { env: { OPENAI_API_KEY: ${JSON.stringify(key)} }, home: ${JSON.stringify(home)}, root: ${JSON.stringify(here)}, ports, allowLoopback: true, pollMs: 0 });
+const code = await onboardCli(["--phone", "--coordinator", ${JSON.stringify(coordinator.origin)}], { env: { OPENAI_API_KEY: ${JSON.stringify(key)} }, home: ${JSON.stringify(home)}, root: ${JSON.stringify(here)}, ports, allowLoopback: true, pollMs: 0 });
 const saved = JSON.parse(readFileSync(sharedPairingPaths(${JSON.stringify(home)}).file, "utf8"));
 console.log("\\nEXIT " + code + " SAVED view=" + saved.allowView + " control=" + saved.allowControl + " reports=" + saved.walkthroughReports);
 process.exit(0);
@@ -309,7 +318,6 @@ def until(pat, t=20):
             except OSError: break
     sys.stdout.write("TIMEOUT %r %r\\n" % (pat, buf[-400:])); sys.exit(2)
 def say(s): os.write(fd, s.encode())
-until(rb"Turn on computer use\\? Type yes or no\\. Type skip to do this later: "); say("yes\\r")
 until(rb"country code\\. Type skip to do this later: "); say("${member}\\r")
 until(rb"Send a sign-in code to this number now\\? Type yes or no\\. Type skip to do this later: "); say("yes\\r")
 until(rb"Sign-in code\\. Type skip to do this later: ")
@@ -325,7 +333,7 @@ sys.stdout.write("NEXT " + out.decode(errors="replace").replace("\\r", "").strip
 say("no\\r")
 until(rb"Allow ClawdTime to open a task result report[^\\n]*: "); say("no\\r")
 until(rb"Pair this Mac with your verified account\\?[^\\n]*: "); say("yes\\r")
-until(rb"Connect this Mac to the shared number now\\?[^\\n]*: "); say("no\\r")
+until(rb"Connect this Mac to the shared number now\\?[^\\n]*: "); say("yes\\r")
 sys.stdout.write(until(rb"SAVED[^\\n]*\\n").decode(errors="replace").replace("\\r", "").strip().splitlines()[-1] + "\\n")
 `,
     );

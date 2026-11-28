@@ -121,7 +121,7 @@ it("in the app, a Stop and then SIGTERM during the desktop start end the desktop
 
 it("in Terminal, Ctrl+C outside a question during the desktop start ends the desktop that setup was starting", async () => {
   const run = setup("terminal");
-  await run.when("Desktop: Starting the desktop.");
+  await run.when("Start ClawdTime: Starting ClawdTime on this Mac.");
   await run.when("SERVICE ");
   const service = run.service();
   cleanup.push(() => alive(service) && process.kill(service, "SIGKILL"));
@@ -172,6 +172,6 @@ it("in the app, Skip for now during the desktop start ends the desktop of that s
   expect(alive(service)).toBe(false);
   expect(run.output().stderr).toContain("EXIT 2");
   expect(run.output().stdout).toContain(
-    '{"id":"desktop","state":"skipped","detail":"The desktop does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard."}',
+    '{"id":"desktop","state":"skipped","detail":"ClawdTime does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard."}',
   );
 }, 30_000);

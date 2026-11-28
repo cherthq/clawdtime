@@ -17,10 +17,13 @@ import {
   setComputerSwitch,
 } from "../connectors/computer/journal.js";
 import {
+  firstRequest,
   OnboardEngine,
+  type KnownKey,
   type OnboardPorts,
   type PermissionFacts,
 } from "../src/onboard/engine.js";
+import { providerById } from "../connectors/computer/providers.js";
 import {
   acceptSharedInvitation,
   coordinatorPost,
@@ -33,6 +36,7 @@ import {
 } from "../src/onboard/pairing.js";
 import {
   jsonLinesIO,
+  routeSteps,
   skippableSteps,
   stepIds,
   type OnboardCommand,
@@ -95,6 +99,12 @@ function fakeMac(
     startErrors?: Error[];
     /** The ports can use or stop the desktop of another install. */
     otherInstall?: { stopFails?: Error };
+    /** Keys in the shell startup files of the person. */
+    knownKeys?: KnownKey[];
+    /** What the provider says of each key: valid unless set. */
+    verdict?: (key: string) => "valid" | "refused" | "unchecked";
+    /** The ports can open the chat, as Terminal setup's do. */
+    chat?: boolean;
   } = {},
 ) {
   const call = (port: string) => options.onCall?.(port);
@@ -108,6 +118,8 @@ function fakeMac(
     validated: 0,
     otherUses: 0,
     otherStops: 0,
+    chatOpens: 0,
+    keysChecked: [] as string[],
   };
   let desktop = options.desktop ?? "absent";
   /** The desktop that an app setup started runs, and no owner holds it. */
@@ -184,6 +196,13 @@ function fakeMac(
             setupStarted: async () => setupStarted && desktop === "connected",
           }
         : {}),
+      ...(options.chat
+        ? {
+            openChat: async () => {
+              calls.chatOpens++;
+            },
+          }
+        : {}),
       ...(options.otherInstall
         ? {
             useOther: async () => {
@@ -233,11 +252,13 @@ function fakeMac(
         connection = "stopped";
       },
     },
-    validateKey: async () => {
+    validateKey: async (_provider, checked) => {
       call("validateKey");
       calls.validated++;
-      return "valid";
+      calls.keysChecked.push(checked);
+      return options.verdict?.(checked) ?? "valid";
     },
+    ...(options.knownKeys ? { knownKeys: async () => options.knownKeys! } : {}),
     request: options.request ?? fetch,
   };
   return { ports, calls };
@@ -293,6 +314,8 @@ async function runJson(
     env?: Record<string, string | undefined>;
     /** Answers a step that is in progress and may be skipped. */
     progress?: (event: StepEvent) => Reply | undefined;
+    /** How often the permissions step checks again by itself: never unless set. */
+    permissionPollMs?: number;
   } = {},
 ) {
   const stdin = new PassThrough();
@@ -359,6 +382,7 @@ async function runJson(
     ports,
     allowLoopback: true,
     pollMs: 0,
+    permissionPollMs: extra.permissionPollMs ?? 0,
     ...(extra.now ? { now: extra.now } : {}),
   });
   const events = lines.map((line) => JSON.parse(line) as OnboardEvent);
@@ -380,21 +404,16 @@ const asked = (events: OnboardEvent[], id: string) =>
   ).length;
 
 describe("clawdtime onboard --json", () => {
-  it("runs local mode from hello to done with no coordinator", async () => {
+  it("runs the first run from hello to done: no coordinator, no phone, no text", async () => {
     const home = folder();
     const requests: string[] = [];
     const mac = fakeMac({
       request: (async (url: string) => {
         requests.push(url);
-        throw Error("no network in local mode");
+        throw Error("no network in the first run");
       }) as unknown as typeof fetch,
     });
-    const { code, events, lines } = await runJson(
-      ["--local"],
-      home,
-      mac.ports,
-      agree(),
-    );
+    const { code, events, lines } = await runJson([], home, mac.ports, agree());
     expect(code).toBe(0);
     expect(events[0]).toEqual({
       type: "hello",
@@ -403,12 +422,14 @@ describe("clawdtime onboard --json", () => {
     });
     // Every line is one protocol object.
     for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
-    // The first state of every step is pending, in the fixed order.
+    // The first state of every step of the run is pending, in the fixed
+    // order. The phone steps are not part of the first run.
     expect(
       steps(events)
-        .slice(0, stepIds.length)
+        .slice(0, routeSteps.first.length)
         .map((event) => [event.id, event.state]),
-    ).toEqual(stepIds.map((id) => [id, "pending"]));
+    ).toEqual(routeSteps.first.map((id) => [id, "pending"]));
+    expect(steps(events).some((event) => event.id === "phone")).toBe(false);
     const report = done(events);
     expect(report.ready).toBe(true);
     expect(report.report.map((row) => [row.id, row.state])).toEqual([
@@ -417,11 +438,9 @@ describe("clawdtime onboard --json", () => {
       ["desktop", "ready"],
       ["computer", "ready"],
       ["permissions", "ready"],
-      ["phone", "skipped"],
-      ["pairing", "skipped"],
-      ["connection", "skipped"],
       ["ready", "ready"],
     ]);
+    // Only the provider's key check went out: no coordinator, no text.
     expect(requests).toEqual([]);
     expect(mac.calls.desktopStarts).toBe(1);
     const root = join(home, ".local", "share", "clawdtime");
@@ -433,21 +452,30 @@ describe("clawdtime onboard --json", () => {
     expect(lines.join("\n")).not.toContain(key);
   });
 
-  it("pairs in shared mode from hello to done and never echoes a secret", async () => {
+  it("gets calls on the phone in a later run, pairs from hello to done and never echoes a secret", async () => {
     const coordinator = await fakeCoordinator();
     cleanup.push(coordinator.close);
     const home = folder();
     const mac = fakeMac();
-    const { code, events, lines, errors } = await runJson(
+    const first = await runJson(
       ["--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      agree(),
+    );
+    // The first run never reads the coordinator, even when one is named.
+    expect(first.code).toBe(0);
+    expect(coordinator.paths).toEqual([]);
+    const { code, events, lines, errors } = await runJson(
+      ["--phone", "--coordinator", coordinator.origin],
       home,
       mac.ports,
       agree(() => coordinator.codeFor(member)),
     );
     expect(code).toBe(0);
     expect(done(events).ready).toBe(true);
-    expect(done(events).report.map((row) => row.state)).toEqual(
-      Array(stepIds.length).fill("ready"),
+    expect(done(events).report.map((row) => [row.id, row.state])).toEqual(
+      routeSteps.phone.map((id) => [id, "ready"]),
     );
     // One text, and only after the yes that came right before it.
     expect(coordinator.texts).toHaveLength(1);
@@ -468,8 +496,13 @@ describe("clawdtime onboard --json", () => {
       capture: { binary: "/Applications/Made Up/ClawdTimeTaskCapture" },
     });
     expect(mac.calls.connectionStarts).toBe(1);
-    // Scan every event and every log line.
-    const everything = [...lines, ...errors].join("\n");
+    // Scan every event and every log line of both runs.
+    const everything = [
+      ...first.lines,
+      ...first.errors,
+      ...lines,
+      ...errors,
+    ].join("\n");
     for (const secret of [
       key,
       member,
@@ -485,23 +518,37 @@ describe("clawdtime onboard --json", () => {
     cleanup.push(coordinator.close);
     const home = folder();
     const mac = fakeMac();
+    await runJson([], home, mac.ports, agree());
     await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       home,
       mac.ports,
       agree(() => coordinator.codeFor(member)),
     );
+    const none = () => {
+      throw Error("no question expected on a rerun");
+    };
+    // A paired Mac takes every step on a rerun, so that it stays connected.
     const again = await runJson(
       ["--coordinator", coordinator.origin],
       home,
       mac.ports,
-      () => {
-        throw Error("no question expected on a rerun");
-      },
+      none,
     );
     expect(again.code).toBe(0);
     expect(done(again.events).ready).toBe(true);
+    expect(done(again.events).report.map((row) => row.id)).toEqual([
+      ...stepIds,
+    ]);
     for (const id of stepIds) expect(asked(again.events, id)).toBe(0);
+    const phone = await runJson(
+      ["--phone", "--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      none,
+    );
+    expect(phone.code).toBe(0);
+    for (const id of stepIds) expect(asked(phone.events, id)).toBe(0);
     expect(mac.calls.desktopStarts).toBe(1);
     expect(mac.calls.connectionStarts).toBe(1);
     expect(coordinator.texts).toHaveLength(1);
@@ -515,7 +562,7 @@ describe("clawdtime onboard --json", () => {
     let expiredOnce = false;
     const yes = agree(() => coordinator.codeFor(member));
     const { events } = await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       folder(),
       fakeMac().ports,
       (event) => {
@@ -681,9 +728,16 @@ describe("clawdtime onboard --json", () => {
         screenRecording: false,
       },
     };
+    // The phone run checks the panel too while computer use is on.
+    const home = folder();
+    setComputerSwitch(
+      join(home, ".local", "share", "clawdtime"),
+      true,
+      Date.now(),
+    );
     const { events } = await runJson(
-      ["--coordinator", coordinator.origin],
-      folder(),
+      ["--phone", "--coordinator", coordinator.origin],
+      home,
       fakeMac({ permissions: [denied] }).ports,
       agree(() => coordinator.codeFor(member)),
     );
@@ -704,12 +758,14 @@ describe("clawdtime onboard --json", () => {
 
   it("falls back to local mode when the coordinator does not answer", async () => {
     const { code, events } = await runJson(
-      ["--coordinator", "http://127.0.0.1:1"],
+      ["--phone", "--coordinator", "http://127.0.0.1:1"],
       folder(),
       fakeMac().ports,
       agree(),
     );
-    expect(code).toBe(0);
+    // The phone run is not done: calls from the phone cannot reach this Mac.
+    expect(code).toBe(2);
+    expect(stateOf(events, "ready")).toBe("skipped");
     const preflight = done(events).report.find(
       (row) => row.id === "preflight",
     )!;
@@ -725,7 +781,7 @@ describe("clawdtime onboard --json", () => {
     });
     cleanup.push(coordinator.close);
     const { events } = await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       folder(),
       fakeMac().ports,
       agree(),
@@ -751,8 +807,11 @@ describe("clawdtime onboard --json", () => {
       join(root, "release.json"),
       JSON.stringify({ version: "0.4.0", coordinator: coordinator.origin }),
     );
+    // The first run reads no coordinator: the phone run does.
+    await runJson([], folder(), fakeMac().ports, agree(), { root });
+    expect(coordinator.paths).toEqual([]);
     const { events } = await runJson(
-      [],
+      ["--phone"],
       folder(),
       fakeMac().ports,
       () => undefined,
@@ -786,7 +845,7 @@ describe("clawdtime onboard --json", () => {
     );
     const yes = agree(() => coordinator.codeFor(member));
     const keep = await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       folder(),
       fakeMac().ports,
       (event) =>
@@ -806,7 +865,7 @@ describe("clawdtime onboard --json", () => {
 
     const home = folder();
     const replace = await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       home,
       fakeMac().ports,
       (event) =>
@@ -827,7 +886,12 @@ describe("clawdtime onboard --json", () => {
     const mac = fakeMac();
     const yes = agree(() => coordinator.codeFor(member));
     // Terminal setup leaves its background connection running.
-    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    await runJson(
+      ["--phone", "--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      yes,
+    );
     expect(mac.calls.connectionStarts).toBe(1);
     const app = await runJson(
       ["--coordinator", coordinator.origin, "--app"],
@@ -852,7 +916,12 @@ describe("clawdtime onboard --json", () => {
     const home = folder();
     const mac = fakeMac();
     const yes = agree(() => coordinator.codeFor(member));
-    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    await runJson(
+      ["--phone", "--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      yes,
+    );
     expect(mac.calls.connectionStarts).toBe(1);
     const app = await runJson(
       ["--coordinator", coordinator.origin, "--app"],
@@ -867,7 +936,7 @@ describe("clawdtime onboard --json", () => {
     expect(
       done(app.events).report.find((row) => row.id === "connection")!.detail,
     ).toBe(
-      "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard.",
+      "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard --phone.",
     );
     expect(mac.calls.connectionStops).toBe(1);
     expect(await mac.ports.connection.status("desktop_1")).toBe("stopped");
@@ -879,7 +948,12 @@ describe("clawdtime onboard --json", () => {
     const home = folder();
     const mac = fakeMac();
     const yes = agree(() => coordinator.codeFor(member));
-    await runJson(["--coordinator", coordinator.origin], home, mac.ports, yes);
+    await runJson(
+      ["--phone", "--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      yes,
+    );
     mac.ports.connection.stop = async () => {
       throw Error("connection_did_not_stop");
     };
@@ -912,7 +986,7 @@ describe("clawdtime onboard --json", () => {
     cleanup.push(coordinator.close);
     const mac = fakeMac({ other: { instanceId: "desktop_1" } });
     const { events } = await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       folder(),
       mac.ports,
       agree(() => coordinator.codeFor(member)),
@@ -930,7 +1004,7 @@ describe("clawdtime onboard --json", () => {
       const mac = fakeMac({ other: { instanceId: "desktop_0" } });
       const yes = agree(() => coordinator.codeFor(member));
       const { events } = await runJson(
-        ["--coordinator", coordinator.origin, ...args],
+        ["--phone", "--coordinator", coordinator.origin, ...args],
         folder(),
         mac.ports,
         (event) =>
@@ -1067,7 +1141,7 @@ describe("clawdtime onboard --json", () => {
       expect(
         done(events).report.find((row) => row.id === "computer")!.detail,
       ).toBe(
-        "Computer use is on. The desktop is busy, so it uses computer use from its next start.",
+        "Computer use is on. ClawdTime is busy, so it uses computer use from its next start.",
       );
     }
   });
@@ -1091,7 +1165,7 @@ describe("clawdtime onboard --json", () => {
     const home = folder();
     const yes = agree(() => coordinator.codeFor(member));
     const { events } = await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       home,
       fakeMac().ports,
       (event) =>
@@ -1125,7 +1199,7 @@ describe("clawdtime onboard --json", () => {
     const home = folder();
     const yes = agree(() => coordinator.codeFor(member));
     await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       home,
       fakeMac().ports,
       (event) =>
@@ -1177,7 +1251,7 @@ describe("clawdtime onboard --json", () => {
     const coordinator = await fakeCoordinator();
     cleanup.push(coordinator.close);
     const { events } = await runJson(
-      ["--coordinator", coordinator.origin],
+      ["--phone", "--coordinator", coordinator.origin],
       folder(),
       fakeMac().ports,
       agree(() => coordinator.codeFor(member)),
@@ -1233,20 +1307,20 @@ describe("skip, so that nobody is stuck at setup", () => {
     done(events).report.find((one) => one.id === id)!;
   const later = {
     preflight:
-      "The ClawdTime panel is missing, so the desktop cannot start. Install ClawdTime again, then run clawdtime onboard.",
+      "The ClawdTime panel is missing, so ClawdTime cannot start. Install ClawdTime again, then run clawdtime onboard.",
     model:
       "No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.",
     desktop:
-      "The desktop does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard.",
+      "ClawdTime does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard.",
     computer: "Computer use stays off. Turn it on later: clawdtime computer on",
     permissions:
       "Screen Recording and Accessibility are not on yet, so ClawdTime cannot see or use this Mac. Turn them on in System Settings, then run clawdtime onboard.",
     phone:
-      "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+      "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard --phone.",
     pairing:
-      "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+      "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard --phone.",
     connection:
-      "This Mac is not connected, so calls from your phone cannot reach it. To connect it later, run clawdtime onboard.",
+      "This Mac is not connected, so calls from your phone cannot reach it. To connect it later, run clawdtime onboard --phone.",
   };
 
   it("every step but ready takes a skip", () => {
@@ -1265,9 +1339,10 @@ describe("skip, so that nobody is stuck at setup", () => {
       { id: "desktop", mac: { startFails: true }, ready: false },
       { id: "computer", mac: {}, ready: true },
       { id: "permissions", mac: { permissions: [denied] }, ready: true },
-      { id: "phone", mac: {}, ready: true, shared: true },
-      { id: "pairing", mac: {}, ready: true, shared: true },
-      { id: "connection", mac: {}, ready: true, shared: true },
+      // The phone run is done only when calls can reach this Mac.
+      { id: "phone", mac: {}, ready: false, shared: true },
+      { id: "pairing", mac: {}, ready: false, shared: true },
+      { id: "connection", mac: {}, ready: false, shared: true },
     ] as const;
     for (const one of cases) {
       const coordinator = await fakeCoordinator();
@@ -1277,7 +1352,9 @@ describe("skip, so that nobody is stuck at setup", () => {
       const root = join(home, ".local", "share", "clawdtime");
       if (one.id === "permissions") setComputerSwitch(root, true, Date.now());
       const { events, code } = await runJson(
-        "shared" in one ? ["--coordinator", coordinator.origin] : ["--local"],
+        "shared" in one
+          ? ["--phone", "--coordinator", coordinator.origin]
+          : ["--local"],
         home,
         mac.ports,
         skipAt(one.id, () => coordinator.codeFor(member)),
@@ -1293,7 +1370,8 @@ describe("skip, so that nobody is stuck at setup", () => {
         one.ready ? "ready" : "skipped",
       );
       expect(code, one.id).toBe(one.ready ? 0 : 2);
-      const next = stepIds[stepIds.indexOf(one.id) + 1]!;
+      const route = "shared" in one ? routeSteps.phone : routeSteps.first;
+      const next = route[route.indexOf(one.id) + 1]!;
       expect(row(events, next).state, one.id).not.toBe("pending");
       if (one.id === "model")
         expect(
@@ -1312,7 +1390,7 @@ describe("skip, so that nobody is stuck at setup", () => {
     );
     expect(row(events, "computer").state).toBe("skipped");
     expect(row(events, "ready").detail).toBe(
-      "ClawdTime is ready on this Mac. Click the mascot to open the chat. Skipped for now: Computer use. Run clawdtime onboard to finish it.",
+      "ClawdTime is ready on this Mac. Click the mascot to open the chat. To get calls on your phone later, run clawdtime onboard --phone. Skipped for now: Computer use. Run clawdtime onboard to finish it.",
     );
     const model = await runJson(
       ["--local"],
@@ -1411,6 +1489,233 @@ describe("skip, so that nobody is stuck at setup", () => {
     const second = await runJson(["--local"], home, mac.ports, agree());
     expect(asked(second.events, "computer")).toBe(1);
     expect(row(second.events, "computer").state).toBe("ready");
+  });
+});
+
+describe("the first run: install to talking with the fewest decisions", () => {
+  const openai = providerById("openai")!;
+  const anthropic = providerById("anthropic")!;
+  const shellKey = `sk-made-up-shell-${"s".repeat(32)}`;
+  const otherKey = `sk-ant-made-up-${"a".repeat(32)}`;
+  const store = (home: string) => join(home, ".local", "share", "clawdtime");
+  const storedFrom = (home: string, id: string) =>
+    keyRows({}, store(home)).rows.find((row) => row.provider.id === id)!.from;
+
+  it("uses a key from the shell settings with no question, after its provider checks it", async () => {
+    const home = folder();
+    const mac = fakeMac({
+      knownKeys: [{ provider: openai, key: shellKey, source: "/x/.zshrc" }],
+    });
+    const { code, events, lines, errors } = await runJson(
+      ["--app"],
+      home,
+      mac.ports,
+      agree(),
+    );
+    expect(code).toBe(0);
+    expect(asked(events, "model")).toBe(0);
+    expect(mac.calls.keysChecked).toEqual([shellKey]);
+    expect(storedFrom(home, "openai")).toEqual({ kind: "store" });
+    expect(done(events).report.find((row) => row.id === "model")!.detail).toBe(
+      "ClawdTime found your OpenAI key in your shell settings. It checked the key. It keeps the key in the protected key store.",
+    );
+    // The key and its file never show in an event or a log.
+    const everything = [...lines, ...errors].join("\n");
+    expect(everything).not.toContain(shellKey);
+    expect(everything).not.toContain("/x/.zshrc");
+  });
+
+  it("never uses a key from the shell settings that its provider refuses: it asks instead", async () => {
+    const home = folder();
+    const mac = fakeMac({
+      knownKeys: [{ provider: openai, key: shellKey, source: "/x/.zshrc" }],
+      verdict: (checked) => (checked === shellKey ? "refused" : "valid"),
+    });
+    const { events } = await runJson(["--app"], home, mac.ports, agree());
+    expect(asked(events, "model")).toBe(2);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "log" &&
+          event.message ===
+            "OpenAI refused the key in your shell settings, so ClawdTime does not use it.",
+      ),
+    ).toBe(true);
+    // The pasted key is the one in the store.
+    expect(mac.calls.keysChecked).toEqual([shellKey, key]);
+    expect(stateOf(events, "model")).toBe("ready");
+  });
+
+  it("asks for the provider with a default and offers the page that makes a key", async () => {
+    const { events } = await runJson(
+      ["--app"],
+      folder(),
+      fakeMac().ports,
+      agree(),
+    );
+    const choice = steps(events).find(
+      (event) => event.id === "model" && event.input?.kind === "choice",
+    )!;
+    expect(choice.input!.default).toBe("openai");
+    expect(choice.input!.consent).toBeUndefined();
+    expect(choice.detail).not.toContain("clawdtime keys");
+    const secret = steps(events).find(
+      (event) => event.id === "model" && event.input?.kind === "secret",
+    )!;
+    expect(secret.recovery).toEqual({
+      label: "Get a key from OpenAI",
+      action: "open_url",
+      url: "https://platform.openai.com/api-keys",
+    });
+  });
+
+  it("uses the provider that a pasted key belongs to, so a wrong choice is no error", async () => {
+    const home = folder();
+    const mac = fakeMac();
+    const { events } = await runJson(["--app"], home, mac.ports, (event) =>
+      event.id === "model" && event.input?.kind === "secret"
+        ? { type: "input", id: "model", value: otherKey }
+        : agree()(event),
+    );
+    expect(stateOf(events, "model")).toBe("ready");
+    expect(storedFrom(home, "anthropic")).toEqual({ kind: "store" });
+    expect(storedFrom(home, "openai")).toBeNull();
+    expect(
+      events.some(
+        (event) =>
+          event.type === "log" &&
+          event.message ===
+            `This key is for ${anthropic.name}, so ClawdTime uses ${anthropic.name}.`,
+      ),
+    ).toBe(true);
+    // The person chose OpenAI, the default: the key went to Anthropic's check.
+    expect(mac.calls.keysChecked).toEqual([otherKey]);
+  });
+
+  it("no consent question has a default, in the first run and in the phone run", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const mac = fakeMac();
+    const first = await runJson([], home, mac.ports, agree());
+    const phone = await runJson(
+      ["--phone", "--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      agree(() => coordinator.codeFor(member)),
+    );
+    const consents = steps([...first.events, ...phone.events]).filter(
+      (event) => event.input?.consent,
+    );
+    expect(consents.length).toBeGreaterThan(6);
+    for (const event of consents) expect(event.input!.default).toBeUndefined();
+  });
+
+  it("in the app, goes on by itself when the permissions are on, with no click", async () => {
+    const denied: PermissionFacts = {
+      panel: { path: "/x/P", accessibility: false, screenRecording: false },
+      capture: { path: "/x/C", screenRecording: true },
+    };
+    // Denied at the first check and at the first watch, then on.
+    const mac = fakeMac({ permissions: [denied, denied] });
+    const { code, events } = await runJson(
+      ["--app"],
+      folder(),
+      mac.ports,
+      (event) => {
+        // The person turns the switches on and clicks nothing.
+        if (event.id === "permissions" && event.state === "needs_input")
+          return [];
+        return agree()(event);
+      },
+      { permissionPollMs: 5 },
+    );
+    expect(code).toBe(0);
+    expect(asked(events, "permissions")).toBe(1);
+    const asking = steps(events).find(
+      (event) => event.id === "permissions" && event.state === "needs_input",
+    )!;
+    expect(asking.detail).toBe(
+      "In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTime. In Screen & System Audio Recording, turn on ClawdTime. Setup continues when they are on.",
+    );
+    expect(stateOf(events, "permissions")).toBe("ready");
+    // The first check, one watch that found them off, one that found them on,
+    // and the check of the step that then goes on.
+    expect(mac.calls.permissionChecks).toBe(4);
+  });
+
+  it("in Terminal, a first run that is ready opens the chat with one suggested request; the app opens its own", async () => {
+    const terminal = fakeMac({ chat: true });
+    const opened = await runJson([], folder(), terminal.ports, agree());
+    expect(terminal.calls.chatOpens).toBe(1);
+    expect(
+      done(opened.events).report.find((row) => row.id === "ready")!.detail,
+    ).toBe(
+      `ClawdTime is ready, and the chat is open. Write or talk to ClawdTime. Try: ${firstRequest(true)} To get calls on your phone later, run clawdtime onboard --phone.`,
+    );
+    const app = fakeMac({ chat: true });
+    const inApp = await runJson(["--app"], folder(), app.ports, agree());
+    expect(app.calls.chatOpens).toBe(0);
+    expect(
+      done(inApp.events).report.find((row) => row.id === "ready")!.detail,
+    ).toBe(
+      "ClawdTime is ready on this Mac. To get calls on your phone later, choose Get calls on your phone.",
+    );
+    // Not ready, or stopped: no chat opens.
+    const skipped = fakeMac({ chat: true });
+    await runJson([], folder(), skipped.ports, (event) =>
+      event.id === "model"
+        ? { type: "action", id: "model", action: "skip" }
+        : agree()(event),
+    );
+    const stopped = fakeMac({ chat: true });
+    await runJson([], folder(), stopped.ports, (event) =>
+      event.id === "computer" ? undefined : agree()(event),
+    );
+    expect(skipped.calls.chatOpens + stopped.calls.chatOpens).toBe(0);
+  });
+
+  it("suggests a chat request when computer use is off", async () => {
+    const mac = fakeMac({ chat: true });
+    const { events } = await runJson([], folder(), mac.ports, (event) =>
+      event.id === "computer" && event.state === "needs_input"
+        ? { type: "input", id: "computer", value: false }
+        : agree()(event),
+    );
+    expect(
+      done(events).report.find((row) => row.id === "ready")!.detail,
+    ).toContain(`Try: ${firstRequest(false)}`);
+    expect(firstRequest(false)).toBe("What can you do on this Mac?");
+  });
+
+  it("takes every step on a paired Mac, and only the first run with --local", async () => {
+    const coordinator = await fakeCoordinator();
+    cleanup.push(coordinator.close);
+    const home = folder();
+    const mac = fakeMac();
+    await runJson([], home, mac.ports, agree());
+    await runJson(
+      ["--phone", "--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      agree(() => coordinator.codeFor(member)),
+    );
+    const paired = await runJson(
+      ["--coordinator", coordinator.origin],
+      home,
+      mac.ports,
+      agree(),
+    );
+    expect(done(paired.events).report.map((row) => row.id)).toEqual([
+      ...stepIds,
+    ]);
+    const local = await runJson(["--local"], home, mac.ports, agree());
+    expect(done(local.events).report.map((row) => row.id)).toEqual([
+      ...routeSteps.first,
+    ]);
+    await expect(
+      onboardCli(["--json", "--local", "--phone"], { ports: mac.ports }),
+    ).rejects.toThrow("Use --local or --phone, not both");
   });
 });
 
@@ -1711,7 +2016,7 @@ describe("a desktop that does not start says why", () => {
     expect(reportRow(events, "desktop")).toEqual({
       id: "desktop",
       state: "ready",
-      detail: "The desktop runs already. Its project and work are kept.",
+      detail: "ClawdTime runs already. Its work is kept.",
     });
   });
 

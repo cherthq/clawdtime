@@ -1,21 +1,27 @@
 # Onboarding
 
-`clawdtime onboard` sets up ClawdTime on a Mac, step by step. One setup engine
-runs the steps. Two interfaces drive it: the terminal wizard and the JSON
-protocol, which the Mac app uses. Both run the same operations.
+`clawdtime onboard` sets up ClawdTime on a Mac, step by step, and then opens
+the chat. One setup engine runs the steps. Two interfaces drive it: the
+terminal wizard and the JSON protocol, which the Mac app uses. Both run the
+same operations.
+
+The first run asks only for what you need to talk to ClawdTime on this Mac: a
+model key (setup finds one when you have one), your yes to computer use, and
+two permissions. Calls on your phone are a later step: `--phone`.
 
 ## The command
 
 ```sh
-clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]
+clawdtime onboard [--phone] [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]
 ```
 
-| Option          | What it does                                                                                                    |
-| --------------- | --------------------------------------------------------------------------------------------------------------- |
-| `--local`       | Sets up this Mac alone. The phone, pairing and connection steps are skipped.                                    |
-| `--coordinator` | The https origin of the shared number's coordinator, for example `https://coordinator.example`.                 |
-| `--json`        | Speaks the protocol below on standard input and output.                                                         |
-| `--app`         | The Mac app drives setup and owns the desktop and the connection. It goes with `--json`. See [Owners](#owners). |
+| Option          | What it does                                                                                                                 |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--phone`       | Gets calls on your phone: verifies your phone, pairs this Mac and connects it. See [Routes](#routes). Not with `--local`.    |
+| `--local`       | Takes the first run only, also on a Mac that is paired already.                                                              |
+| `--coordinator` | The https origin of the shared number's coordinator, for example `https://coordinator.example`. Only the phone steps use it. |
+| `--json`        | Speaks the protocol below on standard input and output.                                                                      |
+| `--app`         | The Mac app drives setup and owns the desktop and the connection. It goes with `--json`. See [Owners](#owners).              |
 
 Without `--json`, the command needs a terminal. When standard input is no
 terminal, it opens `/dev/tty`. With no terminal at all, it prints
@@ -46,9 +52,45 @@ blocks the next launch.
 Run the command again to continue. Each step checks the real state of the Mac
 first. A step that is ready is checked again, not repeated.
 
+## Routes
+
+Each run takes the steps of one route, always in the fixed order of the step
+ids. Only the steps of the run come as `pending`, and only they are in the
+report.
+
+| Route | When                                    | Steps                                                                            |
+| ----- | --------------------------------------- | -------------------------------------------------------------------------------- |
+| First | `clawdtime onboard`, or with `--local`  | `preflight`, `model`, `desktop`, `computer`, `permissions`, `ready`              |
+| Phone | `clawdtime onboard --phone`             | `preflight`, `desktop`, `permissions`, `phone`, `pairing`, `connection`, `ready` |
+| All   | A rerun on a Mac that is paired already | Every step, so that the Mac stays connected as before                            |
+
+The first run reads no coordinator and sends no text. In the Mac app, the
+phone route is **Get calls on your phone**: a button on the last screen and in
+the status window, and an item of the app's menu bar menu.
+
+## The end of setup
+
+A first run that is ready opens the conversation. The chat opens with the keys,
+and it offers one first request. The request pays, deletes and sends nothing:
+
+- With computer use on: `Open Calculator and calculate 15 percent of 240.`
+- With computer use off: `What can you do on this Mac?`
+
+A click on the request sends it. Nothing is sent by itself.
+
+- **Terminal.** The `desktop` step starts the panel tucked, so the person can
+  answer setup. When setup ends ready, it runs `clawdtime start --chat`. A
+  panel that is open already opens its chat. The `ready` line says `Try:` and
+  the request.
+- **The Mac app.** The last screen has **Start talking**. It starts the
+  desktop with `clawdtime start --chat --foreground`, so the panel opens with
+  the chat. When the app runs the desktop already, the button is **Done**. A
+  quiet check at a later launch opens no chat.
+
 ## The coordinator
 
-Setup takes the coordinator origin from the first of these that is set:
+Only the phone steps use a coordinator. Setup takes its origin from the first
+of these that is set:
 
 1. The `--coordinator` option.
 2. The `CLAWDTIME_COORDINATOR` variable.
@@ -62,26 +104,47 @@ release speaks (today `1`), and a mode other than `standby`.
 In every other case setup runs in local mode and says why: no coordinator is
 set, the origin is not https, the coordinator did not answer, it is in
 standby, or its protocol is older or newer. Local use works with no
-coordinator. Run the command again later to pair a phone.
+coordinator. Run `clawdtime onboard --phone` again later to pair a phone.
 
 ## The steps
 
 The step ids and their order are fixed.
 
-| Id            | What it does                                                                                                                                                                                                                                                              | Skip |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| `preflight`   | Checks macOS 14 or later, Apple silicon, the installed panel, and the coordinator's `/health` and protocol.                                                                                                                                                               | yes  |
-| `model`       | Uses a key that is set already. Otherwise it asks for the provider, then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                                                                     | yes  |
-| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                                                              | yes  |
-| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off. A desktop that started before the yes starts again while it is idle, so that it uses computer use now.                                                          | yes  |
-| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each list of System Settings and each binary as the person sees them there, offers the System Settings pane, and checks again. | yes  |
-| `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                                                                       | yes  |
-| `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                                                                            | yes  |
-| `connection`  | Starts one shared connection in the background, bound to the running desktop. It reuses a connection of the same desktop. A connection of an earlier desktop ends first. With `--app` it starts none: see [Owners](#owners).                                              | yes  |
-| `ready`       | One readiness report. It never places a call or sends a text.                                                                                                                                                                                                             | no   |
+| Id            | What it does                                                                                                                                                                                                                                                                                                                                                                  | Skip |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `preflight`   | Checks macOS 14 or later, Apple silicon and the installed panel. In the phone and all routes, also the coordinator's `/health` and protocol.                                                                                                                                                                                                                                  | yes  |
+| `model`       | Uses a key that is set already. Then a key in the shell settings, with no question (see [Keys that setup finds](#keys-that-setup-finds)). Otherwise it asks for the provider (OpenAI is the default), then the key with hidden entry. It checks the key with the provider and stores it in the protected key store of `clawdtime keys`.                                       | yes  |
+| `desktop`     | Uses a desktop that runs already, with its project and its work. Otherwise it starts the desktop as `clawdtime start` does, and waits for its authenticated readiness check.                                                                                                                                                                                                  | yes  |
+| `computer`    | Asks for consent to computer use, then turns on the switch of `clawdtime computer on`. A no keeps it off. A desktop that started before the yes starts again while it is idle, so that it uses computer use now.                                                                                                                                                              | yes  |
+| `permissions` | Reads Accessibility and Screen Recording of the exact installed panel, and Screen Recording of the capture helper in shared mode. It names each list of System Settings and each binary as the person sees them there, offers the System Settings pane, and checks again. With `--json` it also checks again by itself every 2 seconds, and goes on when the switches are on. | yes  |
+| `phone`       | Asks for the person's own number, then a yes. Only after the yes does the coordinator text one sign-in code. Then it asks for the code. A paired Mac sends no text.                                                                                                                                                                                                           | yes  |
+| `pairing`     | Asks for the display, then separate answers for view, computer actions and reports, then a final yes. It reuses a valid pairing. It replaces another Mac only on the person's explicit choice.                                                                                                                                                                                | yes  |
+| `connection`  | Starts one shared connection in the background, bound to the running desktop. It reuses a connection of the same desktop. A connection of an earlier desktop ends first. With `--app` it starts none: see [Owners](#owners).                                                                                                                                                  | yes  |
+| `ready`       | One readiness report. It never places a call or sends a text. In Terminal, a first run that is ready opens the chat.                                                                                                                                                                                                                                                          | no   |
 
-In local mode, `phone`, `pairing` and `connection` are skipped. With computer
-use off in local mode, `permissions` is skipped too.
+When the coordinator is not used, `phone`, `pairing` and `connection` are
+skipped. With computer use off in local mode, `permissions` is skipped too. In
+the phone route, the computer switch says whether `permissions` checks the
+panel too.
+
+## Keys that setup finds
+
+The Mac app starts from Finder, with no shell variables. So a key that you
+exported in Terminal is not in its environment. Before it asks, the `model`
+step reads the shell startup files of the person as text. It runs no shell.
+
+- zsh: `.zshenv`, `.zprofile`, `.zshrc` (in `ZDOTDIR` when it is set). bash:
+  `.bash_profile`, `.bashrc`, `.profile`. The shell comes from `SHELL`.
+- Only a plain assignment of a key variable of an offered provider counts,
+  such as `export OPENAI_API_KEY=...`, with or without quotes. A later
+  assignment wins, as in the shell. An empty value clears it.
+- A value with `$`, a backtick or a backslash is left alone: it needs a shell.
+- Only a regular file of this user, 256 KiB or smaller, is read.
+- The provider checks the key first. A refused key is not used, and setup
+  asks. A key that is used goes to the protected key store, as a pasted key
+  does. The report says
+  `ClawdTime found your OpenAI key in your shell settings.` The key and the
+  file never show in an event or a log.
 
 ## Skip
 
@@ -93,6 +156,7 @@ question, at a failure, and while the desktop starts.
 - A skipped step says in one line what does not work and the command that
   finishes it, for example
   `No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.`
+  A phone step names `clawdtime onboard --phone`.
 - A skip of the desktop while it starts lets that start end, then ends the
   desktop that it made. No process is left.
 - `clawdtime onboard` asks a skipped step again on the next run.
@@ -100,7 +164,9 @@ question, at a failure, and while the desktop starts.
   names the steps that the person skipped. It is not a failure. `ready` is
   false only when ClawdTime cannot work: the check, the model key or the
   desktop was skipped. Then the `ready` row is `skipped` and the exit code
-  is 2.
+  is 2. In the phone route, `ready` is false also when calls from the phone
+  cannot reach the Mac: the phone, the pairing or the connection is not
+  ready.
 - In Terminal, type `skip` (or `s`) at any prompt. Each prompt says
   `Type skip to do this later`.
 - In the app, **Skip for now** is on every step screen.
@@ -144,11 +210,13 @@ owner.
   with no panel, so that it can check it, and starts no connection. The
   `connection` step asks the person, then reports ready with
   `ClawdTime connects this Mac to the shared number when setup ends.` When
-  setup ends, the app runs `clawdtime start --tucked true --foreground`,
-  which takes over the running service and opens the panel, and then
-  `clawdtime shared run`. A background connection that Terminal setup started
-  ends first. When the person stops setup in the app, setup ends the desktop
-  that it started.
+  setup ends, the app runs `clawdtime start --chat --foreground` (Start
+  talking) or `clawdtime start --tucked true --foreground` (a quiet check at a
+  later launch). It takes over the running service and opens the panel, and
+  then runs `clawdtime shared run`. When the app runs the desktop already, a
+  connection that the phone route made ready starts beside it. A background
+  connection that Terminal setup started ends first. When the person stops
+  setup in the app, setup ends the desktop that it started.
 - **A no to the connection.** In Terminal and in the app, a no (or a skip)
   ends a background connection that Terminal setup started, after the same
   check of its process. The report then says that it ended. When it does not
@@ -195,7 +263,9 @@ example a pairing that the coordinator made.
   lines that an interface shows only when the person asks, such as the full
   path of each binary that needs a permission.
 - `recovery` has a `label` and an `action`: `retry`, `open_settings` or
-  `open_url`, with a `url` for the last two. The interface opens the URL.
+  `open_url`, with a `url` for the last two. The interface opens the URL. The
+  key question offers the page where the provider makes keys, for example
+  `Get a key from OpenAI`. The terminal prints its address.
 - `question` is the one-time id of the question that the step asks. A
   `needs_input` step has one. A `failed` step that waits for a retry or a skip
   has one too. An `in_progress` step has one while it may be skipped (the
@@ -203,10 +273,12 @@ example a pairing that the coordinator made.
   when the same question comes again.
 - `input` has a `kind`: `secret`, `text`, `choice`, `confirm`, `phone` or
   `code`, a `prompt`, and for a choice its `options`, each with an `id`, a
-  `label` and an optional `detail`. `consent: true` marks a question whose
-  answer gives or refuses consent: computer use, a sign-in text, view,
-  computer actions, reports, the pairing, a replacement and the connection.
-  An interface gives such a question no default answer.
+  `label` and an optional `detail`. A choice may have a `default`: the option
+  that an interface shows chosen, so that Return takes it. `consent: true`
+  marks a question whose answer gives or refuses consent: computer use, a
+  sign-in text, view, computer actions, reports, the pairing, a replacement
+  and the connection. Such a question never has a `default`, and an interface
+  gives it no default answer.
 - `done` comes last, with `ready` and one report row for each step. With
   `--app` it has `setupDesktop`: true while a desktop service that setup
   started runs and no owner holds it. A cancelled run with `--app` ends that
@@ -249,7 +321,8 @@ example a pairing that the coordinator made.
 ## Secrets
 
 - A secret input goes only to the provider's key check and the protected key
-  store. It never appears in an event, a log, an argument or a file.
+  store. It never appears in an event, a log, an argument or a file. A key
+  that setup finds in the shell settings takes the same path.
 - A phone number goes only to the coordinator. A sign-in code goes only to
   the coordinator. Neither appears in an event or a log.
 - The device credential goes only to the owner-only pairing file.
