@@ -78,7 +78,11 @@
         aria-labelledby="hero-title"
       >
         <div class="hero-copy">
-          <p class="eyebrow">AN ASSISTANT FOR YOUR MAC</p>
+          <p class="hero-ambition">
+            ClawdTime: a computer use agent you can FaceTime.
+            <a href="https://www.trychert.com" rel="noopener">Built on Chert</a
+            >.
+          </p>
           <h1 id="hero-title">
             Talk to your Mac.<br /><span class="highlight"
               >It does the work.</span
@@ -118,6 +122,36 @@
                   <span data-copy-label>Copy</span
                   ><span class="visually-hidden"> the install command</span>
                 </button>
+              </div>
+            </div>
+            <div class="hero-or hero-agent">
+              <p class="hero-or-label">
+                Or ask your coding agent to install it:
+              </p>
+              <div class="prompt-field">
+                <button
+                  type="button"
+                  class="copy-button"
+                  data-copy-target="agent-prompt"
+                  data-metric-action="copy_prompt"
+                >
+                  <span data-copy-label>Copy prompt</span
+                  ><span class="visually-hidden"> for your coding agent</span>
+                </button>
+                <details>
+                  <summary>See the prompt</summary>
+                  <pre class="prompt-text" id="agent-prompt">
+Install ClawdTime on this Mac. ClawdTime is a computer use agent. It uses the apps and the browser on this Mac for me.
+
+1. Check that this Mac has Apple silicon and macOS 14 or later. If it does not, stop and tell me.
+2. Run this command in your shell. It installs ClawdTime and does not start the setup:
+   curl -fsSL https://www.clawdtime.com/install.sh | CLAWDTIME_NO_ONBOARD=1 sh
+3. Do not run clawdtime onboard or clawdtime keys yourself. Never ask me for a key.
+4. Tell me to open Terminal and run this command there:
+   clawdtime onboard
+   If the installer printed a command that adds clawdtime to PATH, tell me to run that command first.
+   The setup asks for my model key at a hidden prompt. It also asks for macOS permissions that only I can give.</pre>
+                </details>
               </div>
             </div>
           </div>
@@ -361,34 +395,39 @@ curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
         <div class="agent-route">
           <svg aria-hidden="true"><use href="#pixel-message" /></svg>
           <div>
-            <h3>Let your coding agent install it.</h3>
+            <h3>Let your coding agent give tasks to ClawdTime.</h3>
             <p>
-              Give Claude Code or Codex this prompt. It runs the install. Then
-              you run <code>clawdtime onboard</code> in your own Terminal for
-              your key and permissions.
+              Give this prompt to Claude Code or Codex. It shows the agent how
+              to use <code>clawdtime chat</code> and
+              <code>clawdtime agents</code>.
             </p>
           </div>
           <button
             type="button"
             class="button button-small copy-prompt"
-            data-copy-target="agent-prompt"
+            data-copy-target="use-prompt"
             data-metric-action="copy_prompt"
           >
-            <span data-copy-label>Copy prompt</span>
+            <span data-copy-label>Copy prompt</span
+            ><span class="visually-hidden"> that gives tasks to ClawdTime</span>
           </button>
           <details>
             <summary>See the prompt</summary>
-            <pre id="agent-prompt">
-Install ClawdTime on this Mac. It needs macOS 14 or later on Apple silicon.
+            <pre class="prompt-text" id="use-prompt">
+ClawdTime runs on this Mac. It is a computer use agent. It uses the apps and the browser on this Mac for me.
 
-1. Run this command in your shell:
-   curl -fsSL https://www.clawdtime.com/install.sh | sh
-2. If the installer prints a line to add to PATH, show it to me.
-3. Do not run the setup yourself, and never ask me for a key. Tell me to
-   open Terminal and run this there:
-   clawdtime onboard
-   The setup asks for my model key in hidden entry, and for macOS
-   permissions that only I can grant.</pre>
+To give ClawdTime a task, run this in your shell: clawdtime chat "TASK"
+For example: clawdtime chat "Open Stonepad and make a note: buy milk."
+ClawdTime answers in the shell. It can use the screen to do the task.
+
+To see the coding agent sessions on this Mac, and which one waits for an answer, run:
+clawdtime agents
+
+To see every command, run: clawdtime help
+
+Give ClawdTime one task at a time. If a command fails, show me its output. Never ask me for a key.
+Now run clawdtime agents once, to check that the command works.
+If your shell does not find clawdtime, use the full path: /Applications/ClawdTime.app/Contents/Resources/runtime/bin/clawdtime</pre>
           </details>
         </div>
       </section>

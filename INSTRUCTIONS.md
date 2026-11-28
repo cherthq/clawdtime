@@ -38,10 +38,11 @@ provider. Choose one of two ways. Both run the same setup: your model key,
 computer use and two permissions. Then the mascot appears.
 [INSTALL.md](INSTALL.md) has each step.
 
-| Way         | How                                                                                                                     |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
-| The Mac app | [Download it](https://www.clawdtime.com/download). Drag ClawdTime to Applications. Open it, choose **Set up ClawdTime** |
-| One command | Run `curl -fsSL https://www.clawdtime.com/install.sh \| sh` in Terminal                                                 |
+| Way               | How                                                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| The Mac app       | [Download it](https://www.clawdtime.com/download). Drag ClawdTime to Applications. Open it, choose **Set up ClawdTime** |
+| One command       | Run `curl -fsSL https://www.clawdtime.com/install.sh \| sh` in Terminal                                                 |
+| Your coding agent | Give it the prompt in [README.md](README.md#install). It installs ClawdTime. Then you run `clawdtime onboard`           |
 
 The release brings its own runtime. You do not need Node, Git or Xcode.
 
@@ -781,6 +782,11 @@ clawdtime agents approve ID                         # or: approve ID --always, t
 clawdtime agents deny ID --message "Not before review."
 clawdtime jobs                                      # code work that ClawdTime handed to a new session
 ```
+
+A coding agent can hand a task to ClawdTime with `clawdtime chat "TASK"`.
+[README.md](README.md#give-tasks-from-a-coding-agent) has a prompt that
+tells the agent how. The last screen of the app's setup copies the same
+prompt.
 
 Ask in the chat to hand code work to a new session: "fix the flaky checkout
 test". The mascot's bubble says when a session waits for you. See

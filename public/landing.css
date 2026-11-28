@@ -2730,6 +2730,75 @@ html:not(.js) [data-copy-target] {
 .hero-or .copy-button {
   border-left-width: 1px;
 }
+/* The one line that says what ClawdTime is, above the headline. */
+.hero-ambition {
+  display: inline-block;
+  max-width: 100%;
+  margin: 0 0 26px;
+  padding: 7px 14px;
+  border: 1px solid #9dbb8c;
+  background: #fbfaf4;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.hero-ambition a {
+  font-weight: 700;
+  color: var(--green);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* The prompt for a coding agent: Copy prompt, and the words in a disclosure. */
+.prompt-field {
+  position: relative;
+  border: 1px solid var(--ink);
+  background: #fbfaf4;
+}
+.prompt-field > .copy-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 132px;
+  height: 46px;
+  border-left: 1px solid var(--ink);
+}
+.prompt-field > .copy-button:focus-visible {
+  outline-offset: -7px;
+}
+.prompt-field summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 146px 0 14px;
+  font-size: 14px;
+  color: var(--green);
+  cursor: pointer;
+  list-style: none;
+}
+.prompt-field summary::-webkit-details-marker {
+  display: none;
+}
+.prompt-field summary::before {
+  content: "+";
+  font: 700 14px var(--mono);
+}
+.prompt-field details[open] summary::before {
+  content: "\2212";
+}
+.prompt-field summary:focus-visible {
+  outline-offset: -5px;
+}
+.prompt-text {
+  margin: 0;
+  padding: 14px 16px;
+  border-top: 1px solid var(--ink);
+  background: #26302a;
+  color: #e7e9dc;
+  font: 12px/1.7 var(--mono);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .things-section {
   padding-block: 72px 64px;
   border-top: 1px solid var(--line);
@@ -2956,6 +3025,18 @@ html:not(.js) [data-copy-target] {
     border-left: 0;
     border-top: 1px solid var(--ink);
   }
+  .hero-or .prompt-field > .copy-button {
+    width: 120px;
+    min-height: 0;
+    border-top: 0;
+    border-left: 1px solid var(--ink);
+  }
+  .prompt-field summary {
+    padding-right: 130px;
+  }
+  .hero-ambition {
+    font-size: 14px;
+  }
   .things-section,
   .control-section,
   .dev-section {
@@ -3065,6 +3146,10 @@ html:not(.js) [data-copy-target] {
 }
 .guide-command .command-text {
   font-size: 13px;
+}
+.guide-prompt {
+  max-width: 720px;
+  margin: 16px 0;
 }
 .guide-body .guide-note {
   font-size: 15px;

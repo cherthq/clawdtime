@@ -40,6 +40,7 @@
         <p class="guide-jump">
           <a href="#mac-app">Way 1: the Mac app</a
           ><a href="#one-command">Way 2: one command</a
+          ><a href="#coding-agent">Your coding agent</a
           ><a href="#first-request">Your first request</a>
         </p>
       </header>
@@ -139,6 +140,39 @@
             When you use another terminal app, such as iTerm, turn on that app
             instead of Terminal.
           </p>
+        </section>
+        <section id="coding-agent">
+          <h2>Let your coding agent install it</h2>
+          <p>
+            Give this prompt to Claude Code or Codex. The agent runs the command
+            of way 2. Then you run the setup in your own Terminal. The agent
+            never sees your key.
+          </p>
+          <div class="prompt-field guide-prompt">
+            <button
+              type="button"
+              class="copy-button"
+              data-copy-target="guide-agent-prompt"
+              data-metric-action="copy_prompt"
+            >
+              <span data-copy-label>Copy prompt</span
+              ><span class="visually-hidden"> for your coding agent</span>
+            </button>
+            <details open>
+              <summary>The prompt</summary>
+              <pre class="prompt-text" id="guide-agent-prompt">
+Install ClawdTime on this Mac. ClawdTime is a computer use agent. It uses the apps and the browser on this Mac for me.
+
+1. Check that this Mac has Apple silicon and macOS 14 or later. If it does not, stop and tell me.
+2. Run this command in your shell. It installs ClawdTime and does not start the setup:
+   curl -fsSL https://www.clawdtime.com/install.sh | CLAWDTIME_NO_ONBOARD=1 sh
+3. Do not run clawdtime onboard or clawdtime keys yourself. Never ask me for a key.
+4. Tell me to open Terminal and run this command there:
+   clawdtime onboard
+   If the installer printed a command that adds clawdtime to PATH, tell me to run that command first.
+   The setup asks for my model key at a hidden prompt. It also asks for macOS permissions that only I can give.</pre>
+            </details>
+          </div>
         </section>
         <section id="first-request">
           <h2>Your first request</h2>

@@ -11,6 +11,11 @@ import {
   SimulatedDevice,
 } from "../src/control/coordinator.js";
 import {
+  agentInstallCommand,
+  agentInstallPrompt,
+  agentUsePrompt,
+  ambitionLine,
+  appCommandPath,
   installCommand,
   macDownloadUrl,
   websiteOrigin,
@@ -58,6 +63,12 @@ const report = (runtime: ReturnType<typeof fixture>, query = "") =>
   runtime.app.request(`/api/operator/website-metrics${query}`, {
     headers: { authorization: `Bearer ${operator}` },
   });
+
+/** The text of the pre element with this id: what its copy button copies. */
+const preText = (html: string, id: string) =>
+  html
+    .match(new RegExp(`<pre\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</pre>`))?.[1]
+    ?.trim();
 
 describe("public website discovery and isolation", () => {
   it("renders six distinct canonical pages, share metadata and consistent structured data", async () => {
@@ -250,9 +261,18 @@ describe("homepage install routes", () => {
       )![1]!;
       expect(command.trim()).toBe(installCommand);
     }
-    const prompt = html.match(/<pre id="agent-prompt">([\s\S]*?)<\/pre>/)![1]!;
-    expect(prompt).toContain(installCommand);
-    expect(prompt).toContain("clawdtime onboard");
+    // The hero offers the prompt for a coding agent next to the command:
+    // a Copy prompt button, and the same words in a disclosure.
+    const button = hero.match(
+      /<button\b[^>]*data-copy-target="agent-prompt"[^>]*>/,
+    )?.[0];
+    expect(button).toContain('data-metric-action="copy_prompt"');
+    expect(hero.indexOf('id="hero-command"')).toBeLessThan(
+      hero.indexOf('data-copy-target="agent-prompt"'),
+    );
+    const details = hero.match(/<details\b[\s\S]*?<\/details>/)?.[0] ?? "";
+    expect(details).toContain("<summary");
+    expect(preText(details, "agent-prompt")).toBe(agentInstallPrompt);
   });
 
   it("keeps em and en dashes and contact instructions out of the changed pages", async () => {
@@ -265,6 +285,113 @@ describe("homepage install routes", () => {
     expect(
       readFileSync(new URL("../public/landing.js", import.meta.url), "utf8"),
     ).not.toMatch(/[\u2013\u2014]/);
+  });
+});
+
+describe("one line for what ClawdTime is, and prompts for a coding agent", () => {
+  const visible = (html: string) =>
+    html
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/ ([.,:])/g, "$1")
+      .trim();
+  // Simplified Technical English: an instruction has 20 words or fewer.
+  const longSentences = (text: string) =>
+    text
+      .split(/\n|(?<=[.:])\s+/)
+      .filter((sentence) => sentence.trim().split(/\s+/).length > 20);
+
+  it("says it in the homepage title, the description, the hero and the README", async () => {
+    const page = websitePages["/"];
+    expect(page.title).toBe(ambitionLine);
+    expect(page.description.startsWith(ambitionLine)).toBe(true);
+    const html = await (await fixture().app.request("/")).text();
+    expect(html).toContain(`<title>${ambitionLine}</title>`);
+    const hero = html.match(
+      /<section\b[^>]*class="hero\b[^>]*>([\s\S]*?)<\/section>/,
+    )![1]!;
+    expect(visible(hero)).toContain(ambitionLine);
+    expect(visible(hero)).toContain("Talk to your Mac. It does the work.");
+    // Built on Chert links to Chert, the company that runs the FaceTime lines.
+    expect(hero).toMatch(
+      /<a\b[^>]*href="https:\/\/www\.trychert\.com"[^>]*>\s*Built on Chert\s*<\/a\s*>/,
+    );
+    const readme = readFileSync(
+      new URL("../README.md", import.meta.url),
+      "utf8",
+    );
+    const top = visible(readme.split("\n").slice(0, 6).join("\n"));
+    expect(top).toContain("Talk to your Mac. It does the work.");
+    expect(top).toContain(ambitionLine);
+  });
+
+  it("gives the coding agent the same install prompt on the homepage, the setup guide and the README", async () => {
+    const runtime = fixture();
+    const guide = await (
+      await runtime.app.request("/guides/getting-started")
+    ).text();
+    expect(preText(guide, "guide-agent-prompt")).toBe(agentInstallPrompt);
+    expect(guide).toMatch(
+      /<button\b[^>]*data-copy-target="guide-agent-prompt"[^>]*data-metric-action="copy_prompt"/,
+    );
+    const readme = readFileSync(
+      new URL("../README.md", import.meta.url),
+      "utf8",
+    );
+    const block = "```text\n" + agentInstallPrompt + "\n```";
+    expect(readme).toContain(block);
+    // Near the top: before the README says what ClawdTime does.
+    expect(readme.indexOf(block)).toBeLessThan(
+      readme.indexOf("## What it does"),
+    );
+    // The agent installs. The person runs the setup and types the key.
+    expect(agentInstallPrompt).toContain(agentInstallCommand);
+    expect(agentInstallCommand).toContain(`${websiteOrigin}/install.sh`);
+    expect(agentInstallCommand).toContain("CLAWDTIME_NO_ONBOARD=1");
+    expect(agentInstallPrompt).toContain("clawdtime onboard");
+    expect(agentInstallPrompt).toMatch(/Never ask me for a key/);
+    expect(agentInstallPrompt).toMatch(/computer use agent/);
+    expect(longSentences(agentInstallPrompt)).toEqual([]);
+    expect(agentInstallPrompt).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  it("tells a coding agent how to hand tasks to ClawdTime, with the words of the Mac app", async () => {
+    const html = await (await fixture().app.request("/")).text();
+    const dev = html.match(
+      /<section\b[^>]*id="coding-agents"[^>]*>([\s\S]*?)<\/section>/,
+    )![1]!;
+    expect(preText(dev, "use-prompt")).toBe(agentUsePrompt);
+    expect(dev).toMatch(
+      /<button\b[^>]*data-copy-target="use-prompt"[^>]*data-metric-action="copy_prompt"/,
+    );
+    // Only commands that the clawdtime command has.
+    const help = readFileSync(
+      new URL("../cli/supervisor.ts", import.meta.url),
+      "utf8",
+    );
+    expect(help).toMatch(/\n {2}chat \[TEXT\] /);
+    expect(agentUsePrompt).toContain('clawdtime chat "');
+    expect(agentUsePrompt).toContain("\nclawdtime agents\n");
+    expect(agentUsePrompt).toContain("clawdtime help");
+    expect(agentUsePrompt).toContain(appCommandPath);
+    expect(longSentences(agentUsePrompt)).toEqual([]);
+    // The last screen of the Mac app's setup copies the same words. It ends
+    // with the path of its own command instead of the usual one.
+    const swift = readFileSync(
+      new URL("../mac/Sources/ClawdTimeApp/SetupViews.swift", import.meta.url),
+      "utf8",
+    );
+    const literal = swift.match(
+      /static let agentPromptBody = """\n([\s\S]*?)\n( *)"""/,
+    )!;
+    const body = literal[1]!
+      .split("\n")
+      .map((line) => line.slice(literal[2]!.length))
+      .join("\n");
+    expect(agentUsePrompt.startsWith(body + "\n")).toBe(true);
+    expect(agentUsePrompt.slice(body.length + 1)).toBe(
+      `If your shell does not find clawdtime, use the full path: ${appCommandPath}`,
+    );
   });
 });
 
