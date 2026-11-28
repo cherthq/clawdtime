@@ -350,7 +350,7 @@ function portFixture(options: { owns?: () => boolean; waitMs?: number } = {}) {
       return { ...current };
     }),
     answer: vi.fn(async (_text: string) => ({
-      message: "Thank you. I go on.",
+      message: "Thank you. The task continues.",
     })),
   };
   const phone = new PhoneDesktop(runtime);
@@ -491,10 +491,10 @@ describe("a spoken yes in a walkthrough call", () => {
     );
     f.runtime.answer.mockImplementationOnce(async () => {
       f.set({ ...f.get(), state: "running", waiting: undefined });
-      return { message: "Thank you. I go on." };
+      return { message: "Thank you. The task continues." };
     });
     expect(await f.port.submit(f.intent, "yes", "turn-2")).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     expect(f.runtime.answer).toHaveBeenCalledOnce();
     expect(f.runtime.answer).toHaveBeenCalledWith("yes");
@@ -518,7 +518,7 @@ describe("a spoken yes in a walkthrough call", () => {
     expect(f.runtime.answer).not.toHaveBeenCalled();
     // Now the caller heard it: their next yes answers it.
     expect(await f.port.submit(f.intent, "yes", "turn-3")).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     expect(f.runtime.answer).toHaveBeenCalledOnce();
   });
@@ -549,7 +549,7 @@ describe("a spoken yes in a walkthrough call", () => {
       `Please say yes or no. ${first}`,
     );
     expect(await f.port.submit(f.intent, "yes", "turn-3")).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     expect(f.runtime.answer).toHaveBeenCalledTimes(2);
   });
@@ -564,7 +564,7 @@ describe("a spoken yes in a walkthrough call", () => {
     await f.port.submit(f.intent, "Send the note", "turn-1");
     f.runtime.answer.mockImplementationOnce(async () => {
       f.set({ ...f.get(), state: "running", waiting: undefined });
-      return { message: "Thank you. I go on." };
+      return { message: "Thank you. The task continues." };
     });
     await f.port.submit(f.intent, "yes", "turn-2");
     // The task asks the same words again for a second send.

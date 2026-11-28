@@ -207,6 +207,13 @@ No request opens with a fixed sentence. The code is in
 - On the way there is no message for each step. When the planner revises its
   plan, the first revision of a request that can be said gives one line in
   the planner's own words. The end is the planner's own summary, as before.
+- Long work says how it goes. When no line went to you for 15 seconds
+  (`progressMs` of the worker), the next action says one progress line: what
+  the worker does now, made from the planner's reason ("Still working: typing
+  the prices into the sheet."). A reason that names a send, a post, a delete
+  or another effect that may still need your yes gives the goal in its place
+  ('Still working on "Fill in the form".'). A request says at most 3
+  progress lines, and none after its end. A question counts as a line.
 - The chat of the panel, a spoken reply and a phone call have one answer for
   the message that started the request. That answer is the worker's first
   words: the supervisor waits up to 8 seconds for them (`firstWords`). The
@@ -227,9 +234,9 @@ to the planner with its next action, marked as what you said after the start,
 so that your newest word wins. An action that was chosen before you spoke did
 not have your words: it is not sent, also when it was already on its way, and
 the planner chooses again. The answer is one short sentence that says where
-your words are now, for example "Got it. I take that into the task that
-runs.". It never says that something was done. Every action after it goes
-through the same checks. One request takes 8 such additions of 600 characters
+your words are now, for example "Got it. I added that to the task.". It
+never says that something was done. Every action after it goes through the
+same checks. One request takes 8 such additions of 600 characters
 each, and none that holds a password or a key. The same message a second time
 adds nothing and starts nothing.
 
@@ -255,14 +262,15 @@ The worker reads each message with `readMidTask` in
   from here", "hang on, I'm checking something", "my turn", "brb", a raised
   hand. A yes, a no or a thanks may stand beside it ("no wait", "ok, hold
   on"). The worker pauses before the next input and says "Paused. Your next
-  message goes on with it.". An action that was on its way is held back. The
-  words of a pause carry nothing for the planner. When you move the mouse or
+  message continues the task.". An action that was on its way is held back.
+  The words of a pause carry nothing for the planner. When you move the mouse or
   press a key while the hands work, the worker pauses in the same way.
 - **Status.** A question about how the task goes, as the whole message: "are
   you done?", "what are you doing?", "how's it going?", "where are you?", "is
-  it done yet?", "done?", "r u stuck?". The answer is one short sentence:
-  'Still working on "open the editor", at step 3, and it is not done yet.'.
-  Nothing is kept, and nothing pauses.
+  it done yet?", "done?", "r u stuck?". The answer is short: the goal, what
+  the worker does now when its reason can be said, and that it is not done:
+  'Still working on "open the editor". Now typing the title. It is not done
+  yet.'. Nothing is kept, and nothing pauses.
 - **Go.** "continue", "go on", "ok", "thanks", a thumbs up: nothing to steer
   with. The task goes on, and the words are not kept.
 - **Steer.** Everything else. Negations, doubts, remarks, time words, other
@@ -1644,7 +1652,7 @@ question of a page names its site. A no ends the request.
   count only a text field: a list or a sheet with the focus passes Return on
   to the default button of its window.
 - **You take over.** When the hands report that you moved the mouse or pressed
-  a key, the worker pauses. Your next message goes on with it, and a stop
+  a key, the worker pauses. Your next message continues the task, and a stop
   stops it.
 - **Done is checked.** `done` counts only after an observation that came after
   the last action.

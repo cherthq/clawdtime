@@ -31,7 +31,7 @@ function running() {
   return {
     snapshot: () => snapshot,
     submit: vi.fn(async (_id: string, _text: string) => ({
-      message: "Got it. I take that into the task that runs.",
+      message: "Got it. I added that to the task.",
     })),
     answer: vi.fn(async (_text: string) => ({ message: "Answered." })),
     stop: vi.fn(() => ({

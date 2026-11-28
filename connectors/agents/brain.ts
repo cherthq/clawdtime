@@ -740,7 +740,7 @@ const unclearApprovalReply = (words: string): boolean =>
   );
 /** Fixed opening lines produced by the computer engine or computer-task state answers. */
 const screenEngineReply =
-  /^(?:Got it\. I (?:take that into the task|go on with the task|hold now)|The task is already running\.|I am still paused|That was no yes[:,]|Continuing\.|Thank you\. I go on\.|The computer task\b|A computer action is waiting:|Stopped\. An action that was already sent|Stopped the computer task\b|Queued\.|Started on the screen\.|Paused[.,]|Still paused\.|Still working on\b|I am starting on\b|I go on with\b|It waits for your answer\.|The question that waited is set aside\b|You moved the mouse or pressed a key\b|You are using the Mac\b|No message came in\b)/i;
+  /^(?:Got it\. I (?:take that into the task|go on with the task|hold now|added that\b)|The task continues\b|The task "|The task is already running\.|I am still paused|That was no yes[:,]|That was not a yes\b|Got it\. That was not a yes\b|Continuing\.|Thank you\. I go on\.|Thank you\. The task continues\.|I am waiting for your answer\.|I do not need an answer to my question now\b|The computer task\b|A computer action is waiting:|Stopped\. An action that was already sent|Stopped the computer task\b|Queued\.|Started on the screen\.|Paused[.,]|Still paused\.|Still working on\b|I am starting on\b|I go on with\b|It waits for your answer\.|The question that waited is set aside\b|You moved the mouse or pressed a key\b|You are using the Mac\b|No message came in\b)/i;
 /**
  * Shared mid-task order check: delegates purely to `readWords` in
  * `connectors/computer/orders.ts`.

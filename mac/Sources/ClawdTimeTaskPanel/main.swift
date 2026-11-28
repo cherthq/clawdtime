@@ -445,7 +445,7 @@ import TaskPanelCore
       let reply = try? await client.say(text)
       await readChat(client)
       chatPending = nil
-      if reply == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." }
+      if reply == nil { chatNotice = "ClawdTime did not answer. Check what is running, then try again." }
       pet.react(success: reply != nil)
       renderChat()
       // It may have answered a request or changed away mode.
@@ -474,7 +474,7 @@ import TaskPanelCore
     releaseNativeEditor(); renderChat()
     let result = try? await client.hear(recording)
     await readChat(client)
-    if result == nil { chatNotice = "ClawdTime did not answer. Check the current work status before trying again." } else if result?.reply != nil { chatNotice = "" }
+    if result == nil { chatNotice = "ClawdTime did not answer. Check what is running, then try again." } else if result?.reply != nil { chatNotice = "" }
     if let result, let reply = result.reply {
       let caption = PetStatus.Bubble.said(heard: result.heard, reply: reply.text, at: reply.at)
       said = (caption.bubble, Date().addingTimeInterval(caption.seconds))
@@ -619,8 +619,8 @@ import TaskPanelCore
       let ok = (try? await client.answerDecision(id, decision: decision, text: text, remember: remember)) == true
       pet.react(success: ok)
       note(!ok ? "That request no longer waits here. Answer it in its terminal."
-        : decision == "allow" ? (remember ? "Allowed, and remembered for this project." : "Allowed. It continues.")
-        : decision == "deny" ? "Denied. It is told." : "Answered. It continues.")
+        : decision == "allow" ? (remember ? "Allowed, and remembered for this project." : "Allowed. The agent continues.")
+        : decision == "deny" ? "Denied. ClawdTime told the agent." : "Answered. The agent continues.")
       decisions = try? await client.decisions()
       render()
     }

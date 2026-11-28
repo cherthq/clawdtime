@@ -860,8 +860,8 @@ afterEach(() =>
 );
 
 describe("natural words at the worker", () => {
-  const taken = "Got it. I take that into the task that runs.";
-  const pausedText = "Paused. Your next message goes on with it.";
+  const taken = "Got it. I added that to the task.";
+  const pausedText = "Paused. Your next message continues the task.";
   const secretText =
     "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself.";
   /** A task whose planner is choosing its first action, until the test lets it go on. */
@@ -939,7 +939,7 @@ describe("natural words at the worker", () => {
     const reply = (
       await worker.submit("g1", "type 4821 as the pin in the serch box")
     ).message;
-    expect(reply).toBe(`${secretText} I go on with the task.`);
+    expect(reply).toBe(`${secretText} The task continues.`);
     expect(journal.guidance("r1")).toEqual([]);
     release();
     await worker.idle();
@@ -967,7 +967,7 @@ describe("natural words at the hand-off", () => {
       submit: vi.fn(async (_id: string, _text: string) => ({
         message:
           state === "running"
-            ? "Got it. I take that into the task that runs."
+            ? "Got it. I added that to the task."
             : "Opening the editor to finish the draft.",
       })),
       answer: vi.fn(async (_text: string) => ({ message: "Answered." })),

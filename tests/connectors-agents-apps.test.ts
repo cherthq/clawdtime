@@ -1140,7 +1140,12 @@ describe("the chat says of a computer task only what its engine reported", () =>
       via: "chat",
     },
     { role: "user", text: "just open it in Chrome", at, via: "call" },
-    { role: "assistant", text: "Thank you. I go on.", at, via: "call" },
+    {
+      role: "assistant",
+      text: "Thank you. The task continues.",
+      at,
+      via: "call",
+    },
   ];
   const questions = [
     "Are you stuck? Do you need help?",
@@ -1519,7 +1524,7 @@ describe("the chat says of a computer task only what its engine reported", () =>
       'It says: Working on "open example.com and find the roadmap board", step 4 of at most 40.',
       "It is still opening the page.",
       "It is typing the address now.",
-      "It waits for your answer.",
+      "I am waiting for your answer.",
       "You moved the mouse or pressed a key, so it paused.",
       "It paused because you clicked something.",
       "You said it's open, but the task has not reported that.",
@@ -1761,8 +1766,8 @@ describe("words for a running computer task reach its engine", () => {
     'Click "Send"? "Send" may be something that cannot be undone, or that speaks for you. Say yes to allow it, or no to stop.';
   const question = "Which workspace should I open?";
   const stopped = "Stopped. An action that was already sent may have finished.";
-  const guided = "Got it. I take that into the task that runs.";
-  const resumed = "Got it. I go on with the task and take that into it.";
+  const guided = "Got it. I added that to the task.";
+  const resumed = "Got it. I added that, and the task continues.";
   const stillRuns = `The computer task still runs: it has not reported that it is done. Its newest report: ${working}`;
   const at = now - 60_000;
   const before: ChatMessage[] = [
@@ -1873,7 +1878,7 @@ describe("words for a running computer task reach its engine", () => {
         return {
           message:
             options.waiting === "question"
-              ? "Thank you. I go on."
+              ? "Thank you. The task continues."
               : "Continuing.",
         };
       },
@@ -2286,7 +2291,7 @@ describe("words for a running computer task reach its engine", () => {
         [words],
         [],
       ]);
-      expect(qSaid).toBe("Thank you. I go on.");
+      expect(qSaid).toBe("Thank you. The task continues.");
       expect(qRun.calls()).toBe(0);
     }
 
@@ -2451,10 +2456,10 @@ describe("chat routing safety and truth for computer tasks", () => {
   const startedText = "Opening the chat app to find the roadmap board.";
   const stoppedText =
     "Stopped. An action that was already sent may have finished.";
-  const guidedText = "Got it. I take that into the task that runs.";
-  const resumedText = "Got it. I go on with the task and take that into it.";
+  const guidedText = "Got it. I added that to the task.";
+  const resumedText = "Got it. I added that, and the task continues.";
   const asideApprovalText =
-    "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.";
+    "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.";
   const stillRuns = `The computer task still runs: it has not reported that it is done. Its newest report: ${working}`;
   const deflectionDraft =
     "The task is still running, currently on step 19, not done yet. Want me to keep waiting or do something else?";
@@ -2614,7 +2619,7 @@ describe("chat routing safety and truth for computer tasks", () => {
               return {
                 message:
                   options.waiting === "question"
-                    ? "Thank you. I go on."
+                    ? "Thank you. The task continues."
                     : "Continuing.",
               };
             },
@@ -3004,7 +3009,7 @@ describe("chat routing safety and truth for computer tasks", () => {
         "open the engineering workspace",
         "call",
       ),
-    ).toBe("Thank you. I go on.");
+    ).toBe("Thank you. The task continues.");
     expect(qF.answered).toEqual(["open the engineering workspace"]);
     expect(qF.submitted).toEqual([]);
 
@@ -3293,15 +3298,15 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
   const startedText = "Opening the chat app to find the roadmap board.";
   const stoppedText =
     "Stopped. An action that was already sent may have finished.";
-  const guidedText = "Got it. I take that into the task that runs.";
-  const resumedText = "Got it. I go on with the task and take that into it.";
-  const goingOnText = "I go on with the task.";
-  const pausedText = "Paused. Your next message goes on with it.";
-  const stillPausedText = "Still paused. Your next message goes on with it.";
+  const guidedText = "Got it. I added that to the task.";
+  const resumedText = "Got it. I added that, and the task continues.";
+  const goingOnText = "The task continues.";
+  const pausedText = "Paused. Your next message continues the task.";
+  const stillPausedText = "Still paused. Your next message continues the task.";
   const asideApprovalText =
-    "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.";
+    "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.";
   const asidePausedApprovalText =
-    "Paused, and what waited for your yes is set aside. Your next message goes on with it.";
+    "Paused. I did not do the step that needed your yes. Your next message continues the task.";
   const refusedApprovalText = 'Canceled. I did not do it: Click "Send".';
   const stillRuns = `The computer task still runs: it has not reported that it is done. Its newest report: ${working}`;
   const deflectionDraft =
@@ -3479,13 +3484,13 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       if (options.waiting === "approval") {
         if (kind === "pause") return asidePausedApprovalText;
         if (kind === "go" || kind === "status")
-          return `That was no yes, so it still waits. ${message}`;
+          return `That was not a yes, so I am still waiting. ${message}`;
         return asideApprovalText;
       }
       if (kind === "pause") return pausedText;
       if (kind === "go") return goingOnText;
       if (kind === "status")
-        return `Still working on "${goal}", at step 19, and it is not done yet.`;
+        return `Still working on "${goal}", at step 19. It is not done yet.`;
       return guidedText;
     };
     f.value.execution = {
@@ -3513,7 +3518,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
             answer: async (text: string) => {
               answered.push(text);
               if (options.waiting === "question")
-                return { message: "Thank you. I go on." };
+                return { message: "Thank you. The task continues." };
               // A pause takes the chat's answer as words for the task.
               if (options.waiting === "takeover")
                 return { message: guideReply(text) };
@@ -4718,7 +4723,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
         "the main workspace",
         "call",
       ),
-    ).toBe("Thank you. I go on.");
+    ).toBe("Thank you. The task continues.");
     expect(qF.answered).toEqual(["the main workspace"]);
   });
 

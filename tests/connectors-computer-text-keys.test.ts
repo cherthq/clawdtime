@@ -267,7 +267,7 @@ describe("keys that edit text, with no text field in focus", () => {
       reason: "too_many_refusals",
     });
     expect(worker.snapshot().message).toBe(
-      "The planner chose 3 actions in a row that the checks refused, so I stopped. The last reason: No text field has the focus. Click into the text first. Ask again in other words.",
+      "My checks blocked 3 steps in a row, so I stopped. The last reason: No text field has the focus. Click into the text first. Ask again in other words.",
     );
   });
 });

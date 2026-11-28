@@ -316,7 +316,13 @@ const screenTools = [
   tool(
     "ask",
     "Ask the person something that only they can decide or supply.",
-    { question: { type: "string" } },
+    {
+      question: {
+        type: "string",
+        description:
+          "One short question in plain words, 20 words or fewer. Give the choices when there are two or three.",
+      },
+    },
     ["question"],
   ),
   tool(
@@ -325,14 +331,23 @@ const screenTools = [
     {
       summary: {
         type: "string",
-        description: "One or two plain sentences: what was done or found.",
+        description:
+          "One or two plain sentences: what was done or found. Give numbers, prices and names exactly as the screen shows them.",
       },
     },
     ["summary"],
   ),
-  tool("give_up", "The goal cannot be met.", { reason: { type: "string" } }, [
-    "reason",
-  ]),
+  tool(
+    "give_up",
+    "The goal cannot be met.",
+    {
+      reason: {
+        type: "string",
+        description: "What blocks the goal, in one plain sentence.",
+      },
+    },
+    ["reason"],
+  ),
   tool(
     "hover",
     "Move the pointer over one element, or over a point of the picture, with no click: a menu or a tooltip that shows on hover opens. Give element, or x and y.",

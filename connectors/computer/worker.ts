@@ -187,55 +187,56 @@ const rememberedWords = 256;
  * on by itself: no sentence asks for a magic word to go on. Each sentence says
  * where the words are now. None says that they were done.
  */
-const guidedText = "Got it. I take that into the task that runs.";
-const resumedText = "Got it. I go on with the task and take that into it.";
-const goingOnText = "I go on with the task.";
+const guidedText = "Got it. I added that to the task.";
+const resumedText = "Got it. I added that, and the task continues.";
+const goingOnText = "The task continues.";
 const continuingText = "Continuing.";
-const pausedText = "Paused. Your next message goes on with it.";
-const stillPausedText = "Still paused. Your next message goes on with it.";
+const pausedText = "Paused. Your next message continues the task.";
+const stillPausedText = "Still paused. Your next message continues the task.";
 const atEndText =
-  "The task is at its end, so it takes no more words. Ask again when it has ended.";
+  "The task is ending, so I cannot add that now. Ask again after it ends.";
 /** The words came while a yes or an answer was awaited: what waited is set aside, and nothing is approved. */
 const asideText = {
   yes_no:
-    "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
-  free: "Got it. I take that into the task and choose again. The question that waited is set aside.",
+    "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.",
+  free: "Got it. I added that and will choose the next step again. I do not need an answer to my question now.",
 } as const;
 const asidePausedText = {
   yes_no:
-    "Paused, and what waited for your yes is set aside. Your next message goes on with it.",
-  free: "Paused, and the question that waited is set aside. Your next message goes on with it.",
+    "Paused. I did not do the step that needed your yes. Your next message continues the task.",
+  free: "Paused. I do not need an answer to my question now. Your next message continues the task.",
 } as const;
 const asideGoText =
-  "The question that waited is set aside, and I go on with the task.";
+  "I do not need an answer to my question now. The task continues.";
 const noYesText = (question: string) =>
-  `That was no yes, so it still waits. ${question}`;
-const waitsText = (question: string) => `It waits for your answer. ${question}`;
+  `That was not a yes, so I am still waiting. ${question}`;
+const waitsText = (question: string) =>
+  `I am waiting for your answer. ${question}`;
 /** With the owner's trust, a pause with no message ends by itself after this time. */
 const resumePauseMs = 60_000;
 const unclearText = (question: string) =>
   `I did not get a clear answer. ${question}`;
-const guidanceFullText = `This task already took ${guidanceLimit} additions from you, and it takes no more.`;
-const guidanceLongText = `That is longer than ${guidanceLength} characters, so I did not take it into the task that runs. Say it in fewer words.`;
+const guidanceFullText = `This task already has ${guidanceLimit} additions from you, so I cannot add more.`;
+const guidanceLongText = `That is longer than ${guidanceLength} characters, so I did not add it to the task. Say it in fewer words.`;
 const guidanceUnwrittenText =
-  "The record of computer tasks could not be written, so I did not take that into the task.";
+  "I could not save the task record, so I did not add that to the task. Say it again in a moment.";
 /** Why an action that was on its way was held back: it was chosen without the person's newest words. */
 const saidMoreText = "The person said more before it went out.";
 const heldByWordReason = "The person asked to hold before it went out.";
 const ownershipText =
-  "Screen input is held by the current phone walkthrough or an unresolved owner. No new computer action was sent.";
+  "Another session, such as a phone call, controls the screen now. I sent nothing. Ask again when it ends.";
 /** The state when nothing runs: a fact for the state route and the chat's model, no invitation. */
 const idleText = "Computer use is on. No computer task runs now.";
 export const offText =
   "Computer use is off. Turn it on with: clawdtime computer on";
 const takeoverText =
-  "You moved the mouse or pressed a key, so I paused. Your next message goes on with it.";
+  "You moved the mouse or pressed a key, so I paused. Your next message continues the task.";
 /**
  * The pause when an action was held back for the person. `wanted` is what
  * the action would have done. No sentence here says that it was done.
  */
 const holdText = (wanted: string) =>
-  `You are using the Mac, so I paused. Next I wanted to ${wanted}. Your next message goes on with it.`;
+  `You are using the Mac, so I paused. Next I wanted to ${wanted}. Your next message continues the task.`;
 /** This many held steps in a row with the same reason end the task. */
 const heldLimit = 3;
 /** This many held steps in a row across any reasons end the task. */
@@ -435,18 +436,18 @@ const silentText = (sentBefore = false) =>
 /** The end after two planner failures in a row, by what the last one was. */
 const plannerText = (trouble?: string) =>
   trouble === "malformed"
-    ? "The planner gave no usable action twice in a row, so I stopped. Nothing more was sent. Ask again, perhaps in other words."
+    ? "The language model gave no usable next step twice in a row, so I stopped. Nothing more was sent. Ask again in other words."
     : trouble === "refused"
-      ? "The planner refused to choose an action twice in a row, so I stopped. Nothing more was sent. Ask again in other words."
+      ? "The language model refused to choose a next step twice in a row, so I stopped. Nothing more was sent. Ask again in other words."
       : trouble === "transient"
-        ? "The planner did not answer after several tries, so I stopped. Nothing more was sent. Ask again in a moment."
-        : "The planner did not answer twice in a row, so I stopped. Nothing more was sent. Ask again in a moment.";
+        ? "The language model did not answer after several tries, so I stopped. Nothing more was sent. Ask again in a minute."
+        : "The language model did not answer twice in a row, so I stopped. Nothing more was sent. Ask again in a minute.";
 const quotaText =
   "The language model account has no quota left, so I stopped. Nothing more was sent. Add credit or raise the limit of the key, then ask again.";
 const authText =
   "The language model did not accept the key, so I stopped. Nothing more was sent. Check CLAWDTIME_OPENAI_API_KEY or OPENAI_API_KEY of the desktop service, then ask again.";
 const refusalsText = (last?: string) =>
-  `The planner chose 3 actions in a row that the checks refused, so I stopped.${last ? ` The last reason: ${last}` : ""} Ask again in other words.`;
+  `My checks blocked 3 steps in a row, so I stopped.${last ? ` The last reason: ${last}` : ""} Ask again in other words.`;
 const giveUpText = (reason: string) =>
   [
     "I could not finish.",
@@ -457,8 +458,8 @@ const giveUpText = (reason: string) =>
     .join(" ");
 /** Plan: the planner changed its plan again and again, and chose no action. */
 const planLoopText =
-  "The planner changed its plan again and again and chose no action, so I stopped. Nothing more was sent. Ask again, perhaps in other words.";
-const faultText = `Something failed inside the worker, so I stopped. An action may have been sent. ${clearHint}`;
+  "I changed my plan repeatedly and took no step, so I stopped. Nothing more was sent. Ask again in other words.";
+const faultText = `Something failed inside ClawdTime, so I stopped. I may have sent a step. ${clearHint}`;
 const secretText =
   "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself.";
 const unwrittenText =
@@ -470,7 +471,7 @@ const grantText = {
     "ClawdTime may not see the screen yet. Open System Settings, Privacy & Security, Screen & System Audio Recording, and turn on the ClawdTime panel. Then ask again.",
 } as const;
 const lostText = (label: string) =>
-  `I sent this and its result never came back: ${label}. It may have happened or not. I do not send it again. ${clearHint}`;
+  `I sent this and received no result: ${label}. It may or may not have happened. I will not send it again. ${clearHint}`;
 const uncertainText = (request: JournalRequest) =>
   request.reason === "unreadable_journal"
     ? `The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until it is cleared. ${clearHint}`
@@ -584,6 +585,8 @@ export interface ComputerWorkerOptions {
   notify?: (text: string) => void;
   /** How long the outline's line for the person may take before the planner's first reason stands in (`opening.ts`). */
   openingMs?: number;
+  /** Long work says a progress line when no line went to the person for this long (`opening.ts`). */
+  progressMs?: number;
   /** Hears the time of each step, for a person who looks for the slow part. */
   timing?: (entry: StepTiming) => void;
   now?: () => number;
@@ -1389,7 +1392,7 @@ export class ComputerWorker implements DesktopExecutorPort {
     run.question = null;
     run.state = "running";
     this.say(
-      `No message came in ${Math.round(this.resumeMs / 1000)} seconds, so I go on with the task.`,
+      `No message came in ${Math.round(this.resumeMs / 1000)} seconds, so the task continues.`,
     );
     question.settle({ kind: "yes" });
     return true;
@@ -1610,7 +1613,13 @@ export class ComputerWorker implements DesktopExecutorPort {
       halt,
       halted,
       ...(read ? { navigation: read } : {}),
-      opening: new Opening((line) => this.say(line), this.options.openingMs),
+      opening: new Opening((line) => this.say(line), this.options.openingMs, {
+        now: () => this.now(),
+        goal: clean(shown, 120),
+        ...(this.options.progressMs !== undefined
+          ? { everyMs: this.options.progressMs }
+          : {}),
+      }),
     };
     this.current = run;
     this.last = null;
@@ -1778,7 +1787,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       if (kind === "status") {
         recordSeen();
         resume();
-        return `I go on with "${clean(run.shown, 120)}" now, from step ${run.step}.`;
+        return `The task "${clean(run.shown, 120)}" continues now, from step ${run.step}.`;
       }
       if (kind === "go") {
         recordSeen();
@@ -1843,17 +1852,24 @@ export class ComputerWorker implements DesktopExecutorPort {
       ? `${guidanceFullText} ${goingOnText}`
       : kept.why;
   }
-  /** What the person hears about a task that runs, in one short sentence. It never says done. */
+  /**
+   * What the person hears about a task that runs: the goal, what the worker
+   * does now when its reason can be said, and that it is not done. It never
+   * says done.
+   */
   private statusText(run: Run) {
     const goal = clean(run.shown, 120);
+    const doing = run.opening.doing;
     return run.step === 0
-      ? `I am starting on "${goal}", and it is not done yet.`
-      : `Still working on "${goal}", at step ${run.step}, and it is not done yet.`;
+      ? `I am starting on "${goal}". It is not done yet.`
+      : doing
+        ? `Still working on "${goal}". Now ${doing} It is not done yet.`
+        : `Still working on "${goal}", at step ${run.step}. It is not done yet.`;
   }
   /** A pause says when it ends by itself: with the owner's trust, after a bounded time. */
   private pauseSays(text: string) {
     return this.options.trust
-      ? `${text} With no message, I go on by myself in ${Math.round(this.resumeMs / 1000)} seconds.`
+      ? `${text} With no message, the task continues by itself in ${Math.round(this.resumeMs / 1000)} seconds.`
       : text;
   }
   /**
@@ -2040,7 +2056,7 @@ export class ComputerWorker implements DesktopExecutorPort {
         return { message: secretText };
       run.question = null;
       question.settle({ kind: "text", text: words });
-      return { message: "Thank you. I go on." };
+      return { message: "Thank you. The task continues." };
     }
     // A pause takes any message, as words that come while the task runs do:
     // a stop stops, a pause stays, everything else goes on.

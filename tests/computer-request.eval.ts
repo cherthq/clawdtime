@@ -173,6 +173,8 @@ const knowsEmail: Person = (question, page) =>
 interface Talk {
   asked: string[];
   faults: string[];
+  /** Every line that the worker said to the person, oldest first: its start line, progress lines and its end. */
+  said: string[];
 }
 /** One scripted way through a request, for --check. */
 interface Path {
@@ -210,6 +212,12 @@ interface Request {
   faults?: Faults;
   /** It is about the new kinds of action: only with --new-actions. */
   newActions?: true;
+  /**
+   * It judges the progress lines of long work. In --check, where a request
+   * takes a second, the worker says them with no wait; with a model, after
+   * the service's own wait.
+   */
+  progress?: true;
   /** The subgoals of the scripted plan in --check. Without them the plan is one subgoal, the goal itself. */
   subgoals?: string[];
   /**
@@ -1115,6 +1123,82 @@ const requests: Request[] = [
         askPassword,
         clickNamed("Sign in", "AXButton"),
         doneStep("You are signed in with your work email."),
+      ]),
+    ],
+  },
+  {
+    id: "only the person knows: one short question at a time",
+    app: "login",
+    goal: "Sign in to Ledger with my work email. I will type the password myself.",
+    person: knowsEmail,
+    // Each question is one question of at most 25 words: the person can answer it at once.
+    done: (state, _said, _final, talk) =>
+      state.signedIn === "ada@example.com" &&
+      talk.asked.length > 0 &&
+      talk.asked.every(
+        (question) =>
+          (question.match(/\?/g) ?? []).length <= 1 &&
+          question.split(/\s+/).filter(Boolean).length <= 25,
+      ),
+    paths: [
+      ideal([
+        () => act.ask("What is your work email address?"),
+        (v) => {
+          const email = /the person answered: ([^\s()]+@[^\s()]+)/.exec(
+            v.ask.brief,
+          )?.[1];
+          if (!email) throw new Error("the answer did not reach the planner");
+          return act.type(email, named(v, "Email"));
+        },
+        askPassword,
+        clickNamed("Sign in", "AXButton"),
+        doneStep("You are signed in with your work email."),
+      ]),
+      wrong("asks three questions at once", [
+        () =>
+          act.ask(
+            "What is your work email address? Is it the work or the home account? Do you want to stay signed in?",
+          ),
+        (v) => {
+          const email = /the person answered: ([^\s()]+@[^\s()]+)/.exec(
+            v.ask.brief,
+          )?.[1];
+          if (!email) throw new Error("the answer did not reach the planner");
+          return act.type(email, named(v, "Email"));
+        },
+        askPassword,
+        clickNamed("Sign in", "AXButton"),
+        doneStep("You are signed in with your work email."),
+      ]),
+    ],
+  },
+  {
+    id: "long work says how it goes",
+    app: "settings",
+    goal: "Turn on Bluetooth and dark mode.",
+    progress: true,
+    // The switches are on, and the person heard how it goes before the end: at most 3 progress lines, none of them a claim of the end.
+    done: (state, said, final, talk) => {
+      const progress = talk.said.filter((line) =>
+        /^Still working\b/.test(line),
+      );
+      return (
+        twoSwitches(state, said, final, talk) &&
+        progress.length >= 1 &&
+        progress.length <= 3 &&
+        talk.said.indexOf(progress[0]!) < talk.said.indexOf(said) &&
+        progress.every((line) => !/\b(?:done|finished|complete)\b/i.test(line))
+      );
+    },
+    paths: [
+      ideal([
+        clickNamed("Bluetooth"),
+        clickNamed("Dark mode"),
+        doneStep("Bluetooth and dark mode are on."),
+      ]),
+      wrong("only one of the two", [
+        clickNamed("Bluetooth"),
+        doneStep("Bluetooth and dark mode are on."),
       ]),
     ],
   },
@@ -2045,6 +2129,7 @@ async function one(
       ...(port ? { browser: port } : {}),
       notify: (text) => said.push(text),
       timing: (entry) => timed.push(entry),
+      ...(request.progress && script ? { progressMs: 0 } : {}),
       // A long request has its own limits, under those of the service.
       ...(limit
         ? {
@@ -2093,7 +2178,11 @@ async function one(
       request: request.id,
       ...("path" in chooser ? { path: chooser.path.name } : {}),
       run,
-      done: request.done(state, last, final, { asked, faults: applied }),
+      done: request.done(state, last, final, {
+        asked,
+        faults: applied,
+        said,
+      }),
       state: final,
       reason: record?.reason ?? "",
       // An entry of the kind end says what the worker did after the last step: no step of its own.

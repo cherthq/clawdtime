@@ -1181,7 +1181,7 @@ describe("the worker with a plan", () => {
     expect(planner.inputs[3]!.plan?.updatesLeft).toBe(0);
     expect(hands.sent).toEqual([]);
     expect(said.at(-1)).toBe(
-      "The planner changed its plan again and again and chose no action, so I stopped. Nothing more was sent. Ask again, perhaps in other words.",
+      "I changed my plan repeatedly and took no step, so I stopped. Nothing more was sent. Ask again in other words.",
     );
     expect(journal.get("plan_loop")).toMatchObject({
       state: "blocked",
@@ -1200,7 +1200,7 @@ describe("the worker with a plan", () => {
     await worker.submit("plan_none", "Save the note");
     await worker.idle();
     expect(planner.outlines).toHaveLength(0);
-    expect(said.at(-1)).toMatch(/changed its plan again and again/);
+    expect(said.at(-1)).toMatch(/changed my plan repeatedly/);
     const direct = setup([done]);
     await direct.worker.submit("plan_direct", "open example.com");
     await direct.worker.idle();

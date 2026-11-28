@@ -93,7 +93,7 @@ export class FakeComputer {
     if (!this.configured) return { message: "Computer use is off." };
     if (this.isLive) {
       this.guidance.push(text);
-      return { message: `Got it. I take that into the task: "${text}".` };
+      return { message: `Got it. I added that to the task: "${text}".` };
     }
     this.run(text);
     if (this.quiet) {

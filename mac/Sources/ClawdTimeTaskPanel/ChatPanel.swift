@@ -134,7 +134,7 @@ final class ChatView: NSView, SheetContent {
   private let noticeRow = NSView()
   private var shown: [String] = []
   private var model = ChatModel()
-  private static let starters = ["Open my latest X posts and tell me the replies", "Find a USB-C charger on Amazon under 30 dollars", "Read my unread messages in Slack"]
+  private static let starters = ["Find a USB-C charger under 30 dollars", "What is on my calendar today?", "Read my newest unread email"]
   /// The answers under the last message, as the buttons show them.
   private var choices: [String] = []
   /// The requests that an empty chat offers, as the buttons show them. At the
@@ -257,7 +257,7 @@ final class ChatView: NSView, SheetContent {
       : model.voice == .thinking ? "Working on its answer."
       : model.voice == .speaking ? "Speaking."
       : model.modelReady ? "It uses this Mac for you: apps, the web and your accounts. It asks before it pays, deletes or sends for you." + (model.memory ? " Memory is on." : "")
-      : "No language model key: it tells the state and takes a clear approve or deny."
+      : "No language model key yet. Until you add one, it shows what is running and takes Approve or Deny."
     let noticeChanged = notice.stringValue != model.notice
     notice.stringValue = model.notice; noticeRow.isHidden = model.notice.isEmpty
     if noticeChanged { onResize?() }

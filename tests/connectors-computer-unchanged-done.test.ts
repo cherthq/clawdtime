@@ -250,7 +250,7 @@ describe("an answer to a question of the planner", () => {
     await worker.submit("email_answer", "Sign in with my work email");
     await until(() => worker.snapshot().state === "waiting_for_person");
     expect((await worker.answer("ada@example.com")).message).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     await worker.idle();
     expect(planner.inputs[1]!.history.at(-1)?.outcome).toBe(

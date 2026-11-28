@@ -94,7 +94,7 @@ class FakeWorker implements ReachWorker {
     this.answers.push(text);
     this.now = { ...this.now, state: "running", message: "Working." };
     delete this.now.waiting;
-    return { message: "Thank you. I go on." };
+    return { message: "Thank you. The task continues." };
   }
   stop() {
     return this.now;
