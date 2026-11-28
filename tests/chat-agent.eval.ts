@@ -11,12 +11,16 @@
  *   npm run eval:chat -- --check
  *   npm run eval:chat
  *
- * --check needs no model and no key. For each case it plays two scripted
- * paths through the same agent: the ideal one, whose first call is the
- * expected one, must pass (so the tool exists in that state and the gate lets
- * it through); a wrong one (a question back, or a call where words were
- * right, or no task to stop) must fail. So it proves that each case can pass
- * and that its check tells right from wrong.
+ * --check needs no model and no key. For each case it plays scripted paths
+ * through the same agent: the ideal one, whose first call is the expected
+ * one, must pass (so the tool exists in that state and the gate lets it
+ * through); a wrong one (a question back, or a call where words were right,
+ * or no task to stop) must fail; and a broken one (the ideal first answer,
+ * then a model that fails) must fail too. So it proves that each case can
+ * pass and that its check tells right from wrong.
+ *
+ * A turn in which a call of the model failed is never right, even when its
+ * first call was the expected one: the owner got no answer of the model.
  *
  * With no flag it asks the chat's own model (CLAWDTIME_SUPERVISOR_MODEL, the
  * key in CLAWDTIME_OPENAI_API_KEY or the key of that provider, from the
@@ -45,6 +49,7 @@ import {
   tempRoot,
 } from "./chat-agent-fixture.js";
 import { fakeHost } from "./connectors-system-fixture.js";
+import { holdOpen } from "./computer-eval-report.js";
 
 type Setup = "idle" | "running" | "approval" | "question" | "job" | "done";
 type Expect = string[] | "stop" | "words";
@@ -88,6 +93,15 @@ const cases: Case[] = [
   {
     name: "search: flights",
     say: "find flights from SFO to JFK next Friday",
+    setup: "idle",
+    expect: ["computer_do"],
+  },
+  // A goal in other words can add a step that the owner did not say ("like",
+  // "send", "order"), and the gate then refuses the task: a lost turn. The
+  // goal keeps the owner's own words.
+  {
+    name: "search: similar places, in the owner's words",
+    say: "find hotels in Lisbon similar to the one we had in Porto",
     setup: "idle",
     expect: ["computer_do"],
   },
@@ -169,6 +183,12 @@ const cases: Case[] = [
   {
     name: "app: mail",
     say: "read me my newest email",
+    setup: "idle",
+    expect: ["computer_do"],
+  },
+  {
+    name: "app: let someone know, in the owner's words",
+    say: "let Ada know on Riverchat that the review moved to 3 pm",
     setup: "idle",
     expect: ["computer_do"],
   },
@@ -266,6 +286,14 @@ const cases: Case[] = [
   {
     name: "approval: no",
     say: "no, don't send it",
+    setup: "approval",
+    expect: ["answer_question"],
+  },
+  // A yes in other words answers the question that waits: no look at the
+  // tasks first.
+  {
+    name: "approval: yes in other words",
+    say: "go ahead",
     setup: "approval",
     expect: ["answer_question"],
   },
@@ -459,6 +487,8 @@ interface Outcome {
   refused: string | null;
   reply: string;
   askedFirst: boolean;
+  /** A call of the model failed in the turn, so the turn ended with no reply of its own. */
+  modelFailed: boolean;
 }
 
 async function play(
@@ -498,12 +528,18 @@ async function play(
     });
   const routines = new Routines({ root });
   let firstCalls: LoopCall[] | null = null;
+  let modelFailed = false;
   const watched: LoopModel = {
     async next(request, signal) {
       trail.push("model");
-      const answer = await model.next(request, signal);
-      firstCalls ??= answer.calls;
-      return answer;
+      try {
+        const answer = await model.next(request, signal);
+        firstCalls ??= answer.calls;
+        return answer;
+      } catch (error) {
+        modelFailed = true;
+        throw error;
+      }
     },
   };
   const records: { name: string; refused?: string }[] = [];
@@ -540,15 +576,31 @@ async function play(
     refused: refusal,
     reply: answer.text,
     askedFirst: asksFirst.test(answer.text),
+    modelFailed,
   };
 }
 
+/** The model, until it has answered `count` calls: each later call fails, as a service that answers 400. */
+const failsAfter = (model: LoopModel, count: number): LoopModel => {
+  let calls = 0;
+  return {
+    async next(request, signal) {
+      calls += 1;
+      if (calls > count) throw new Error("The language model answered 400.");
+      return model.next(request, signal);
+    },
+  };
+};
+
+// A turn whose model failed is never right: its first call may be right,
+// but the owner gets no answer of the model.
 const passes = (item: Case, outcome: Outcome) =>
-  item.expect === "stop"
+  !outcome.modelFailed &&
+  (item.expect === "stop"
     ? outcome.first === "stop"
     : item.expect === "words"
       ? outcome.first === "words"
-      : item.expect.includes(outcome.first) && outcome.refused === null;
+      : item.expect.includes(outcome.first) && outcome.refused === null);
 
 const args = process.argv.slice(2);
 for (const flag of args)
@@ -575,6 +627,10 @@ if (!checking) {
   real = setup.model;
   console.log(`Model: ${setup.name}`);
 }
+
+// A retry wait of the chat's model must not end the run. Each way out of
+// this script is a process.exit, which ends the hold too.
+holdOpen();
 
 const results: Record<string, unknown>[] = [];
 let ok = 0;
@@ -615,14 +671,39 @@ for (const item of chosen) {
               item,
               scriptedModel([{ text: "Should I do that for you?" }]),
             );
+    // The broken path: the ideal first answer, then a model that fails, so
+    // the turn ends with no reply of its own. A stop runs in code before
+    // any model, so it has no broken path.
+    const broken =
+      item.expect === "stop"
+        ? null
+        : await play(
+            item,
+            failsAfter(
+              scriptedModel(
+                item.expect === "words"
+                  ? [{ text: "Okay." }]
+                  : [{ calls: [call(name, idealArgs(item, name))] }],
+              ),
+              item.expect === "words" ? 0 : 1,
+            ),
+          );
     const good = passes(item, ideal);
-    const told = !passes(item, wrong);
+    const told = !passes(item, wrong) && (!broken || !passes(item, broken));
     if (good) ok++;
     if (told) caught++;
     console.log(
-      `${good && told ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; ideal ${ideal.first}${ideal.refused ? ` (refused: ${ideal.refused})` : ""}; wrong ${wrong.first}`,
+      `${good && told ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; ideal ${ideal.first}${ideal.refused ? ` (refused: ${ideal.refused})` : ""}; wrong ${wrong.first}${broken ? `; broken ${broken.first}${passes(item, broken) ? " (passed)" : ""}` : ""}`,
     );
-    results.push({ name: item.name, expected, ideal, wrong, good, told });
+    results.push({
+      name: item.name,
+      expected,
+      ideal,
+      wrong,
+      broken,
+      good,
+      told,
+    });
   } else {
     let outcome: Outcome;
     try {
@@ -633,13 +714,14 @@ for (const item of chosen) {
         refused: error instanceof Error ? error.message : "failed",
         reply: "",
         askedFirst: false,
+        modelFailed: false,
       };
     }
     const good = passes(item, outcome);
     if (good) ok++;
     if (outcome.askedFirst && Array.isArray(item.expect)) asked++;
     console.log(
-      `${good ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; got ${outcome.first}${outcome.refused ? ` (refused: ${outcome.refused})` : ""}. Reply: ${outcome.reply.slice(0, 120)}`,
+      `${good ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; got ${outcome.first}${outcome.refused ? ` (refused: ${outcome.refused})` : ""}${outcome.modelFailed ? " (a later call of the model failed)" : ""}. Reply: ${outcome.reply.slice(0, 120)}`,
     );
     results.push({ name: item.name, expected, ...outcome, good });
   }
