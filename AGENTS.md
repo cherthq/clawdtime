@@ -124,7 +124,10 @@ browser drivers in a real browser with no window. `npm test` does not run them.
   active during sharing. Only legacy v1 uses the global yield, acknowledge and
   resume.
 - Model output is an untrusted single-action plan.
-- Keep screens and audio transient.
+- Keep screens and audio transient. One exception: call recording is an
+  explicit, per-line feature, off by default, that records only after the
+  caller heard a fixed spoken consent line. See
+  [docs/RECORDING.md](docs/RECORDING.md).
 
 **Stack and data.**
 
