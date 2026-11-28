@@ -32,6 +32,8 @@ import TaskPanelCore
   private let pet = PetController()
   private let chatPanel = SheetController(ChatView(frame: NSRect(x: 0, y: 0, width: ChatView.width, height: 400)))
   private let voice = VoiceController()
+  /// Settings changed the look of the mascot or the voice: read them again.
+  private let settingsReload = SettingsReload()
   /// Computer use: the panel sees the screen and sends input for the worker.
   private lazy var hands = HandsController(pet: pet)
   private var transcript: ChatTranscript?
@@ -59,6 +61,12 @@ import TaskPanelCore
     NSApp.setActivationPolicy(.accessory)
     Theme.registerFonts()
     configureMenus()
+    settingsReload.start { [weak self] defaults in
+      guard let self else { return }
+      self.pet.reloadLook(from: defaults)
+      self.voice.speakerOn = PanelPreferences.voiceReplies(defaults.object(forKey: PanelPreferences.Key.voiceReplies))
+      self.refreshMenus()
+    }
     if let launch = PanelLaunch(arguments: CommandLine.arguments) {
       startTucked = launch.tucked
       startChat = launch.chat

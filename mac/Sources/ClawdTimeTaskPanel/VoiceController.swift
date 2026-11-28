@@ -18,7 +18,8 @@ final class VoiceController: NSObject, AVAudioPlayerDelegate {
   }
   /// The gate of the microphone, shared with the audio thread that writes the recording.
   private let latch = MicrophoneLatch()
-  var speakerOn = true {
+  /// It speaks its answers unless the person turned that off in Settings. The speaker button changes it for now.
+  var speakerOn = PanelPreferences.voiceReplies(UserDefaults.standard.object(forKey: PanelPreferences.Key.voiceReplies)) {
     didSet {
       if !speakerOn, phase == .speaking { player?.stop(); player = nil; listen() }
       onChange?()
@@ -127,6 +128,9 @@ final class VoiceController: NSObject, AVAudioPlayerDelegate {
   private func play(_ url: URL) {
     guard let sound = try? AVAudioPlayer(contentsOf: url) else { listen(); return }
     sound.delegate = self; sound.isMeteringEnabled = true
+    // The speed that the person chose in Settings. The pitch stays.
+    sound.enableRate = true
+    sound.rate = Float(PanelPreferences.voiceRate(UserDefaults.standard.object(forKey: PanelPreferences.Key.voiceRate)))
     player = sound; phase = .speaking
     sound.play()
     meterTimer?.invalidate()
