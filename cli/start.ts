@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { linkedDesktopFolder } from "../connectors/agents/desktop-chat.js";
 import { stateRoot } from "../connectors/agents/hooks.js";
 import { desktopCli, type DesktopLaunch } from "./task-desktop.js";
+import { applyStoredSettings } from "./settings.js";
 import { findNativeHelper } from "../src/native-helpers.js";
 import { takeProcessLock } from "../src/process-lock.js";
 
@@ -266,6 +267,8 @@ export async function startCli(
       `The project folder must not hold the state folder ${state}. Choose a folder of its own, such as ~/code/my-project.`,
     );
 
+  // The choices of Settings, as the variables that the service reads. A variable that is set wins.
+  applyStoredSettings(env, configRoot);
   // The chat agent answers in the panel, as in the start command of the README.
   if (!env.CLAWDTIME_CHAT) env.CLAWDTIME_CHAT = "agent";
   const launch = () =>

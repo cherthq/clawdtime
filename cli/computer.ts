@@ -125,8 +125,11 @@ const reachReason = (reason: string) => {
   };
   return plain[reason] ?? reason.replace(/_/g, " ");
 };
-/** What the reach of the running desktop service last said, and the routines. */
-function reachRows(
+/**
+ * What the reach of the running desktop service last said, and the routines,
+ * in plain sentences. `clawdtime settings phone` shows the same words.
+ */
+export function reachSummary(
   root: string,
   env: Record<string, string | undefined>,
   now: number,
@@ -382,7 +385,7 @@ export async function computerCli(
         browser = "cannot be driven. It did not answer.";
       }
     row("browser", browser);
-    const reach = reachRows(root, env, now());
+    const reach = reachSummary(root, env, now());
     row("calls to you", reach.calls);
     row("texts to you", reach.texts);
     row("routines", reach.routines);

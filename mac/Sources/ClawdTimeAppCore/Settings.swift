@@ -93,6 +93,8 @@ public protocol DesktopRestarting: AnyObject {
   var connectionStatus: OwnedStatus { get }
   /// Stops the desktop (and its connection) and starts both again as they were.
   func restartDesktop()
+  /// Ends the phone connection: it stops both, runs `then`, and starts the desktop again alone.
+  func dropConnection(then: @escaping @MainActor () -> Void)
 }
 
 extension ProcessOwner: DesktopRestarting {
@@ -101,6 +103,13 @@ extension ProcessOwner: DesktopRestarting {
   public func restartDesktop() {
     let keep = self.connection.isLive
     stop { [weak self] in self?.start(connection: keep) }
+  }
+  public func dropConnection(then: @escaping @MainActor () -> Void) {
+    let keepDesktop = desktop.isLive
+    stop { [weak self] in
+      then()
+      if keepDesktop { self?.start(connection: false) }
+    }
   }
 }
 
@@ -120,15 +129,19 @@ public struct AboutInfo: Equatable, Sendable {
   public var shortCommit: String? { commit.map { String($0.prefix(7)) } }
 }
 
-/// The Settings window's state. It reads and changes the model keys and the
-/// planner model through the runtime's own commands, and reads the
-/// permissions from the panel and the capture helper. A key goes to
-/// `clawdtime keys set PROVIDER` on stdin only: never in an argument, the
-/// environment, a file or a message. After a change, the desktop starts
-/// again only when it is idle; otherwise the window offers the restart.
+/// The Settings window's state. It reads and changes every setting through
+/// the runtime's own commands (`clawdtime settings`, `keys` and `computer
+/// model`), and reads the permissions from the panel and the capture helper.
+/// It never edits a file itself. A key goes to `clawdtime keys set PROVIDER`
+/// on stdin only: never in an argument, the environment, a file or a
+/// message. After a change that the desktop reads when it starts, the
+/// desktop starts again only when it is idle; otherwise the window offers
+/// the restart.
 @MainActor
 public final class SettingsModel: ObservableObject {
-  public enum Work: Equatable, Sendable { case loading, key(String), model, permissions }
+  public enum Work: Equatable, Sendable {
+    case loading, key(String), model, permissions, setting(String), privacy, history, forget, update, phone, unpair
+  }
   /// What the window says after a key or model change.
   public enum RestartNote: Equatable, Sendable {
     /// The desktop is not running: it reads the change when it starts.
@@ -146,6 +159,15 @@ public final class SettingsModel: ObservableObject {
   @Published public private(set) var problem: String?
   @Published public private(set) var work: Work?
   @Published public private(set) var restart: RestartNote?
+  /// Every setting of `clawdtime settings --json`.
+  @Published public private(set) var runtime: RuntimeSettingsReport?
+  @Published public private(set) var privacy: PrivacyReport?
+  @Published public private(set) var update: UpdateReport?
+  @Published public private(set) var phone: PhoneReport?
+  /// One plain sentence about the last thing that worked, such as "Removed 3 facts."
+  @Published public private(set) var done: String?
+  /// A change that is on its way: the window shows it at once.
+  @Published public private(set) var pending: [String: SettingValue] = [:]
 
   public let about: AboutInfo
   private let runner: CommandRunning
@@ -177,16 +199,162 @@ public final class SettingsModel: ObservableObject {
     public static let keyAsModel = "That looks like a key, not a model name. Add keys in Model keys."
     public static let badModel = "Use a model name with letters, numbers and . _ - : / only."
     public static let needsBase = "This provider needs its base address, for example https://models.example/v1."
+    public static let unknownSetting = "That setting is not in the list."
+    public static let keyAsSetting = "That looks like a key, not a setting. Add keys in Models."
+    public static let badText = "Use plain words, with no line break, that do not start with a dash."
   }
 
-  /// Reads the keys, the model and the permissions again.
+  /// Reads the keys, the model, every setting and the permissions again.
   public func load() async {
     work = .loading
     defer { work = nil }
     await readKeys()
     await readModel()
+    await readSettings()
     await checkPermissions()
   }
+
+  @discardableResult
+  public func readSettings() async -> Bool {
+    guard let report: RuntimeSettingsReport = await json(["settings", "--json"]) else { return false }
+    runtime = report
+    return true
+  }
+
+  public func setting(_ id: String) -> RuntimeSetting? { runtime?.setting(id) }
+
+  /// The value that the window shows: a change on its way, or what the runtime said.
+  public func value(_ id: String) -> SettingValue? { pending[id] ?? setting(id)?.value }
+
+  /// A variable of the environment holds this setting: a choice here does not win.
+  public func isFixed(_ id: String) -> Bool { setting(id)?.from == .environment }
+
+  /// Changes one setting through `clawdtime settings set`. A change that the
+  /// desktop reads when it starts restarts it when it is idle.
+  @discardableResult
+  public func set(_ id: String, _ value: SettingValue) async -> Bool {
+    guard let row = setting(id) else { problem = Text.unknownSetting; return false }
+    if case .text(let text) = value {
+      // The runtime refuses these too, but a key must not even reach an argument.
+      guard !Self.looksLikeKey(text) else { problem = Text.keyAsSetting; return false }
+      guard !text.hasPrefix("-"), !text.contains(where: { $0.isNewline }), text.count <= 400 else { problem = Text.badText; return false }
+    }
+    if let choices = row.choices, let text = value.text, !choices.contains(text) { problem = Text.unknownSetting; return false }
+    pending[id] = value
+    defer { pending[id] = nil }
+    return await change(["settings", "set", id, value.argument, "--json"], id: id)
+  }
+
+  /// Back to the default of one setting.
+  @discardableResult
+  public func reset(_ id: String) async -> Bool {
+    guard setting(id) != nil else { problem = Text.unknownSetting; return false }
+    return await change(["settings", "reset", id, "--json"], id: id)
+  }
+
+  private func change(_ arguments: [String], id: String) async -> Bool {
+    work = .setting(id)
+    defer { work = nil }
+    guard let result: SettingChange = await json(arguments) else { return false }
+    await readSettings()
+    // The speed and the models change each other.
+    if ["speed", "model.planner", "model.chat"].contains(id) { await readModel() }
+    if result.applies == .restart { await changed() }
+    return true
+  }
+
+  /// Removes every fact in memory, for good. The window asked first.
+  @discardableResult
+  public func forgetMemory() async -> Bool {
+    work = .forget
+    defer { work = nil }
+    guard let result: ForgetResult = await json(["settings", "forget-memory", "--yes", "--json"]) else { return false }
+    done = result.removed == 0 ? "Memory was empty." : "Removed \(result.removed) \(result.removed == 1 ? "fact" : "facts") for good."
+    await readPrivacy()
+    return true
+  }
+
+  @discardableResult
+  public func readPrivacy() async -> Bool {
+    let previous = work
+    if previous == nil { work = .privacy }
+    defer { if previous == nil { work = nil } }
+    guard let report: PrivacyReport = await json(["settings", "privacy", "--json"]) else { return false }
+    privacy = report
+    return true
+  }
+
+  /// Moves the chat history, the spoken replies and the step times to the Trash. The window asked first.
+  @discardableResult
+  public func deleteHistory() async -> Bool {
+    work = .history
+    defer { work = nil }
+    guard let result: HistoryResult = await json(["settings", "delete-history", "--yes", "--json"]) else { return false }
+    done = result.moved.isEmpty ? "There was no history to move." : "Moved \(result.moved.count) \(result.moved.count == 1 ? "file" : "files") to the Trash."
+    await readPrivacy()
+    if !result.moved.isEmpty { await changed() }
+    return true
+  }
+
+  /// Reads latest.json of the release. Only when the person asks: it goes to the network.
+  @discardableResult
+  public func checkUpdate() async -> Bool {
+    work = .update
+    defer { work = nil }
+    guard let report: UpdateReport = await json(["settings", "update", "--json"]) else { return false }
+    update = report
+    return true
+  }
+
+  /// The release page, only when it is an https address.
+  public var updatePage: URL? {
+    guard let page = update?.page, let url = URL(string: page), url.scheme == "https" else { return nil }
+    return url
+  }
+
+  @discardableResult
+  public func openUpdatePage() -> Bool {
+    guard let updatePage else { return false }
+    return open(updatePage)
+  }
+
+  @discardableResult
+  public func readPhone() async -> Bool {
+    let previous = work
+    if previous == nil { work = .phone }
+    defer { if previous == nil { work = nil } }
+    guard let report: PhoneReport = await json(["settings", "phone", "--json"]) else { return false }
+    phone = report
+    return true
+  }
+
+  /// Unpairs this Mac. The phone connection uses the pairing, so it ends
+  /// first; the desktop goes on. The window asked first.
+  public func unpairPhone() async {
+    work = .unpair
+    if let desktop, desktop.connectionStatus.isLive {
+      await withCheckedContinuation { (resume: CheckedContinuation<Void, Never>) in
+        desktop.dropConnection { resume.resume() }
+      }
+    }
+    defer { work = nil }
+    if let result: UnpairOutcome = await json(["settings", "phone", "unpair", "--yes", "--json"]) {
+      done = result.sentence
+    }
+    await readPhone()
+  }
+
+  /// Opens a folder of ClawdTime in the Finder: the state folder, or a folder in it.
+  /// Only the state folder and the folder of the logs, as the privacy report names them.
+  @discardableResult
+  public func openFolder(_ path: String) -> Bool {
+    guard let privacy, path.hasPrefix("/") else { return false }
+    let allowed = [privacy.folder] + privacy.items.filter { $0.id == "logs" }.map(\.path)
+    guard allowed.contains(path) else { return false }
+    return open(URL(fileURLWithPath: path, isDirectory: true))
+  }
+
+  public func dismissDone() { done = nil }
 
   @discardableResult
   public func readKeys() async -> Bool {
@@ -270,6 +438,8 @@ public final class SettingsModel: ObservableObject {
     defer { work = nil }
     guard succeeded(await command(arguments)) else { return false }
     await readModel()
+    // The speed preset follows the models.
+    await readSettings()
     await changed()
     return true
   }
