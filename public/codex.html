@@ -15,123 +15,108 @@
         >clawdtime<span class="brand-dot">_</span></a
       >
       <nav aria-label="Main navigation">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup guide</a>
+        <a href="/#what-it-does">What it does</a
+        ><a href="/guides/getting-started">Setup guide</a
+        ><a href="/pricing">Pricing</a>
       </nav>
       <a
         class="button button-small"
-        href="/#availability"
-        data-metric-action="availability"
-        >Pilot availability ↗</a
+        href="/download"
+        data-metric-action="download"
+        >Download</a
       >
     </header>
     <main id="main" class="section-wrap guide-page">
       <header class="guide-hero">
-        <p class="eyebrow">CODEX / INVITED PILOT</p>
-        <h1>Your Codex session.<br />A FaceTime away.</h1>
+        <p class="eyebrow">FOR DEVELOPERS / CODEX</p>
+        <h1>Use ClawdTime with Codex.</h1>
         <p class="lede">
-          ClawdTime can bring a question and the selected Mac screen from a
-          running Codex session to your phone. The current pilot has limited
-          live evidence; it is not a general remote-control or idle-chat
-          service.
+          ClawdTime shows your Codex sessions and which one waits for you.
+          Answer an approval request from the chat. Ask it to start a coding
+          session for a job.
         </p>
-        <p class="guide-date">ClawdTime team · Checked November 13, 2026</p>
+        <p class="guide-date">Updated 28 November 2026</p>
       </header>
       <div class="guide-body">
-        <section id="tested">
-          <h2>What has been tested?</h2>
-          <div class="fact-grid">
-            <article>
-              <h3>Codex desktop</h3>
-              <p>
-                Screen sharing and spoken feedback have been observed in a
-                running desktop chat. A limited native-control task has also
-                been observed. These results apply to the tested workflow, not
-                every desktop tool or client version.
-              </p>
-              <p>
-                The desktop app version was not recorded. Reconnect, longer
-                calls, broader control and conversational latency remain open
-                checks.
-              </p>
-            </article>
-            <article>
-              <h3>Codex CLI</h3>
-              <p>
-                Codex CLI <code>0.166.0-alpha.5.1</code> passed synthetic
-                connector checks. Synthetic feedback confirms connector
-                behavior; it does not prove a real handset call or
-                screen-control session.
-              </p>
-              <p>
-                Ask your pilot contact which installed build and client surface
-                your invitation covers.
-              </p>
-            </article>
-          </div>
-        </section>
         <section>
-          <h2>How does a call fit into my work?</h2>
+          <h2>Set it up</h2>
           <ol class="guide-steps">
             <li>
-              <strong>Keep the intended Codex session running.</strong> Connect
-              that project using the trusted pilot integration.
+              <strong>Install ClawdTime.</strong> Follow the
+              <a href="/guides/getting-started">setup guide</a>.
             </li>
             <li>
-              <strong>Request attention explicitly.</strong> Ask the agent to
-              call when a specific decision or visual review would help. The
-              skill does not detect every blocked process.
+              <strong>Add the hook.</strong> Run
+              <code>clawdtime agents hooks install --agent codex</code>. It adds
+              its own entries to <code>~/.codex/hooks.json</code> and changes no
+              other hook.
             </li>
             <li>
-              <strong>Review the selected screen.</strong> Respond by voice or
-              text. Voice currently takes turns and can have noticeable delays.
+              <strong>Trust the hook in Codex.</strong> Open Codex and run
+              <code>/hooks</code> once.
             </li>
             <li>
-              <strong>Continue in the authorized workflow.</strong> Native
-              approvals still apply. Sharing does not grant unrestricted
-              computer control.
+              <strong>See your sessions.</strong> Run
+              <code>clawdtime agents</code>, or ask in the chat: “what needs
+              me?”
             </li>
           </ol>
         </section>
         <section>
-          <h2>Does it take over an idle Codex chat?</h2>
-          <p>
-            No. The current workflow needs a running, connected session. A
-            separate managed execution mode is in development; it is not the
-            same chat and is not the deployed pilot described here.
-          </p>
+          <h2>What you can do</h2>
+          <ul class="checklist">
+            <li>
+              Approve or deny a request from the chat, the mascot's bubble or
+              <code>clawdtime agents approve ID</code>.
+            </li>
+            <li>
+              Start a coding session for a job: “fix the failing checkout test”.
+              <code>clawdtime jobs</code> lists that work.
+            </li>
+            <li>
+              Bring the terminal of a session to the front:
+              <code>clawdtime agents focus NAME</code>.
+            </li>
+          </ul>
         </section>
         <section>
-          <h2>Before you try it</h2>
-          <p>
-            You need an invitation, macOS 14+, Node 24+, the operator-provided
-            companion and gateway, and your intended iMessage/FaceTime handset.
-            Screen selection and local permission are explicit. Public npm
-            installation and notarized downloads are not ready.
-          </p>
-          <a
-            class="button"
-            href="/guides/getting-started"
-            data-metric-action="guide"
-            >Read the setup checklist ↗</a
-          >
+          <h2>Limits</h2>
+          <ul class="checklist">
+            <li>
+              Without the hook, a Codex session that waits for approval shows as
+              Working.
+            </li>
+            <li>
+              A request that ClawdTime cannot show in full is allowed only in
+              its terminal. You can still deny it from ClawdTime.
+            </li>
+            <li>The approval rules of Codex still apply.</li>
+            <li>
+              Removal:
+              <code>clawdtime agents hooks uninstall --agent codex</code>
+              removes only these entries.
+            </li>
+          </ul>
         </section>
         <section class="related-links">
-          <h2>Related information</h2>
-          <a href="/integrations/claude-code">Claude Code integration</a
-          ><a href="/privacy">Screen access and data</a
-          ><a href="/pricing">Pilot availability and planned pricing</a>
+          <h2>More</h2>
+          <a href="/integrations/claude-code">Use it with Claude Code</a
+          ><a href="/guides/getting-started">Setup guide</a
+          ><a href="/privacy">Privacy and control</a
+          ><a
+            href="https://github.com/cherthq/clawdtime/blob/main/docs/AGENT_BOARD.md"
+            >The agent board in detail</a
+          >
         </section>
       </div>
     </main>
     <footer class="site-footer section-wrap">
       <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>
       <nav aria-label="Footer">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup</a
+        <a href="/guides/getting-started">Setup guide</a
         ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/integrations/codex">Codex</a
         ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
           >GitHub ↗</a
         >
