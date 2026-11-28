@@ -65,7 +65,7 @@ try {
   let response = await page.goto(origin);
   assert.equal(response?.status(), 200);
   await page
-    .getByRole("heading", { name: "Your coding agent can FaceTime you." })
+    .getByRole("heading", { level: 1, name: /^Talk to your Mac\./ })
     .waitFor();
   await page.screenshot({
     path: resolve(folder, "landing-desktop.png"),

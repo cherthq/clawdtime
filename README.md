@@ -1,160 +1,151 @@
 <h1 align="center">ClawdTime</h1>
 
-<p align="center"><strong>A computer use agent for your Mac</strong></p>
+<p align="center"><strong>Talk to your Mac. It does the work.</strong></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.4.0-blue" alt="Version 0.4.0">
   <a href="https://www.clawdtime.com"><img src="https://img.shields.io/badge/ClawdTime-Website-black" alt="ClawdTime website"></a>
-  <img src="https://img.shields.io/badge/status-internal_pilot-orange" alt="Internal pilot">
+  <img src="https://img.shields.io/badge/status-early_release-orange" alt="Early release">
 </p>
 
-ClawdTime is a computer use agent that works on your Mac: it uses your apps,
-web pages and accounts for you, and checks each action in code before it acts.
-You reach it in its chat, by voice, by iMessage and on a FaceTime call through
-a Chert line.
+ClawdTime is an assistant on your Mac. You ask it in plain words, by chat or
+by voice. It uses your apps and your browser for you: it clicks, types and
+reads the screen. It can also call your phone when it needs you (preview).
 
 [![Watch the ClawdTime demo](https://img.youtube.com/vi/1DTf_1M67aw/maxresdefault.jpg)](https://youtu.be/1DTf_1M67aw)
 
-[Watch the demo on YouTube](https://youtu.be/1DTf_1M67aw)
-
 ## What it does
 
-- **Computer and browser use.** It clicks, types, scrolls and reads the screen
-  in any app, and can drive a web page by its elements. A visible cursor glides
-  to each place before it acts.
-- **Plans for long tasks.** It splits a task into a few subgoals and checks
-  each one on the screen.
-- **A chat that acts.** Say what you want in the chat, by voice or on a call.
-  It starts at once, and your next words steer the task.
-- **Calls you back for a sign-in.** When it needs you, it calls you on your
-  line, or texts you. You type passwords on the Mac yourself: it never asks
-  for one.
-- **Zoom on a call.** The call video follows its clicks. Say "zoom on the
-  address bar" or "show the whole screen".
-- **Routines.** "Every morning at 9, check my inbox and tell me" runs every
-  day at 9.
-- **Memory.** It keeps what you tell it about you and your work, when you turn
-  memory on.
-- **Any model provider.** OpenAI, Anthropic, Google Gemini, Mistral, Groq,
+- **Ask in plain words.** "Find a phone case on shop.example and put it in the
+  cart."
+- **It uses your apps.** It does one checked action at a time. An orange
+  cursor moves to each place before it clicks or types.
+- **It asks first.** It asks before a payment, a delete that you cannot undo,
+  or a send that you did not ask for.
+- **Routines.** "Every morning at 9, check my inbox and tell me what is new."
+- **Memory.** It keeps what you tell it, when you turn memory on.
+- **Your choice of model.** OpenAI, Anthropic, Google Gemini, Mistral, Groq,
   OpenRouter and more, or your own endpoint.
-- **Coding agents.** It lists the coding agent sessions on your Mac, answers
-  their permission requests for you, and hands code work to a new session.
+- **Phone calls (preview).** When a task needs your approval, it calls you once and asks. This needs a phone line from Chert and the source install.
+- **Coding agents.** It lists the Claude Code and Codex sessions on your Mac,
+  answers their requests when you approve, and starts a coding session for a job.
 
-## Quick start
+## Install
 
-You need a Mac with Apple silicon and macOS 14 or later. You do not need Node,
-Git or Xcode. Run this in Terminal:
+You need a Mac with Apple silicon and macOS 14 or later, and a key from a model
+provider. Choose one of two ways. Both run the same setup.
+
+**The Mac app.** [Download ClawdTime](https://www.clawdtime.com/download).
+Drag it to Applications. Open it. Choose **Set up ClawdTime**.
+
+**One command.** Paste this in Terminal:
 
 ```sh
-curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh
+curl -fsSL https://www.clawdtime.com/install.sh | sh
 ```
 
-It installs the newest release in `~/Library/Application Support/ClawdTime`,
-links the `clawdtime` command in `~/.local/bin`, and starts the guided setup,
-`clawdtime onboard`: your model key, the panel's permissions, your phone and
-the pairing of this Mac. Run it again to update: your settings, keys and
-pairing stay. [INSTALL.md](INSTALL.md) has each step, the setup by hand and a
-prompt that has your coding agent do it.
+It installs ClawdTime for you only and never uses sudo. You do not need Node,
+Git or Xcode. Setup starts in the same window.
 
-To build from the source instead, you need macOS 14 or later, Node 24 or later,
-Swift (the Xcode command line tools) and an iPhone:
+Setup asks for your model key, a yes to computer use, and two macOS
+permissions: Accessibility and Screen Recording. Run setup again at any time. It checks each step and continues from where it stopped. [INSTALL.md](INSTALL.md) has
+each step and the build from source.
 
-1. **Install** ClawdTime and the `chert` command:
+## First use
 
-   ```sh
-   npm install -g @trychert/facetime@beta
-   git clone https://github.com/cherthq/clawdtime.git ~/clawdtime
-   cd ~/clawdtime && npm ci && npm run build && npm link
-   (cd line && npm install)
-   ```
+Click the mascot to open the chat. Type a first request:
 
-   Or run `sh scripts/install.sh --source`: it does these steps for you.
+> Open Wikipedia and tell me today's featured article.
 
-2. **Connect** to Chert and get a line: `clawdtime connect`
-3. **Turn on** computer use: `clawdtime computer on`
-4. **Add a model key**: `clawdtime keys set openai`. It reads the key from a
-   hidden prompt. For another provider, see
-   [Models and keys](INSTRUCTIONS.md#5-models-and-keys).
-5. **Start the desktop**, with `--project` set to the folder for code work:
+ClawdTime opens the page, reads it and answers in the chat.
 
-   ```sh
-   (cd mac && swift build --product ClawdTimeTaskPanel)
-   CLAWDTIME_CHAT=agent npm run task:desktop -- \
-     --state ~/.local/share/clawdtime/desktop --project ~/code/my-project
-   ```
+To speak, press **Talk**. Voice uses an OpenAI key, set as `OPENAI_API_KEY`
+when ClawdTime starts. Typing works with every provider.
 
-   `clawdtime start` runs the second command for you. With no `--project`,
-   the first start uses `~/clawdtime-work`. The mascot appears. Click it to
-   open the chat. In System Settings, Privacy & Security, give the panel
-   Accessibility and Screen & System Audio Recording. Then run
-   `clawdtime connect` once more, so that the desktop gets its calling policy.
+To stop it, press **Stop** in the bar at the top of the screen, hold Escape,
+or say "stop".
 
-`clawdtime computer doctor` says what is ready and what is missing.
+When a part does not work, run `clawdtime computer doctor`. It says what is
+missing.
 
-## Opt-in previews
+## Settings
 
-These parts are off until you select them. Tests cover them, but they still
-need a check on a real Mac and phone before you rely on them.
+In the app, open **Settings** (Command-comma). It has four pages:
 
-- **Window sharing.** Share one window or one display on a call, and crop
-  and zoom it. `npm run preview:camera` opens a local preview with no call.
-- **Prepared walkthroughs.** The agent stages a walkthrough of two apps and
-  raises each exact window in turn. `npm run prepare:presentation`, then
-  `npm run test:presentation`.
-- **Streaming voice.** A new session can use `--voice-frontend elevenlabs`.
-  `npm run test:voice:camera` checks the path with no provider or phone.
-- **Text sessions.** A paired person can control a scoped session by iMessage.
-  You approve each grant on the Mac.
+| Page          | What you do there                                         |
+| ------------- | --------------------------------------------------------- |
+| Model keys    | Add, replace or remove the key of each provider           |
+| Planner model | Choose the model that plans each action                   |
+| Permissions   | See Accessibility and Screen Recording, and open them     |
+| General       | Open at login, run setup again, stop, uninstall, versions |
+
+In Terminal, use these commands:
+
+```sh
+clawdtime keys set anthropic                       # asks for the key, and does not show it
+clawdtime computer model anthropic/claude-opus-5-5
+clawdtime keys list                                # which keys are set, never a key
+```
+
+Every setting is in [INSTRUCTIONS.md](INSTRUCTIONS.md#18-settings).
+
+## Update and uninstall
+
+**Update.** Download the app again, or run the install command again. Your
+settings and keys stay. macOS asks for the two permissions again.
+
+**Uninstall.** In the app, open Settings > General. Choose **Uninstall ClawdTime**. In Terminal, run `clawdtime uninstall`. It lists what it moves to
+the Trash and asks first. It deletes nothing.
+
+## Privacy
+
+- ClawdTime keeps your tasks, chats and keys in `~/.local/share/clawdtime`, for you only.
+- For each action, your request and a picture of the screen go to the model
+  provider that you chose. ClawdTime never saves pictures of the screen to disk.
+- ClawdTime never types into a password field. It never sends a password, a
+  code or a card number to a model.
+
+[INSTRUCTIONS.md](INSTRUCTIONS.md#16-privacy) lists each file and what leaves
+the Mac.
 
 ## Benchmarks
 
-Measured on 26 November 2026, on build `3821123`. The harness is the same for every row; only the
-model changes. The evals open no window and touch nothing on your screen.
+Measured on 26 November 2026, on build `3821123`. Only the model changes. The
+evals open no window and touch nothing on your screen.
 
-| Model                  | Planner eval: right first action (38 screens, 2 runs) | Median answer | Request eval: tasks done (23 tasks of many steps) | Time for all 23 |
-| ---------------------- | ----------------------------------------------------- | ------------- | ------------------------------------------------- | --------------- |
-| gpt-6.2-astra          | 76/76                                                 | 3.1 s         | 23/23                                             | 358 s           |
-| gpt-5.4                | 76/76                                                 | 1.5 s         | 22/23                                             | 230 s           |
-| claude-opus-5-5        | 75/76                                                 | 1.7 s         | 23/23                                             | 231 s           |
-| gpt-6.2-sol            | 74/76                                                 | 2.0 s         | 23/23                                             | 302 s           |
-| claude-fable-5-2       | 74/76                                                 | 1.6 s         | 23/23                                             | 203 s           |
-| claude-sonnet-5-5      | 74/76                                                 | 1.8 s         | 23/23                                             | 254 s           |
-| gemini-3.1-pro-preview | 65/76                                                 | 4.3 s         | 21/23                                             | 920 s           |
-| gemini-3.8-flash       | 62/76                                                 | 4.6 s         | 22/23                                             | 896 s           |
+| Model                  | Right first action (76 tries) | Median answer | Tasks done (23) | Time for 23 |
+| ---------------------- | ----------------------------- | ------------- | --------------- | ----------- |
+| gpt-6.2-astra          | 76/76                         | 3.1 s         | 23/23           | 358 s       |
+| gpt-5.4                | 76/76                         | 1.5 s         | 22/23           | 230 s       |
+| claude-opus-5-5        | 75/76                         | 1.7 s         | 23/23           | 231 s       |
+| gpt-6.2-sol            | 74/76                         | 2.0 s         | 23/23           | 302 s       |
+| claude-fable-5-2       | 74/76                         | 1.6 s         | 23/23           | 203 s       |
+| claude-sonnet-5-5      | 74/76                         | 1.8 s         | 23/23           | 254 s       |
+| gemini-3.1-pro-preview | 65/76                         | 4.3 s         | 21/23           | 920 s       |
+| gemini-3.8-flash       | 62/76                         | 4.6 s         | 22/23           | 896 s       |
 
-On a real Mac, on the real screen:
+On a real Mac, 42 of 44 apps passed a read-only task. The other 2 were
+correct stops: a sign-in page, and Mail with no account. 11 of 14 tasks of
+real work were right. 2 of the misses were apps that the Mac does not have.
+Run the evals with `npm run eval:computer:planner` and
+`npm run eval:computer:request`. Add `--check` to test the checks with no
+model and no key.
 
-- 44 apps, one read-only task each (Calculator, Maps, System Settings, Safari,
-  LibreOffice and more): 42 of 44 right on a full run of the newest build. The
-  other 2 were correct stops (a sign-in page, Mail with no account).
-- 14 tasks of real work (reading the news, YouTube and a social feed,
-  comparing prices on a shop, writing and saving an essay and a blog draft,
-  a research note across two apps, Terminal, Finder): 11 of 14 right; 2 of
-  the misses were apps that this Mac does not have.
+## Contributing
 
-Run the evals yourself, with a key for the provider:
+Read [AGENTS.md](AGENTS.md) first: the code map, the build and the rules.
+Install Node 24 or later and run `npm ci`. Run `npm run check` before you
+push. Make one small change in each pull request.
 
-```sh
-npm run eval:computer:planner -- gpt-6.2-sol anthropic/claude-opus-5-5 --repeat 2
-npm run eval:computer:request -- gpt-6.2-sol
-```
-
-Add `--check` to prove the checks with no model and no key.
+This repository is public. Use made-up examples only, such as `shop.example`,
+Stonepad or +1 415 555 0100.
 
 ## Read more
 
-| Page                                                                             | What it covers                                                  |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [INSTRUCTIONS.md](INSTRUCTIONS.md)                                               | The full user guide: every command, setting and phrase          |
-| [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md)                                         | The Chert line step by step: calls, texts and the line agent    |
-| [AGENTS.md](AGENTS.md)                                                           | Rules for coding agents that work in this repository            |
-| [docs/COMPUTER_USE.md](docs/COMPUTER_USE.md)                                     | How computer use works: the planner, the checks and the limits  |
-| [docs/SUPERVISOR.md](docs/SUPERVISOR.md)                                         | The chat, voice, memory, the trove and answers to coding agents |
-| [docs/AUTOMATIC_CALL_ZOOM.md](docs/AUTOMATIC_CALL_ZOOM.md)                       | Zoom on the call video                                          |
-| [docs/AGENT_BOARD.md](docs/AGENT_BOARD.md)                                       | The coding agent sessions on this Mac                           |
-| [docs/DESKTOP_SPACES.md](docs/DESKTOP_SPACES.md)                                 | Moves between desktops and apps                                 |
-| [docs/CODING_DEMO_DESKTOP.md](docs/CODING_DEMO_DESKTOP.md)                       | The desktop service and the panel: options, recovery and limits |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                     | The parts and how they connect                                  |
-| [docs/CONVERSATIONAL_CONTROL_RELEASE.md](docs/CONVERSATIONAL_CONTROL_RELEASE.md) | The opt-in voice, text and job previews, and their checks       |
-| [docs/AUDIO_QUALIFICATION.md](docs/AUDIO_QUALIFICATION.md)                       | The audio test mode for a line                                  |
-| [media/README.md](media/README.md)                                               | The media service, the camera preview and its checks            |
+| Page                                     | What it covers                                  |
+| ---------------------------------------- | ----------------------------------------------- |
+| [INSTALL.md](INSTALL.md)                 | Each install step, update, uninstall and source |
+| [INSTRUCTIONS.md](INSTRUCTIONS.md)       | The full user guide: every command and setting  |
+| [SETUP_CLAWDTIME.md](SETUP_CLAWDTIME.md) | Phone calls and texts on a Chert line           |
+| [docs/MAC_APP.md](docs/MAC_APP.md)       | The Mac app: setup, Settings and how it works   |
+| [docs/SUPERVISOR.md](docs/SUPERVISOR.md) | The chat, voice, memory and coding agents       |
