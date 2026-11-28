@@ -255,6 +255,75 @@ describe("the terminal wizard and consent", () => {
     expect(screen).not.toContain("Computer use is on");
   }, 20_000);
 
+  it("in Terminal, a permission that is still off after check again prints the two reset commands, and setup runs neither", async () => {
+    const off = {
+      panel: { path: "/x/P", accessibility: false, screenRecording: false },
+      capture: { path: "/x/C", screenRecording: true },
+    };
+    const on = {
+      panel: { path: "/x/P", accessibility: true, screenRecording: true },
+      capture: { path: "/x/C", screenRecording: true },
+    };
+    const checks = [off, off];
+    const ports = {
+      ...fakePorts(),
+      permissions: async () => checks.shift() ?? on,
+    };
+    const opened: string[] = [];
+    const answered = new Map<string, number>();
+    // Each prompt is answered once for each time it shows.
+    const answer = (screen: string, prompt: string, reply: () => void) => {
+      const shown = screen.split(prompt).length - 1;
+      if (!screen.endsWith(prompt) || (answered.get(prompt) ?? 0) >= shown)
+        return;
+      answered.set(prompt, shown);
+      setImmediate(reply);
+    };
+    const terminal = fakeTerminal((screen, type) => {
+      answer(
+        screen,
+        "Turn on computer use? Type yes or no. Type skip to do this later: ",
+        () => type("yes\r"),
+      );
+      answer(
+        screen,
+        "Press Enter to open System Settings, type skip to do this later, or type quit to stop: ",
+        () => type("\r"),
+      );
+      answer(
+        screen,
+        "Press Enter when you are done, to check again, or type skip to do this later: ",
+        () => type("\r"),
+      );
+    });
+    const code = await onboardCli(["--local"], {
+      env: { OPENAI_API_KEY: key, TERM_PROGRAM: "Apple_Terminal" },
+      home: folder(),
+      root: folder(),
+      stdin: terminal.input,
+      stdout: terminal.output,
+      ports,
+      pollMs: 0,
+      // Nothing opens on this Mac: the pane is only recorded.
+      openUrl: async (url) => {
+        opened.push(url);
+      },
+    });
+    const screen = terminal.screen();
+    expect(code, screen).toBe(0);
+    expect(screen).toContain(
+      "Permissions: Accessibility and Screen & System Audio Recording are still off for Terminal. If the list shows ClawdTime on, macOS still holds the permission of an older ClawdTime. Remove ClawdTime from the list with the minus button, then turn it on again. Or run these commands in Terminal, then check again.\n" +
+        "    tccutil reset Accessibility com.clawdtime.app\n" +
+        "    tccutil reset ScreenCapture com.clawdtime.app\n",
+    );
+    // The first question does not say it: the person has not said the switches are on yet.
+    expect(screen.split("tccutil reset Accessibility").length - 1).toBe(1);
+    expect(opened).toEqual([
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    ]);
+  }, 20_000);
+
   it("in a real terminal, a yes typed twice 50 ms apart at the display question answers only that question", async () => {
     const coordinator = await fakeCoordinator();
     cleanup.push(coordinator.close);

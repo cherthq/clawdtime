@@ -43,13 +43,21 @@ public final class SetupCoordinator: ObservableObject {
   private var engine: EngineControlling?
   private var run = 0
   private var openedSettingsFor: StepID?
+  /// Asks macOS once in a run for each permission that the engine says is missing.
+  private let permissionRequests: PermissionRequests?
+  /// Runs the reset of ClawdTime's own permissions when the person clicks it.
+  private let resetRunner: CommandRunning?
+  @Published public private(set) var permissionReset = PermissionResetState.idle
   /// Set for a launch after setup was done once: a ready result finishes by itself.
   public var finishWhenReady = false
   public var onFinish: (() -> Void)?
 
   public init(makeEngine: @escaping EngineFactory, owner: ProcessOwning?, open: @escaping (URL) -> Bool, helloTimeout: TimeInterval = 30,
-              answerDelay: TimeInterval = SetupCoordinator.defaultAnswerDelay, now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+              answerDelay: TimeInterval = SetupCoordinator.defaultAnswerDelay, now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+              permissions: PermissionRequests? = nil, resetRunner: CommandRunning? = nil) {
     self.makeEngine = makeEngine
+    self.permissionRequests = permissions
+    self.resetRunner = resetRunner
     self.owner = owner
     self.open = open
     self.helloTimeout = helloTimeout
@@ -96,6 +104,9 @@ public final class SetupCoordinator: ObservableObject {
     let current = run
     setupRun = requested
     state.begin()
+    // Each run asks macOS once more for a permission that is still missing.
+    permissionRequests?.rearmAll()
+    permissionReset = .idle
     answered = nil
     shown = nil
     handedOff = false
@@ -142,6 +153,10 @@ public final class SetupCoordinator: ObservableObject {
       // A new question, or any other news from the engine, ends the wait.
       if step.question != answered { answered = nil }
       if let question = step.question, question != shown?.question { shown = (question, now()) }
+      // macOS shows its own dialog and lists this build: once in a run.
+      if step.id == .permissions, step.state == .needsInput, let needs = step.permissions {
+        permissionRequests?.ask(needs.kinds)
+      }
     case .hello where state.phase != .running:
       // A protocol this app does not speak: leave before any step runs.
       engine?.cancel(grace: 2)
@@ -190,6 +205,34 @@ public final class SetupCoordinator: ObservableObject {
       let step = state.current, step.state == .needsInput || step.state == .failed else { return }
     openedSettingsFor = nil
     perform(.recheck)
+  }
+
+  /// The step on screen says that macOS holds the permission of an older
+  /// build, and this app can reset ClawdTime's own permissions.
+  public var offersPermissionReset: Bool {
+    guard resetRunner != nil, state.phase == .running, let step = state.current,
+      step.id == .permissions, step.state == .needsInput, let needs = step.permissions else { return false }
+    return needs.stale && !needs.kinds.isEmpty
+  }
+  /// The reset is offered and does not run now.
+  public var canResetPermissions: Bool { offersPermissionReset && permissionReset != .running }
+
+  /// Reset ClawdTime permissions: removes only ClawdTime's own entries of
+  /// the permissions that are still off, then asks macOS again, so that the
+  /// list shows this build. The engine checks again by itself.
+  @discardableResult
+  public func resetPermissions() -> Task<Void, Never>? {
+    guard canResetPermissions, let runner = resetRunner, let kinds = state.current?.permissions?.kinds else { return nil }
+    let current = run
+    permissionReset = .running
+    return Task { [weak self] in
+      let worked = await PermissionReset.run(kinds, runner: runner)
+      guard let self, current == self.run else { return }
+      self.permissionReset = worked ? .done : .failed
+      guard worked else { return }
+      self.permissionRequests?.rearm(kinds)
+      self.permissionRequests?.ask(kinds)
+    }
   }
 
   /// Cancels an engine and counts it until it has left.

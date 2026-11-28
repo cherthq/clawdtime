@@ -731,6 +731,9 @@ struct PermissionsPage: View {
         RowDivider()
         row("Screen Recording", who: "Capture helper", detail: "Lets ClawdTime show your screen on a call.", granted: model.permissions?.captureScreenRecording, pane: .screenRecording)
       }
+      if !model.stalePermissions.isEmpty || model.permissionReset != .idle {
+        stale
+      }
       HStack(alignment: .top) {
         Text("In System Settings, open Privacy & Security. Turn on ClawdTime in Accessibility and in Screen & System Audio Recording. This page checks again by itself.")
           .font(.system(size: 11)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
@@ -746,6 +749,32 @@ struct PermissionsPage: View {
         if Task.isCancelled { break }
         await model.checkPermissions(quietly: true)
       }
+    }
+  }
+
+  /// macOS holds the permission of an older build: the words and the reset.
+  private var stale: some View {
+    SettingsGroup {
+      VStack(alignment: .leading, spacing: 10) {
+        if !model.stalePermissions.isEmpty {
+          Text(SettingsModel.staleWords(model.stalePermissions))
+            .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+        }
+        HStack(spacing: 10) {
+          if !model.stalePermissions.isEmpty {
+            Button(PermissionWords.resetLabel) { Task { await model.resetPermissions() } }
+              .buttonStyle(SmallPill(kind: .secondary)).disabled(model.permissionReset == .running)
+          }
+          switch model.permissionReset {
+          case .done: Text(PermissionWords.resetDone).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+          case .failed: Text(PermissionWords.resetFailed).font(.system(size: 12)).foregroundStyle(Theme.danger)
+          case .idle, .running: EmptyView()
+          }
+        }
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 11)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 

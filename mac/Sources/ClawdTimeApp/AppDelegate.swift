@@ -59,7 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       open: { NSWorkspace.shared.open($0) },
       // The second click of a double click never answers the next question,
       // even with a slow double-click setting (capped at 1.5 seconds).
-      answerDelay: min(1.5, max(SetupCoordinator.defaultAnswerDelay, NSEvent.doubleClickInterval + 0.1)))
+      answerDelay: min(1.5, max(SetupCoordinator.defaultAnswerDelay, NSEvent.doubleClickInterval + 0.1)),
+      // A missing permission: macOS lists this build with its own dialog,
+      // once in a run. The reset runs only after the person clicks it.
+      permissions: PermissionRequests(prompt: SystemPermissionPrompt()), resetRunner: ProcessCommandRunner())
     setup.onFinish = { [weak self] in self?.didFinishSetup() }
     settings = makeSettings(layout)
     watch = setup.$state.sink { [weak self] state in
@@ -198,7 +201,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model = SettingsModel(
       runner: ProcessCommandRunner(), launcher: layout?.launcher,
       native: layout?.root.appendingPathComponent("app/native", isDirectory: true),
-      desktop: owner, about: AboutInfo.current(layout), open: { NSWorkspace.shared.open($0) })
+      desktop: owner, about: AboutInfo.current(layout), open: { NSWorkspace.shared.open($0) },
+      prompt: SystemPermissionPrompt())
     let actions = SettingsActions(
       runSetup: { [weak self] in
         guard let self else { return }

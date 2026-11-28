@@ -621,9 +621,12 @@ describe("clawdtime onboard --json", () => {
     const asking = steps(events).filter(
       (event) => event.id === "permissions" && event.state === "needs_input",
     );
-    // Asked, then asked again after the recheck that found it still denied.
+    // Asked, then asked again after the recheck that found it still denied:
+    // the person said it is on, so the words name an older build's permission.
     expect(asking).toHaveLength(2);
-    expect(asking[1]!.detail).toBe(asking[0]!.detail);
+    expect(asking[1]!.detail).toMatch(
+      /^Accessibility is still off for the app you run ClawdTime in, such as Terminal\. If the list shows ClawdTime on, macOS still holds the permission of an older ClawdTime\./,
+    );
     expect(asking[1]!.question).not.toBe(asking[0]!.question);
     expect(asking[0]!.recovery).toEqual({
       label: "Open System Settings",
@@ -754,6 +757,138 @@ describe("clawdtime onboard --json", () => {
     expect(asking.recovery?.url).toBe(
       "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     );
+  });
+
+  describe("a permission that macOS still holds for an older build", () => {
+    const both: PermissionFacts = {
+      panel: {
+        path: "/Applications/Made Up/ClawdTimeTaskPanel",
+        accessibility: false,
+        screenRecording: false,
+      },
+      capture: { screenRecording: true },
+    };
+    const granted: PermissionFacts = {
+      panel: { accessibility: true, screenRecording: true },
+      capture: { screenRecording: true },
+    };
+    /** The person says the switches are on twice; macOS refuses both times, then grants. */
+    const recheckTwice: Responder = (event) =>
+      event.id === "permissions"
+        ? { type: "action", id: "permissions", action: "recheck" }
+        : agree()(event);
+
+    it("in the app, says so after a check again still fails, and names what is missing", async () => {
+      const mac = fakeMac({ permissions: [both, both, granted] });
+      const { events } = await runJson(
+        ["--local", "--app"],
+        folder(),
+        mac.ports,
+        recheckTwice,
+      );
+      const asking = steps(events).filter(
+        (event) => event.id === "permissions" && event.state === "needs_input",
+      );
+      expect(asking).toHaveLength(2);
+      // The first question: the usual words, and what macOS does not grant.
+      expect(asking[0]!.detail).toBe(
+        "In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTime. In Screen & System Audio Recording, turn on ClawdTime. Then check again.",
+      );
+      expect(asking[0]!.permissions).toEqual({
+        missing: ["accessibility", "screen_recording"],
+        stale: false,
+      });
+      // The person said they are on, and macOS still refuses: an older build holds them.
+      expect(asking[1]!.detail).toBe(
+        "Accessibility and Screen & System Audio Recording are still off for ClawdTime. If the list shows ClawdTime on, macOS still holds the permission of an older ClawdTime. Remove ClawdTime from the list with the minus button, then turn it on again. Or click Reset ClawdTime permissions.",
+      );
+      // The app runs its own fixed reset: the event carries no command.
+      expect(asking[1]!.permissions).toEqual({
+        missing: ["accessibility", "screen_recording"],
+        stale: true,
+      });
+      expect(asking[1]!.recovery?.action).toBe("open_settings");
+      expect(stateOf(events, "permissions")).toBe("ready");
+    });
+
+    it("in Terminal, prints the two reset commands for the person to run, and runs nothing", async () => {
+      const mac = fakeMac({ permissions: [both, both, granted] });
+      const { events } = await runJson(
+        ["--local"],
+        folder(),
+        mac.ports,
+        recheckTwice,
+        { env: { TERM_PROGRAM: "Apple_Terminal" } },
+      );
+      const asking = steps(events).filter(
+        (event) => event.id === "permissions" && event.state === "needs_input",
+      );
+      expect(asking[1]!.detail).toBe(
+        "Accessibility and Screen & System Audio Recording are still off for Terminal. If the list shows ClawdTime on, macOS still holds the permission of an older ClawdTime. Remove ClawdTime from the list with the minus button, then turn it on again. Or run these commands in Terminal, then check again.",
+      );
+      expect(asking[1]!.permissions).toEqual({
+        missing: ["accessibility", "screen_recording"],
+        stale: true,
+        reset: [
+          "tccutil reset Accessibility com.clawdtime.app",
+          "tccutil reset ScreenCapture com.clawdtime.app",
+        ],
+      });
+      // Only ClawdTime's own bundle id, never every app.
+      for (const command of asking[1]!.permissions!.reset!)
+        expect(command).toMatch(
+          /^tccutil reset (Accessibility|ScreenCapture) com\.clawdtime\.app$/,
+        );
+      expect(stateOf(events, "permissions")).toBe("ready");
+    });
+
+    it("resets only what is still off", async () => {
+      const accessibility: PermissionFacts = {
+        panel: { accessibility: false, screenRecording: true },
+        capture: { screenRecording: true },
+      };
+      const mac = fakeMac({
+        permissions: [accessibility, accessibility, granted],
+      });
+      const { events } = await runJson(
+        ["--local"],
+        folder(),
+        mac.ports,
+        recheckTwice,
+        { env: { TERM_PROGRAM: "Apple_Terminal" } },
+      );
+      const stale = steps(events).filter(
+        (event) => event.id === "permissions" && event.state === "needs_input",
+      )[1]!;
+      expect(stale.detail).toMatch(
+        /^Accessibility is still off for Terminal\. /,
+      );
+      expect(stale.permissions).toEqual({
+        missing: ["accessibility"],
+        stale: true,
+        reset: ["tccutil reset Accessibility com.clawdtime.app"],
+      });
+    });
+
+    it("is not said while the app checks again by itself: only after the person says they are on", async () => {
+      const mac = fakeMac({ permissions: [both, both, both, granted] });
+      const { events } = await runJson(
+        ["--local", "--app"],
+        folder(),
+        mac.ports,
+        (event) =>
+          event.id === "permissions" && event.state === "needs_input"
+            ? []
+            : agree()(event),
+        { permissionPollMs: 5 },
+      );
+      const asking = steps(events).filter(
+        (event) => event.id === "permissions" && event.state === "needs_input",
+      );
+      expect(asking).toHaveLength(1);
+      expect(asking[0]!.permissions?.stale).toBe(false);
+      expect(stateOf(events, "permissions")).toBe("ready");
+    });
   });
 
   it("falls back to local mode when the coordinator does not answer", async () => {

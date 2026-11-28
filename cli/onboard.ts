@@ -177,6 +177,9 @@ export class TerminalWizard implements OnboardIO {
     if (event.state === "needs_input" || event.state === "failed") {
       if (said && event.detail) {
         this.write(`${event.title}: ${event.detail}`);
+        // Commands for the person to run, one per line. Setup never runs them.
+        for (const command of event.permissions?.reset ?? [])
+          this.write(`    ${command}`);
         // A terminal has no disclosure: the details follow on their own lines.
         if (event.details?.length) {
           this.write("  Details:");

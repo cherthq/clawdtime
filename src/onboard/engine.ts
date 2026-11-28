@@ -56,6 +56,8 @@ import {
   type InputRequest,
   type OnboardCommand,
   type OnboardIO,
+  type PermissionId,
+  type PermissionNeeds,
   type Recovery,
   type ReportRow,
   type SetupRoute,
@@ -202,6 +204,20 @@ const accessibilityPane =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const screenPane =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+/**
+ * The bundle id of the Mac app. macOS ties a permission to it and to the
+ * code of one build. A reset removes only its own entries, never every app's.
+ */
+export const appBundleId = "com.clawdtime.app";
+/** The service names of `tccutil` for each permission. */
+const tccServices: Record<PermissionId, string> = {
+  accessibility: "Accessibility",
+  screen_recording: "ScreenCapture",
+};
+/** The commands that a person runs in Terminal to reset ClawdTime's permissions. */
+export function permissionResetCommands(missing: readonly PermissionId[]) {
+  return missing.map((id) => `tccutil reset ${tccServices[id]} ${appBundleId}`);
+}
 /** The providers that setup offers: each has a default model. */
 const offered = providers.filter((provider) => provider.defaultModel);
 /** The provider that setup chooses when the person has no preference. */
@@ -427,6 +443,7 @@ export class OnboardEngine {
       recovery?: Recovery;
       input?: InputRequest;
       question?: string;
+      permissions?: PermissionNeeds;
     } = {},
   ) {
     this.rows.set(id, { id, state, detail: more.detail ?? "" });
@@ -553,7 +570,12 @@ export class OnboardEngine {
   private async ask(
     id: StepId,
     input: InputRequest,
-    view: { detail?: string; details?: string[]; recovery?: Recovery } = {},
+    view: {
+      detail?: string;
+      details?: string[];
+      recovery?: Recovery;
+      permissions?: PermissionNeeds;
+    } = {},
   ): Promise<
     | { value: string | boolean | string[] }
     | { action: "retry" | "recheck" | "skip" }
@@ -592,7 +614,12 @@ export class OnboardEngine {
   private async askWatching(
     id: StepId,
     input: InputRequest,
-    view: { detail?: string; details?: string[]; recovery?: Recovery },
+    view: {
+      detail?: string;
+      details?: string[];
+      recovery?: Recovery;
+      permissions?: PermissionNeeds;
+    },
     everyMs: number,
     changed: () => Promise<boolean>,
   ): Promise<
@@ -1300,6 +1327,10 @@ export class OnboardEngine {
             : "Computer use is off, so no permission is needed.",
       });
     let checked = false;
+    // The person said that the switches are on: a check again, after System
+    // Settings or not. A permission that is still off then belongs to an
+    // older build: macOS ties it to the code of one build.
+    let saidOn = false;
     for (;;) {
       await this.proceed();
       // A check that the watch made already is not shown again.
@@ -1326,13 +1357,24 @@ export class OnboardEngine {
         return this.step("permissions", "ready", {
           detail: `${this.computerOn ? "Accessibility and Screen Recording are on for ClawdTime." : "Computer use is off, so ClawdTime needs no permission for it."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for calls." : ""}`,
         });
+      const ids = missing.lists.map((one) => one.id);
       const view = {
-        detail: `In System Settings, open Privacy & Security. ${missing.lists.map((one) => `In ${one.list}, turn on ${this.permissionHolder()}.`).join(" ")} ${this.settings.permissionPollMs ? "Setup continues when they are on." : "Then check again."}`,
+        detail: saidOn
+          ? this.stalePermissionWords(missing.lists.map((one) => one.list))
+          : `In System Settings, open Privacy & Security. ${missing.lists.map((one) => `In ${one.list}, turn on ${this.permissionHolder()}.`).join(" ")} ${this.settings.permissionPollMs ? "Setup continues when they are on." : "Then check again."}`,
         details: missing.details,
         recovery: {
           label: "Open System Settings",
           action: "open_settings" as const,
           url: missing.lists[0]!.url,
+        },
+        permissions: {
+          missing: ids,
+          stale: saidOn,
+          // Terminal prints the commands; the app has its own fixed reset.
+          ...(saidOn && !this.settings.appOwned
+            ? { reset: permissionResetCommands(ids) }
+            : {}),
         },
       };
       const input: InputRequest = { kind: "confirm", prompt: "Check again" };
@@ -1357,7 +1399,23 @@ export class OnboardEngine {
       }
       if ("action" in again && again.action === "skip")
         return this.skipStep("permissions");
+      saidOn = true;
     }
+  }
+
+  /**
+   * The words after a check again that still fails. The person may see the
+   * switch on: it belongs to an older build that no longer exists.
+   */
+  private stalePermissionWords(lists: string[]) {
+    return [
+      `${lists.join(" and ")} ${lists.length > 1 ? "are" : "is"} still off for ${this.permissionHolder()}.`,
+      "If the list shows ClawdTime on, macOS still holds the permission of an older ClawdTime.",
+      "Remove ClawdTime from the list with the minus button, then turn it on again.",
+      this.settings.appOwned
+        ? "Or click Reset ClawdTime permissions."
+        : "Or run these commands in Terminal, then check again.",
+    ].join(" ");
   }
 
   /**
@@ -1385,11 +1443,17 @@ export class OnboardEngine {
       screen.push(named("ClawdTimeTaskCapture", facts.capture.path));
     const lists = [
       {
+        id: "accessibility" as const,
         list: "Accessibility",
         binaries: accessibility,
         url: accessibilityPane,
       },
-      { list: this.screenList(), binaries: screen, url: screenPane },
+      {
+        id: "screen_recording" as const,
+        list: this.screenList(),
+        binaries: screen,
+        url: screenPane,
+      },
     ].filter((one) => one.binaries.length);
     const details = [...new Set(lists.flatMap((one) => one.binaries))].flatMap(
       (name) =>

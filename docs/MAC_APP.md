@@ -18,7 +18,15 @@ Requirements: macOS 14 or later on a Mac with Apple silicon.
    System Settings, Privacy & Security, and the item to turn on in it.
    Choose **Open System Settings**, turn the item on, and come back. The app
    checks the step again when you return. **Check again** does the same.
-   **Details** shows the full path of each item, when you need it.
+   **Details** shows the full path of each item, when you need it. The app
+   asks macOS once for each missing permission. macOS then shows its own
+   dialog and adds this ClawdTime to the list.
+   If ClawdTime is on in the list but setup still waits, macOS holds the
+   permission of an older ClawdTime. Remove ClawdTime from the list with the
+   minus button, then turn it on again. Or choose **Reset ClawdTime
+   permissions**. It resets only the permissions of ClawdTime
+   (`tccutil reset Accessibility com.clawdtime.app` and
+   `tccutil reset ScreenCapture com.clawdtime.app`), then asks macOS again.
 6. **Skip for now** is on every step, also while the desktop starts. A skip
    is never a yes. Setup goes on, and the last screen says what each skipped
    step leaves undone and how to finish it. Run setup again to come back to
@@ -74,7 +82,9 @@ mascot), or Command-comma. The sections are on the left:
   risky actions, or never), and the browser.
 - **Permissions**: Accessibility and Screen Recording of the panel and the
   capture helper. The page checks again every few seconds while it is open.
-  A red dot on the section says that a permission is off.
+  A red dot on the section says that a permission is off. When a permission
+  is still off after you open System Settings and come back, the page offers
+  **Reset ClawdTime permissions**, as setup does.
 - **Phone**: whether this Mac is paired, **Pair this Mac** or **Unpair…**,
   the end of your number, and the calls and texts when a question waits.
 - **Privacy**: what ClawdTime keeps on this Mac, how much and where,
@@ -266,7 +276,7 @@ itself:
 | Every section | `clawdtime settings --json`                                                                   | `clawdtime settings set NAME VALUE --json`, `clawdtime settings reset NAME --json`                                                                                              |
 | Assistant     | the same                                                                                      | `clawdtime settings forget-memory --yes --json`                                                                                                                                 |
 | Models        | `clawdtime keys list --json`, `clawdtime computer model --json`                               | `clawdtime keys set PROVIDER` (the key on stdin), `clawdtime keys remove PROVIDER`, `clawdtime computer model PROVIDER/MODEL [--base-url URL]`, `clawdtime computer model auto` |
-| Permissions   | `app/native/ClawdTimeTaskPanel --check-access`, `app/native/ClawdTimeTaskCapture --preflight` | nothing: **Open System Settings** opens `x-apple.systempreferences:` on the right list                                                                                          |
+| Permissions   | `app/native/ClawdTimeTaskPanel --check-access`, `app/native/ClawdTimeTaskCapture --preflight` | **Open System Settings** opens `x-apple.systempreferences:` on the right list; **Reset ClawdTime permissions** runs `/usr/bin/tccutil reset SERVICE com.clawdtime.app`          |
 | Phone         | `clawdtime settings phone --json`                                                             | `clawdtime settings phone unpair --yes --json`, after the app ended the phone connection                                                                                        |
 | Privacy       | `clawdtime settings privacy --json`                                                           | `clawdtime settings delete-history --yes --json`                                                                                                                                |
 | About         | `clawdtime settings update --json`, only when you choose **Check now**                        | `clawdtime uninstall --yes [--keep-settings]`, after the app stopped what it owns                                                                                               |
@@ -305,7 +315,8 @@ none, and the phone connection is off: the same rule as setup.
 - **Download** opens the release page only when it is an `https` address.
   **Open the folder** opens only the state folder or the folder of the logs.
 - The permission checks ask macOS with no prompt. A helper that is not in the
-  runtime shows **Not found**.
+  runtime shows **Not found**. Only a click on **Reset ClawdTime permissions**
+  runs `tccutil`, and only for the bundle id `com.clawdtime.app`.
 
 ### The self-test
 
@@ -352,7 +363,16 @@ mac/scripts/sign-and-notarize.sh --app build/release/ClawdTime.app --out build/r
   and checks a quarantined copy with Gatekeeper.
 - Without both, it signs ad hoc and makes `ClawdTime-<version>-arm64-unsigned.dmg`.
   macOS blocks that file when it is downloaded. Use it for checks on the Mac
-  that built it.
+  that built it. The script prints a warning: permissions reset on every
+  update of an ad hoc build.
+
+**Sign every release with the Developer ID.** macOS ties the Accessibility
+and Screen Recording permissions of an ad hoc app to the code hash (cdhash)
+of one build. After an update to a new ad hoc build, System Settings still
+shows ClawdTime on, but macOS refuses the new build, and setup waits at
+Permissions. A Developer ID signature ties the permissions to the bundle id
+and the team, so they stay after updates.
+
 - `make-dmg.sh --app PATH --out DIR` makes the DMG alone: the app, an
   Applications link, and a `.sha256` file.
 

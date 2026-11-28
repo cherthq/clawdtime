@@ -132,6 +132,10 @@ class PackageAppTests(unittest.TestCase):
                      env={"CLAWDTIME_SIGN_IDENTITY": "Developer ID Application: Stonepad (EXAMPLE123)"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Both CLAWDTIME_SIGN_IDENTITY and CLAWDTIME_NOTARY_PROFILE are needed", result.stderr)
+        # An ad hoc build loses its permissions at each update: the script says so loudly.
+        self.assertIn("WARNING: ad hoc signature.", result.stderr)
+        self.assertIn("Accessibility and Screen Recording reset on every update", result.stderr)
+        self.assertIn("Sign releases with a Developer ID", result.stderr)
         dmg = self.out / "ClawdTime-0.4.0-arm64-unsigned.dmg"
         self.assertTrue(dmg.exists())
         self.assertTrue((self.out / "ClawdTime-0.4.0-arm64-unsigned.dmg.sha256").read_text().endswith("ClawdTime-0.4.0-arm64-unsigned.dmg\n"))

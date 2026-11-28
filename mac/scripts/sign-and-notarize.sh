@@ -38,6 +38,20 @@ else
   if [ -n "$identity$profile" ]; then
     printf 'Both CLAWDTIME_SIGN_IDENTITY and CLAWDTIME_NOTARY_PROFILE are needed for a release. Signing ad hoc.\n' >&2
   fi
+  # macOS ties the permissions of an ad hoc app to the code hash (cdhash) of
+  # one build. A Developer ID signature ties them to the bundle id and team.
+  {
+    printf '\n'
+    printf '########################################################################\n'
+    printf 'WARNING: ad hoc signature. Do not publish this build as a release.\n'
+    printf 'macOS ties Accessibility and Screen Recording to the code hash of this\n'
+    printf 'one build. Accessibility and Screen Recording reset on every update:\n'
+    printf 'System Settings shows ClawdTime on, but the new build is refused.\n'
+    printf 'Sign releases with a Developer ID (CLAWDTIME_SIGN_IDENTITY and\n'
+    printf 'CLAWDTIME_NOTARY_PROFILE), so that the permissions stay after updates.\n'
+    printf '########################################################################\n'
+    printf '\n'
+  } >&2
 fi
 
 work="$(mktemp -d)"

@@ -49,6 +49,20 @@ final class SettingsScreenshotTests: XCTestCase {
       await model.readSettings()
     }),
     Shot(name: "permissions", section: .permissions),
+    // The person opened System Settings and came back, and macOS still refuses: an older build holds the permission.
+    Shot(name: "permissions-stale", section: .permissions, prepare: { runtime, _, model in
+      runtime.answer(["--check-access"], #"{"accessibility":false,"screenRecording":false,"version":1}"#)
+      model.openSettings(.accessibility)
+      model.openSettings(.screenRecording)
+      await model.checkPermissions()
+    }),
+    Shot(name: "permissions-reset", section: .permissions, prepare: { runtime, _, model in
+      runtime.answer(["--check-access"], #"{"accessibility":false,"screenRecording":false,"version":1}"#)
+      model.openSettings(.accessibility)
+      model.openSettings(.screenRecording)
+      await model.checkPermissions()
+      await model.resetPermissions()
+    }),
     Shot(name: "phone", section: .phone, height: 760, prepare: { _, _, model in await model.readPhone() }),
     Shot(name: "phone-unpair", section: .phone, preview: SettingsPreview(confirming: "unpair"), height: 800, prepare: { _, _, model in
       await model.readPhone()

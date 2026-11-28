@@ -155,6 +155,10 @@ public final class SettingsModel: ObservableObject {
   @Published public private(set) var keys: KeysReport?
   @Published public private(set) var model: ModelReport?
   @Published public private(set) var permissions: PermissionStatus?
+  /// The permissions that are still off after the person opened System
+  /// Settings for them and came back: macOS holds an older build's permission.
+  @Published public private(set) var stalePermissions: [PermissionKind] = []
+  @Published public private(set) var permissionReset = PermissionResetState.idle
   /// One plain sentence about the last thing that went wrong.
   @Published public private(set) var problem: String?
   @Published public private(set) var work: Work?
@@ -176,9 +180,13 @@ public final class SettingsModel: ObservableObject {
   private let capture: URL?
   private weak var desktop: DesktopRestarting?
   private let open: (URL) -> Bool
+  private let prompt: PermissionPrompting?
+  /// The lists that the person opened in System Settings, while their permission is off.
+  private var openedPanes: Set<PermissionPane> = []
 
   public init(runner: CommandRunning, launcher: URL?, native: URL?, desktop: DesktopRestarting?, about: AboutInfo,
-              open: @escaping (URL) -> Bool) {
+              open: @escaping (URL) -> Bool, prompt: PermissionPrompting? = nil) {
+    self.prompt = prompt
     self.runner = runner
     self.launcher = launcher
     panel = native?.appendingPathComponent("ClawdTimeTaskPanel")
@@ -461,11 +469,54 @@ public final class SettingsModel: ObservableObject {
       status.captureScreenRecording = object["screenPermission"] as? Bool
     }
     permissions = status
+    let off = Self.offPermissions(status)
+    // A permission that is on ends its wait.
+    openedPanes = openedPanes.filter { pane in off.contains { $0.pane == pane } }
+    // The person came back from System Settings (the window checks when it
+    // comes to the front) or clicked Check again, and it is still off. The
+    // page's own repeated check adds nothing: System Settings may be in front.
+    stalePermissions = quietly
+      ? stalePermissions.filter(off.contains)
+      : off.filter { openedPanes.contains($0.pane) }
+    // Every permission is on: the note of a reset has done its work.
+    if off.isEmpty && permissionReset != .running { permissionReset = .idle }
+  }
+
+  /// The permissions that a helper reported off. One that is not found is not off.
+  static func offPermissions(_ status: PermissionStatus) -> [PermissionKind] {
+    var off: [PermissionKind] = []
+    if status.panelAccessibility == false { off.append(.accessibility) }
+    if status.panelScreenRecording == false || status.captureScreenRecording == false { off.append(.screenRecording) }
+    return off
+  }
+
+  /// Reset ClawdTime permissions: removes only ClawdTime's own entries of the
+  /// permissions that are stale, then asks macOS again, so that the list shows
+  /// this build.
+  public func resetPermissions() async {
+    let kinds = stalePermissions
+    guard !kinds.isEmpty, permissionReset != .running else { return }
+    permissionReset = .running
+    let worked = await PermissionReset.run(kinds, runner: runner)
+    permissionReset = worked ? .done : .failed
+    guard worked else { return }
+    stalePermissions = []
+    openedPanes = []
+    for kind in kinds { prompt?.request(kind) }
+  }
+
+  /// The words of the Permissions page for permissions that macOS holds for an older build.
+  public static func staleWords(_ kinds: [PermissionKind]) -> String {
+    let lists = kinds.map(\.listName)
+    return "\(lists.joined(separator: " and ")) \(lists.count > 1 ? "are" : "is") still off for ClawdTime. \(PermissionWords.olderBuild) Or click \(PermissionWords.resetLabel)."
   }
 
   /// Opens one list in System Settings.
   @discardableResult
-  public func openSettings(_ pane: PermissionPane) -> Bool { open(pane.url) }
+  public func openSettings(_ pane: PermissionPane) -> Bool {
+    openedPanes.insert(pane)
+    return open(pane.url)
+  }
 
   /// The person chose to start the desktop again now.
   public func restartNow() {
