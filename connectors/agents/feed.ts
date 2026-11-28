@@ -43,6 +43,7 @@ import { answerByCall, loadCallLink, openCall, sayByCall } from "./call.js";
 import { agentLabel } from "./catalog.js";
 import { DecisionDesk, type DecisionRequest } from "./decisions.js";
 import { focusSession, realRunner, type Runner } from "./focus.js";
+import { storedKeys } from "../computer/keys.js";
 import { stateRoot } from "./hooks.js";
 import { focusRemote, HostBook, RemoteDesk, remoteSend } from "./hosts.js";
 import { sendText } from "./input.js";
@@ -302,7 +303,7 @@ export class BoardFeed implements AgentBoardPort {
     this.speech =
       options.speech !== undefined
         ? options.speech
-        : speechSettings(process.env);
+        : speechSettings(process.env, storedKeys(this.root).keys);
     // The jobs exist where a new coding session has a folder to work in.
     const jobs = options.project
       ? new Jobs(this.root, {

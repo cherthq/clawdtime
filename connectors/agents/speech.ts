@@ -19,10 +19,17 @@ export interface SpeechSettings {
   request?: typeof fetch;
 }
 
+/**
+ * The environment wins; then the OpenAI key that setup saved in the key store,
+ * so a person who set ClawdTime up in the app or with clawdtime onboard can
+ * talk to it without a key in the environment.
+ */
 export function speechSettings(
   env: Record<string, string | undefined>,
+  stored: Partial<Record<string, string>> = {},
 ): SpeechSettings | null {
-  const key = env.CLAWDTIME_OPENAI_API_KEY || env.OPENAI_API_KEY;
+  const key =
+    env.CLAWDTIME_OPENAI_API_KEY || env.OPENAI_API_KEY || stored.openai;
   if (!key) return null;
   return {
     key,
