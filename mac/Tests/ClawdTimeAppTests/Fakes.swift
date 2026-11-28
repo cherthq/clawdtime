@@ -131,8 +131,10 @@ final class ScriptedEngine: EngineControlling {
 @MainActor
 final class RecordingOwner: ProcessOwning {
   var starts: [Bool] = []
+  /// Whether each start asked to open the chat.
+  var chats: [Bool] = []
   var stops = 0
   var isActive: Bool { !starts.isEmpty && stops == 0 }
-  func start(connection: Bool) { starts.append(connection) }
+  func start(connection: Bool, chat: Bool) { starts.append(connection); chats.append(chat) }
   func stop(completion: @escaping @MainActor () -> Void) { stops += 1; completion() }
 }

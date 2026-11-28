@@ -83,12 +83,28 @@ final class SetupProtocolTests: XCTestCase {
     // --app: the app owns the desktop and the one connection, so setup starts no background connection.
     XCTAssertEqual(SetupProtocol.arguments(local: false), ["onboard", "--json", "--app"])
     XCTAssertEqual(SetupProtocol.arguments(local: true), ["onboard", "--json", "--app", "--local"])
+    // Get calls on your phone is its own, later run. A local run is never a phone run.
+    XCTAssertEqual(SetupProtocol.arguments(.phone), ["onboard", "--json", "--app", "--phone"])
+    XCTAssertEqual(SetupProtocol.arguments(.first), ["onboard", "--json", "--app"])
+    XCTAssertEqual(SetupRun(local: true, phone: true), SetupRun(local: true))
+  }
+
+  func testAChoiceShowsItsDefaultChosenButAConsentQuestionNever() throws {
+    let options = [InputOption(id: "openai", label: "OpenAI"), InputOption(id: "anthropic", label: "Anthropic")]
+    XCTAssertEqual(StepInput(kind: .choice, options: options, default: "openai").preselected, ["openai"])
+    XCTAssertEqual(StepInput(kind: .choice, options: options, consent: true, default: "openai").preselected, [], "a consent question has no default")
+    XCTAssertEqual(StepInput(kind: .choice, options: options, default: "made-up").preselected, [], "an unknown option is never chosen")
+    XCTAssertEqual(StepInput(kind: .confirm, consent: true, default: "yes").preselected, [])
+    // It comes from the engine's event.
+    guard case .step(let step) = try EngineEvent.decode(line: #"{"type":"step","id":"model","state":"needs_input","question":"model-question-0001","input":{"kind":"choice","prompt":"Which model provider do you use?","default":"openai","options":[{"id":"openai","label":"OpenAI"}]}}"#) else { return XCTFail() }
+    XCTAssertEqual(step.input?.default, "openai")
   }
 
   func testStepsHaveTheirFixedOrderAndEveryStepButReadyMayBeSkipped() {
     XCTAssertEqual(StepID.order.map(\.rawValue), ["preflight", "model", "desktop", "computer", "permissions", "phone", "pairing", "connection", "ready"])
     XCTAssertEqual(StepID.order.filter(\.isSkippable), [.preflight, .model, .desktop, .computer, .permissions, .phone, .pairing, .connection])
     for id in StepID.order { XCTAssertFalse(id.fallbackTitle.isEmpty) }
+    XCTAssertEqual(StepID.desktop.fallbackTitle, "Start ClawdTime", "people read Desktop as the macOS desktop")
     XCTAssertEqual(StepID(rawValue: "voice").fallbackTitle, "Voice")
   }
 }

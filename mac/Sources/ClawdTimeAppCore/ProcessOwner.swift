@@ -26,6 +26,15 @@ public struct ManagedCommand: Equatable, Sendable {
     command.environment = ["CLAWDTIME_APP_BUNDLE": app.standardizedFileURL.path]
     return command
   }
+  /// The same desktop, but its panel opens with the chat in focus and one
+  /// suggested first request: the end of setup, when the person chooses Start talking.
+  public func openingChat() -> ManagedCommand {
+    var command = self
+    if let index = command.arguments.firstIndex(of: "--tucked"), index + 1 < command.arguments.count {
+      command.arguments.replaceSubrange(index...index + 1, with: ["--chat"])
+    }
+    return command
+  }
   /// The one shared connection. It needs a ready desktop and ends on SIGTERM.
   /// `--owned`: it also ends by itself when the app is gone, after a crash too,
   /// so it never stays connected with no owner and never keeps the lock.
@@ -58,8 +67,13 @@ public enum OwnedStatus: Equatable, Sendable {
 @MainActor
 public protocol ProcessOwning: AnyObject {
   var isActive: Bool { get }
-  func start(connection: Bool)
+  /// `chat`: the panel opens with the chat in focus, for the end of setup.
+  func start(connection: Bool, chat: Bool)
   func stop(completion: @escaping @MainActor () -> Void)
+}
+
+extension ProcessOwning {
+  public func start(connection: Bool) { start(connection: connection, chat: false) }
 }
 
 /// The one owner of the desktop and connection processes. It starts the
@@ -108,16 +122,26 @@ public final class ProcessOwner: ObservableObject, ProcessOwning {
   public var desktopPID: pid_t? { desktopChild?.pid }
   public var connectionPID: pid_t? { connectionChild?.pid }
 
-  /// Starts the desktop, then the connection once the desktop is ready.
-  public func start(connection wanted: Bool) {
-    guard !stopping, desktopChild == nil else { return }
+  /// Starts the desktop, then the connection once the desktop is ready. A
+  /// desktop that runs already is kept: then only a connection that is
+  /// wanted and not running starts, beside it. `chat`: the panel opens with
+  /// the chat in focus.
+  public func start(connection wanted: Bool, chat: Bool = false) {
+    guard !stopping else { return }
+    guard desktopChild == nil else {
+      if wanted, desktop == .running, connectionChild == nil {
+        wantsConnection = true
+        desktopReady()
+      }
+      return
+    }
     wantsConnection = wanted
     generation += 1
     let current = generation
     panelClosed = false
     desktop = .starting
     do {
-      desktopChild = try spawn(desktopCommand, onLine: { [weak self] line in
+      desktopChild = try spawn(chat ? desktopCommand.openingChat() : desktopCommand, onLine: { [weak self] line in
         guard let self, current == self.generation else { return }
         if self.desktop == .starting, ManagedCommand.isReadyLine(line) {
           self.desktopReady()

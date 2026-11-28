@@ -20,20 +20,22 @@ import {
 import { macPorts, packageVersion } from "../src/onboard/system.js";
 import { checkoutRoot, startCli } from "./start.js";
 
-export const onboardHelp = `clawdtime onboard: set up ClawdTime on this Mac, step by step
-  clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]
-  --local          set up this Mac alone: no phone, pairing or shared connection
+export const onboardHelp = `clawdtime onboard: set up ClawdTime on this Mac, then talk to it
+  clawdtime onboard [--phone] [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]
+  --phone          get calls on your phone: verify your phone, pair this Mac and connect it
+  --local          set up this Mac alone, also on a Mac that is paired already
   --coordinator    the https origin of the shared number's coordinator. Without it,
                    CLAWDTIME_COORDINATOR, then the coordinator of this release
   --json           speak the setup protocol on standard input and output (docs/ONBOARDING.md)
   --app            the ClawdTime app drives setup and owns the desktop and the connection:
                    setup opens no panel and starts no background connection
-It checks this Mac, stores your model key, starts the desktop, asks for computer use,
-checks the permissions, verifies your phone, pairs this Mac and connects it. Run it
-again to continue where it stopped: a step that is ready is checked, not repeated.
-A sign-in text goes out only after you say yes. Keys, numbers and codes are never shown.`;
+It checks this Mac, finds or asks for your model key, starts ClawdTime, asks for computer
+use and checks the permissions. Then it opens the chat. Your phone is a later step:
+clawdtime onboard --phone. Run setup again to continue where it stopped: a step that
+is ready is checked, not repeated. A sign-in text goes out only after you say yes.
+Keys, numbers and codes are never shown.`;
 const usage =
-  "Use: clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]";
+  "Use: clawdtime onboard [--phone] [--local] [--coordinator HTTPS_ORIGIN] [--json] [--app]";
 export const noTerminalLine =
   "Run clawdtime onboard in Terminal to finish setup.";
 
@@ -57,6 +59,8 @@ export interface OnboardCliDependencies {
   ports?: OnboardPorts;
   /** Opens a System Settings pane for the terminal wizard. */
   openUrl?: (url: string) => Promise<void>;
+  /** How often the permissions step checks again by itself, with --json. 0: never. */
+  permissionPollMs?: number;
   allowLoopback?: boolean;
   desktopWaitMs?: number;
   pollMs?: number;
@@ -108,6 +112,8 @@ class Interrupted extends Error {}
 export class TerminalWizard implements OnboardIO {
   private pending: StepEvent | null = null;
   private shown = new Map<string, string>();
+  /** The title of each step, as its events say it, for the report. */
+  private titles = new Map<string, string>();
   /** Quit, Ctrl+C or the end of the terminal's input at a question. */
   private stopped = false;
   /** Ends the line that is being read now, if any. */
@@ -156,12 +162,13 @@ export class TerminalWizard implements OnboardIO {
       for (const row of event.report)
         if (row.id !== "ready")
           this.write(
-            `  ${row.id.padEnd(12)} ${row.state.replace("_", " ")}${(row.state === "skipped" || row.state === "failed") && row.detail ? `. ${row.detail}` : ""}`,
+            `  ${`${this.titles.get(row.id) ?? row.id}:`.padEnd(18)} ${row.state.replace("_", " ")}${(row.state === "skipped" || row.state === "failed") && row.detail ? `. ${row.detail}` : ""}`,
           );
       const ready = event.report.find((row) => row.id === "ready");
       if (ready?.detail) this.write(ready.detail);
       return;
     }
+    this.titles.set(event.id, event.title);
     if (event.state === "pending") return;
     // Each detail is shown once; a question shows it when it changes.
     const key = `${event.id}:${event.state}:${event.detail ?? ""}`;
@@ -175,6 +182,9 @@ export class TerminalWizard implements OnboardIO {
           this.write("  Details:");
           for (const line of event.details) this.write(`    ${line}`);
         }
+        // A page to open, such as where to get a key: the terminal shows its address.
+        if (event.recovery?.action === "open_url" && event.recovery.url)
+          this.write(`  ${event.recovery.label}: ${event.recovery.url}`);
       }
       // Only a question is answered: a failure that waits for nothing is not.
       if (event.question) {
@@ -301,8 +311,17 @@ export class TerminalWizard implements OnboardIO {
           `  ${index + 1}. ${option.label}${option.detail ? `. ${option.detail}` : ""}`,
         ),
       );
+      // Return takes the default of a choice. A consent choice has none.
+      const fallback = asked.consent
+        ? -1
+        : options.findIndex((option) => option.id === asked.default);
       for (;;) {
-        const reply = (await this.line(`Type a number.${later}: `)).trim();
+        const reply = (
+          await this.line(
+            `Type a number${fallback >= 0 ? `, or press Enter for ${fallback + 1}` : ""}.${later}: `,
+          )
+        ).trim();
+        if (reply === "" && fallback >= 0) return input(options[fallback]!.id);
         const option = options[Number(reply) - 1];
         if (option && /^\d+$/.test(reply)) return input(option.id);
         if (skips(reply)) return action("skip");
@@ -414,11 +433,18 @@ export class TerminalWizard implements OnboardIO {
 }
 
 function parse(args: string[]) {
-  const options = { local: false, json: false, help: false, app: false } as {
+  const options = {
+    local: false,
+    json: false,
+    help: false,
+    app: false,
+    phone: false,
+  } as {
     local: boolean;
     json: boolean;
     help: boolean;
     app: boolean;
+    phone: boolean;
     coordinator?: string;
   };
   for (let i = 0; i < args.length; i++) {
@@ -427,6 +453,7 @@ function parse(args: string[]) {
     else if (arg === "--local" && !options.local) options.local = true;
     else if (arg === "--json" && !options.json) options.json = true;
     else if (arg === "--app" && !options.app) options.app = true;
+    else if (arg === "--phone" && !options.phone) options.phone = true;
     else if (arg === "--coordinator" && options.coordinator === undefined) {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw Error(usage);
@@ -435,6 +462,10 @@ function parse(args: string[]) {
   }
   if (options.local && options.coordinator !== undefined)
     throw Error("Use --local or --coordinator, not both.");
+  if (options.local && options.phone)
+    throw Error(
+      "Use --local or --phone, not both: calls on your phone need pairing.",
+    );
   if (options.app && !options.json)
     throw Error("--app goes with --json: the app speaks the setup protocol.");
   return options;
@@ -518,12 +549,24 @@ export async function onboardCli(
       app: options.app,
       command,
       startDesktop: desktopStarter(options.app, { env, home, root }),
+      // Terminal setup opens the chat when it ends. The app opens it itself.
+      ...(options.app
+        ? {}
+        : {
+            openChat: (say: (line: string) => void) =>
+              startCli(["--chat"], { env, home, root, print: say }),
+          }),
     });
   const engine = new OnboardEngine(
     io,
     {
       version: packageVersion(root),
       local: options.local,
+      ...(options.phone ? { route: "phone" as const } : {}),
+      // With the protocol, setup checks the permissions again by itself.
+      ...(options.json && (dependencies.permissionPollMs ?? 2000) > 0
+        ? { permissionPollMs: dependencies.permissionPollMs ?? 2000 }
+        : {}),
       ...(options.app ? { appOwned: true } : {}),
       ...(options.coordinator !== undefined
         ? { coordinator: options.coordinator }

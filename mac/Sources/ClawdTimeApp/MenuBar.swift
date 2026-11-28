@@ -42,6 +42,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
   private let busy: () -> Bool
   private let openWindow: () -> Void
   private let openSettings: () -> Void
+  private let phone: () -> Void
   private let stop: () -> Void
   private let start: () -> Void
   private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -50,13 +51,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
   /// `shown`: the app's item shows now. `busy`: setup runs, so Stop has work to end.
   init(owner: ProcessOwner, shown: @escaping () -> Bool, busy: @escaping () -> Bool = { false },
-       openWindow: @escaping () -> Void, openSettings: @escaping () -> Void = {},
+       openWindow: @escaping () -> Void, openSettings: @escaping () -> Void = {}, phone: @escaping () -> Void = {},
        stop: @escaping () -> Void, start: @escaping () -> Void) {
     self.owner = owner
     self.shown = shown
     self.busy = busy
     self.openWindow = openWindow
     self.openSettings = openSettings
+    self.phone = phone
     self.stop = stop
     self.start = start
     super.init()
@@ -65,10 +67,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     open.target = self
     let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
     settings.target = self
+    // The phone is a later, optional step: setup opens it in its window.
+    let calls = NSMenuItem(title: "Get calls on your phone…", action: #selector(getCalls), keyEquivalent: "")
+    calls.target = self
     statusLine.isEnabled = false
     stopItem.target = self
     let quit = NSMenuItem(title: "Quit ClawdTime", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-    menu.items = [open, settings, .separator(), statusLine, stopItem, .separator(), quit]
+    menu.items = [open, settings, calls, .separator(), statusLine, stopItem, .separator(), quit]
     watch = owner.objectWillChange.sink { [weak self] _ in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.refresh() } }
     }
@@ -106,5 +111,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
   @objc private func openClawdTime() { openWindow() }
   @objc private func showSettings() { openSettings() }
+  @objc private func getCalls() { phone() }
   @objc private func toggle() { owner.isActive || busy() ? stop() : start() }
 }

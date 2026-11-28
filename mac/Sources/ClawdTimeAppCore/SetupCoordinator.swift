@@ -32,7 +32,10 @@ public final class SetupCoordinator: ObservableObject {
   private var afterDrain: [@MainActor () -> Void] = []
   private var beginQueued = false
 
-  public typealias EngineFactory = @MainActor (_ local: Bool) throws -> EngineControlling
+  /// Which setup runs now: the first run, or the later phone run.
+  @Published public private(set) var setupRun = SetupRun.first
+
+  public typealias EngineFactory = @MainActor (_ run: SetupRun) throws -> EngineControlling
   private let makeEngine: EngineFactory
   private let owner: ProcessOwning?
   private let open: (URL) -> Bool
@@ -70,7 +73,13 @@ public final class SetupCoordinator: ObservableObject {
   public var engineIsRunning: Bool { engine != nil }
 
   /// Starts (or starts again) the engine. A rerun resumes: ready steps are checked, not repeated.
-  public func begin(local: Bool = false) {
+  public func begin(local: Bool = false) { begin(SetupRun(local: local)) }
+
+  /// Get calls on your phone: the later, optional run. It verifies the phone,
+  /// pairs this Mac and connects it, each with its own consent.
+  public func beginPhone() { begin(.phone) }
+
+  public func begin(_ requested: SetupRun) {
     guard engine == nil else { return }
     // Two engines never run at once: a stopped one leaves first.
     guard draining == 0 else {
@@ -78,19 +87,20 @@ public final class SetupCoordinator: ObservableObject {
         beginQueued = true
         afterDrain.append { [weak self] in
           self?.beginQueued = false
-          self?.begin(local: local)
+          self?.begin(requested)
         }
       }
       return
     }
     run += 1
     let current = run
+    setupRun = requested
     state.begin()
     answered = nil
     shown = nil
     handedOff = false
     let engine: EngineControlling
-    do { engine = try makeEngine(local) } catch {
+    do { engine = try makeEngine(requested) } catch {
       state.fail(.engineDidNotStart())
       return
     }
@@ -204,7 +214,7 @@ public final class SetupCoordinator: ObservableObject {
   private func endSetupDesktop() {
     guard holdsSetupDesktop else { return }
     holdsSetupDesktop = false
-    guard let cleanup = try? makeEngine(false) else { return }
+    guard let cleanup = try? makeEngine(.first) else { return }
     do { try cleanup.start() } catch { return }
     drain(cleanup)
   }
@@ -231,13 +241,14 @@ public final class SetupCoordinator: ObservableObject {
     owner.stop { finish() }
   }
 
-  /// Setup is done: start what the report says is ready.
-  public func finish() {
+  /// Setup is done: start what the report says is ready. `chat`: the panel
+  /// opens with the chat in focus and one first request (Start talking).
+  public func finish(chat: Bool = false) {
     guard case .finished = state.phase else { return }
     let desktopReady = state.reported(.desktop) == .ready
     let connectionReady = state.reported(.connection) == .ready
     // The owner takes over the desktop that setup started.
-    if desktopReady, let owner { owner.start(connection: connectionReady); holdsSetupDesktop = false }
+    if desktopReady, let owner { owner.start(connection: connectionReady, chat: chat); holdsSetupDesktop = false }
     handedOff = true
     onFinish?()
   }

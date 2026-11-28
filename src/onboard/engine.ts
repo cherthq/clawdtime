@@ -51,13 +51,14 @@ import {
 } from "./pairing.js";
 import {
   onboardProtocol,
+  routeSteps,
   skippableSteps,
-  stepIds,
   type InputRequest,
   type OnboardCommand,
   type OnboardIO,
   type Recovery,
   type ReportRow,
+  type SetupRoute,
   type StepId,
   type StepState,
 } from "./protocol.js";
@@ -70,6 +71,14 @@ export interface PermissionFacts {
     screenRecording: boolean;
   };
   capture: { path?: string; screenRecording: boolean };
+}
+
+/** A model key that setup found outside the environment and the key store. */
+export interface KnownKey {
+  provider: Provider;
+  key: string;
+  /** Where it was found, for the details: a file path. Never shown in a detail. */
+  source: string;
 }
 
 /** Everything that touches the Mac or the network. Tests replace each one. */
@@ -104,7 +113,19 @@ export interface OnboardPorts {
     useOther?(other: OtherInstall): Promise<void>;
     /** Stops the desktop of another install, checked by its own files. Optional. */
     stopOther?(other: OtherInstall): Promise<void>;
+    /**
+     * Opens the chat of the running desktop with the keys, and one suggested
+     * first request. Optional: Terminal setup calls it when it ends ready.
+     * The Mac app opens the chat itself.
+     */
+    openChat?(log: (message: string) => void): Promise<void>;
   };
+  /**
+   * Model keys in the shell startup files of the person, read as text: no
+   * shell runs. Optional. The Mac app starts with no shell variables, so a key
+   * that the person exported is found here.
+   */
+  knownKeys?(): Promise<KnownKey[]>;
   /** A fresh read-only check of the installed panel and capture helper. */
   permissions(): Promise<PermissionFacts>;
   displays: {
@@ -138,6 +159,11 @@ export interface OnboardSettings {
   version: string;
   local: boolean;
   /**
+   * `phone`: the later run that gets calls on the person's phone
+   * (`--phone`). Otherwise the first run, or every step on a paired Mac.
+   */
+  route?: "first" | "phone";
+  /**
    * The Mac app drives setup and owns the long-lived processes: setup starts
    * no background connection, and the app connects after setup.
    */
@@ -153,6 +179,8 @@ export interface OnboardSettings {
   allowLoopback?: boolean;
   desktopWaitMs?: number;
   pollMs?: number;
+  /** How often the permissions step checks again by itself. 2 seconds unless set. */
+  permissionPollMs?: number;
 }
 
 class Cancelled extends Error {}
@@ -160,12 +188,12 @@ class Cancelled extends Error {}
 const titles: Record<StepId, string> = {
   preflight: "Check this Mac",
   model: "Model key",
-  desktop: "Desktop",
+  desktop: "Start ClawdTime",
   computer: "Computer use",
   permissions: "Permissions",
   phone: "Your phone",
   pairing: "Pair this Mac",
-  connection: "Shared connection",
+  connection: "Phone connection",
   ready: "Ready",
 };
 
@@ -176,6 +204,37 @@ const screenPane =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 /** The providers that setup offers: each has a default model. */
 const offered = providers.filter((provider) => provider.defaultModel);
+/** The provider that setup chooses when the person has no preference. */
+const preferred = offered[0]!;
+/** Where each offered provider makes keys. */
+const keyPages: Partial<Record<Provider["id"], string>> = {
+  openai: "https://platform.openai.com/api-keys",
+  anthropic: "https://console.anthropic.com/settings/keys",
+};
+
+/**
+ * The provider that a key belongs to, from the start of the key, among the
+ * offered ones. Null when the start does not tell.
+ */
+export function providerOfKey(key: string): Provider | null {
+  const id = key.startsWith("sk-ant-")
+    ? "anthropic"
+    : key.startsWith("sk-")
+      ? "openai"
+      : null;
+  return offered.find((provider) => provider.id === id) ?? null;
+}
+
+/**
+ * The one request that the chat offers when setup opens it. The panel shows
+ * the same words (TaskPanelCore FirstRequest): change both together. It
+ * pays, deletes and sends nothing.
+ */
+export function firstRequest(computerUse: boolean) {
+  return computerUse
+    ? "Open Calculator and calculate 15 percent of 240."
+    : "What can you do on this Mac?";
+}
 
 /** A phone number as the coordinator takes it: + and 7 to 15 digits. */
 export function normalizePhone(raw: string): string | null {
@@ -198,20 +257,20 @@ function plain(error: unknown, fallback: string) {
 /** What a skipped step leaves undone, and the command that finishes it. */
 const later = {
   preflight:
-    "The ClawdTime panel is missing, so the desktop cannot start. Install ClawdTime again, then run clawdtime onboard.",
+    "The ClawdTime panel is missing, so ClawdTime cannot start. Install ClawdTime again, then run clawdtime onboard.",
   model:
     "No model key is stored, so ClawdTime cannot plan or chat yet. To add one later, run clawdtime onboard, or clawdtime keys set PROVIDER.",
   desktop:
-    "The desktop does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard.",
+    "ClawdTime does not run, so the chat and computer use do not work yet. To start it later, run clawdtime start, or clawdtime onboard.",
   computer: "Computer use stays off. Turn it on later: clawdtime computer on",
   permissions:
     "Screen Recording and Accessibility are not on yet, so ClawdTime cannot see or use this Mac. Turn them on in System Settings, then run clawdtime onboard.",
   phone:
-    "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+    "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard --phone.",
   pairing:
-    "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard.",
+    "This Mac is not paired, so calls from your phone cannot reach it. To pair it later, run clawdtime onboard --phone.",
   connection:
-    "This Mac is not connected, so calls from your phone cannot reach it. To connect it later, run clawdtime onboard.",
+    "This Mac is not connected, so calls from your phone cannot reach it. To connect it later, run clawdtime onboard --phone.",
 } satisfies Record<Exclude<StepId, "ready">, string>;
 
 const answers = (view: boolean, control: boolean, reports: boolean) =>
@@ -240,6 +299,11 @@ export class OnboardEngine {
   private skippedByPerson = new Set<StepId>();
   /** The Darwin major version that preflight read (24 is macOS 15). */
   private darwin: number | null = null;
+  /** The steps of this run, in order. */
+  private route: SetupRoute = "first";
+  private steps: readonly StepId[] = routeSteps.first;
+  /** The provider of a key that setup found and stored in this run. */
+  private found: Provider | null = null;
   private readonly now: () => number;
   private readonly root: string;
   private readonly pairingFiles: { directory: string; file: string };
@@ -261,28 +325,32 @@ export class OnboardEngine {
       protocol: onboardProtocol,
       version: this.settings.version,
     });
-    for (const id of stepIds) this.step(id, "pending");
+    this.route = this.chooseRoute();
+    this.steps = routeSteps[this.route];
+    for (const id of this.steps) this.step(id, "pending");
+    const runs: Partial<Record<StepId, () => Promise<void>>> = {
+      model: () => this.model(),
+      desktop: () => this.desktop(),
+      computer: () => this.computer(),
+      permissions: () => this.permissions(),
+      phone: () => this.phone(),
+      pairing: () => this.pairing(),
+      connection: () => this.connection(),
+    };
     let cancelled = false;
     try {
       await this.proceed();
-      if (await this.preflight()) {
-        for (const step of [
-          () => this.model(),
-          () => this.desktop(),
-          () => this.computer(),
-          () => this.permissions(),
-          () => this.phone(),
-          () => this.pairing(),
-          () => this.connection(),
-        ]) {
+      if (await this.preflight())
+        for (const id of this.steps) {
+          const step = runs[id];
+          if (!step) continue;
           await this.proceed();
           await step();
         }
-      }
     } catch (error) {
       if (error instanceof Cancelled) cancelled = true;
       else {
-        const open = stepIds.find(
+        const open = this.steps.find(
           (id) =>
             id !== "ready" &&
             ["in_progress", "needs_input", "pending"].includes(
@@ -313,7 +381,7 @@ export class OnboardEngine {
         () => (stopped = true),
         () => this.log("warn", "The desktop that setup started did not stop."),
       );
-    const ready = !cancelled && this.finish();
+    const ready = !cancelled && (await this.finish());
     // The app learns whether a desktop that setup started runs with no
     // owner: its owner takes it on Finish, or a Stop ends it.
     const setupDesktop = this.settings.appOwned
@@ -324,10 +392,24 @@ export class OnboardEngine {
     this.io.emit({
       type: "done",
       ready,
-      report: stepIds.map((id) => this.rows.get(id)!),
+      report: this.steps.map((id) => this.rows.get(id)!),
       ...(setupDesktop !== undefined ? { setupDesktop } : {}),
     });
     return { ready, cancelled };
+  }
+
+  /**
+   * The steps of this run. `--phone` asks for the phone steps. A Mac that is
+   * paired already takes every step, so that a rerun keeps it connected as
+   * before. Any other run is the first run: what is needed to talk to
+   * ClawdTime on this Mac.
+   */
+  private chooseRoute(): SetupRoute {
+    if (this.settings.route === "phone") return "phone";
+    if (this.settings.local) return "first";
+    return readSharedPairing(this.pairingFiles.file).kind === "none"
+      ? "first"
+      : "all";
   }
 
   /** A desktop that an app setup started runs, with no owner. A failed check counts as one. */
@@ -501,6 +583,81 @@ export class OnboardEngine {
     }
   }
 
+  /**
+   * Asks one question, as `ask` does, and checks `changed` every `everyMs`
+   * while the question is open. When the check says yes first, the question
+   * ends with no answer ("changed"): a command that comes for it later names
+   * an old question and is refused. `changed` only reads: it has no effect.
+   */
+  private async askWatching(
+    id: StepId,
+    input: InputRequest,
+    view: { detail?: string; details?: string[]; recovery?: Recovery },
+    everyMs: number,
+    changed: () => Promise<boolean>,
+  ): Promise<
+    | { value: string | boolean | string[] }
+    | { action: "retry" | "recheck" | "skip" }
+    | "changed"
+  > {
+    for (;;) {
+      const question = this.newQuestion();
+      this.step(id, "needs_input", { ...view, input, question });
+      let over = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const watched = new Promise<"changed">((resolve) => {
+        const tick = async () => {
+          if (over || this.io.cancelled()) return;
+          const yes = await changed().catch(() => false);
+          if (over) return;
+          if (yes) return resolve("changed");
+          timer = setTimeout(() => void tick(), everyMs);
+        };
+        timer = setTimeout(() => void tick(), everyMs);
+      });
+      const answered = (async () => {
+        for (;;) {
+          const command = await this.nextCommand();
+          // The watch ended the question first: the command is the next one's.
+          if (over) return null;
+          this.pendingNext = null;
+          if (
+            command.type !== "cancel" &&
+            (command.question !== question || command.id !== id)
+          ) {
+            this.log(
+              "warn",
+              "That answer is not for the question that is open now. It was ignored.",
+            );
+            continue;
+          }
+          return command;
+        }
+      })();
+      const first = await Promise.race([watched, answered]);
+      over = true;
+      clearTimeout(timer);
+      if (first === "changed") return "changed";
+      if (!first || first.type === "cancel") throw new Cancelled();
+      if (first.type === "action") {
+        if (first.action === "skip" && !skippableSteps.has(id)) {
+          this.log("warn", "This step cannot be skipped.");
+          continue;
+        }
+        return { action: first.action };
+      }
+      const value = this.fit(input, first.value);
+      if (value === undefined) {
+        this.log(
+          "warn",
+          "That answer does not fit the question. Answer again.",
+        );
+        continue;
+      }
+      return { value };
+    }
+  }
+
   private fit(input: InputRequest, value: string | boolean | string[]) {
     if (input.kind === "confirm") {
       if (typeof value === "boolean") return value;
@@ -593,7 +750,9 @@ export class OnboardEngine {
         break;
       }
     let mode: string;
-    if (this.settings.local) mode = "Local mode: no phone pairing.";
+    // The first run needs no coordinator: it never reads one.
+    if (this.route === "first") mode = "";
+    else if (this.settings.local) mode = "Local mode: no phone pairing.";
     else {
       const choice = chooseCoordinator({
         ...(this.settings.coordinator !== undefined
@@ -604,7 +763,7 @@ export class OnboardEngine {
         allowLoopback: this.settings.allowLoopback === true,
       });
       const local =
-        "Setup runs in local mode. Run clawdtime onboard again later to pair your phone.";
+        "Setup runs in local mode. To pair your phone later, run clawdtime onboard --phone.";
       if (choice.kind === "none")
         mode = "No coordinator is set, so setup runs in local mode.";
       else if (choice.kind === "invalid") {
@@ -651,13 +810,14 @@ export class OnboardEngine {
     if (panelSkipped) this.skipStep("preflight");
     else
       this.step("preflight", "ready", {
-        detail: `macOS and Apple silicon checked. ${mode}`,
+        detail: `This Mac can run ClawdTime.${mode ? ` ${mode}` : ""}`,
       });
     return true;
   }
 
   private async model() {
     const env = this.settings.env;
+    let looked = false;
     for (;;) {
       const setup = plannerSetup(env, this.root);
       if (setup.ok) {
@@ -665,9 +825,11 @@ export class OnboardEngine {
         this.step("model", "ready", {
           detail: !keyFrom
             ? `${provider.name} needs no key.`
-            : keyFrom.kind === "environment"
-              ? `A key for ${provider.name} is set in ${keyFrom.name}.`
-              : `A key for ${provider.name} is in the protected key store.`,
+            : this.found?.id === provider.id
+              ? `ClawdTime found your ${provider.name} key in your shell settings. It checked the key. It keeps the key in the protected key store.`
+              : keyFrom.kind === "environment"
+                ? `A key for ${provider.name} is set in ${keyFrom.name}.`
+                : `A key for ${provider.name} is in the protected key store.`,
         });
         return;
       }
@@ -679,20 +841,29 @@ export class OnboardEngine {
           return this.skipStep("model");
         continue;
       }
+      // A key that the person has already, outside the environment: no question.
+      if (!looked) {
+        looked = true;
+        if (await this.findKnownKey()) continue;
+      }
       const choice = await this.ask(
         "model",
         {
           kind: "choice",
           prompt: "Which model provider do you use?",
+          default: preferred.id,
           options: offered.map((provider) => ({
             id: provider.id,
             label: provider.name,
-            detail: `Plans with ${provider.defaultModel}.`,
+            detail: `${provider.id === preferred.id ? "The default. " : ""}ClawdTime uses ${provider.defaultModel}.`,
           })),
         },
         {
           detail:
-            "ClawdTime plans each action with a language model. Your key stays on this Mac. For another provider, run clawdtime keys set PROVIDER, then run this again.",
+            "ClawdTime uses a language model to plan each action. Your key stays on this Mac.",
+          details: [
+            "For another provider, run clawdtime keys set PROVIDER, then run clawdtime onboard again.",
+          ],
         },
       );
       if ("action" in choice) {
@@ -705,14 +876,97 @@ export class OnboardEngine {
     }
   }
 
+  /**
+   * Uses a key that the person keeps in the shell startup files. Each key is
+   * checked with its provider first: a refused key is not used. The key goes
+   * only to the check and the protected key store, as a pasted key does.
+   */
+  private async findKnownKey(): Promise<boolean> {
+    let known: KnownKey[] = [];
+    try {
+      known = (await this.ports.knownKeys?.()) ?? [];
+    } catch {
+      known = [];
+    }
+    for (const candidate of known) {
+      const { provider } = candidate;
+      if (!offered.includes(provider)) continue;
+      let key: string;
+      try {
+        key = checkKey(candidate.key);
+      } catch {
+        continue;
+      }
+      await this.proceed();
+      this.step("model", "in_progress", {
+        detail: `Checking the ${provider.name} key from your shell settings.`,
+      });
+      const verdict = await this.ports
+        .validateKey(provider, key)
+        .catch(() => "unchecked" as const);
+      if (verdict === "refused") {
+        this.log(
+          "warn",
+          `${provider.name} refused the key in your shell settings, so ClawdTime does not use it.`,
+        );
+        continue;
+      }
+      if (verdict === "unchecked")
+        this.log(
+          "warn",
+          `${provider.name} could not be reached to check the key from your shell settings. It is stored anyway.`,
+        );
+      await this.proceed();
+      try {
+        this.keep(provider, key);
+      } catch {
+        this.log(
+          "warn",
+          "The key from your shell settings could not be stored. Paste it instead.",
+        );
+        return false;
+      }
+      this.found = provider;
+      return true;
+    }
+    return false;
+  }
+
+  /** Stores a key. The provider of the key plans, even when a key of another one is set. */
+  private keep(provider: Provider, key: string) {
+    storeKey(this.root, provider, key);
+    const after = plannerSetup(this.settings.env, this.root);
+    if (
+      !this.settings.env.CLAWDTIME_COMPUTER_MODEL?.trim() &&
+      provider.defaultModel &&
+      (!after.ok || after.settings.provider.id !== provider.id)
+    )
+      storeModelChoice(this.root, {
+        model: `${provider.id}/${provider.defaultModel}`,
+      });
+  }
+
   /** Reads, checks and stores one key. It returns to the provider choice on retry. */
-  private async takeKey(provider: Provider): Promise<"skip" | undefined> {
+  private async takeKey(chosen: Provider): Promise<"skip" | undefined> {
+    let provider = chosen;
     let detail = `Paste your ${provider.name} API key. It is not shown.`;
     for (;;) {
+      const page = keyPages[provider.id];
       const answer = await this.ask(
         "model",
         { kind: "secret", prompt: `${provider.name} API key` },
-        { detail },
+        {
+          detail,
+          ...(page
+            ? {
+                recovery: {
+                  label: `Get a key from ${provider.name}`,
+                  action: "open_url",
+                  url: page,
+                },
+              }
+            : {}),
+        },
       );
       if ("action" in answer)
         return answer.action === "skip" ? "skip" : undefined;
@@ -722,6 +976,16 @@ export class OnboardEngine {
       } catch (error) {
         detail = plain(error, "That key cannot be used. Nothing was stored.");
         continue;
+      }
+      // The start of a key tells its provider: a key of the other provider
+      // is used with that provider, not refused.
+      const owner = providerOfKey(key);
+      if (owner && owner.id !== provider.id) {
+        this.log(
+          "info",
+          `This key is for ${owner.name}, so ClawdTime uses ${owner.name}.`,
+        );
+        provider = owner;
       }
       await this.proceed();
       this.step("model", "in_progress", {
@@ -741,17 +1005,7 @@ export class OnboardEngine {
         );
       await this.proceed();
       try {
-        storeKey(this.root, provider, key);
-        // The chosen provider plans, even when a key of another one is set.
-        const after = plannerSetup(this.settings.env, this.root);
-        if (
-          !this.settings.env.CLAWDTIME_COMPUTER_MODEL?.trim() &&
-          provider.defaultModel &&
-          (!after.ok || after.settings.provider.id !== provider.id)
-        )
-          storeModelChoice(this.root, {
-            model: `${provider.id}/${provider.defaultModel}`,
-          });
+        this.keep(provider, key);
       } catch (error) {
         return (await this.failed(
           "model",
@@ -764,7 +1018,7 @@ export class OnboardEngine {
       if (desktop?.service === "connected")
         this.log(
           "info",
-          "The desktop runs already. It reads the new key the next time it starts.",
+          "ClawdTime runs already. It reads the new key the next time it starts.",
         );
       return undefined;
     }
@@ -782,7 +1036,7 @@ export class OnboardEngine {
         );
         const started = await this.whileSkippable(
           "desktop",
-          "Starting the desktop.",
+          "Starting ClawdTime on this Mac.",
           starting,
         );
         if (started === "skip" || started === "cancel") {
@@ -840,7 +1094,7 @@ export class OnboardEngine {
         const until = { over: false };
         const waited = await this.whileSkippable(
           "desktop",
-          "Waiting for the desktop to answer.",
+          "Waiting for ClawdTime to answer.",
           this.waitForDesktop(until),
         );
         until.over = true;
@@ -861,7 +1115,7 @@ export class OnboardEngine {
       }
       if (status.service === "connected") {
         this.step("desktop", "ready", {
-          detail: `${this.startedDesktop ? "The desktop started." : "The desktop runs already. Its project and work are kept."}${status.chat === "no_model" ? " It has no model key yet. It reads one the next time it starts." : ""}`,
+          detail: `${this.startedDesktop ? "ClawdTime started." : "ClawdTime runs already. Its work is kept."}${status.chat === "no_model" ? " It has no model key yet. It reads one the next time it starts." : ""}`,
         });
         return;
       }
@@ -869,8 +1123,8 @@ export class OnboardEngine {
         (await this.failed(
           "desktop",
           status.service === "identity_mismatch"
-            ? "The running desktop does not match its own files. Nothing was replaced. Quit ClawdTime, then try again."
-            : "The desktop did not answer its readiness check. Nothing was replaced. Wait a moment, then try again.",
+            ? "The ClawdTime that runs does not match its own files. Nothing was replaced. Quit ClawdTime, then try again."
+            : "ClawdTime did not answer after it started. Nothing was replaced. Wait a moment, then try again.",
         )) === "skip"
       ) {
         if (this.startedDesktop) await this.endStartedDesktop();
@@ -970,7 +1224,7 @@ export class OnboardEngine {
           { kind: "confirm", prompt: "Turn on computer use?", consent: true },
           {
             detail:
-              "ClawdTime can then see your screen, and click and type for you. Every action is checked in code. A click that cannot be undone needs your yes. Stop it any time: say stop, or press Stop work in the panel.",
+              "ClawdTime can then see your screen. It can click and type for you. It asks you before an action that you cannot undo. To stop it, say stop or press Stop work in the panel.",
           },
         );
         if ("action" in answer && answer.action !== "skip") continue;
@@ -1000,7 +1254,7 @@ export class OnboardEngine {
         if (!busy && this.ports.desktop.restart) {
           await this.proceed();
           this.step("computer", "in_progress", {
-            detail: "Starting the desktop again, so that it can use this Mac.",
+            detail: "Starting ClawdTime again, so that it can use this Mac.",
           });
           try {
             await this.ports.desktop.restart((message) =>
@@ -1015,8 +1269,8 @@ export class OnboardEngine {
             this.log(
               "warn",
               status.service === "connected"
-                ? "The desktop was not started again. It uses computer use from its next start."
-                : "The desktop did not start again. Start it yourself: clawdtime start",
+                ? "ClawdTime did not start again. It uses computer use from its next start."
+                : "ClawdTime did not start again. Start it yourself: clawdtime start",
             );
           }
         }
@@ -1026,23 +1280,34 @@ export class OnboardEngine {
           status.computer === "configured"
             ? "Computer use is on."
             : busy
-              ? "Computer use is on. The desktop is busy, so it uses computer use from its next start."
-              : "Computer use is on. The desktop uses it from its next start.",
+              ? "Computer use is on. ClawdTime is busy, so it uses computer use from its next start."
+              : "Computer use is on. ClawdTime uses it from its next start.",
       });
       return;
     }
   }
 
   private async permissions() {
+    // The phone run does not ask about computer use: the switch says whether
+    // the panel needs its permissions too.
+    if (this.route === "phone")
+      this.computerOn = readComputerSwitch(this.root).enabled === true;
     if (!this.computerOn && this.mode === "local")
       return this.step("permissions", "skipped", {
-        detail: "Computer use is off, so no permission is needed.",
+        detail:
+          this.route === "phone"
+            ? this.localDetail()
+            : "Computer use is off, so no permission is needed.",
       });
+    let checked = false;
     for (;;) {
       await this.proceed();
-      this.step("permissions", "in_progress", {
-        detail: "Checking Screen Recording and Accessibility.",
-      });
+      // A check that the watch made already is not shown again.
+      if (!checked)
+        this.step("permissions", "in_progress", {
+          detail: "Checking Screen Recording and Accessibility.",
+        });
+      checked = false;
       let facts: PermissionFacts;
       try {
         facts = await this.ports.permissions();
@@ -1056,59 +1321,81 @@ export class OnboardEngine {
           return this.skipStep("permissions");
         continue;
       }
-      // Each list of System Settings once, as the person sees it there, with
-      // every binary that it still needs. The paths go only to the details.
-      const accessibility: string[] = [];
-      const screen: string[] = [];
-      const paths = new Map<string, string>();
-      const named = (name: string, path: string | undefined) => {
-        if (path) paths.set(name, path);
-        return name;
-      };
-      const panel = named("ClawdTimeTaskPanel", facts.panel.path);
-      if (this.computerOn) {
-        if (!facts.panel.accessibility) accessibility.push(panel);
-        if (!facts.panel.screenRecording) screen.push(panel);
-      }
-      if (
-        this.mode === "shared" &&
-        facts.capture.path &&
-        !facts.capture.screenRecording
-      )
-        screen.push(named("ClawdTimeTaskCapture", facts.capture.path));
-      const missing = [
-        {
-          list: "Accessibility",
-          binaries: accessibility,
-          url: accessibilityPane,
-        },
-        { list: this.screenList(), binaries: screen, url: screenPane },
-      ].filter((one) => one.binaries.length);
-      if (!missing.length)
+      const missing = this.missingPermissions(facts);
+      if (!missing.lists.length)
         return this.step("permissions", "ready", {
-          detail: `${this.computerOn ? "Accessibility and Screen Recording are on for the panel." : "Computer use is off, so the panel needs no permission."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for the capture helper." : ""}`,
+          detail: `${this.computerOn ? "Accessibility and Screen Recording are on for ClawdTime." : "Computer use is off, so ClawdTime needs no permission for it."}${this.mode === "shared" && facts.capture.path ? " Screen Recording is on for calls." : ""}`,
         });
-      const again = await this.ask(
-        "permissions",
-        { kind: "confirm", prompt: "Check again" },
-        {
-          detail: `In System Settings, open Privacy & Security. ${missing.map((one) => `In ${one.list}, turn on ${this.permissionHolder()}.`).join(" ")} Then check again.`,
-          details: [...new Set(missing.flatMap((one) => one.binaries))].flatMap(
-            (name) =>
-              paths.has(name)
-                ? [`Checked for ${name}: ${paths.get(name)}`]
-                : [],
-          ),
-          recovery: {
-            label: "Open System Settings",
-            action: "open_settings",
-            url: missing[0]!.url,
-          },
+      const view = {
+        detail: `In System Settings, open Privacy & Security. ${missing.lists.map((one) => `In ${one.list}, turn on ${this.permissionHolder()}.`).join(" ")} ${this.settings.permissionPollMs ? "Setup continues when they are on." : "Then check again."}`,
+        details: missing.details,
+        recovery: {
+          label: "Open System Settings",
+          action: "open_settings" as const,
+          url: missing.lists[0]!.url,
         },
-      );
+      };
+      const input: InputRequest = { kind: "confirm", prompt: "Check again" };
+      // In the app, setup checks again by itself while the person turns the
+      // switches on. Check again stays for a person who wants it.
+      const every = this.settings.permissionPollMs;
+      const again = every
+        ? await this.askWatching(
+            "permissions",
+            input,
+            view,
+            every,
+            async () => {
+              const now = await this.ports.permissions();
+              return !this.missingPermissions(now).lists.length;
+            },
+          )
+        : await this.ask("permissions", input, view);
+      if (again === "changed") {
+        checked = true;
+        continue;
+      }
       if ("action" in again && again.action === "skip")
         return this.skipStep("permissions");
     }
+  }
+
+  /**
+   * Each list of System Settings once, as the person sees it there, with
+   * every binary that it still needs. The paths go only to the details.
+   */
+  private missingPermissions(facts: PermissionFacts) {
+    const accessibility: string[] = [];
+    const screen: string[] = [];
+    const paths = new Map<string, string>();
+    const named = (name: string, path: string | undefined) => {
+      if (path) paths.set(name, path);
+      return name;
+    };
+    const panel = named("ClawdTimeTaskPanel", facts.panel.path);
+    if (this.computerOn) {
+      if (!facts.panel.accessibility) accessibility.push(panel);
+      if (!facts.panel.screenRecording) screen.push(panel);
+    }
+    if (
+      this.mode === "shared" &&
+      facts.capture.path &&
+      !facts.capture.screenRecording
+    )
+      screen.push(named("ClawdTimeTaskCapture", facts.capture.path));
+    const lists = [
+      {
+        list: "Accessibility",
+        binaries: accessibility,
+        url: accessibilityPane,
+      },
+      { list: this.screenList(), binaries: screen, url: screenPane },
+    ].filter((one) => one.binaries.length);
+    const details = [...new Set(lists.flatMap((one) => one.binaries))].flatMap(
+      (name) =>
+        paths.has(name) ? [`Checked for ${name}: ${paths.get(name)}`] : [],
+    );
+    return { lists, details };
   }
 
   /** The name of the Screen Recording list in System Settings on this Mac. */
@@ -1134,8 +1421,8 @@ export class OnboardEngine {
 
   private localDetail() {
     return this.settings.local
-      ? "Local mode. To pair your phone later, run clawdtime onboard."
-      : "No coordinator is available, so this waits. Run clawdtime onboard again later.";
+      ? "Local mode. To pair your phone later, run clawdtime onboard --phone."
+      : "No coordinator is available, so this waits. To pair your phone later, run clawdtime onboard --phone.";
   }
 
   private async phone() {
@@ -1234,7 +1521,7 @@ export class OnboardEngine {
       }
       if (consent.value !== true)
         return skipped(
-          "No text was sent. To pair your phone later, run clawdtime onboard.",
+          "No text was sent. To pair your phone later, run clawdtime onboard --phone.",
         );
       await this.proceed();
       this.step("phone", "in_progress", {
@@ -1339,7 +1626,7 @@ export class OnboardEngine {
       });
     if (!this.session)
       return skipped(
-        "Your phone is not verified, so this Mac is not paired. To pair it later, run clawdtime onboard.",
+        "Your phone is not verified, so this Mac is not paired. To pair it later, run clawdtime onboard --phone.",
       );
     for (;;) {
       let displays: SharedDisplay[] = [];
@@ -1421,7 +1708,7 @@ export class OnboardEngine {
       );
       if (go !== true)
         return skipped(
-          "This Mac is not paired. To pair it later, run clawdtime onboard.",
+          "This Mac is not paired. To pair it later, run clawdtime onboard --phone.",
         );
       const acceptance = sharedAcceptance({
         displayId,
@@ -1541,7 +1828,7 @@ export class OnboardEngine {
           )) === "skip"
         )
           return skipped(
-            "This Mac may not be paired. Run clawdtime onboard to check it.",
+            "This Mac may not be paired. Run clawdtime onboard --phone to check it.",
           );
         continue;
       }
@@ -1623,7 +1910,7 @@ export class OnboardEngine {
           return go === "skip"
             ? this.skipStep("connection")
             : skipped(
-                "This Mac is not connected. To connect it later, run clawdtime onboard.",
+                "This Mac is not connected. To connect it later, run clawdtime onboard --phone.",
               );
         // No means not connected: the background connection that Terminal
         // setup started (or one of an earlier desktop) ends now, checked by
@@ -1649,7 +1936,7 @@ export class OnboardEngine {
           continue;
         }
         return skipped(
-          "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard.",
+          "This Mac is not connected. The connection that ran in the background ended. To connect it later, run clawdtime onboard --phone.",
         );
       }
       await this.proceed();
@@ -1687,39 +1974,70 @@ export class OnboardEngine {
 
   /**
    * The readiness report: ready when every step is ready or skipped and the
-   * Mac can work (a check, a model key and a desktop). It lists each skipped
-   * step: a skip is never a failure.
+   * Mac can work (a check, a model key and a desktop). The phone run is
+   * ready only when calls from the phone can reach this Mac. It lists each
+   * skipped step: a skip is never a failure. A first run in Terminal that is
+   * ready opens the chat, with the keys, as the app does on Start talking.
    */
-  private finish() {
-    const rows = stepIds
+  private async finish() {
+    const rows = this.steps
       .filter((id) => id !== "ready")
       .map((id) => this.rows.get(id)!);
-    const required: StepId[] = ["preflight", "model", "desktop"];
+    const required: StepId[] =
+      this.route === "phone"
+        ? ["preflight", "desktop", "phone", "pairing", "connection"]
+        : ["preflight", "model", "desktop"];
     const settled = rows.every(
       (row) => row.state === "ready" || row.state === "skipped",
     );
     const ready =
-      settled && required.every((id) => this.rows.get(id)!.state === "ready");
-    const paired = this.rows.get("pairing")!.state === "ready";
-    const connected = this.rows.get("connection")!.state === "ready";
+      settled && required.every((id) => this.rows.get(id)?.state === "ready");
+    const paired = this.rows.get("pairing")?.state === "ready";
+    const connected = this.rows.get("connection")?.state === "ready";
     const skipped = rows
       .filter(
         (row) => row.state === "skipped" && this.skippedByPerson.has(row.id),
       )
       .map((row) => titles[row.id]);
     const list = skipped.length
-      ? ` Skipped for now: ${skipped.join(", ")}. Run clawdtime onboard to finish ${skipped.length === 1 ? "it" : "them"}.`
+      ? ` Skipped for now: ${skipped.join(", ")}. Run clawdtime onboard${this.route === "phone" ? " --phone" : ""} to finish ${skipped.length === 1 ? "it" : "them"}.`
       : "";
+    let detail: string;
+    if (!settled)
+      detail = `Setup is not finished. Run clawdtime onboard${this.route === "phone" ? " --phone" : ""} again to continue where it stopped.`;
+    else if (!ready)
+      detail =
+        this.route === "phone"
+          ? `Calls from your phone cannot reach this Mac yet.${list}`
+          : `ClawdTime cannot work on this Mac yet.${list}`;
+    else if (paired && connected)
+      detail = `ClawdTime is ready on this Mac and paired with your phone. To try a call, call the shared number from your verified phone, then run clawdtime shared prove on this Mac.${list}`;
+    else detail = `${await this.openConversation()}${list}`;
     this.step("ready", ready ? "ready" : settled ? "skipped" : "failed", {
-      detail: ready
-        ? (paired && connected
-            ? "ClawdTime is ready on this Mac and paired with your phone. To try a call, call the shared number from your verified phone, then run clawdtime shared prove on this Mac."
-            : "ClawdTime is ready on this Mac. Click the mascot to open the chat.") +
-          list
-        : settled
-          ? `ClawdTime cannot work on this Mac yet.${list}`
-          : "Setup is not finished. Run clawdtime onboard again to continue where it stopped.",
+      detail,
     });
     return ready;
+  }
+
+  /**
+   * The last words of a first run that is ready. In Terminal it opens the
+   * chat with the keys and one suggested first request. The Mac app opens
+   * the chat itself when the person chooses Start talking.
+   */
+  private async openConversation() {
+    const later = this.settings.appOwned
+      ? " To get calls on your phone later, choose Get calls on your phone."
+      : " To get calls on your phone later, run clawdtime onboard --phone.";
+    const open = this.ports.desktop.openChat;
+    if (this.settings.appOwned)
+      return `ClawdTime is ready on this Mac.${later}`;
+    if (!open || this.io.cancelled())
+      return `ClawdTime is ready on this Mac. Click the mascot to open the chat.${later}`;
+    try {
+      await open((message) => this.log("info", message));
+    } catch {
+      return `ClawdTime is ready on this Mac. Click the mascot to open the chat.${later}`;
+    }
+    return `ClawdTime is ready, and the chat is open. Write or talk to ClawdTime. Try: ${firstRequest(this.computerOn)}${later}`;
   }
 }

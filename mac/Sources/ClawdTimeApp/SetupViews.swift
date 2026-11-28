@@ -40,6 +40,8 @@ struct SetupRootView: View {
   @ObservedObject var owner: ProcessOwner
   let loginItem: LoginItemControlling
   var close: () -> Void = {}
+  /// Get calls on your phone: the later, optional setup run.
+  var phone: () -> Void = {}
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   static let size = CGSize(width: 600, height: 660)
@@ -49,7 +51,7 @@ struct SetupRootView: View {
     VStack(spacing: 0) {
       // Stop stays available while a desktop that setup started may run.
       HeaderView(running: setup.canStop || owner.isActive, stop: { setup.stop() })
-      ProgressRail(state: setup.state, visible: screen != .welcome)
+      ProgressRail(state: setup.state, visible: screen != .welcome && !setup.state.order.isEmpty)
         .padding(.horizontal, 32)
         .padding(.top, 4)
       ZStack {
@@ -86,14 +88,14 @@ struct SetupRootView: View {
   @ViewBuilder private func content(_ screen: Screen) -> some View {
     switch screen {
     case .welcome: WelcomeView(begin: { setup.begin() })
-    case .connecting, .checking: WaitingView(title: "Checking this Mac", detail: "ClawdTime looks at what is set up already.")
+    case .connecting, .checking: WaitingView(title: "Checking this Mac", detail: "Setup looks at what is ready already.")
     case .step(let step):
       StepCard(step: step, answered: setup.answered != nil && setup.answered == step.question, armDelay: setup.answerDelay,
                submit: { setup.submit($0) }, perform: { setup.perform($0) },
                recover: { setup.followRecovery() })
     case .finished(let ready):
-      FinishedView(state: setup.state, ready: ready, handedOff: setup.handedOff, owner: owner, loginItem: loginItem,
-                   finish: { setup.finish() }, again: { setup.begin() }, close: close)
+      FinishedView(state: setup.state, ready: ready, handedOff: setup.handedOff, phoneRun: setup.setupRun.phone, owner: owner, loginItem: loginItem,
+                   finish: { setup.finish(chat: $0) }, again: { setup.begin(setup.setupRun) }, phone: phone, close: close)
     case .failed(let failure):
       FailureView(failure: failure, again: failure.kind == .runtimeMissing ? nil : { setup.begin() })
     case .stopped:
@@ -186,16 +188,16 @@ struct WelcomeView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
       Text("Welcome to ClawdTime").font(.system(size: 30, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
-      Text("Set up ClawdTime on this Mac in a few steps. Each step says what it needs and why.")
+      Text("ClawdTime uses your Mac for you. Type a task, or say it.")
         .font(.system(size: 15)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
       VStack(alignment: .leading, spacing: 12) {
-        Row(symbol: "key.fill", title: "Your model key", detail: "Kept in protected storage on this Mac.")
-        Row(symbol: "lock.shield.fill", title: "Your permissions", detail: "You choose what ClawdTime may see and do.")
-        Row(symbol: "iphone", title: "Your phone, when you want calls", detail: "You can skip it and use ClawdTime on this Mac.")
+        Row(symbol: "key.fill", title: "A model key", detail: "Setup looks for your key. If it finds no key, you paste one.")
+        Row(symbol: "cursorarrow.click.2", title: "Your yes to computer use", detail: "ClawdTime asks you before an action that you cannot undo.")
+        Row(symbol: "lock.shield.fill", title: "Two switches in System Settings", detail: "Setup opens the page. Setup continues when the switches are on.")
       }
       .padding(.vertical, 6)
-      Text("Stop, at the top of this window, ends setup and everything ClawdTime runs.")
-        .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+      Text("Then the chat opens. You can add calls on your phone later. Stop, at the top, ends setup and everything that ClawdTime runs.")
+        .font(.system(size: 12)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
       HStack {
         Spacer()
         Button("Set up ClawdTime", action: begin).buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
@@ -295,6 +297,8 @@ struct StepCard: View {
     self.step = step; self.answered = answered; self.armDelay = armDelay
     self.submit = submit; self.perform = perform; self.recover = recover
     _armed = State(initialValue: armDelay <= 0)
+    // A choice with a default shows it chosen, so Return takes it. Never at a consent question.
+    _selection = State(initialValue: Self.preselected(step))
   }
 
   /// Nothing on the card answers now: the answer went out, or the question just appeared.
@@ -313,6 +317,12 @@ struct StepCard: View {
     guard step.state == .needsInput, step.input != nil else { return nil }
     if checksSettings(step) { return "Check again" }
     return isConsent(step) ? nil : "Continue"
+  }
+
+  /// The option that shows chosen when the question appears.
+  static func preselected(_ step: StepEvent) -> Set<String> {
+    guard step.state == .needsInput, let input = step.input else { return [] }
+    return input.preselected
   }
 
   /// A field of another kind starts empty: a phone number never carries into the code field.
@@ -534,25 +544,71 @@ struct ChoiceRow: View {
   }
 }
 
-/// The readiness view at the end, and the status view after setup.
+/// The readiness view at the end, and the status view after setup. A first
+/// run that is ready ends on Start talking: the panel opens with the chat in
+/// focus. The phone is a later step, one button away.
 struct FinishedView: View {
   var state: SetupState
   var ready: Bool
   var handedOff: Bool
+  /// The run that ended was Get calls on your phone.
+  var phoneRun = false
   @ObservedObject var owner: ProcessOwner
   let loginItem: LoginItemControlling
-  var finish: () -> Void
+  /// `chat`: open the chat in focus as the desktop starts.
+  var finish: (_ chat: Bool) -> Void
   var again: () -> Void
+  var phone: () -> Void = {}
   var close: () -> Void
   @State private var openAtLogin = false
   @State private var loginNote: String?
 
+  /// The words and buttons of the end of setup.
+  struct Words: Equatable {
+    var title: String
+    var line: String
+    /// The default button, and whether it opens the chat.
+    var primary: String
+    var opensChat: Bool
+    /// Get calls on your phone, when this Mac is not paired.
+    var offersPhone: Bool
+    var offersAgain: Bool
+  }
+
+  static func words(ready: Bool, handedOff: Bool, phoneRun: Bool, paired: Bool, desktopRuns: Bool) -> Words {
+    if handedOff {
+      return Words(title: ready ? "ClawdTime is ready" : "Setup is not complete",
+                   line: "ClawdTime lives in the menu bar. Stop there ends sharing and control at any time.",
+                   primary: "Close", opensChat: false, offersPhone: !paired, offersAgain: true)
+    }
+    if phoneRun {
+      return ready
+        ? Words(title: "Calls are ready", line: "Done connects this Mac. Then call the shared number from your verified phone to talk to ClawdTime.",
+                primary: "Done", opensChat: false, offersPhone: false, offersAgain: false)
+        : Words(title: "Calls are not set up yet", line: "ClawdTime still works on this Mac. Try again when you are ready.",
+                primary: "Done", opensChat: false, offersPhone: false, offersAgain: true)
+    }
+    if !ready {
+      return Words(title: "Setup is not complete", line: "You can use what is ready now and finish the rest later.",
+                   primary: "Finish", opensChat: false, offersPhone: false, offersAgain: true)
+    }
+    // A desktop that runs already keeps its panel: there is no new chat to open.
+    return Words(title: "ClawdTime is ready",
+                 line: desktopRuns ? "ClawdTime runs on this Mac. Click the mascot to open the chat."
+                   : "Start talking opens the chat. Type a task for ClawdTime, or talk to it.",
+                 primary: desktopRuns ? "Done" : "Start talking", opensChat: !desktopRuns, offersPhone: !paired, offersAgain: false)
+  }
+
+  private var words: Words {
+    Self.words(ready: ready, handedOff: handedOff, phoneRun: phoneRun, paired: state.reported(.pairing) == .ready || state.state(of: .pairing) == .ready,
+               desktopRuns: owner.desktop == .running)
+  }
+
   var body: some View {
+    let words = self.words
     VStack(alignment: .leading, spacing: 16) {
-      Text(ready ? "ClawdTime is ready" : "Setup is not complete").font(.system(size: 26, weight: .semibold))
-      Text(ready
-           ? "ClawdTime lives in the menu bar. Stop there ends sharing and control at any time."
-           : "You can use what is ready now and finish the rest later.")
+      Text(words.title).font(.system(size: 26, weight: .semibold))
+      Text(words.line)
         .font(.system(size: 14)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
       // The report takes the room the window has; a long one scrolls.
       ScrollView {
@@ -591,13 +647,20 @@ struct FinishedView: View {
       if let loginNote {
         Text(loginNote).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
       }
-      HStack {
-        Button("Run setup again", action: again).buttonStyle(PillStyle(kind: .secondary))
+      HStack(spacing: 10) {
+        if words.offersAgain {
+          Button(phoneRun ? "Try again" : "Run setup again", action: again).buttonStyle(PillStyle(kind: .secondary))
+        }
+        if words.offersPhone {
+          Button(action: phone) { Label("Get calls on your phone", systemImage: "iphone") }
+            .buttonStyle(PillStyle(kind: .secondary))
+            .help("Verify your phone, pair this Mac and connect it. Each step asks you first.")
+        }
         Spacer()
         if handedOff {
-          Button("Close", action: close).buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
+          Button(words.primary, action: close).buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
         } else {
-          Button("Finish", action: finish).buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
+          Button(words.primary) { finish(words.opensChat) }.buttonStyle(PillStyle(kind: .primary)).keyboardShortcut(.defaultAction)
         }
       }
     }

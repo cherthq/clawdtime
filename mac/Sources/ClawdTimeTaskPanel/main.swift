@@ -27,6 +27,8 @@ import TaskPanelCore
   private var awayItems: [NSMenuItem] = []
   private var memoryItems: [NSMenuItem] = []
   private var startTucked = false
+  /// Setup ended and asked for the chat: it opens with the keys and one first request.
+  private var startChat = false
   private let pet = PetController()
   private let chatPanel = SheetController(ChatView(frame: NSRect(x: 0, y: 0, width: ChatView.width, height: 400)))
   private let voice = VoiceController()
@@ -59,6 +61,7 @@ import TaskPanelCore
     configureMenus()
     if let launch = PanelLaunch(arguments: CommandLine.arguments) {
       startTucked = launch.tucked
+      startChat = launch.chat
       load(URL(fileURLWithPath: launch.configPath))
     } else {
       showStartupFailure(.configuration)
@@ -239,19 +242,26 @@ import TaskPanelCore
       do { store = try PanelReceiptStore(directory: config.receiptDirectory, binding: binding) }
       catch PanelFailure.alreadyOpen {
         // A tucked start asks for no attention, so it does not raise the open panel.
-        if !startTucked {
+        // A chat start asks the open panel to open its chat with the keys.
+        if startChat {
+          DistributedNotificationCenter.default().postNotificationName(Notification.Name(PanelLaunch.chatNotification(show: name.rawValue)),
+                                                                       object: nil, userInfo: nil, deliverImmediately: true)
+        } else if !startTucked {
           DistributedNotificationCenter.default().postNotificationName(name, object: nil, userInfo: nil, deliverImmediately: true)
         }
         showStartupFailure(.alreadyOpen); return
       }
       reopenName = name
       DistributedNotificationCenter.default().addObserver(self, selector: #selector(showPanel), name: name, object: nil, suspensionBehavior: .deliverImmediately)
+      DistributedNotificationCenter.default().addObserver(self, selector: #selector(showChat), name: Notification.Name(PanelLaunch.chatNotification(show: name.rawValue)),
+                                                          object: nil, suspensionBehavior: .deliverImmediately)
       self.configuration = config; self.configPath = path.standardizedFileURL
       receipts = store; client = PanelClient(configuration: config); state.pending = store.entries
       wire(); render()
       pet.show()
       // The chat opens beside the mascot, without the keys: the window in use keeps them.
-      if !startTucked { openChat(focus: false) }
+      // At the end of setup it opens with the keys instead, and one first request.
+      if startChat { showChat(nil) } else if !startTucked { openChat(focus: false) }
       beginPolling()
       if let client { hands.start(client: client) }
     } catch let failure as PanelFailure { showStartupFailure(failure) }
@@ -484,6 +494,17 @@ import TaskPanelCore
   @objc func showPanel(_ sender: Any?) {
     pet.show()
     if !chatPanel.isOpen { openChat() }
+  }
+  /// The end of setup: the chat opens with the keys, and offers one first request
+  /// that fits computer use. A chat that is open already takes the keys.
+  @objc func showChat(_ sender: Any?) {
+    pet.show()
+    if chatPanel.isOpen { chatPanel.window.makeKey(); chatPanel.view.focus() } else { openChat(focus: true) }
+    guard let client else { return }
+    Task { @MainActor [weak self] in
+      let computerUse = (try? await client.handsAreEngine()) ?? false
+      self?.chatPanel.view.offerFirstRequest(FirstRequest.suggestion(computerUse: computerUse))
+    }
   }
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showPanel(nil); return true }
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

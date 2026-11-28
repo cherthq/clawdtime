@@ -166,6 +166,81 @@ final class SetupViewTests: XCTestCase {
     XCTAssertEqual(MenuText.summary(desktop: .ended("The desktop stopped with status 1."), connection: .off), "The desktop stopped with status 1.")
   }
 
+  func testAProviderChoiceOpensWithTheDefaultChosenSoReturnContinues() throws {
+    let lines = [
+      #"{"type":"step","id":"model","state":"needs_input","question":"model-question-0001","input":{"kind":"choice","prompt":"Which model provider do you use?","default":"openai","options":[{"id":"openai","label":"OpenAI"},{"id":"anthropic","label":"Anthropic"}]}}"#,
+      #"{"type":"step","id":"pairing","state":"needs_input","question":"pair-question-0001","input":{"kind":"choice","consent":true,"default":"replace","prompt":"Your number already has a paired Mac.","options":[{"id":"replace","label":"Pair this Mac in its place"},{"id":"keep","label":"Keep the other Mac"}]}}"#,
+    ]
+    let steps = try lines.map { line -> StepEvent in
+      guard case .step(let step) = try EngineEvent.decode(line: line) else { throw CocoaError(.coderInvalidValue) }
+      return step
+    }
+    XCTAssertEqual(StepCard.preselected(steps[0]), ["openai"])
+    XCTAssertEqual(StepCard.defaultButton(steps[0]), "Continue")
+    // A consent choice shows nothing chosen and Return answers nothing, whatever the engine sends.
+    XCTAssertEqual(StepCard.preselected(steps[1]), [])
+    XCTAssertNil(StepCard.defaultButton(steps[1]))
+  }
+
+  func testTheLastScreenOpensTheConversationAndOffersThePhoneOnce() {
+    let first = FinishedView.words(ready: true, handedOff: false, phoneRun: false, paired: false, desktopRuns: false)
+    XCTAssertEqual(first.primary, "Start talking")
+    XCTAssertTrue(first.opensChat)
+    XCTAssertTrue(first.offersPhone)
+    XCTAssertFalse(first.offersAgain, "the ready screen offers one way on, and the phone")
+    // A paired Mac is not offered the phone again.
+    XCTAssertFalse(FinishedView.words(ready: true, handedOff: false, phoneRun: false, paired: true, desktopRuns: false).offersPhone)
+    // A desktop that the app runs already keeps its panel: no Start talking that would open nothing.
+    let rerun = FinishedView.words(ready: true, handedOff: false, phoneRun: false, paired: false, desktopRuns: true)
+    XCTAssertEqual(rerun.primary, "Done")
+    XCTAssertFalse(rerun.opensChat)
+    let phone = FinishedView.words(ready: true, handedOff: false, phoneRun: true, paired: true, desktopRuns: true)
+    XCTAssertEqual([phone.title, phone.primary], ["Calls are ready", "Done"])
+    XCTAssertFalse(phone.opensChat)
+    let notYet = FinishedView.words(ready: false, handedOff: false, phoneRun: true, paired: false, desktopRuns: true)
+    XCTAssertTrue(notYet.offersAgain)
+    XCTAssertFalse(FinishedView.words(ready: false, handedOff: false, phoneRun: false, paired: false, desktopRuns: false).opensChat)
+    for words in [first, rerun, phone, notYet] {
+      XCTAssertFalse(words.line.contains("\u{2014}") || words.line.contains("\u{2013}"))
+      for sentence in words.line.split(separator: ".") { XCTAssertLessThanOrEqual(sentence.split(separator: " ").count, 20, String(sentence)) }
+    }
+  }
+
+  func testStartTalkingHandsTheDesktopToTheOwnerWithTheChatOpen() {
+    let engine = ScriptedEngine()
+    let owner = RecordingOwner()
+    var runs: [SetupRun] = []
+    let setup = SetupCoordinator(makeEngine: { run in runs.append(run); return engine }, owner: owner, open: { _ in false }, answerDelay: 0)
+    setup.begin()
+    engine.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
+    engine.emit(#"{"type":"done","ready":true,"report":[{"id":"desktop","state":"ready"},{"id":"ready","state":"ready"}]}"#)
+    setup.finish(chat: true)
+    XCTAssertEqual(owner.starts, [false])
+    XCTAssertEqual(owner.chats, [true])
+    XCTAssertEqual(runs, [.first])
+    // Get calls on your phone: its own run, and Done connects with no chat.
+    let phoneEngine = ScriptedEngine()
+    let phoneOwner = RecordingOwner()
+    let phone = SetupCoordinator(makeEngine: { run in runs.append(run); return phoneEngine }, owner: phoneOwner, open: { _ in false }, answerDelay: 0)
+    phone.beginPhone()
+    XCTAssertEqual(runs.last, .phone)
+    XCTAssertTrue(phone.setupRun.phone)
+    phoneEngine.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
+    phoneEngine.emit(#"{"type":"done","ready":true,"report":[{"id":"desktop","state":"ready"},{"id":"pairing","state":"ready"},{"id":"connection","state":"ready"}]}"#)
+    phone.finish()
+    XCTAssertEqual(phoneOwner.starts, [true])
+    XCTAssertEqual(phoneOwner.chats, [false])
+    // A quiet launch after setup was done finishes by itself and opens no chat.
+    let quietEngine = ScriptedEngine()
+    let quietOwner = RecordingOwner()
+    let quiet = SetupCoordinator(makeEngine: { _ in quietEngine }, owner: quietOwner, open: { _ in false }, answerDelay: 0)
+    quiet.finishWhenReady = true
+    quiet.begin()
+    quietEngine.emit(#"{"type":"hello","protocol":2,"version":"0.4.0"}"#)
+    quietEngine.emit(#"{"type":"done","ready":true,"report":[{"id":"desktop","state":"ready"}]}"#)
+    XCTAssertEqual(quietOwner.chats, [false])
+  }
+
   func testTheAppStartsWithSetupNotDone() {
     let defaults = UserDefaults(suiteName: "ClawdTimeAppTests-\(UUID().uuidString)")!
     let app = AppDelegate(runtimeOverride: nil, defaults: defaults, loginItem: FakeLoginItem())

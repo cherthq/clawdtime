@@ -26,8 +26,15 @@ final class SetupStateTests: XCTestCase {
     XCTAssertNil(newer.current, "nothing runs after a protocol mismatch")
   }
 
-  func testTheFocusFollowsTheLatestStepThatIsNotPending() {
+  /// The first run names six steps, in their fixed order: the phone steps are not part of it.
+  private func firstRun() -> SetupState {
     var state = running()
+    for id in [StepID.preflight, .model, .desktop, .computer, .permissions, .ready] { state.apply(.step(StepEvent(id: id, state: .pending))) }
+    return state
+  }
+
+  func testTheFocusFollowsTheLatestStepThatIsNotPending() {
+    var state = firstRun()
     state.apply(.step(StepEvent(id: .preflight, state: .inProgress)))
     XCTAssertEqual(state.focus, .preflight)
     state.apply(.step(StepEvent(id: .model, state: .pending)))
@@ -38,14 +45,27 @@ final class SetupStateTests: XCTestCase {
     XCTAssertEqual(state.current?.displayTitle, "Model key")
     XCTAssertEqual(state.position, 2)
     XCTAssertEqual(state.settledCount, 1)
-    XCTAssertEqual(state.progress, 1.0 / 9.0, accuracy: 0.0001)
+    XCTAssertEqual(state.progress, 1.0 / 6.0, accuracy: 0.0001)
+  }
+
+  func testTheRailShowsOnlyTheStepsThatTheEngineNamesInTheirFixedOrder() {
+    XCTAssertEqual(SetupState().order, [], "nothing is drawn before the engine names its steps")
+    XCTAssertEqual(firstRun().order, [.preflight, .model, .desktop, .computer, .permissions, .ready])
+    // The phone run, announced out of order on purpose: the fixed order wins.
+    var phone = running()
+    for id in [StepID.ready, .connection, .preflight, .phone, .desktop, .pairing, .permissions] { phone.apply(.step(StepEvent(id: id, state: .pending))) }
+    XCTAssertEqual(phone.order, [.preflight, .desktop, .permissions, .phone, .pairing, .connection, .ready])
+    phone.apply(.step(StepEvent(id: .phone, state: .needsInput, input: StepInput(kind: .phone))))
+    XCTAssertEqual(phone.position, 4)
   }
 
   func testAnUnknownStepIsDrawnAfterTheKnownOnes() {
-    var state = running()
+    var state = firstRun()
     state.apply(.step(StepEvent(id: "voice", state: .needsInput)))
+    state.apply(.step(StepEvent(id: .phone, state: .pending)))
     XCTAssertEqual(state.order.last, "voice")
-    XCTAssertEqual(state.order.count, 10)
+    XCTAssertEqual(state.order.count, 8)
+    XCTAssertEqual(state.order.firstIndex(of: .phone), 5, "a known step takes its place before the unknown one")
     XCTAssertEqual(state.current?.displayTitle, "Voice")
   }
 

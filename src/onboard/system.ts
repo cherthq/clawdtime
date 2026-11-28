@@ -39,6 +39,7 @@ import {
 import { findNativeHelper } from "../native-helpers.js";
 import { processLockHolder } from "../process-lock.js";
 import type { OnboardPorts, PermissionFacts } from "./engine.js";
+import { shellKeys } from "./known-keys.js";
 import {
   listSharedDisplays,
   resolveSharedDisplay,
@@ -586,6 +587,8 @@ export function macPorts(input: {
     log: (message: string) => void,
     options?: { tucked?: boolean },
   ) => Promise<void>;
+  /** Opens the chat of the running desktop with the keys. Terminal setup only. */
+  openChat?: (log: (message: string) => void) => Promise<void>;
   request?: typeof fetch;
 }): OnboardPorts {
   const request = input.request ?? fetch;
@@ -612,10 +615,12 @@ export function macPorts(input: {
       },
       // Setup starts the desktop only when none runs. A service that runs
       // after the start, with no owner lock before it, is the one it made.
+      // The panel starts tucked: the person still answers setup. The chat
+      // opens when setup ends.
       start: async (log) => {
         const before = started.servicePid();
         try {
-          await input.startDesktop(log);
+          await input.startDesktop(log, { tucked: true });
         } finally {
           if (before === null) await started.remember(app);
         }
@@ -656,7 +661,9 @@ export function macPorts(input: {
         linkDesktopFolder(stateRoot(system), other.state);
       },
       stopOther: (other) => stopOtherInstall(system, other),
+      ...(input.openChat ? { openChat: input.openChat } : {}),
     },
+    knownKeys: async () => shellKeys(input.home, input.env),
     permissions: async (): Promise<PermissionFacts> => {
       const panelPath = panel();
       const capturePath = capture();

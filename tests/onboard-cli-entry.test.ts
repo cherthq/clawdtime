@@ -47,7 +47,11 @@ it("shows its help", async () => {
     const result = await clawdtime(["onboard", "--help"], home);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(
-      "clawdtime onboard [--local] [--coordinator HTTPS_ORIGIN] [--json]",
+      "clawdtime onboard [--phone] [--local] [--coordinator HTTPS_ORIGIN] [--json]",
+    );
+    // The phone is a later step, and the help says how to take it.
+    expect(result.stdout).toContain(
+      "Your phone is a later step:\nclawdtime onboard --phone.",
     );
   } finally {
     rmSync(home, { recursive: true, force: true });

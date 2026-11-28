@@ -137,6 +137,9 @@ final class ChatView: NSView, SheetContent {
   private static let starters = ["Open my latest X posts and tell me the replies", "Find a USB-C charger on Amazon under 30 dollars", "Read my unread messages in Slack"]
   /// The answers under the last message, as the buttons show them.
   private var choices: [String] = []
+  /// The requests that an empty chat offers, as the buttons show them. At the
+  /// end of setup it is one first request.
+  private var ideaTexts: [String] = ChatView.starters
 
   override init(frame: NSRect) {
     super.init(frame: frame)
@@ -155,10 +158,7 @@ final class ChatView: NSView, SheetContent {
 
     rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 12
     ideas.orientation = .vertical; ideas.alignment = .leading; ideas.spacing = 6
-    for (index, starter) in Self.starters.enumerated() {
-      let chip = PillButton(starter, kind: .secondary, small: true, target: self, action: #selector(starterPressed(_:)))
-      chip.tag = index; ideas.addArrangedSubview(chip)
-    }
+    showIdeas()
     let content = NSStackView(views: [ideas, rows]); content.orientation = .vertical; content.alignment = .leading; content.spacing = 12
     content.detachesHiddenViews = true
     document.addSubview(content); content.translatesAutoresizingMaskIntoConstraints = false
@@ -234,6 +234,22 @@ final class ChatView: NSView, SheetContent {
   var hasDraft: Bool { !input.string.isEmpty || model.pending != nil || model.voice != .off }
   func focus() { input.focus() }
 
+  /// The end of setup: the empty chat offers this one request in place of the others.
+  /// A click sends it, as any request of the chat. Nothing is sent by itself.
+  func offerFirstRequest(_ text: String) {
+    guard ideaTexts != [text] else { return }
+    ideaTexts = [text]
+    showIdeas()
+    onResize?()
+  }
+  private func showIdeas() {
+    for view in ideas.arrangedSubviews { ideas.removeArrangedSubview(view); view.removeFromSuperview() }
+    for (index, idea) in ideaTexts.enumerated() {
+      let chip = PillButton(idea, kind: .secondary, small: true, target: self, action: #selector(starterPressed(_:)))
+      chip.tag = index; ideas.addArrangedSubview(chip)
+    }
+  }
+
   func render(_ model: ChatModel) {
     self.model = model
     detail.stringValue = !model.connected ? "Not connected. Nothing is sent."
@@ -300,7 +316,7 @@ final class ChatView: NSView, SheetContent {
     onSend?(choices[sender.tag])
   }
   @objc private func starterPressed(_ sender: NSControl) {
-    guard Self.starters.indices.contains(sender.tag), model.pending == nil, model.connected else { return }
-    onSend?(Self.starters[sender.tag])
+    guard ideaTexts.indices.contains(sender.tag), model.pending == nil, model.connected else { return }
+    onSend?(ideaTexts[sender.tag])
   }
 }

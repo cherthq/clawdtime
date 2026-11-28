@@ -26,6 +26,32 @@ export const stepIds = [
   "ready",
 ] as const;
 export type StepId = (typeof stepIds)[number];
+
+/**
+ * Which steps a run takes, always in the order of `stepIds`.
+ *
+ * - `first`: what a person needs to talk to ClawdTime on this Mac. No phone,
+ *   no text, no coordinator.
+ * - `phone`: "Get calls on your phone", a later and optional run
+ *   (`clawdtime onboard --phone`). It needs a desktop that runs, so it checks
+ *   that one too.
+ * - `all`: every step. A rerun on a Mac that is paired already takes it, so
+ *   that the Mac stays connected as before.
+ */
+export type SetupRoute = "first" | "phone" | "all";
+export const routeSteps: Record<SetupRoute, readonly StepId[]> = {
+  first: ["preflight", "model", "desktop", "computer", "permissions", "ready"],
+  phone: [
+    "preflight",
+    "desktop",
+    "permissions",
+    "phone",
+    "pairing",
+    "connection",
+    "ready",
+  ],
+  all: stepIds,
+};
 export type StepState =
   "pending" | "in_progress" | "needs_input" | "ready" | "failed" | "skipped";
 
@@ -52,6 +78,11 @@ export interface InputRequest {
   prompt: string;
   options?: InputOption[];
   multiple?: boolean;
+  /**
+   * For a choice: the option that an interface shows chosen, so that Return
+   * takes it. A consent question never has one.
+   */
+  default?: string;
   /**
    * The answer gives or refuses consent: computer use, view, computer
    * actions, reports, the pairing, a replacement, a sign-in text or the

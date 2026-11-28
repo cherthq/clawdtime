@@ -11,9 +11,22 @@ public enum SetupProtocol {
   /// `--app` says that the app owns the long-lived processes: setup opens no
   /// panel and starts no background connection, and the app starts the one
   /// desktop and the one connection when setup ends.
-  public static func arguments(local: Bool) -> [String] {
-    local ? ["onboard", "--json", "--app", "--local"] : ["onboard", "--json", "--app"]
+  public static func arguments(local: Bool) -> [String] { arguments(SetupRun(local: local)) }
+  /// `phone`: the later run that gets calls on the person's phone.
+  public static func arguments(_ run: SetupRun) -> [String] {
+    ["onboard", "--json", "--app"] + (run.phone ? ["--phone"] : run.local ? ["--local"] : [])
   }
+}
+
+/// Which setup runs. The first run is what a person needs to talk to
+/// ClawdTime on this Mac. The phone run ("Get calls on your phone") is a later,
+/// optional one. `local` keeps a paired Mac to the first run.
+public struct SetupRun: Equatable, Sendable {
+  public var local: Bool
+  public var phone: Bool
+  public init(local: Bool = false, phone: Bool = false) { self.local = local; self.phone = phone && !local }
+  public static let first = SetupRun()
+  public static let phone = SetupRun(phone: true)
 }
 
 /// A setup step. The ids are fixed by the protocol; an id the app does not know
@@ -50,12 +63,12 @@ public struct StepID: RawRepresentable, Hashable, Codable, Sendable, Expressible
     switch self {
     case .preflight: "Check this Mac"
     case .model: "Model key"
-    case .desktop: "Desktop"
+    case .desktop: "Start ClawdTime"
     case .computer: "Computer use"
     case .permissions: "Permissions"
     case .phone: "Your phone"
     case .pairing: "Pair this Mac"
-    case .connection: "Connection"
+    case .connection: "Phone connection"
     case .ready: "Ready"
     default: rawValue.prefix(1).uppercased() + rawValue.dropFirst()
     }
@@ -103,10 +116,18 @@ public struct StepInput: Codable, Equatable, Sendable {
   public var multiple: Bool?
   /// The answer gives or refuses consent. Such a question has no default button.
   public var consent: Bool?
-  public init(kind: Kind, prompt: String? = nil, options: [InputOption]? = nil, multiple: Bool? = nil, consent: Bool? = nil) {
-    self.kind = kind; self.prompt = prompt; self.options = options; self.multiple = multiple; self.consent = consent
+  /// For a choice: the option that shows chosen, so that Return takes it.
+  public var `default`: String?
+  public init(kind: Kind, prompt: String? = nil, options: [InputOption]? = nil, multiple: Bool? = nil, consent: Bool? = nil, default: String? = nil) {
+    self.kind = kind; self.prompt = prompt; self.options = options; self.multiple = multiple; self.consent = consent; self.default = `default`
   }
   public var allowsMany: Bool { multiple ?? false }
+  /// The option that shows chosen when the question appears. A consent
+  /// question has none, whatever the engine says: the person chooses.
+  public var preselected: Set<String> {
+    guard kind == .choice, consent != true, let chosen = self.default, (options ?? []).contains(where: { $0.id == chosen }) else { return [] }
+    return [chosen]
+  }
 }
 
 public struct StepEvent: Codable, Equatable, Sendable {

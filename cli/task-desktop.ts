@@ -274,7 +274,7 @@ export async function desktopCli(
   const print = dependencies.print ?? console.log;
   if (!args.length || args[0] === "--help") {
     print(
-      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. A click on the mascot opens the chat. The panel lists no coding-agent sessions; its bubble names one that waits for you, and --agents false turns that reading off. Closing the panel leaves the service and task running. Startup does not call or capture. It renews the desktop's own expired task session only while no task, call or voice is open. Without --port, a desktop whose port another program holds moves to a free port and keeps it. The service writes its output, masked, to desktop-start.log in the state folder. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
+      "task:desktop --state PRIVATE_DIR --project SELECTED_PROJECT [--port 13326] [--session-file PRIVATE_FILE] [--worker codex --checks PRIVATE_FILE] [--calls-config PRIVATE_FILE] [--panel-binary ABSOLUTE_EXECUTABLE] [--agents false] [--tucked true | --chat true]\nSimulation is the default. --tucked true starts the panel as the mascot and takes no focus. A click on the mascot opens the chat. --chat true opens the chat with the keys and one suggested first request, also in a panel that is open already. The panel lists no coding-agent sessions; its bubble names one that waits for you, and --agents false turns that reading off. Closing the panel leaves the service and task running. Startup does not call or capture. It renews the desktop's own expired task session only while no task, call or voice is open. Without --port, a desktop whose port another program holds moves to a free port and keeps it. The service writes its output, masked, to desktop-start.log in the state folder. Calls configuration requires Codex and an existing session; each call needs separate operator authorization.",
     );
     return undefined;
   }
@@ -295,6 +295,7 @@ export async function desktopCli(
         "--panel-binary",
         "--agents",
         "--tucked",
+        "--chat",
       ].includes(key) ||
       !value ||
       value.startsWith("--") ||
@@ -350,6 +351,13 @@ export async function desktopCli(
     !["true", "false"].includes(options["--tucked"])
   )
     throw Error("Use --tucked true or --tucked false.");
+  if (
+    options["--chat"] !== undefined &&
+    !["true", "false"].includes(options["--chat"])
+  )
+    throw Error("Use --chat true or --chat false.");
+  if (options["--chat"] === "true" && options["--tucked"] === "true")
+    throw Error("Use --chat true or --tucked true, not both.");
   const checksPath = options["--checks"]
     ? resolve(options["--checks"])
     : undefined;
@@ -589,9 +597,11 @@ export async function desktopCli(
       );
       return { service };
     }
-    // Tucked: the panel starts as the mascot and takes no focus.
+    // Tucked: the panel starts as the mascot and takes no focus. Chat: the
+    // chat opens with the keys, also in a panel that is open already.
     const panelArgs = ["--config", panelPath];
     if (options["--tucked"] === "true") panelArgs.push("--tucked");
+    if (options["--chat"] === "true") panelArgs.push("--chat");
     const panel = spawnProcess(panelBinary, panelArgs, {
       cwd: root,
       // A foreground owner keeps the panel in its own process group, so that

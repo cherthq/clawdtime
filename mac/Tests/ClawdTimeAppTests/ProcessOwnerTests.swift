@@ -143,8 +143,45 @@ final class ProcessOwnerTests: XCTestCase {
     XCTAssertFalse(owner.isActive)
   }
 
+  func testStartTalkingOpensTheChatAndAConnectionStartsBesideARunningDesktop() throws {
+    let folder = try temporaryFolder(self)
+    let record = folder.path.replacingOccurrences(of: "'", with: "'\\''")
+    let script = try writeScript(folder.appendingPathComponent("runtime/bin/clawdtime"), """
+    record='\(record)'
+    case "$1" in
+      start)
+        printf '%s\\n' "$*" >> "$record/starts"
+        trap 'exit 0' TERM
+        echo '{"type":"ready"}'
+        while :; do sleep 1; done ;;
+      shared)
+        trap 'exit 0' TERM
+        echo "connection" >> "$record/events"
+        while :; do sleep 1; done ;;
+    esac
+    """)
+    let owner = ProcessOwner(launcher: script, grace: 3)
+    owner.start(connection: false, chat: true)
+    waitUntil { owner.desktop == .running }
+    let starts = { ((try? String(contentsOf: folder.appendingPathComponent("starts"), encoding: .utf8)) ?? "").split(separator: "\n").map(String.init) }
+    XCTAssertEqual(starts(), ["start --chat --foreground"], "the end of setup opens the chat, not a tucked mascot")
+    XCTAssertEqual(owner.connection, .off)
+    // Get calls on your phone, done later: the connection starts beside the desktop that runs.
+    owner.start(connection: true)
+    waitUntil { events(folder).contains("connection") }
+    XCTAssertEqual(owner.connection, .running)
+    XCTAssertEqual(starts().count, 1, "the desktop is not started a second time")
+    var stopped = false
+    owner.stop { stopped = true }
+    waitUntil { stopped }
+    XCTAssertEqual(owner.desktop, .off)
+  }
+
   func testTheCommandsAreTheOnesTheRuntimeMustProvide() {
     XCTAssertEqual(ManagedCommand.desktop.arguments, ["start", "--tucked", "true", "--foreground"])
+    XCTAssertEqual(ManagedCommand.desktop.openingChat().arguments, ["start", "--chat", "--foreground"])
+    XCTAssertEqual(ManagedCommand.desktop(app: URL(fileURLWithPath: "/Applications/ClawdTime.app")).openingChat().environment["CLAWDTIME_APP_BUNDLE"],
+                   "/Applications/ClawdTime.app")
     XCTAssertTrue(ManagedCommand.desktop.waitsForReady)
     // --owned: the connection ends by itself when the app is gone, also after a crash.
     XCTAssertEqual(ManagedCommand.connection.arguments, ["shared", "run", "--owned"])
