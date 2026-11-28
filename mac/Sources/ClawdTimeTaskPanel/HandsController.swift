@@ -129,10 +129,10 @@ import TaskPanelCore
     desktop.onTransition = { [weak self] phase, epoch in
       guard let self else { return }
       switch phase {
-      case .switching: self.label = "Switching the work surface"; self.guide.hide()
-      case .waiting: self.label = "Waiting for the work surface to settle"
-      case .ready: self.label = "Work surface verified"
-      case .blocked: self.label = "Desktop switch blocked; no further input"
+      case .switching: self.label = "Switching desktops"; self.guide.hide()
+      case .waiting: self.label = "Waiting for the desktop to settle"
+      case .ready: self.label = "On the correct desktop"
+      case .blocked: self.label = "Desktop switch blocked. ClawdTime sends no more input."
       }
       self.showBar()
       // Desktop verification owns readiness; presentation stays wide until that
