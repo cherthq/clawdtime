@@ -40,6 +40,8 @@ const events = {
   TrackUnsubscribed: "trackUnsubscribed",
 };
 const repo = fileURLToPath(new URL("..", import.meta.url));
+/** The first note of each recorded call. */
+const STARTED = `Recording started after the consent line played in full: "${CONSENT_LINE}"`;
 
 /** A folder of its own for each test, outside the checkout. */
 function folder() {
@@ -52,7 +54,13 @@ function folder() {
 }
 
 /** One synthetic call: a room with the caller in it, a session, an audio output and a clock that the test moves. */
-function call({ env = {}, video = false, ffmpeg = true, home } = {}) {
+function call({
+  env = {},
+  video = false,
+  ffmpeg = true,
+  home,
+  voice = "ok",
+} = {}) {
   let clock = Date.parse("2026-11-28T10:15:00.000Z");
   const now = () => clock;
   const pass = (ms) => {
@@ -151,6 +159,36 @@ function call({ env = {}, video = false, ffmpeg = true, home } = {}) {
     return () => ticks.splice(ticks.indexOf(run), 1);
   };
   const session = new EventEmitter();
+  // The session's direct say: each call, its exact text and options, and a handle whose playout the test ends.
+  const says = [];
+  session.say = (text, options) => {
+    if (voice === "say_throws") throw new Error("synthetic say failure");
+    const done = Promise.withResolvers();
+    const handle = { interrupted: false, waitForPlayout: () => done.promise };
+    says.push({ text, options, handle, done });
+    return handle;
+  };
+  // The voice that renders the consent line. The test sees which text it got.
+  const synthesized = [];
+  const consentFrame = 111;
+  const synthesize = (text) => {
+    synthesized.push(text);
+    if (voice === "voice_fails")
+      return (async function* () {
+        throw new Error("synthetic voice failure");
+      })();
+    return (async function* () {
+      for (let index = 0; index < 3; index++)
+        yield {
+          frame: {
+            data: new Int16Array(480).fill(consentFrame),
+            sampleRate: RECORDING_RATE,
+            channels: 1,
+            samplesPerChannel: 480,
+          },
+        };
+    })();
+  };
   const played = [];
   const output = {
     async captureFrame(frame) {
@@ -176,6 +214,7 @@ function call({ env = {}, video = false, ffmpeg = true, home } = {}) {
       events,
     },
     spawn,
+    synthesize,
     ffmpegReady: () => ffmpeg,
     interval,
     now,
@@ -212,7 +251,30 @@ function call({ env = {}, video = false, ffmpeg = true, home } = {}) {
       createdAt: now(),
     });
   const flush = () => new Promise((resolve) => setImmediate(resolve));
-  return {
+  /**
+   * Plays the newest say as the SDK does: its audio frames go through the agent's output, then its playout ends.
+   * `interrupt` ends it as interrupted. `partial` plays one frame only.
+   */
+  const playSay = async ({ interrupt = false, partial = false } = {}) => {
+    const entry = says.at(-1);
+    const reader = entry.options.audio.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      await output.captureFrame(value);
+      if (partial) break;
+    }
+    entry.handle.interrupted = interrupt;
+    entry.done.resolve();
+    await flush();
+  };
+  /** The usual start: the consent line is said and plays in full. */
+  const consent = async () => {
+    const started = f.recording.consent();
+    await playSay();
+    return started;
+  };
+  const f = {
     recording,
     room,
     caller,
@@ -234,7 +296,13 @@ function call({ env = {}, video = false, ffmpeg = true, home } = {}) {
     pass,
     now,
     flush,
+    says,
+    synthesized,
+    consentFrame,
+    playSay,
+    consent,
   };
+  return f;
 }
 
 const calls = (root) =>
@@ -351,28 +419,22 @@ test("on: a synthetic call keeps its times, its whole transcript and the audio o
       env: { CLAWDTIME_LINE_RECORDING_LABEL: "test-line" },
     });
     const root = join(home, ".local/share/clawdtime/line/recordings");
-    const greeting = f.recording.greet(
-      "Greet the caller in one short sentence.",
-    );
-    assert.ok(greeting.includes(CONSENT_LINE));
-    assert.ok(
-      greeting.indexOf(CONSENT_LINE) < greeting.indexOf("Greet the caller"),
-    );
-    // The consent line starts to play: the recording starts with its first frame.
+    // The consent line plays in full: the recording starts at its end.
+    assert.equal(await f.consent(), true);
+    assert.equal(calls(root).length, 1);
     await f.output.captureFrame(f.frame(1000));
     assert.equal(
       f.played.length,
-      1,
-      "the agent's audio still reaches the call",
+      4,
+      "the agent's audio still reaches the call: the consent line, then the greeting",
     );
-    assert.equal(calls(root).length, 1);
     assert.equal(f.streams.length, 1, "one stream reads the caller's voice");
     assert.equal(f.streams[0].track, f.audioPublication.track);
     assert.deepEqual(f.streams[0].options, {
       sampleRate: RECORDING_RATE,
       numChannels: 1,
     });
-    f.said("assistant", `${CONSENT_LINE} Hi, I am ClawdTime on this Mac.`);
+    f.said("assistant", "Hi, I am ClawdTime on this Mac.");
     f.pass(1000);
     f.streams[0].push(f.frame(-2000));
     await f.flush();
@@ -403,8 +465,8 @@ test("on: a synthetic call keeps its times, its whole transcript and the audio o
     assert.deepEqual(
       turns.map((turn) => [turn.who, turn.text, turn.offsetMs]),
       [
-        ["note", "Recording started.", 0],
-        ["agent", `${CONSENT_LINE} Hi, I am ClawdTime on this Mac.`, 0],
+        ["note", STARTED, 0],
+        ["agent", "Hi, I am ClawdTime on this Mac.", 0],
         ["caller", "Open Stonepad, please.", 1000],
         ["agent", "Stonepad is open.", 1500],
         ["note", "The call ended.", 3000],
@@ -447,27 +509,127 @@ test("on: a synthetic call keeps its times, its whole transcript and the audio o
   }
 });
 
-test("consent comes first: nothing is recorded before the greeting asks for the consent line and it plays", async () => {
+test("consent is fixed text: the session's direct say of the exact consent line, with audio of exactly that text, and no generated reply", async () => {
+  const { home, done } = folder();
+  try {
+    const f = call({ home });
+    // The voice renders the line when the call starts, before any greeting.
+    assert.deepEqual(f.synthesized, [CONSENT_LINE]);
+    const started = f.recording.consent();
+    assert.equal(f.says.length, 1);
+    assert.equal(f.says[0].text, CONSENT_LINE);
+    assert.ok(f.says[0].options.audio instanceof ReadableStream);
+    assert.notEqual(f.says[0].options.addToChatCtx, false);
+    // A second request does not say it again.
+    assert.equal(await f.recording.consent(), false);
+    assert.equal(f.says.length, 1);
+    await f.playSay();
+    assert.equal(await started, true);
+    // The consent audio played on the call: three frames of the rendered line.
+    assert.deepEqual(
+      f.played.map((frame) => frame.data[0]),
+      [f.consentFrame, f.consentFrame, f.consentFrame],
+    );
+    await f.recording.close("room_disconnected");
+  } finally {
+    done();
+  }
+});
+
+test("nothing is recorded before the consent line ended: not its audio, not the caller, not a word", async () => {
   const { home, done } = folder();
   try {
     const f = call({ home });
     const root = join(home, ".local/share/clawdtime/line/recordings");
-    // Audio and words before the greeting are not recorded.
     await f.output.captureFrame(f.frame(500));
     f.said("user", "Hello?");
+    const started = f.recording.consent();
+    // The line plays, and the caller talks, but its playout has not ended.
+    const reader = f.says[0].options.audio.getReader();
+    for (;;) {
+      const { value, done: end } = await reader.read();
+      if (end) break;
+      await f.output.captureFrame(value);
+    }
+    f.said("assistant", CONSENT_LINE);
+    f.said("user", "Okay.");
+    await f.flush();
     assert.equal(calls(root).length, 0);
-    assert.equal(f.streams.length, 0);
-    f.recording.greet("Greet the caller.");
-    // A second greeting does not ask for the line again.
-    assert.equal(f.recording.greet("Greet the caller."), "Greet the caller.");
-    assert.equal(calls(root).length, 0, "the request alone starts nothing");
+    assert.equal(f.streams.length, 0, "the caller's voice is not read yet");
+    assert.equal(f.recording.state(), "consenting");
+    f.pass(4000);
+    f.says[0].handle.interrupted = false;
+    f.says[0].done.resolve();
+    assert.equal(await started, true);
     await f.output.captureFrame(f.frame(700));
     const [id] = calls(root);
     await f.recording.close("room_disconnected");
+    const meta = record(root, id);
+    assert.equal(meta.recordingStartedAt, "2026-11-28T10:15:04.000Z");
     const turns = transcript(root, id).turns;
-    assert.equal(turns[0].text, "Recording started.");
-    assert.ok(!turns.some((turn) => turn.text === "Hello?"));
-    assert.equal(readWav(join(root, id, "agent.wav")).samples[0], 700);
+    assert.deepEqual(
+      turns.map((turn) => turn.text),
+      [STARTED, "The call ended."],
+    );
+    const agent = readWav(join(root, id, "agent.wav")).samples;
+    assert.equal(agent[0], 700);
+    assert.ok(
+      !agent.includes(f.consentFrame),
+      "the consent audio is not recorded",
+    );
+    assert.ok(!agent.includes(500));
+  } finally {
+    done();
+  }
+});
+
+test("an interrupted consent line records nothing of the call", async () => {
+  const { home, done } = folder();
+  try {
+    for (const how of [
+      { interrupt: true },
+      { interrupt: true, partial: true },
+    ]) {
+      const f = call({ home });
+      const started = f.recording.consent();
+      await f.playSay(how);
+      assert.equal(await started, false);
+      assert.equal(f.recording.state(), "closed");
+      await f.output.captureFrame(f.frame(700));
+      f.said("user", "Open Stonepad.");
+      await f.recording.close("caller_or_session_closed");
+      assert.equal(
+        calls(join(home, ".local/share/clawdtime/line/recordings")).length,
+        0,
+      );
+      assert.ok(f.logs.some((entry) => entry.code === "consent_interrupted"));
+    }
+  } finally {
+    done();
+  }
+});
+
+test("a consent line that cannot be said, or whose audio failed, records nothing", async () => {
+  const { home, done } = folder();
+  try {
+    const root = join(home, ".local/share/clawdtime/line/recordings");
+    const thrown = call({ home, voice: "say_throws" });
+    assert.equal(await thrown.recording.consent(), false);
+    await thrown.output.captureFrame(thrown.frame(700));
+    await thrown.recording.close("caller_or_session_closed");
+    assert.ok(thrown.logs.some((entry) => entry.code === "consent_failed"));
+    const silent = call({ home, voice: "voice_fails" });
+    const started = silent.recording.consent();
+    // The SDK plays an empty stream and ends the playout as not interrupted.
+    await silent.playSay();
+    assert.equal(await started, false);
+    await silent.output.captureFrame(silent.frame(700));
+    await silent.recording.close("caller_or_session_closed");
+    assert.ok(
+      silent.logs.some((entry) => entry.code === "consent_audio_failed"),
+    );
+    assert.equal(silent.played.length, 1, "no consent audio played");
+    assert.equal(calls(root).length, 0);
   } finally {
     done();
   }
@@ -495,9 +657,8 @@ test("stop recording: the caller's words stop every part at once, and the call g
   try {
     const f = call({ home });
     const root = join(home, ".local/share/clawdtime/line/recordings");
-    f.recording.greet("Greet the caller.");
+    await f.consent();
     await f.output.captureFrame(f.frame(100));
-    f.said("assistant", CONSENT_LINE);
     f.pass(1000);
     f.streams[0].push(f.frame(200));
     await f.flush();
@@ -513,7 +674,7 @@ test("stop recording: the caller's words stop every part at once, and the call g
     f.pass(1000);
     f.streams[0].push(f.frame(300));
     await f.output.captureFrame(f.frame(400));
-    assert.equal(f.played.length, 2, "the agent still speaks on the call");
+    assert.equal(f.played.length, 5, "the agent still speaks on the call");
     f.said("user", "Please stop recording.");
     f.said("assistant", STOPPED_LINE);
     await f.flush();
@@ -528,7 +689,7 @@ test("stop recording: the caller's words stop every part at once, and the call g
     const turns = transcript(root, id).turns;
     assert.deepEqual(
       turns.map((turn) => turn.text),
-      ["Recording started.", CONSENT_LINE, "The caller stopped the recording."],
+      [STARTED, "The caller stopped the recording."],
     );
     const caller = readWav(join(root, id, "caller.wav")).samples;
     assert.ok(!caller.includes(300));
@@ -542,7 +703,7 @@ test("the stop_recording tool stops at once, releases the caller turn, and says 
   const { home, done } = folder();
   try {
     const f = call({ home });
-    f.recording.greet("Greet the caller.");
+    await f.consent();
     await f.output.captureFrame(f.frame(100));
     let canceled = 0;
     const tools = f.recording.tools((definition) => definition, {
@@ -568,8 +729,10 @@ test("stop recording before the consent line plays means nothing of the call is 
   const { home, done } = folder();
   try {
     const f = call({ home });
-    f.recording.greet("Greet the caller.");
+    const started = f.recording.consent();
     f.heard("Don't record this call.");
+    await f.playSay();
+    assert.equal(await started, false);
     await f.output.captureFrame(f.frame(100));
     await f.recording.close("caller_or_session_closed");
     assert.equal(
@@ -607,7 +770,7 @@ test("video: a caller's video track is subscribed and kept as MP4 parts, a new p
   try {
     const f = call({ home, video: true });
     const root = join(home, ".local/share/clawdtime/line/recordings");
-    f.recording.greet("Greet the caller.");
+    await f.consent();
     await f.output.captureFrame(f.frame(100));
     assert.deepEqual(f.subscribed, [true]);
     // The library says that the subscription is there.
@@ -655,13 +818,13 @@ test("video that cannot be recorded leaves a plain reason in the call record, an
   try {
     const root = join(home, ".local/share/clawdtime/line/recordings");
     const none = call({ home });
-    none.recording.greet("Greet the caller.");
+    await none.consent();
     await none.output.captureFrame(none.frame(100));
     await none.recording.close("caller_or_session_closed");
     const noTool = call({ home, video: true, ffmpeg: false });
     // The answer about ffmpeg comes before the greeting.
     await noTool.flush();
-    noTool.recording.greet("Greet the caller.");
+    await noTool.consent();
     await noTool.output.captureFrame(noTool.frame(100));
     await noTool.recording.close("caller_or_session_closed");
     assert.deepEqual(
@@ -674,7 +837,7 @@ test("video that cannot be recorded leaves a plain reason in the call record, an
       video: true,
       env: { CLAWDTIME_LINE_RECORDING_VIDEO: "off" },
     });
-    off.recording.greet("Greet the caller.");
+    await off.consent();
     await off.output.captureFrame(off.frame(100));
     await off.recording.close("caller_or_session_closed");
     const reasons = calls(root)
@@ -740,7 +903,7 @@ test("retention: each call keeps its own end date, and old calls go at the next 
       },
     );
     const f = call({ home, env: { CLAWDTIME_LINE_RECORDING_DAYS: "7" } });
-    f.recording.greet("Greet the caller.");
+    await f.consent();
     await f.output.captureFrame(f.frame(100));
     await f.recording.close("caller_or_session_closed");
     assert.ok(!existsSync(join(root, recent)));
@@ -757,9 +920,9 @@ test("a recordings folder that others can read is not used: the call goes on and
     const root = join(home, "open");
     mkdirSync(root, { mode: 0o755 });
     const f = call({ home, env: { CLAWDTIME_LINE_RECORDING_DIR: root } });
-    f.recording.greet("Greet the caller.");
+    assert.equal(await f.consent(), false);
     await f.output.captureFrame(f.frame(100));
-    assert.equal(f.played.length, 1);
+    assert.equal(f.played.length, 4);
     await f.recording.close("caller_or_session_closed");
     assert.deepEqual(readdirSync(root), []);
     assert.ok(f.logs.some((entry) => entry.code === "folder_not_private"));
@@ -774,7 +937,7 @@ test("the line agent wires the recording into ordinary calls only", () => {
     'from "./recording.mjs"',
     "recording = ordinaryCall\n      ? makeCallRecording(",
     "recording?.attach(session, audioOutput)",
-    "recording?.greet(greeting) ?? greeting",
+    "recording?.consent();",
     "recording?.tools(llm.tool, callerRequest)",
     "recording?.instructions",
     "recording?.close(reason)",

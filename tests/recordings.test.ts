@@ -75,8 +75,27 @@ async function recordCall(root: string, at = "2026-11-28T10:15:00.000Z") {
     pushes.push((frame) => controller.enqueue(frame));
     return stream;
   } as unknown as new () => ReadableStream;
-  const session = new EventEmitter();
+  const frame = (value: number) => ({
+    data: new Int16Array(480).fill(value),
+    sampleRate: RECORDING_RATE,
+    channels: 1,
+    samplesPerChannel: 480,
+  });
+  // The session's direct say plays its audio through the output, then its playout ends.
   const output = { captureFrame: async (_frame: unknown) => {} };
+  const session = Object.assign(new EventEmitter(), {
+    say(_text: string, options: { audio: ReadableStream }) {
+      const played = (async () => {
+        const reader = options.audio.getReader();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          await output.captureFrame(value);
+        }
+      })();
+      return { interrupted: false, waitForPlayout: () => played };
+    },
+  });
   const recording = makeCallRecording({
     settings: recordingSettings(
       {
@@ -91,22 +110,19 @@ async function recordCall(root: string, at = "2026-11-28T10:15:00.000Z") {
     callerIdentity: "chert-bridge-synthetic",
     callStarted: clock,
     media: { AudioStream: FakeAudioStream, KIND_AUDIO: 1, KIND_VIDEO: 2 },
+    synthesize: async function* () {
+      yield { frame: frame(111) };
+    },
     now: () => clock,
   })!;
   recording.attach(session, output);
-  const frame = (value: number) => ({
-    data: new Int16Array(480).fill(value),
-    sampleRate: RECORDING_RATE,
-    channels: 1,
-    samplesPerChannel: 480,
-  });
   const said = (role: string, text: string) =>
     session.emit("conversation_item_added", {
       item: { type: "message", role, textContent: text, createdAt: clock },
     });
-  recording.greet("Greet the caller.");
+  expect(await recording.consent()).toBe(true);
   await output.captureFrame(frame(1200));
-  said("assistant", `${CONSENT_LINE} Hi, I am ClawdTime.`);
+  said("assistant", "Hi, I am ClawdTime.");
   clock += 2000;
   pushes[0]!(frame(-800));
   await new Promise((done) => setImmediate(done));
@@ -325,8 +341,11 @@ describe("call recordings: the admin page", () => {
       await f.get(`/api/calls/${id}`, { cookie })
     ).json()) as { transcript: { who: string; text: string }[] };
     expect(detail.transcript.map((turn) => [turn.who, turn.text])).toEqual([
-      ["note", "Recording started."],
-      ["agent", `${CONSENT_LINE} Hi, I am ClawdTime.`],
+      [
+        "note",
+        `Recording started after the consent line played in full: "${CONSENT_LINE}"`,
+      ],
+      ["agent", "Hi, I am ClawdTime."],
       ["caller", "What is on the Stonepad screen?"],
       ["agent", "Stonepad shows the shop.example page."],
       ["note", "The call ended."],

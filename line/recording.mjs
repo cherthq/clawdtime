@@ -2,14 +2,16 @@
 // .env.local says CLAWDTIME_LINE_RECORDING=on. docs/RECORDING.md is the guide.
 //
 // How one call is recorded:
-//  1. The greeting asks the agent to say the consent line first (CONSENT_LINE). Nothing is recorded yet.
-//  2. The first audio frame of the agent after that request is the consent line as it starts to play. The recording
-//     starts with it: the call folder, the caller's voice (its own audio stream), the agent's voice (a copy of each
-//     frame that goes to the call), the transcript (the session's conversation items) and, when the caller sends
-//     video and ffmpeg is on this Mac, the caller's video.
-//  3. "Stop recording" in the caller's final transcript, or the stop_recording tool, stops every part at once. The
+//  1. When the call starts, a speech voice renders the consent line (CONSENT_LINE) as audio. No model writes it.
+//  2. At the greeting, the session says exactly that text with that audio (its direct say, not a generated reply).
+//     Nothing is recorded while it plays.
+//  3. Only when the line played in full, not interrupted, does the recording start: the call folder, the caller's
+//     voice (its own audio stream), the agent's voice (a copy of each frame that goes to the call), the transcript
+//     (the session's conversation items) and, when the caller sends video and ffmpeg is on this Mac, the caller's
+//     video. A say that fails, audio that could not be made, or an interruption records nothing of the call.
+//  4. "Stop recording" in the caller's final transcript, or the stop_recording tool, stops every part at once. The
 //     call goes on. What was recorded before the stop is kept.
-//  4. When the call ends, the files are closed, the two voices are mixed into one more file, and the record of the
+//  5. When the call ends, the files are closed, the two voices are mixed into one more file, and the record of the
 //     call gets its end time.
 // Without a greeting (no ready signal) there is no consent line, and nothing of the call is recorded.
 // The log of the line gets codes only, never a word of the call.
@@ -146,6 +148,8 @@ export function makeCallRecording({
   callStarted = Date.now(),
   media = {},
   spawn = spawnProcess,
+  // Renders text as speech: an async iterable of audio frames, or of items with a `frame`.
+  synthesize,
   ffmpegReady = ffmpegAnswers,
   interval = (run, ms) => {
     const timer = setInterval(run, ms);
@@ -168,8 +172,9 @@ export function makeCallRecording({
     I420,
     events = {},
   } = media;
-  // waiting: no consent request yet. armed: the greeting asked for the consent line. recording. stopped: the caller
-  // or the call ended it. declined: the caller said stop before it started. failed: the folder could not be used.
+  // waiting: no consent line yet. consenting: the consent line plays. recording. stopped: the caller or the call
+  // ended it. declined: the caller said stop before it started. closed: the line did not play in full, or the call
+  // ended first. failed: the folder could not be used.
   let state = "waiting",
     startMs = 0,
     stoppedAt = 0,
@@ -185,6 +190,15 @@ export function makeCallRecording({
     session = null,
     output = null,
     original = null;
+  // The consent line as audio, made once when the call starts, so it plays at once at the greeting.
+  const consentAudio = (async () => {
+    if (typeof synthesize !== "function") throw new Error("No voice");
+    const frames = [];
+    for await (const item of synthesize(CONSENT_LINE))
+      frames.push(item?.frame ?? item);
+    return frames;
+  })();
+  consentAudio.catch(() => {});
   const turns = [];
   const missing = [];
   const readers = new Set();
@@ -350,7 +364,11 @@ export function makeCallRecording({
       return;
     }
     state = "recording";
-    turn("note", "Recording started.", startMs);
+    turn(
+      "note",
+      `Recording started after the consent line played in full: "${CONSENT_LINE}"`,
+      startMs,
+    );
     if (!settings.video)
       missing.push({
         part: "video",
@@ -380,7 +398,7 @@ export function makeCallRecording({
 
   /** Ends every part at once. The files close in the background; `finishing` waits for them. */
   const halt = (by) => {
-    if (state === "armed" || state === "waiting") {
+    if (state === "consenting" || state === "waiting") {
       state = by === "caller" ? "declined" : "closed";
       log("recording", { code: by === "caller" ? "declined" : "not_started" });
       return Promise.resolve();
@@ -484,12 +502,71 @@ export function makeCallRecording({
     state: () => state,
     /** What the voice model is told about the recording. */
     instructions: INSTRUCTIONS,
-    /** The greeting with the consent line first. Only the first greeting of a call asks for it. */
-    greet(base) {
-      if (state !== "waiting") return base;
-      state = "armed";
-      log("recording", { code: "armed" });
-      return `Before anything else, say exactly these words: "${CONSENT_LINE}" Then: ${base}`;
+    /**
+     * Says the consent line: the session's direct say of the exact text, with the audio that the voice made of it.
+     * It is queued at once, so a greeting asked for after it plays after it. Resolves true when the line played in
+     * full and the recording started; false otherwise, and then nothing of the call is recorded.
+     */
+    consent() {
+      if (state !== "waiting" || !session) return Promise.resolve(false);
+      state = "consenting";
+      let index = 0,
+        pulledAll = false,
+        audioFailed = false;
+      const audio = new ReadableStream({
+        async pull(controller) {
+          let frames = null;
+          try {
+            frames = await consentAudio;
+          } catch {
+            /* failed below */
+          }
+          if (!frames?.length) {
+            audioFailed = true;
+            controller.close();
+            return;
+          }
+          if (index < frames.length) controller.enqueue(frames[index++]);
+          if (index >= frames.length) {
+            pulledAll = true;
+            controller.close();
+          }
+        },
+      });
+      let handle;
+      try {
+        handle = session.say(CONSENT_LINE, { audio, addToChatCtx: true });
+      } catch {
+        state = "closed";
+        log("recording", { code: "consent_failed" });
+        return Promise.resolve(false);
+      }
+      log("recording", { code: "consent_started" });
+      return (async () => {
+        try {
+          await handle.waitForPlayout();
+        } catch {
+          if (state === "consenting") {
+            state = "closed";
+            log("recording", { code: "consent_failed" });
+          }
+          return false;
+        }
+        // The caller said stop, or the call ended, while the line played.
+        if (state !== "consenting") return false;
+        if (handle.interrupted) {
+          state = "closed";
+          log("recording", { code: "consent_interrupted" });
+          return false;
+        }
+        if (audioFailed || !pulledAll) {
+          state = "closed";
+          log("recording", { code: "consent_audio_failed" });
+          return false;
+        }
+        begin();
+        return state === "recording";
+      })();
     },
     /** Listens to the session's words and copies the agent's audio frames. Before the session starts. */
     attach(value, audio) {
@@ -501,7 +578,6 @@ export function makeCallRecording({
         original = audio.captureFrame;
         audio.captureFrame = function (frame) {
           try {
-            if (state === "armed") begin();
             if (state === "recording") agentTrack?.write(frame, now());
           } catch {
             /* The call's audio never waits for the recording. */

@@ -26,12 +26,21 @@ The agent's own picture (the stone or the shared screen) is not recorded.
 
 1. The agent says this line first: "This call is recorded. Say stop recording
    to turn it off."
-2. The recording starts with the first sound of that line. Nothing before it
-   is recorded.
-3. The caller can say "stop recording" at any time. Every part stops at once.
+2. The line is fixed text. No language model writes it. When the call starts,
+   a speech model (`gpt-4o-mini-tts`, with the voice of the line) makes audio
+   of exactly that text. At the greeting, the voice session says the text with
+   that audio. The greeting plays after it.
+3. The recording starts only after the line played in full. Nothing before
+   its end is recorded, not even the line itself. The transcript starts with a
+   note that holds the exact words.
+4. When the line is not said in full, nothing of the call is recorded: the
+   say failed, the audio could not be made, the line was interrupted, or the
+   call ended first. The line log gets a code: `consent_failed`,
+   `consent_audio_failed` or `consent_interrupted`.
+5. The caller can say "stop recording" at any time. Every part stops at once.
    The call goes on. The agent says: "Recording is off. Nothing more of this
    call is recorded." What was recorded before the stop is kept.
-4. When the call does not greet (no ready signal), the agent never says the
+6. When the call does not greet (no ready signal), the agent never says the
    line, and nothing of the call is recorded.
 
 These phrases also stop it: "stop the recording", "turn off the recording",
@@ -74,6 +83,11 @@ code. The call itself goes on as before.
 | `CLAWDTIME_LINE_RECORDING_VIDEO` | `on`           | `off` records no video                                       |
 | `CLAWDTIME_LINE_RECORDING_DIR`   | see below      | The recordings folder. An absolute path outside the checkout |
 | `CLAWDTIME_LINE_FFMPEG`          | `ffmpeg`       | The ffmpeg command for the video                             |
+
+The consent line uses the voice of the line, `CLAWDTIME_LINE_VOICE` (default
+`marin`), and the `OPENAI_API_KEY` of the line. When the speech model does not
+have that voice, the line log gets `consent_audio_failed`, and nothing is
+recorded.
 
 The recordings folder is `recordings` in the line's state folder:
 `~/.local/share/clawdtime/line/recordings`, or `$CLAWDTIME_LINE_STATE/recordings`.
@@ -135,7 +149,9 @@ Add `--dir FOLDER` to read another recordings folder.
 ## How it works
 
 - `line/recording.mjs` records one call. The line agent makes it for each
-  ordinary call when the switch is on. It gets the session's conversation
+  ordinary call when the switch is on. It says the consent line with the
+  session's direct say of fixed text and fixed audio, and waits for the end
+  of its playout. Then it gets the session's conversation
   items for the transcript, a copy of each audio frame that the agent sends,
   and its own audio stream of the caller's track. For the video it subscribes
   to the caller's video track and sends the newest picture to ffmpeg ten times

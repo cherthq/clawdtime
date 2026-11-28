@@ -17,7 +17,7 @@ export function recordingSettings(
 export interface CallRecording {
   state(): string;
   instructions: string;
-  greet(base: string): string;
+  consent(): Promise<boolean>;
   attach(session: unknown, audio?: unknown): void;
   tools(
     tool: (definition: any) => any,
@@ -33,6 +33,7 @@ export function makeCallRecording(options: {
   callStarted?: number;
   media?: Record<string, unknown>;
   spawn?: (...args: any[]) => any;
+  synthesize?: (text: string) => AsyncIterable<unknown>;
   ffmpegReady?: (command: string) => boolean;
   interval?: (run: () => void, ms: number) => () => void;
   now?: () => number;

@@ -19,7 +19,7 @@ import {
   ServerOptions,
   voice,
 } from "@livekit/agents";
-import { realtime } from "@livekit/agents-plugin-openai";
+import { realtime, TTS } from "@livekit/agents-plugin-openai";
 import {
   AudioStream,
   LocalVideoTrack,
@@ -389,6 +389,12 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
             I420: VideoBufferType.I420,
             events: RoomEvent,
           },
+          // The consent line is speech of fixed text from this voice, never words of the realtime model.
+          synthesize: (text) =>
+            new TTS({
+              model: "gpt-4o-mini-tts",
+              voice: process.env.CLAWDTIME_LINE_VOICE || "marin",
+            }).synthesize(text),
           log,
         })
       : null;
@@ -706,12 +712,11 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
           } catch {
             void cleanup("greeting_authority_failed");
           }
-        } else
-          say(
-            shared
-              ? shared.greeting()
-              : (recording?.greet(greeting) ?? greeting),
-          );
+        } else {
+          // A recorded call: the fixed consent line plays first, and the recording starts only after it ended.
+          void recording?.consent();
+          say(shared ? shared.greeting() : greeting);
+        }
       },
       {
         event: RoomEvent.RoomMetadataChanged,
