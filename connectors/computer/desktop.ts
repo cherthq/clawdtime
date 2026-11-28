@@ -50,7 +50,7 @@ export const noOtherAppText =
  * one who has. Both mark the request as seen and repeat nothing.
  */
 export const clearHint =
-  'After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear';
+  'Look at the screen first. Then say "clear the computer task", or run: clawdtime computer clear';
 
 /**
  * Answers to open_app that end the request: an unknown result, a missing
@@ -147,7 +147,10 @@ export function normalizeDynamicTitle(title: string): string {
     .replace(/^[•●]\s+/u, "")
     .replace(/(?:\(\s*\d+\+?\s*\)|\[\s*\d+\+?\s*\])(?!\.[A-Za-z0-9])/g, " ")
     .replace(
-      new RegExp(`\\(\\s*${timePattern}\\s*\\)|\\[\\s*${timePattern}\\s*\\]`, "g"),
+      new RegExp(
+        `\\(\\s*${timePattern}\\s*\\)|\\[\\s*${timePattern}\\s*\\]`,
+        "g",
+      ),
       " ",
     )
     .replace(/(?:\s*[-–—|]\s*|\s+)\d+\s+tabs?\b/gi, " ")

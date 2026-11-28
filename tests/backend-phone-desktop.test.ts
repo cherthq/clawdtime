@@ -214,9 +214,7 @@ describe("phone desktop execution ownership", () => {
       () => adapter.execution.submit("ignored", "Open Messages"),
     );
     // The worker keeps the running task and takes the words into it.
-    expect(followUp.message).toBe(
-      "Got it. I take that into the task that runs.",
-    );
+    expect(followUp.message).toBe("Got it. I added that to the task.");
     expect(worker.snapshot().requestId).toBe(task);
     expect(journal.guidance(task)).toMatchObject([{ text: "Open Messages" }]);
     expect(journal.all()).toHaveLength(1);

@@ -766,7 +766,7 @@ describe("a sign-in or a code", () => {
       reachReplies.secret,
     );
     expect(await reach.reply("done", "call", call.placed[0]!.key)).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     await worker.idle();
     expect(worker.snapshot().state).toBe("completed");

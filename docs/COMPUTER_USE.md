@@ -227,9 +227,9 @@ to the planner with its next action, marked as what you said after the start,
 so that your newest word wins. An action that was chosen before you spoke did
 not have your words: it is not sent, also when it was already on its way, and
 the planner chooses again. The answer is one short sentence that says where
-your words are now, for example "Got it. I take that into the task that
-runs.". It never says that something was done. Every action after it goes
-through the same checks. One request takes 8 such additions of 600 characters
+your words are now, for example "Got it. I added that to the task.". It
+never says that something was done. Every action after it goes through the
+same checks. One request takes 8 such additions of 600 characters
 each, and none that holds a password or a key. The same message a second time
 adds nothing and starts nothing.
 
@@ -255,8 +255,8 @@ The worker reads each message with `readMidTask` in
   from here", "hang on, I'm checking something", "my turn", "brb", a raised
   hand. A yes, a no or a thanks may stand beside it ("no wait", "ok, hold
   on"). The worker pauses before the next input and says "Paused. Your next
-  message goes on with it.". An action that was on its way is held back. The
-  words of a pause carry nothing for the planner. When you move the mouse or
+  message continues the task.". An action that was on its way is held back.
+  The words of a pause carry nothing for the planner. When you move the mouse or
   press a key while the hands work, the worker pauses in the same way.
 - **Status.** A question about how the task goes, as the whole message: "are
   you done?", "what are you doing?", "how's it going?", "where are you?", "is
@@ -1644,7 +1644,7 @@ question of a page names its site. A no ends the request.
   count only a text field: a list or a sheet with the focus passes Return on
   to the default button of its window.
 - **You take over.** When the hands report that you moved the mouse or pressed
-  a key, the worker pauses. Your next message goes on with it, and a stop
+  a key, the worker pauses. Your next message continues the task, and a stop
   stops it.
 - **Done is checked.** `done` counts only after an observation that came after
   the last action.

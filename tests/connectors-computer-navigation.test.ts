@@ -223,10 +223,7 @@ describe("goal-only semantic navigation interpretation", () => {
     expect(defaultReaderModel).toBe("gpt-6.2-astra");
     const calls: { url: string; body: Record<string, unknown> }[] = [];
     const fallbackRequest: typeof fetch = async (url, options) => {
-      const body = JSON.parse(String(options?.body)) as Record<
-        string,
-        unknown
-      >;
+      const body = JSON.parse(String(options?.body)) as Record<string, unknown>;
       calls.push({ url: String(url), body });
       if (body.model === "gpt-6.2-astra")
         return new Response("{}", { status: 404 });
@@ -296,14 +293,17 @@ describe("goal-only semantic navigation interpretation", () => {
     ]);
 
     // Empty cut: true response throws cleanly instead of returning empty output.
-    const cutModel = new OpenAIModel("fixture-key", "gpt-6.2-astra", async () =>
-      new Response(
-        JSON.stringify({
-          status: "incomplete",
-          incomplete_details: { reason: "max_output_tokens" },
-          output: [{ type: "reasoning", id: "rs_1", summary: [] }],
-        }),
-      ),
+    const cutModel = new OpenAIModel(
+      "fixture-key",
+      "gpt-6.2-astra",
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [{ type: "reasoning", id: "rs_1", summary: [] }],
+          }),
+        ),
     );
     await expect(
       cutModel.complete({
@@ -780,7 +780,7 @@ describe("a direct request for a web address in the worker", () => {
     await until(() => f.worker.snapshot().state === "waiting_for_person");
     expect(f.hands.sent).toEqual([]);
     expect(f.worker.snapshot().message).toBe(
-      "You are using the Mac, so I paused. Next I wanted to open app.example.com in Fixture Browser. Your next message goes on with it.",
+      "You are using the Mac, so I paused. Next I wanted to open app.example.com in Fixture Browser. Your next message continues the task.",
     );
     // The model is not asked in between either.
     expect(f.planner.inputs).toHaveLength(0);

@@ -212,7 +212,7 @@ describe("what a computer request teaches memory", () => {
     await run.worker.submit("r1", "Sign up for the phone shop newsletter");
     await run.waiting();
     expect((await run.worker.answer("use my work email")).message).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     await run.worker.idle();
     expect(run.hands.sent.map((command) => command.kind)).toContain("type");

@@ -115,7 +115,7 @@ const askText = (pattern: ProgressPattern) =>
   } What should I try next? Say it in a few words, or say no to stop.`;
 
 export const progressEndText =
-  "My last actions did not move the task on, also after I tried other ways and asked you, so I stopped. The task is not finished. Ask again in other words, or do the next step yourself.";
+  "I tried other ways and asked you, but my last steps did not move the task. I stopped, and the task is not finished. Ask again in other words, or do the next step yourself.";
 
 const stillRow = () => ({
   count: 0,

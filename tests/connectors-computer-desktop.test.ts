@@ -223,7 +223,7 @@ describe("verified desktop activation", () => {
       question: null,
     });
     expect(f.worker.status().message).toMatch(
-      /3 actions in a row .* The last reason: No app with that name was found on this Mac\./,
+      /blocked 3 steps in a row.* The last reason: No app with that name was found on this Mac\./,
     );
     expect(f.journal.get("absent")?.reason).toBe("too_many_refusals");
     expect(f.journal.unresolved()).toBeNull();

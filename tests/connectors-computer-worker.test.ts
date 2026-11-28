@@ -235,7 +235,7 @@ describe("a task", () => {
     expect((await worker.submit("r1", "First")).message).toMatch(/Working on/);
     // Words that come during the first look steer the task, and it goes on.
     expect((await worker.submit("r2", "Second")).message).toBe(
-      "Got it. I take that into the task that runs.",
+      "Got it. I added that to the task.",
     );
     expect(journal.get("r2")).toBeNull();
     release();
@@ -1108,19 +1108,19 @@ describe("the person takes over", () => {
   };
   // An action that was held back for the person: the pause says what it was.
   const held = (wanted: string) =>
-    `You are using the Mac, so I paused. Next I wanted to ${wanted}. Your next message goes on with it.`;
+    `You are using the Mac, so I paused. Next I wanted to ${wanted}. Your next message continues the task.`;
   it("pauses, and any next message goes on: it needs no magic word", async () => {
     const { worker, hands, waiting, said, planner } = setup([click, done]);
     interrupted(hands);
     await worker.submit("r1", "Click it");
     await waiting();
     expect(worker.snapshot().message).toBe(
-      "You moved the mouse or pressed a key, so I paused. Your next message goes on with it.",
+      "You moved the mouse or pressed a key, so I paused. Your next message continues the task.",
     );
     expect(said).toHaveLength(1);
     expect(kinds(hands.commands)).toEqual(["observe", "look", "click"]);
     expect((await worker.answer("hmm")).message).toBe(
-      "Got it. I go on with the task and take that into it.",
+      "Got it. I added that, and the task continues.",
     );
     await worker.idle();
     expect(planner.inputs.at(-1)).toMatchObject({ guidance: ["hmm"] });
@@ -1257,7 +1257,7 @@ describe("the person takes over", () => {
 });
 
 describe("what the person says while a task runs", () => {
-  const taken = "Got it. I take that into the task that runs.";
+  const taken = "Got it. I added that to the task.";
   const busy = /already running/;
   /** A step of the planner that waits until the test lets it go on. */
   const held = (action: Action) => {
@@ -1401,11 +1401,11 @@ describe("what the person says while a task runs", () => {
     await waiting();
     expect(worker.snapshot()).toMatchObject({
       message:
-        "You moved the mouse or pressed a key, so I paused. Your next message goes on with it.",
+        "You moved the mouse or pressed a key, so I paused. Your next message continues the task.",
       waiting: "takeover",
     });
     expect((await worker.submit("r2", "Click it again")).message).toBe(
-      "Got it. I go on with the task and take that into it.",
+      "Got it. I added that, and the task continues.",
     );
     await worker.idle();
     expect(worker.snapshot().state).toBe("completed");
@@ -1436,7 +1436,7 @@ describe("what the person says while a task runs", () => {
     await paused.worker.submit("r1", "Click it");
     await paused.waiting();
     expect((await paused.worker.submit("r2", "no, not that")).message).toBe(
-      "Got it. I go on with the task and take that into it.",
+      "Got it. I added that, and the task continues.",
     );
     // The next click goes out with the words, and the person takes over again.
     await until(() => paused.hands.sent.length === 2);
@@ -1470,7 +1470,7 @@ describe("what the person says while a task runs", () => {
     expect(
       (await asked.worker.submit("r2", "No, do not send it")).message,
     ).toBe(
-      "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
+      "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.",
     );
     await asked.worker.idle();
     expect(asked.hands.sent).toEqual([]);
@@ -1525,7 +1525,7 @@ describe("what the person says while a task runs", () => {
     const pause = paused.worker.snapshot().message;
     for (const [index, words] of unclear.entries())
       expect((await paused.worker.submit(`p${index}`, words)).message).toBe(
-        "Still paused. Your next message goes on with it.",
+        "Still paused. Your next message continues the task.",
       );
     expect(paused.worker.snapshot()).toMatchObject({
       state: "waiting_for_person",
@@ -1547,7 +1547,7 @@ describe("what the person says while a task runs", () => {
       await asked.worker.submit("r1", "Finish the draft");
       await asked.waiting();
       expect((await asked.worker.submit(`a${index}`, words)).message).toBe(
-        "Paused, and what waited for your yes is set aside. Your next message goes on with it.",
+        "Paused. I did not do the step that needed your yes. Your next message continues the task.",
       );
       await until(
         () =>
@@ -1566,7 +1566,7 @@ describe("what the person says while a task runs", () => {
     await free.worker.submit("r1", "Open my note");
     await free.waiting();
     expect((await free.worker.submit("f1", "hold on")).message).toBe(
-      "Paused, and the question that waited is set aside. Your next message goes on with it.",
+      "Paused. I do not need an answer to my question now. Your next message continues the task.",
     );
     await until(
       () =>
@@ -1689,7 +1689,7 @@ describe("what the person says while a task runs", () => {
     expect(
       (await worker.submit("r2", "Okay, just please open it")).message,
     ).toBe(
-      "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
+      "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.",
     );
     await until(() => planner.inputs.length === 2);
     expect(planner.inputs[1]).toMatchObject({
@@ -1720,7 +1720,7 @@ describe("what the person says while a task runs", () => {
     await waiting();
     expect(worker.snapshot()).toMatchObject({ waiting: "question" });
     expect((await worker.submit("r2", "Open the other note")).message).toBe(
-      "Got it. I take that into the task and choose again. The question that waited is set aside.",
+      "Got it. I added that and will choose the next step again. I do not need an answer to my question now.",
     );
     await worker.idle();
     expect(worker.snapshot().state).toBe("completed");
@@ -1759,7 +1759,7 @@ describe("what the person says while a task runs", () => {
     expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
     expect(worker.snapshot().message).toMatch(/password field/);
     expect((await worker.submit("r2", "Use the other field")).message).toBe(
-      "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
+      "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.",
     );
     await worker.idle();
     expect(hands.sent.map((command) => command.kind)).toEqual(["click"]);
@@ -1845,7 +1845,7 @@ describe("what the person says while a task runs", () => {
         )
       ).message,
     ).toBe(
-      "That is longer than 600 characters, so I did not take it into the task that runs. Say it in fewer words.",
+      "That is longer than 600 characters, so I did not add it to the task. Say it in fewer words.",
     );
     expect(journal.guidance("r1")).toEqual([]);
     const additions = Array.from(
@@ -1855,7 +1855,7 @@ describe("what the person says while a task runs", () => {
     for (const [index, words] of additions.entries())
       expect((await worker.submit(`g${index + 1}`, words)).message).toBe(taken);
     expect((await worker.submit("g9", "Open tab 9")).message).toBe(
-      "This task already took 8 additions from you, and it takes no more. I go on with the task.",
+      "This task already has 8 additions from you, so I cannot add more. The task continues.",
     );
     // A credential is refused, and the task goes on: it pauses for nothing.
     expect(
@@ -1866,7 +1866,7 @@ describe("what the person says while a task runs", () => {
         )
       ).message,
     ).toBe(
-      "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself. I go on with the task.",
+      "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself. The task continues.",
     );
     // A mark that the cleaning takes away does not hide a credential.
     expect(
@@ -1907,7 +1907,7 @@ describe("what the person says while a task runs", () => {
         )
       ).message,
     ).toBe(
-      `That is longer than 600 characters, so I did not take it into the task that runs. Say it in fewer words. ${question}`,
+      `That is longer than 600 characters, so I did not add it to the task. Say it in fewer words. ${question}`,
     );
     expect(
       (
@@ -1934,7 +1934,7 @@ describe("what the person says while a task runs", () => {
     worker.setOwnershipGuard(() => owned);
     owned = false;
     expect((await worker.submit("r2", "Use the other tab")).message).toContain(
-      "held by the current phone",
+      "controls the screen now. I sent nothing.",
     );
     owned = true;
     worker.stop();
@@ -2203,7 +2203,7 @@ describe("what the person says while a task runs", () => {
       await run.worker.submit("r1", "Finish the draft");
       await run.waiting();
       expect((await run.worker.submit("g1", words)).message).toBe(
-        "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
+        "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.",
       );
       await run.worker.idle();
       // Send never went out: the planner chose again with the words, and only Next went.
@@ -2216,7 +2216,7 @@ describe("what the person says while a task runs", () => {
       await run.worker.submit("r1", "Finish the draft");
       await run.waiting();
       expect((await run.worker.submit("g1", words)).message).toBe(
-        "Paused, and what waited for your yes is set aside. Your next message goes on with it.",
+        "Paused. I did not do the step that needed your yes. Your next message continues the task.",
       );
       await until(
         () =>
@@ -2243,7 +2243,7 @@ describe("what the person says while a task runs", () => {
         : undefined;
     await worker.submit("r1", "Click it");
     await waiting();
-    const pauseReply = "Still paused. Your next message goes on with it.";
+    const pauseReply = "Still paused. Your next message continues the task.";
     const waits = [
       "I'm typing",
       "hold up",
@@ -2267,7 +2267,7 @@ describe("what the person says while a task runs", () => {
     // screen order is needed, and no magic word.
     expect(
       (await worker.submit("go", "hmm, did you click that?")).message,
-    ).toBe("Got it. I go on with the task and take that into it.");
+    ).toBe("Got it. I added that, and the task continues.");
     await worker.idle();
     expect(worker.snapshot().state).toBe("completed");
     expect(planner.inputs[1]).toMatchObject({
@@ -2305,7 +2305,7 @@ describe("what the person says while a task runs", () => {
       const first = held({ kind: "wait", ms: 0 });
       const run = await running([first.step, click, done]);
       expect((await run.worker.submit("h1", words)).message).toBe(
-        "Paused. Your next message goes on with it.",
+        "Paused. Your next message continues the task.",
       );
       first.release();
       await run.waiting();
@@ -2328,7 +2328,7 @@ describe("what the person says while a task runs", () => {
       await free.worker.submit("r1", "Pick a row");
       await free.waiting();
       expect((await free.worker.submit("h1", words)).message).toBe(
-        "Got it. I take that into the task and choose again. The question that waited is set aside.",
+        "Got it. I added that and will choose the next step again. I do not need an answer to my question now.",
       );
       await free.worker.idle();
       expect(free.planner.inputs[1]).toMatchObject({ guidance: [words] });
@@ -2392,7 +2392,7 @@ describe("what the person says while a task runs", () => {
       .message;
     expect(askReply).not.toContain("Got it");
     expect(askReply).toContain(
-      "The task is at its end, so it takes no more words. Ask again when it has ended.",
+      "The task is ending, so I cannot add that now. Ask again after it ends.",
     );
     expect(atAsk.hands.sent).toEqual([]);
     expect(atAsk.planner.inputs).toHaveLength(1);
@@ -2414,7 +2414,7 @@ describe("what the person says while a task runs", () => {
       await atClick.worker.submit("g1", "now click the second button")
     ).message;
     expect(clickReply).toBe(
-      "The task is at its end, so it takes no more words. Ask again when it has ended.",
+      "The task is ending, so I cannot add that now. Ask again after it ends.",
     );
     expect(atClick.journal.guidance("r1")).toEqual([]);
     releaseClick();
@@ -2549,7 +2549,7 @@ describe("what the person says while a task runs", () => {
     mkdirSync(dirname(run.journal.guidanceFile), { recursive: true });
     writeFileSync(run.journal.guidanceFile, "not json");
     expect((await run.worker.submit("g1", "Use Safari")).message).toContain(
-      "could not be written",
+      "could not save the task record",
     );
     first.release();
     await run.worker.idle();
@@ -2596,7 +2596,7 @@ describe("what the person says while a task runs", () => {
       await run.worker.submit("r1", "Click it");
       await run.waiting();
       expect((await run.worker.submit("g1", phrase)).message, phrase).toBe(
-        "Got it. I go on with the task and take that into it.",
+        "Got it. I added that, and the task continues.",
       );
       await run.worker.idle();
       // The words went to the planner, and the next click went out after a new look.
@@ -2707,7 +2707,7 @@ describe("what the person says while a task runs", () => {
         "Work on page",
       );
       expect((await run.worker.submit("h1", phrase)).message, phrase).toBe(
-        "Paused. Your next message goes on with it.",
+        "Paused. Your next message continues the task.",
       );
       first.release();
       await run.waiting();
@@ -2756,7 +2756,7 @@ describe("what the person says while a task runs", () => {
       await run.worker.submit("r1", "Finish it");
       await run.waiting();
       expect((await run.worker.submit("h1", phrase)).message, phrase).toBe(
-        "Got it. I take that into the task and choose again. That was no yes: what waited for one is set aside.",
+        "Got it. That was not a yes, so I did not do that step. I added your words and will choose the next step again.",
       );
       await run.worker.idle();
       expect(run.planner.inputs[1], phrase).toMatchObject({
@@ -2770,7 +2770,7 @@ describe("what the person says while a task runs", () => {
       await run.worker.submit("r1", "Finish it");
       await run.waiting();
       expect((await run.worker.submit("h1", phrase)).message, phrase).toBe(
-        "Paused, and what waited for your yes is set aside. Your next message goes on with it.",
+        "Paused. I did not do the step that needed your yes. Your next message continues the task.",
       );
       await until(
         () =>
@@ -2788,7 +2788,7 @@ describe("what the person says while a task runs", () => {
     await run.waiting();
     const question = run.worker.snapshot().message;
     expect((await run.worker.submit("h1", "continue")).message).toBe(
-      `That was no yes, so it still waits. ${question}`,
+      `That was not a yes, so I am still waiting. ${question}`,
     );
     expect(run.worker.snapshot()).toMatchObject({
       waiting: "approval",
@@ -2858,7 +2858,7 @@ describe("what the person says while a task runs", () => {
       new Promise((resolve) => (resolveNav3 = resolve));
     await navHold.worker.submit("r1", "Click Next");
     expect((await navHold.worker.submit("h1", "wait")).message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     resolveNav3({ kind: "none" });
     await navHold.waiting();
@@ -2890,10 +2890,10 @@ describe("what the person says while a task runs", () => {
     expect(
       (await atLimit.worker.submit("h0", "don't click that")).message,
     ).toBe(
-      "The task is at its end, so it takes no more words. Ask again when it has ended.",
+      "The task is ending, so I cannot add that now. Ask again after it ends.",
     );
     expect((await atLimit.worker.submit("h1", "wait")).message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     releaseLook();
     await atLimit.waiting();
@@ -2911,10 +2911,10 @@ describe("what the person says while a task runs", () => {
         (await atCap.worker.submit(`g${n}`, `Open tab ${n}`)).message,
       ).toBe(taken);
     expect((await atCap.worker.submit("h9", "don't click that")).message).toBe(
-      "This task already took 8 additions from you, and it takes no more. I go on with the task.",
+      "This task already has 8 additions from you, so I cannot add more. The task continues.",
     );
     expect((await atCap.worker.submit("h10", "hold on")).message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     step1B.release();
     await atCap.waiting();
@@ -2932,9 +2932,9 @@ describe("what the person says while a task runs", () => {
     writeFileSync(broken.journal.guidanceFile, "not json");
     expect(
       (await broken.worker.submit("h1", "don't click that")).message,
-    ).toContain("could not be written");
+    ).toContain("could not save the task record");
     expect((await broken.worker.submit("h2", "one sec")).message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     step1C.release();
     await broken.waiting();
@@ -2974,7 +2974,7 @@ describe("what the person says while a task runs", () => {
       )
     ).message;
     expect(secretReply).toContain("do not take a password");
-    expect(secretReply).toContain("I go on with the task.");
+    expect(secretReply).toContain("The task continues.");
     step1D2.release();
     await secretHold.worker.idle();
     expect(secretHold.worker.snapshot().state).toBe("completed");
@@ -3054,7 +3054,7 @@ describe("what the person says while a task runs", () => {
     expect(midSwitchReply).not.toContain("before the first action");
     expect(midSwitchReply).not.toContain("I hold now");
     expect(midSwitchReply).toBe(
-      "The task is at its end, so it takes no more words. Ask again when it has ended.",
+      "The task is ending, so I cannot add that now. Ask again after it ends.",
     );
     releaseSwitch();
     await seqA.worker.idle();
@@ -3086,12 +3086,12 @@ describe("what the person says while a task runs", () => {
     });
     await until(() => seqB.hands.commands.length === 1);
     expect((await seqB.worker.submit("h1", "wait")).message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     releaseObserve();
     await seqB.waiting();
     expect((await seqB.worker.submit("g1", "Open Safari")).message).toBe(
-      "Got it. I go on with the task and take that into it.",
+      "Got it. I added that, and the task continues.",
     );
     await until(() =>
       seqB.hands.sent.some((command) => command.kind === "click"),
@@ -3119,7 +3119,7 @@ describe("what the person says while a task runs", () => {
       });
       const reply = (await run.worker.submit("s1", phrase)).message;
       expect(reply, phrase).toBe(
-        "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself. I go on with the task.",
+        "I do not take a password or a key in the chat. I did not keep that: type it into the field on the Mac yourself. The task continues.",
       );
       first.release();
       await run.worker.idle();
@@ -3186,7 +3186,7 @@ describe("what the person says while a task runs", () => {
       run.hands.commands.some((command) => command.kind === "wait"),
     );
     expect((await run.worker.submit("h1", "hold on")).message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     // The pause has not begun yet: the next message ends it, as at a pause.
     expect((await run.worker.submit("g2", "Open Safari")).message).toBe(taken);
@@ -3214,7 +3214,7 @@ describe("what the person says while a task runs", () => {
     expect(twice.worker.snapshot()).toMatchObject({
       state: "waiting_for_person",
       waiting: "takeover",
-      message: "Paused. Your next message goes on with it.",
+      message: "Paused. Your next message continues the task.",
     });
     expect(twice.hands.sent).toEqual([]);
     twice.worker.stop();
@@ -3247,7 +3247,7 @@ describe("what the person says while a task runs", () => {
       await run.worker.submit("r1", "Click it");
       await run.waiting();
       expect((await run.worker.submit("g1", phrase)).message, phrase).toBe(
-        "Got it. I go on with the task and take that into it.",
+        "Got it. I added that, and the task continues.",
       );
       await run.worker.idle();
       expect(run.planner.inputs[1], phrase).toMatchObject({
@@ -3262,7 +3262,7 @@ describe("what the person says while a task runs", () => {
     const step1 = held({ kind: "wait", ms: 0 });
     const run = await running([step1.step, done]);
     expect((await run.worker.submit("c1", "continue")).message).toBe(
-      "I go on with the task.",
+      "The task continues.",
     );
     expect(run.journal.guidance("r1")).toEqual([]);
     expect(run.journal.guided("c1")).toBe("r1");
@@ -3276,7 +3276,7 @@ describe("what the person says while a task runs", () => {
     await free.worker.submit("r1", "Pick a row");
     await free.waiting();
     expect((await free.worker.submit("c2", "continue")).message).toBe(
-      "The question that waited is set aside, and I go on with the task.",
+      "I do not need an answer to my question now. The task continues.",
     );
     await free.worker.idle();
     expect(free.worker.snapshot().state).toBe("completed");
@@ -3361,7 +3361,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     Array.from({ length: times }, () => action);
   const wanted = 'press return in "Address and search bar"';
   const hold = (next: string) =>
-    `You are using the Mac, so I paused. Next I wanted to ${next}. Your next message goes on with it.`;
+    `You are using the Mac, so I paused. Next I wanted to ${next}. Your next message continues the task.`;
   const retired =
     "The desktop or display changed. Old coordinates were retired; nothing was sent.";
   const screenChangingEnd =
@@ -4240,7 +4240,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     expect(hands.sent).toEqual([]);
     // Words that ask to wait keep the takeover pause, and send nothing.
     expect((await worker.submit("g1", "I am checking something")).message).toBe(
-      "Still paused. Your next message goes on with it.",
+      "Still paused. Your next message continues the task.",
     );
     expect(hands.sent).toEqual([]);
     const observesBefore = hands.commands.filter(
@@ -4944,15 +4944,17 @@ describe("an action that is not sent, or that moves nothing", () => {
     await until(() => readsA === 6);
     const holdReplyA = await caseA.worker.submit("g1", "wait, hold on");
     expect(holdReplyA.message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     resolveThirdA(pEmpty);
     await until(() => caseA.worker.status().state === "waiting_for_person");
     expect(caseA.worker.status()).toMatchObject({
       state: "waiting_for_person",
-      question: "Paused. Your next message goes on with it.",
+      question: "Paused. Your next message continues the task.",
     });
-    expect(caseA.said).toContain("Paused. Your next message goes on with it.");
+    expect(caseA.said).toContain(
+      "Paused. Your next message continues the task.",
+    );
     caseA.worker.stop();
     await caseA.worker.idle();
 
@@ -4976,13 +4978,13 @@ describe("an action that is not sent, or that moves nothing", () => {
     await until(() => readsB === 6);
     const holdReplyB = await caseB.worker.submit("g2", "hold on");
     expect(holdReplyB.message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     rejectThirdB(new Error("tab closed"));
     await until(() => caseB.worker.status().state === "waiting_for_person");
     expect(caseB.worker.status()).toMatchObject({
       state: "waiting_for_person",
-      question: "Paused. Your next message goes on with it.",
+      question: "Paused. Your next message continues the task.",
     });
     caseB.worker.stop();
     await caseB.worker.idle();
@@ -5006,9 +5008,7 @@ describe("an action that is not sent, or that moves nothing", () => {
     await caseC.worker.submit("r3", "Click Next");
     await until(() => readsC === 6);
     const orderReplyC = await caseC.worker.submit("g3", "open Safari");
-    expect(orderReplyC.message).toBe(
-      "Got it. I take that into the task that runs.",
-    );
+    expect(orderReplyC.message).toBe("Got it. I added that to the task.");
     resolveThirdC(pEmpty);
     await caseC.worker.idle();
     expect(caseC.journal.get("r3")).toMatchObject({ state: "completed" });
@@ -5077,9 +5077,7 @@ describe("an action that is not sent, or that moves nothing", () => {
       "g1",
       "try clicking Refresh one more time",
     );
-    expect(guideReply.message).toBe(
-      "Got it. I take that into the task that runs.",
-    );
+    expect(guideReply.message).toBe("Got it. I added that to the task.");
     releasePlan4();
     await worker.idle();
     // Mid-task orders do not clear row.told: choosing click again on the unchanged screen ends no_progress.
@@ -5149,7 +5147,7 @@ describe("what is not known", () => {
       canStop: false,
     });
     expect(second.worker.snapshot().message).toBe(
-      'An earlier computer task has an unknown result: "Pay the invoice". It is not run again. After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear',
+      'An earlier computer task has an unknown result: "Pay the invoice". It is not run again. Look at the screen first. Then say "clear the computer task", or run: clawdtime computer clear',
     );
     // The same request and a new one: neither runs.
     for (const [id, text] of [
@@ -5196,7 +5194,7 @@ describe("what is not known", () => {
       canStop: false,
     });
     expect(worker.snapshot().message).toBe(
-      'I sent this and its result never came back: Click "Save". It may have happened or not. I do not send it again. After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear',
+      'I sent this and received no result: Click "Save". It may or may not have happened. I will not send it again. Look at the screen first. Then say "clear the computer task", or run: clawdtime computer clear',
     );
     expect(said).toEqual([worker.snapshot().message]);
     expect(journal.get("r1")).toMatchObject({
@@ -5279,7 +5277,7 @@ describe("what is not known", () => {
     writeFileSync(journal.file, "not a journal");
     expect(worker.snapshot().state).toBe("uncertain");
     expect(worker.snapshot().message).toBe(
-      'The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until it is cleared. After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear',
+      'The record of computer tasks cannot be read, so I cannot tell whether an earlier task has an unknown result. Nothing new starts until it is cleared. Look at the screen first. Then say "clear the computer task", or run: clawdtime computer clear',
     );
     expect(worker.clear().message).toMatch(
       /^The record of computer requests could not be read\. It was set aside as \S+journal\.unreadable-1000000\.json and is not removed\. New work can start\.$/,
@@ -5295,7 +5293,7 @@ describe("what is not known", () => {
 
   it("every sentence that names the command also says the spoken way", async () => {
     const spoken =
-      /After you looked at the screen, say "clear the computer task", or run: clawdtime computer clear$/;
+      /Look at the screen first. Then say "clear the computer task", or run: clawdtime computer clear$/;
     for (const error of ["input_unknown", "transition_unknown"] as const) {
       const { worker, hands } = setup([click, done]);
       hands.answer = (command) =>
@@ -5314,7 +5312,7 @@ describe("what is not known", () => {
     await worker.idle();
     expect(worker.snapshot().state).toBe("uncertain");
     expect(worker.snapshot().message).toMatch(
-      /^Something failed inside the worker/,
+      /^Something failed inside ClawdTime/,
     );
     expect(worker.snapshot().message).toMatch(spoken);
   });
@@ -5416,7 +5414,7 @@ describe("what the planner may not do", () => {
     expect(hands.sent).toEqual([]);
     expect(planner.inputs).toHaveLength(3);
     expect(worker.snapshot()).toMatchObject({ state: "blocked" });
-    expect(said[0]).toMatch(/3 actions in a row that the checks refused/);
+    expect(said[0]).toMatch(/My checks blocked 3 steps in a row/);
   });
 
   it("the step limit ends the request", async () => {
@@ -5498,7 +5496,7 @@ describe("what the planner may not do", () => {
     await worker.idle();
     expect(hands.sent).toEqual([]);
     expect(worker.snapshot().state).toBe("blocked");
-    expect(said[0]).toMatch(/planner did not answer/);
+    expect(said[0]).toMatch(/language model did not answer/);
     // The reason of the failure is not passed on: it can hold what was sent.
     expect(said[0]).not.toContain("500");
   });
@@ -5536,7 +5534,7 @@ describe("questions and endings of the planner", () => {
     );
     expect(said).toEqual(["The task asks: Which note: Shopping or Work?"]);
     expect((await worker.answer("the shopping one")).message).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     await worker.idle();
     expect(worker.snapshot().state).toBe("completed");
@@ -6038,7 +6036,7 @@ describe("phone walkthrough execution ownership", () => {
     worker.setOwnershipGuard(() => false);
     expect(
       (await worker.submit("call-owned-request", "Save the note")).message,
-    ).toContain("held by the current phone");
+    ).toContain("controls the screen now. I sent nothing.");
     expect(hands.commands).toEqual([]);
   });
   it("rechecks ownership after the planner awaits and before dispatch", async () => {
@@ -6108,9 +6106,7 @@ describe("stackfix round 1 blockers and rests", () => {
       "g1",
       "try clicking Refresh one more time",
     );
-    expect(guideReply.message).toBe(
-      "Got it. I take that into the task that runs.",
-    );
+    expect(guideReply.message).toBe("Got it. I added that to the task.");
     releasePlan4();
     await until(() => worker.status().state !== "running");
     // Must end blocked / no_progress immediately (never pause for a false repeat question).
@@ -6156,7 +6152,7 @@ describe("stackfix round 1 blockers and rests", () => {
     releasePlan4();
     await until(() => worker.status().state === "waiting_for_person");
     expect(worker.status().question).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     await worker.answer("continue");
     await until(() => worker.status().state !== "running");
@@ -6591,7 +6587,7 @@ describe("a task that does not move on", () => {
     });
     expect(said).toEqual([swingQuestion]);
     expect((await worker.answer("use the search field")).message).toBe(
-      "Thank you. I go on.",
+      "Thank you. The task continues.",
     );
     await worker.idle();
     expect(worker.snapshot().state).toBe("completed");
@@ -6650,7 +6646,7 @@ describe("a task that does not move on", () => {
     await worker.answer("try the menu");
     await worker.idle();
     const end =
-      "My last actions did not move the task on, also after I tried other ways and asked you, so I stopped. The task is not finished. Ask again in other words, or do the next step yourself.";
+      "I tried other ways and asked you, but my last steps did not move the task. I stopped, and the task is not finished. Ask again in other words, or do the next step yourself.";
     expect(hands.sent).toHaveLength(20);
     expect(said).toEqual([swingQuestion, swingQuestion, end]);
     expect(journal.get("r1")).toMatchObject({
@@ -6844,7 +6840,7 @@ describe("trouble of the planner", () => {
     expect(planner.inputs).toHaveLength(5);
     expect(hands.sent).toEqual([]);
     expect(worker.snapshot().message).toBe(
-      "The planner did not answer after several tries, so I stopped. Nothing more was sent. Ask again in a moment.",
+      "The language model did not answer after several tries, so I stopped. Nothing more was sent. Ask again in a minute.",
     );
     expect(journal.get("r1")).toMatchObject({ reason: "planner_failed" });
   });
@@ -6882,7 +6878,7 @@ describe("trouble of the planner", () => {
     await worker.idle();
     expect(planner.inputs).toHaveLength(2);
     expect(worker.snapshot().message).toBe(
-      "The planner gave no usable action twice in a row, so I stopped. Nothing more was sent. Ask again, perhaps in other words.",
+      "The language model gave no usable next step twice in a row, so I stopped. Nothing more was sent. Ask again in other words.",
     );
   });
 
@@ -6908,7 +6904,7 @@ describe("trouble of the planner", () => {
     await held.worker.submit("w1", "wait a moment");
     await held.waiting();
     expect(held.worker.snapshot().message).toBe(
-      "Paused. Your next message goes on with it.",
+      "Paused. Your next message continues the task.",
     );
     await held.worker.answer("continue");
     await held.worker.idle();

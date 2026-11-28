@@ -38,11 +38,11 @@ afterEach(() =>
     .forEach((path) => rmSync(path, { recursive: true, force: true })),
 );
 
-const taken = "Got it. I take that into the task that runs.";
-const resumed = "Got it. I go on with the task and take that into it.";
-const paused = "Paused. Your next message goes on with it.";
-const stillPaused = "Still paused. Your next message goes on with it.";
-const goingOn = "I go on with the task.";
+const taken = "Got it. I added that to the task.";
+const resumed = "Got it. I added that, and the task continues.";
+const paused = "Paused. Your next message continues the task.";
+const stillPaused = "Still paused. Your next message continues the task.";
+const goingOn = "The task continues.";
 const secretLead = "I do not take a password or a key in the chat.";
 const wait: Action = { kind: "wait", ms: 0 };
 const click: Action = { kind: "click_element", element: 1 };
@@ -290,7 +290,11 @@ describe("autonomy: any next message ends a pause", () => {
     ["no, the other one", resumed, ["no, the other one"]],
     ["continue", "Continuing.", []],
     ["ok", "Continuing.", []],
-    ["are you done?", 'I go on with "Open the editor" now, from step 1.', []],
+    [
+      "are you done?",
+      'The task "Open the editor" continues now, from step 1.',
+      [],
+    ],
   ] as const)(
     "goes on after %j, with no magic word",
     async (words, reply, guidance) => {
@@ -359,7 +363,7 @@ describe("autonomy: a pause ends by itself only with the owner's trust", () => {
   it("goes on by itself after the bounded time with trust, read on the injected clock", async () => {
     const run = await pausedTask({ trust: true, resumeMs: 60_000 });
     expect(run.worker.snapshot().message).toBe(
-      `${paused} With no message, I go on by myself in 60 seconds.`,
+      `${paused} With no message, the task continues by itself in 60 seconds.`,
     );
     run.clock.now += 59_999;
     expect(run.worker.status().state).toBe("waiting_for_person");
@@ -368,7 +372,7 @@ describe("autonomy: a pause ends by itself only with the owner's trust", () => {
     await run.worker.idle();
     expect(run.worker.snapshot().state).toBe("completed");
     expect(run.said).toContain(
-      "No message came in 60 seconds, so I go on with the task.",
+      "No message came in 60 seconds, so the task continues.",
     );
     expect(run.hands.sent).toEqual([]);
   });
