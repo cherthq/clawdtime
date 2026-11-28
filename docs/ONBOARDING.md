@@ -262,6 +262,13 @@ example a pairing that the coordinator made.
   an `input`. The `detail` is plain words with no file path. `details` holds
   lines that an interface shows only when the person asks, such as the full
   path of each binary that needs a permission.
+- `permissions` comes only on the `permissions` step while a permission is
+  off. `missing` lists `accessibility` and `screen_recording`. `stale` is
+  true after the person said the switch is on and macOS still refuses: macOS
+  holds the permission of an older ClawdTime build. In Terminal, `reset` holds
+  the `tccutil reset ... com.clawdtime.app` commands for the person to run.
+  No interface runs a command from an event. The Mac app asks macOS once for
+  each missing permission, and offers its own fixed reset.
 - `recovery` has a `label` and an `action`: `retry`, `open_settings` or
   `open_url`, with a `url` for the last two. The interface opens the URL. The
   key question offers the page where the provider makes keys, for example
@@ -339,6 +346,10 @@ example a pairing that the coordinator made.
   of each binary in it (`ClawdTimeTaskPanel`, `ClawdTimeTaskCapture`). The
   full path of each binary is in `details`. The step checks again after the
   person acts.
+- **Permission of an older build.** A check again still fails. The step says
+  that macOS may hold the permission of an older ClawdTime, and how to remove
+  it from the list. The app offers **Reset ClawdTime permissions**. Terminal
+  prints the two `tccutil reset` commands and never runs them.
 - **Coordinator unavailable or older.** Setup runs in local mode.
 - **Number already paired.** The step shows what a replacement does: the
   other Mac loses access at once, its open call ends, and its tasks get no

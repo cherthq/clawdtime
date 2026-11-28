@@ -90,6 +90,21 @@ export interface InputRequest {
    */
   consent?: boolean;
 }
+/** A macOS permission that setup checks. */
+export type PermissionId = "accessibility" | "screen_recording";
+/**
+ * The permissions step, while a permission is off. `stale`: the person said
+ * that the switch is on, and macOS still refuses. macOS then holds the
+ * permission of an older ClawdTime build. `reset`: in Terminal only, the
+ * commands that remove ClawdTime's own entries, for the person to run. An
+ * interface never runs a command from an event: the Mac app has its own
+ * fixed reset.
+ */
+export interface PermissionNeeds {
+  missing: PermissionId[];
+  stale: boolean;
+  reset?: string[];
+}
 export interface StepEvent {
   type: "step";
   id: StepId;
@@ -104,6 +119,8 @@ export interface StepEvent {
   details?: string[];
   recovery?: Recovery;
   input?: InputRequest;
+  /** The permissions step only: what macOS does not grant yet. */
+  permissions?: PermissionNeeds;
   /**
    * The one-time id of the question that this event asks: on `needs_input`,
    * and on `failed` when the step waits for a retry or a skip. An answer

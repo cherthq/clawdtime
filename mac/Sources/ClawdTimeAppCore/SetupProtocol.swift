@@ -130,6 +130,18 @@ public struct StepInput: Codable, Equatable, Sendable {
   }
 }
 
+/// The permissions step, while a permission is off. `stale`: the person said
+/// that the switch is on, and macOS still refuses, so macOS holds the
+/// permission of an older ClawdTime build. The engine's Terminal commands are
+/// not read: the app runs only its own fixed reset.
+public struct PermissionNeeds: Codable, Equatable, Sendable {
+  public var missing: [String]
+  public var stale: Bool
+  public init(missing: [String], stale: Bool) { self.missing = missing; self.stale = stale }
+  /// The permissions that this app knows, in the engine's order.
+  public var kinds: [PermissionKind] { missing.compactMap(PermissionKind.init(rawValue:)) }
+}
+
 public struct StepEvent: Codable, Equatable, Sendable {
   public var id: StepID
   public var state: StepState
@@ -142,8 +154,12 @@ public struct StepEvent: Codable, Equatable, Sendable {
   public var input: StepInput?
   /// The one-time id of the question this event asks. An answer must name it.
   public var question: String?
-  public init(id: StepID, state: StepState, title: String? = nil, detail: String? = nil, details: [String]? = nil, recovery: Recovery? = nil, input: StepInput? = nil, question: String? = nil) {
+  /// The permissions step only: what macOS does not grant yet.
+  public var permissions: PermissionNeeds?
+  public init(id: StepID, state: StepState, title: String? = nil, detail: String? = nil, details: [String]? = nil, recovery: Recovery? = nil, input: StepInput? = nil, question: String? = nil,
+              permissions: PermissionNeeds? = nil) {
     self.id = id; self.state = state; self.title = title; self.detail = detail; self.details = details; self.recovery = recovery; self.input = input; self.question = question
+    self.permissions = permissions
   }
   public var displayTitle: String { (title?.isEmpty == false ? title : nil) ?? id.fallbackTitle }
 }

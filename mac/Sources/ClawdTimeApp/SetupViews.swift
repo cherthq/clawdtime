@@ -92,7 +92,8 @@ struct SetupRootView: View {
     case .step(let step):
       StepCard(step: step, answered: setup.answered != nil && setup.answered == step.question, armDelay: setup.answerDelay,
                submit: { setup.submit($0) }, perform: { setup.perform($0) },
-               recover: { setup.followRecovery() })
+               recover: { setup.followRecovery() },
+               reset: setup.offersPermissionReset ? { setup.resetPermissions() } : nil, resetState: setup.permissionReset)
     case .finished(let ready):
       FinishedView(state: setup.state, ready: ready, handedOff: setup.handedOff, phoneRun: setup.setupRun.phone, owner: owner, loginItem: loginItem,
                    finish: { setup.finish(chat: $0) }, again: { setup.begin(setup.setupRun) }, phone: phone, close: close)
@@ -284,6 +285,9 @@ struct StepCard: View {
   var submit: (InputValue) -> Void
   var perform: (StepAction) -> Void
   var recover: () -> Bool
+  /// Reset ClawdTime permissions, while macOS holds an older build's permission. Nil: not offered.
+  var reset: (() -> Void)?
+  var resetState: PermissionResetState
 
   @State private var text = ""
   @State private var selection: Set<String> = []
@@ -293,9 +297,11 @@ struct StepCard: View {
   @State private var showDetails = false
 
   init(step: StepEvent, answered: Bool, armDelay: TimeInterval, submit: @escaping (InputValue) -> Void,
-       perform: @escaping (StepAction) -> Void, recover: @escaping () -> Bool) {
+       perform: @escaping (StepAction) -> Void, recover: @escaping () -> Bool,
+       reset: (() -> Void)? = nil, resetState: PermissionResetState = .idle) {
     self.step = step; self.answered = answered; self.armDelay = armDelay
     self.submit = submit; self.perform = perform; self.recover = recover
+    self.reset = reset; self.resetState = resetState
     _armed = State(initialValue: armDelay <= 0)
     // A choice with a default shows it chosen, so Return takes it. Never at a consent question.
     _selection = State(initialValue: Self.preselected(step))
@@ -337,6 +343,16 @@ struct StepCard: View {
     return step.recovery?.action == .retry ? step.recovery?.label : "Try again"
   }
 
+  /// What the reset of the permissions says after a click.
+  static func resetNote(_ state: PermissionResetState) -> String? {
+    switch state {
+    case .idle: nil
+    case .running: "Resetting."
+    case .done: PermissionWords.resetDone
+    case .failed: PermissionWords.resetFailed
+    }
+  }
+
   /// A step that waits for the person to act in System Settings. Its only
   /// answer is Check again, so it shows no Yes or No.
   static func checksSettings(_ step: StepEvent) -> Bool {
@@ -361,6 +377,16 @@ struct StepCard: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
         }
         .font(.system(size: 12))
+      }
+      if let reset {
+        HStack(spacing: 10) {
+          Button(PermissionWords.resetLabel, action: reset)
+            .buttonStyle(PillStyle(kind: .secondary)).disabled(answered || resetState == .running)
+          if let note = Self.resetNote(resetState) {
+            Text(note).font(.system(size: 12)).foregroundStyle(resetState == .failed ? Theme.danger : Theme.secondaryText)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
       }
       if step.state == .needsInput, let input = step.input, !Self.checksSettings(step) {
         InputField(input: input, text: $text, selection: $selection, submit: send)

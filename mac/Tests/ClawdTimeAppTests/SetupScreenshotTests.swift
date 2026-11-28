@@ -35,6 +35,7 @@ final class SetupScreenshotTests: XCTestCase {
     "permissions": "Permissions", "phone": "Your phone", "pairing": "Pair this Mac", "connection": "Phone connection", "ready": "Ready",
   ]
   private static let firstRun = [hello] + pending(first)
+  private static let staleLine = #"{"type":"step","id":"permissions","state":"needs_input","title":"Permissions","question":"shot-question-0007b","detail":"Accessibility and Screen & System Audio Recording are still off for ClawdTime. If the list shows ClawdTime on, macOS still holds the permission of an older ClawdTime. Remove ClawdTime from the list with the minus button, then turn it on again. Or click Reset ClawdTime permissions.","details":["Checked for ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel"],"recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"},"permissions":{"missing":["accessibility","screen_recording"],"stale":true}}"#
   private static let phoneRun = [hello] + pending(later)
 
   private static let shots: [Shot] = [
@@ -70,6 +71,10 @@ final class SetupScreenshotTests: XCTestCase {
     Shot(name: "12-permissions", lines: firstRun + ready(["preflight", "model", "desktop", "computer"]) + [
       #"{"type":"step","id":"permissions","state":"needs_input","title":"Permissions","question":"shot-question-0007","detail":"In System Settings, open Privacy & Security. In Accessibility, turn on ClawdTime. In Screen & System Audio Recording, turn on ClawdTime. Setup continues when they are on.","details":["Checked for ClawdTimeTaskPanel: /Applications/ClawdTime.app/Contents/Resources/runtime/app/native/ClawdTimeTaskPanel"],"recovery":{"label":"Open System Settings","action":"open_settings","url":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"},"input":{"kind":"confirm","prompt":"Check again"}}"#,
     ]),
+    // macOS holds the permission of an older build: the engine's own words, after a check again.
+    Shot(name: "12b-permissions-stale", lines: firstRun + ready(["preflight", "model", "desktop", "computer"]) + [staleLine]),
+    Shot(name: "12c-permissions-reset", lines: firstRun + ready(["preflight", "model", "desktop", "computer"]) + [staleLine],
+         after: { $0.resetPermissions() }),
     Shot(name: "13-ready-start-talking", lines: firstRun + finishedLines(ready: true)),
     Shot(name: "14-ready-with-skips", lines: firstRun + skippedLines(ready: true)),
     Shot(name: "15-not-ready-model-skipped", lines: firstRun + skippedLines(ready: false)),
@@ -183,7 +188,9 @@ final class SetupScreenshotTests: XCTestCase {
     if let folder { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
     for shot in Self.shots {
       let engine = ScriptedEngine()
-      let setup = SetupCoordinator(makeEngine: { _ in engine }, owner: RecordingOwner(), open: { _ in false }, answerDelay: 0)
+      // A fake request and a fake reset: no dialog opens and tccutil never runs.
+      let setup = SetupCoordinator(makeEngine: { _ in engine }, owner: RecordingOwner(), open: { _ in false }, answerDelay: 0,
+                                   permissions: PermissionRequests(prompt: FakePermissionPrompt()), resetRunner: FakeResetRunner())
       if !shot.lines.isEmpty || shot.name.hasSuffix("stopped") {
         if shot.phone { setup.beginPhone() } else { setup.begin() }
         for line in shot.lines { engine.emit(line) }
@@ -192,6 +199,8 @@ final class SetupScreenshotTests: XCTestCase {
         engine.onExit?(1, ["The desktop did not answer its readiness check.", "Setup stopped on an unexpected problem."])
       }
       shot.after?(setup)
+      let resetDeadline = Date().addingTimeInterval(5)
+      while setup.permissionReset == .running && Date() < resetDeadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
       let owner = ProcessOwner(launcher: shot.desktopRuns ? try runningDesktop() : URL(fileURLWithPath: "/nonexistent/clawdtime"), grace: 1)
       if shot.desktopRuns {
         owner.start(connection: false)
