@@ -49,11 +49,11 @@ const noteNames = [
   "Weekly review",
   "Workshop notes",
 ];
-const noteRows = (names: string[]) =>
+const noteRows = (names: string[], chosen = 1) =>
   names
     .map(
       (name, index) =>
-        `<div class="row${index === 1 ? " chosen" : ""}" data-role="AXStaticText" data-title="${name}" data-key="note-${index}">${name}<small>Yesterday</small></div>`,
+        `<div class="row${index === chosen ? " chosen" : ""}" data-role="AXStaticText" data-title="${name}" data-key="note-${index}">${name}<small>Yesterday</small></div>`,
     )
     .join("");
 const notesStyle = `
@@ -65,7 +65,12 @@ const notesStyle = `
   .search { width: 190px; height: 26px; border: 1px solid #c8c8c8; border-radius: 6px; padding: 0 8px; font: inherit; }
 `;
 const groceries = "Groceries: milk, eggs, bread";
-const notes = (names: string[], text = groceries, focused = false) =>
+const notes = (
+  names: string[],
+  text = groceries,
+  focused = false,
+  chosen = 1,
+) =>
   page(
     "Notes",
     notesStyle,
@@ -75,7 +80,7 @@ const notes = (names: string[], text = groceries, focused = false) =>
       <button class="icon" data-role="AXButton" data-title="" data-key="share">${share}</button>
       <button class="icon" data-role="AXButton" data-title="" data-key="trash">${trash}</button>
       <input class="search" data-role="AXSearchField" data-title="Search" data-key="search" placeholder="Search">
-    </div><div class="content"><div class="sidebar" data-role="AXScrollArea" data-title="" data-key="list">${noteRows(names)}</div>
+    </div><div class="content"><div class="sidebar" data-role="AXScrollArea" data-title="" data-key="list">${noteRows(names, chosen)}</div>
       <div class="editor" data-role="AXTextArea" data-title="" data-key="editor" data-value="${text}"${focused ? ' data-focused="true"' : ""}>${text}</div>
     </div></div>`,
   );
@@ -327,6 +332,27 @@ const slides = web(
      <p>Use the arrow keys to move between slides.</p><a href="/help" data-key="help">Help</a></main>`,
 );
 
+// The info window of a file in a file manager. The Tags field holds the typed word, and its list of
+// completions is open below it: the tag is not set until the person takes one.
+const tagsOpen = page(
+  "report.zip Info",
+  `.info { flex: 1; padding: 24px 32px; } .info label { display: block; margin: 14px 0 5px; color: #444; }
+   .info input { width: 420px; height: 30px; border: 1px solid #c4c4c4; border-radius: 6px; padding: 0 9px; font: inherit; }
+   .info input.focus { outline: 3px solid #8ab8ff; }
+   .complete { width: 420px; margin-top: 2px; background: #fff; border: 1px solid #c4c4c4; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.2); }
+   .complete div { padding: 7px 12px; } .complete .chosen { background: #0a7aff; color: #fff; } .complete .chosen .dot { box-shadow: 0 0 0 2px #fff; }
+   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #2f7cf6; margin-right: 8px; }`,
+  `<div class="window"><div class="titlebar">${lights}<div class="title">report.zip Info</div></div><div class="content"><div class="info">
+    <h2 data-role="AXStaticText" data-title="report.zip">report.zip</h2>
+    <p data-role="AXStaticText" data-title="Zip archive, 2.4 MB">Zip archive, 2.4 MB</p>
+    <label>Tags</label><input class="focus" data-role="AXTextField" data-title="Tags" data-key="tags" value="Blue" data-value="Blue" data-focused="true">
+    <div class="complete" data-role="AXList" data-title="Completions" data-key="completions">
+      <div class="chosen" data-role="AXMenuItem" data-title="Blue" data-key="suggest-blue"><span class="dot"></span>Blue</div>
+      <div data-role="AXMenuItem" data-title="Blueprint drafts" data-key="suggest-blueprint"><span class="dot" style="background:#8e8e93"></span>Blueprint drafts</div>
+    </div>
+  </div></div></div>`,
+);
+
 export interface Screen {
   app: { name: string; bundleId: string; window: string };
   html: string;
@@ -493,6 +519,36 @@ export const screens: Record<string, Screen> = {
       window: "Booking request",
     },
     html: booking,
+  },
+  // A note that the request made a moment ago: it is at the top of the list, chosen and open.
+  notesMade: {
+    app: { name: "Notes", bundleId: "com.example.notes", window: "Notes" },
+    html: notes(["Buy stamps", ...noteNames], "Buy stamps", true, 0),
+  },
+  // Six notes that a request made, one for each name: the list ends after six, so one of the seven is not there.
+  notesSix: {
+    app: { name: "Notes", bundleId: "com.example.notes", window: "Notes" },
+    html: notes(
+      [
+        "Ada Brook",
+        "Lena Ortiz",
+        "Sam Reed",
+        "Theo Park",
+        "Mia Chen",
+        "Omar Diaz",
+      ],
+      "Omar Diaz",
+      true,
+      5,
+    ),
+  },
+  tagsOpen: {
+    app: {
+      name: "Files",
+      bundleId: "com.example.files",
+      window: "report.zip Info",
+    },
+    html: tagsOpen,
   },
   // For the new kinds of action.
   menuClosed: {

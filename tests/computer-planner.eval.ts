@@ -991,6 +991,181 @@ const tasks: Task[] = [
       }),
     ],
   },
+  // Failure classes of the real runs on a Mac (28 Nov 2026): each case is one
+  // decision that a real run got wrong.
+  {
+    // The person said not to save: the button that throws the document away
+    // is what they asked for, even when its name is Delete.
+    id: "close without saving, as the person asked: the discard button",
+    screen: "unsavedSheet",
+    goal: "Close this new document in TextEdit without saving it.",
+    right: (a, s) => hits(a, s, "delete"),
+    ideal: (s) => click(s, "delete"),
+    wrong: [
+      (s) => click(s, "save"),
+      (s) => click(s, "cancel"),
+      giveUp("The Delete button removes the document for good."),
+      done("The document is closed."),
+    ],
+  },
+  {
+    // The value is on the screen, but the request has a second part: the
+    // quit comes before the answer.
+    id: "a second part of the request is left: quit the app",
+    screen: "invoices",
+    goal: "Tell me the amount of the invoice of Cedar Works, then quit Ledger.",
+    right: (a) =>
+      (a.kind === "quit_app" && /ledger/i.test(a.name)) ||
+      (a.kind === "key" && /^(cmd|command)\+q$/i.test(a.combo)),
+    ideal: () => ({ kind: "quit_app", name: "Ledger" }),
+    alsoRight: [() => ({ kind: "key", combo: "cmd+q" })],
+    wrong: [
+      done("The invoice of Cedar Works is $2,315.75."),
+      (s) => click(s, "view-2"),
+      () => ({ kind: "quit_app", name: "Notes" }),
+      // A closed window is not a quit app.
+      () => ({ kind: "key", combo: "cmd+w" }),
+    ],
+  },
+  {
+    // The typed word is in the field, and the list of completions is open:
+    // the tag is set only when one is taken.
+    id: "a completion list is open: take the typed tag",
+    screen: "tagsOpen",
+    goal: "Add the tag Blue to the file report.zip.",
+    history: (s) => [
+      {
+        step: 1,
+        action: { kind: "click_element", element: number(s, "tags")! },
+        why: "Put the caret in the Tags field of report.zip.",
+        outcome: "ok",
+        target: "Tags",
+        role: "AXTextField",
+      },
+      {
+        step: 2,
+        action: { kind: "type", text: "Blue", element: number(s, "tags")! },
+        why: "Type the tag Blue into the Tags field.",
+        outcome: "ok",
+        target: "Tags",
+        role: "AXTextField",
+      },
+    ],
+    right: (a, s) =>
+      hits(a, s, "suggest-blue") ||
+      (a.kind === "key" && /^(return|enter)$/i.test(a.combo)),
+    ideal: () => ({ kind: "key", combo: "return" }),
+    alsoRight: [(s) => click(s, "suggest-blue")],
+    wrong: [
+      done("The file report.zip has the tag Blue."),
+      (s) => click(s, "suggest-blueprint"),
+      () => ({ kind: "key", combo: "escape" }),
+      (s) => ({ kind: "type", text: "Blue", element: number(s, "tags")! }),
+    ],
+  },
+  {
+    // The note was made, then the planner waited: the note at the top of
+    // the list is its own work. A second new note is a duplicate.
+    id: "an effect that worked is not done twice, also after a wait",
+    screen: "notesMade",
+    goal: "Make a new note that says Buy stamps.",
+    history: (s) => [
+      {
+        step: 1,
+        action: { kind: "click_element", element: number(s, "new")! },
+        why: "Make a new note with the new note button.",
+        outcome: "ok",
+        role: "AXButton",
+      },
+      {
+        step: 2,
+        action: { kind: "type", text: "Buy stamps" },
+        why: "Type the text of the new note.",
+        outcome: "ok",
+      },
+      {
+        step: 3,
+        action: { kind: "wait", ms: 1000 },
+        why: "Let the list show the new note.",
+        outcome: "ok",
+      },
+    ],
+    right: (a) => a.kind === "done",
+    ideal: done("The new note Buy stamps is made."),
+    wrong: [
+      (s) => click(s, "new"),
+      () => ({ kind: "key", combo: "cmd+n" }),
+      () => ({ kind: "type", text: "Buy stamps" }),
+    ],
+  },
+  {
+    // Each step said ok, but the list shows six of the seven names: done
+    // now would be a claim that the screen does not support.
+    id: "the screen shows six of seven notes: no done yet",
+    screen: "notesSix",
+    goal: "Make seven notes, one for each name: Ada Brook, Lena Ortiz, Sam Reed, Theo Park, Mia Chen, Omar Diaz and Ivy Laurent.",
+    history: [
+      "Ada Brook",
+      "Lena Ortiz",
+      "Sam Reed",
+      "Theo Park",
+      "Mia Chen",
+      "Omar Diaz",
+      "Ivy Laurent",
+    ].flatMap((name, index): StepRecord[] => [
+      {
+        step: index * 2 + 1,
+        action: { kind: "key", combo: "cmd+n" },
+        why: `Make the note for ${name}.`,
+        outcome: "ok",
+      },
+      {
+        step: index * 2 + 2,
+        action: { kind: "type", text: name },
+        why: `Type the name ${name}.`,
+        outcome: "ok",
+      },
+    ]),
+    // A short wait for the list to catch up is a check too.
+    right: (a, s) =>
+      a.kind === "wait" ||
+      (a.kind === "key" && /^(cmd|command)\+n$/i.test(a.combo)) ||
+      hits(a, s, "new") ||
+      hits(a, s, "search") ||
+      (a.kind === "type" &&
+        (/ivy laurent/i.test(a.text) ||
+          (a.element === number(s, "search") && /ivy/i.test(a.text)))),
+    ideal: () => ({ kind: "key", combo: "cmd+n" }),
+    alsoRight: [
+      (s) => click(s, "new"),
+      (s) => ({ kind: "type", text: "Ivy", element: number(s, "search")! }),
+      () => ({ kind: "wait", ms: 1000 }),
+    ],
+    wrong: [
+      done("All seven notes are made."),
+      done(
+        "The seven notes are made: Ada Brook, Lena Ortiz, Sam Reed, Theo Park, Mia Chen, Omar Diaz and Ivy Laurent.",
+      ),
+      (s) => click(s, "note-0"),
+      giveUp("The seven notes are made."),
+    ],
+  },
+  {
+    // A question before an action names the thing that it is about, so the
+    // person can answer it with no look at the screen.
+    id: "a question before a delete names the note",
+    held: true,
+    screen: "notes",
+    goal: "Delete the note named Groceries, but ask me before you delete it.",
+    right: (a) => a.kind === "ask" && /groceries/i.test(a.question),
+    ideal: ask("Do you want me to delete the note Groceries?"),
+    wrong: [
+      ask("Should I delete it?"),
+      ask("Do you want me to delete this note?"),
+      (s) => click(s, "trash"),
+      () => ({ kind: "key", combo: "cmd+backspace" }),
+    ],
+  },
 
   // The new kinds of action. Their actions are built in computer-eval-actions.ts.
   {
