@@ -2,6 +2,8 @@
 
 <p align="center"><strong>Talk to your Mac. It does the work.</strong></p>
 
+<p align="center">ClawdTime: a computer use agent you can FaceTime. <a href="https://www.trychert.com">Built on Chert</a>.</p>
+
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.4.0-blue" alt="Version 0.4.0">
   <a href="https://www.clawdtime.com"><img src="https://img.shields.io/badge/ClawdTime-Website-black" alt="ClawdTime website"></a>
@@ -10,7 +12,46 @@
 
 ClawdTime is an assistant on your Mac. You ask it in plain words, by chat or
 by voice. It uses your apps and your browser for you: it clicks, types and
-reads the screen. It can also call your phone when it needs you (preview).
+reads the screen. It can also call you, and you can call it on FaceTime
+(preview).
+
+## Install
+
+You need a Mac with Apple silicon and macOS 14 or later, and a key from a model
+provider. Choose one of two ways. Both run the same setup.
+
+**The Mac app.** [Download ClawdTime](https://www.clawdtime.com/download).
+Drag it to Applications. Open it. Choose **Set up ClawdTime**.
+
+**One command.** Paste this in Terminal:
+
+```sh
+curl -fsSL https://www.clawdtime.com/install.sh | sh
+```
+
+It installs ClawdTime for you only and never uses sudo. You do not need Node,
+Git or Xcode. Setup starts in the same window.
+
+**Or let your coding agent install it.** Give this prompt to Claude Code or
+Codex. The agent runs the command. Then you run the setup in your own
+Terminal, so the agent never sees your key.
+
+```text
+Install ClawdTime on this Mac. ClawdTime is a computer use agent. It uses the apps and the browser on this Mac for me.
+
+1. Check that this Mac has Apple silicon and macOS 14 or later. If it does not, stop and tell me.
+2. Run this command in your shell. It installs ClawdTime and does not start the setup:
+   curl -fsSL https://www.clawdtime.com/install.sh | CLAWDTIME_NO_ONBOARD=1 sh
+3. Do not run clawdtime onboard or clawdtime keys yourself. Never ask me for a key.
+4. Tell me to open Terminal and run this command there:
+   clawdtime onboard
+   If the installer printed a command that adds clawdtime to PATH, tell me to run that command first.
+   The setup asks for my model key at a hidden prompt. It also asks for macOS permissions that only I can give.
+```
+
+Setup asks for your model key, a yes to computer use, and two macOS
+permissions: Accessibility and Screen Recording. Run setup again at any time. It checks each step and continues from where it stopped. [INSTALL.md](INSTALL.md) has
+each step and the build from source.
 
 [![Watch the ClawdTime demo](https://img.youtube.com/vi/1DTf_1M67aw/maxresdefault.jpg)](https://youtu.be/1DTf_1M67aw)
 
@@ -30,27 +71,6 @@ reads the screen. It can also call your phone when it needs you (preview).
 - **Coding agents.** It lists the Claude Code and Codex sessions on your Mac,
   answers their requests when you approve, and starts a coding session for a job.
 
-## Install
-
-You need a Mac with Apple silicon and macOS 14 or later, and a key from a model
-provider. Choose one of two ways. Both run the same setup.
-
-**The Mac app.** [Download ClawdTime](https://www.clawdtime.com/download).
-Drag it to Applications. Open it. Choose **Set up ClawdTime**.
-
-**One command.** Paste this in Terminal:
-
-```sh
-curl -fsSL https://www.clawdtime.com/install.sh | sh
-```
-
-It installs ClawdTime for you only and never uses sudo. You do not need Node,
-Git or Xcode. Setup starts in the same window.
-
-Setup asks for your model key, a yes to computer use, and two macOS
-permissions: Accessibility and Screen Recording. Run setup again at any time. It checks each step and continues from where it stopped. [INSTALL.md](INSTALL.md) has
-each step and the build from source.
-
 ## First use
 
 Click the mascot to open the chat. Type a first request:
@@ -67,6 +87,29 @@ or say "stop".
 
 When a part does not work, run `clawdtime computer doctor`. It says what is
 missing.
+
+## Give tasks from a coding agent
+
+Give this prompt to Claude Code or Codex. Then the agent can hand a task to
+ClawdTime, and see the coding agent sessions on this Mac. The last screen of
+the app's setup has a button that copies it.
+
+```text
+ClawdTime runs on this Mac. It is a computer use agent. It uses the apps and the browser on this Mac for me.
+
+To give ClawdTime a task, run this in your shell: clawdtime chat "TASK"
+For example: clawdtime chat "Open Stonepad and make a note: buy milk."
+ClawdTime answers in the shell. It can use the screen to do the task.
+
+To see the coding agent sessions on this Mac, and which one waits for an answer, run:
+clawdtime agents
+
+To see every command, run: clawdtime help
+
+Give ClawdTime one task at a time. If a command fails, show me its output. Never ask me for a key.
+Now run clawdtime agents once, to check that the command works.
+If your shell does not find clawdtime, use the full path: /Applications/ClawdTime.app/Contents/Resources/runtime/bin/clawdtime
+```
 
 ## Settings
 

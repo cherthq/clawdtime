@@ -62,6 +62,25 @@ run:
 curl -fsSL https://www.clawdtime.com/install.sh | CLAWDTIME_REPLACE_SOURCE=1 sh
 ```
 
+### Let your coding agent install it
+
+Give this prompt to Claude Code or Codex. The agent runs the command of way 2
+with the setup turned off. Then you run `clawdtime onboard` in your own
+Terminal, so the agent never sees your key.
+
+```text
+Install ClawdTime on this Mac. ClawdTime is a computer use agent. It uses the apps and the browser on this Mac for me.
+
+1. Check that this Mac has Apple silicon and macOS 14 or later. If it does not, stop and tell me.
+2. Run this command in your shell. It installs ClawdTime and does not start the setup:
+   curl -fsSL https://www.clawdtime.com/install.sh | CLAWDTIME_NO_ONBOARD=1 sh
+3. Do not run clawdtime onboard or clawdtime keys yourself. Never ask me for a key.
+4. Tell me to open Terminal and run this command there:
+   clawdtime onboard
+   If the installer printed a command that adds clawdtime to PATH, tell me to run that command first.
+   The setup asks for my model key at a hidden prompt. It also asks for macOS permissions that only I can give.
+```
+
 ## Your first request
 
 Click the mascot to open the chat. Type:
