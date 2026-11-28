@@ -1,3 +1,4 @@
+import { defaultChatAgentModel } from "../connectors/agents/chat-model.js";
 import {
   existsSync,
   mkdirSync,
@@ -181,7 +182,9 @@ describe("clawdtime settings --json", () => {
       kind: "number",
     });
     expect(row(report, "voice.name")).toMatchObject({ value: "alloy" });
-    expect(row(report, "model.chat")).toMatchObject({ value: "gpt-6.2-astra" });
+    expect(row(report, "model.chat")).toMatchObject({
+      value: defaultChatAgentModel,
+    });
   });
 
   it("never holds a key, also when a stored key and a key in the environment are there", async () => {
