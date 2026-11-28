@@ -96,6 +96,15 @@ const cases: Case[] = [
     setup: "idle",
     expect: ["computer_do"],
   },
+  // A goal in other words can add a step that the owner did not say ("like",
+  // "send", "order"), and the gate then refuses the task: a lost turn. The
+  // goal keeps the owner's own words.
+  {
+    name: "search: similar places, in the owner's words",
+    say: "find hotels in Lisbon similar to the one we had in Porto",
+    setup: "idle",
+    expect: ["computer_do"],
+  },
   // Shopping.
   {
     name: "shop: reorder",
@@ -174,6 +183,12 @@ const cases: Case[] = [
   {
     name: "app: mail",
     say: "read me my newest email",
+    setup: "idle",
+    expect: ["computer_do"],
+  },
+  {
+    name: "app: let someone know, in the owner's words",
+    say: "let Ada know on Riverchat that the review moved to 3 pm",
     setup: "idle",
     expect: ["computer_do"],
   },
@@ -271,6 +286,14 @@ const cases: Case[] = [
   {
     name: "approval: no",
     say: "no, don't send it",
+    setup: "approval",
+    expect: ["answer_question"],
+  },
+  // A yes in other words answers the question that waits: no look at the
+  // tasks first.
+  {
+    name: "approval: yes in other words",
+    say: "go ahead",
     setup: "approval",
     expect: ["answer_question"],
   },
