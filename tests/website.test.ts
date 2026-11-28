@@ -113,6 +113,24 @@ describe("public website discovery and isolation", () => {
     expect(dimensions.getUint32(20)).toBe(630);
   });
 
+  it("allows the recorded demo only on the homepage and discloses the early release", async () => {
+    const runtime = fixture();
+    const home = await runtime.app.request("/");
+    const html = await home.text();
+    expect(home.headers.get("content-security-policy")).toContain(
+      "frame-src https://www.youtube-nocookie.com",
+    );
+    expect(html).toContain("https://youtu.be/1DTf_1M67aw");
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain('href="/download"');
+    expect(html).toContain("signed and notarized by Apple");
+    expect(html).not.toContain("Release pending");
+    const operational = await runtime.app.request("/pair");
+    expect(operational.headers.get("content-security-policy")).not.toContain(
+      "youtube",
+    );
+  });
+
   it("indexes canonical live marketing HTML but excludes aliases without redirecting APIs", async () => {
     const runtime = fixture();
     const control = new ControlCoordinator(
@@ -208,13 +226,13 @@ describe("homepage install routes", () => {
       /<wbr \/>/g,
       "",
     );
-    const hero = html.slice(
-      html.indexOf('<section class="hero'),
-      html.indexOf("</section>", html.indexOf('<section class="hero')),
-    );
+    const hero = html.match(
+      /<section\b[^>]*class="hero\b[^>]*>([\s\S]*?)<\/section>/,
+    )![1]!;
     expect(hero).toContain('href="/download"');
     expect(hero).toContain(installCommand);
-    expect(hero).toContain("macOS 14 or later, Apple silicon.");
+    expect(hero).toContain("macOS 14 or later");
+    expect(hero).toContain("Apple silicon");
     expect(hero).not.toMatch(/invited|invitation/i);
     const routes = html.slice(html.indexOf('id="get-clawdtime"'));
     expect(routes).toContain('href="/download"');
@@ -226,19 +244,20 @@ describe("homepage install routes", () => {
     expect(targets.length).toBeGreaterThanOrEqual(3);
     for (const id of targets) expect(html).toContain(`id="${id}"`);
     // A copy button copies the exact command: one line, nothing around it.
-    for (const id of ["hero-command", "route-command"])
-      expect(html).toContain(`id="${id}">\n${installCommand}</pre>`);
+    for (const id of ["hero-command", "route-command"]) {
+      const command = html.match(
+        new RegExp(`<pre\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</pre>`),
+      )![1]!;
+      expect(command.trim()).toBe(installCommand);
+    }
     const prompt = html.match(/<pre id="agent-prompt">([\s\S]*?)<\/pre>/)![1]!;
     expect(prompt).toContain(installCommand);
     expect(prompt).toContain("clawdtime onboard");
-    // The pricing copy no longer says the product is invitation only.
-    const pricing = html.slice(html.indexOf('id="pricing"'));
-    expect(pricing.slice(0, pricing.indexOf("</h2>"))).not.toMatch(/invited/i);
   });
 
   it("keeps em and en dashes and contact instructions out of the changed pages", async () => {
     const runtime = fixture();
-    for (const path of ["/", "/pricing", "/guides/getting-started"]) {
+    for (const path of Object.keys(websitePages)) {
       const html = await (await runtime.app.request(path)).text();
       expect(html, path).not.toMatch(/[\u2013\u2014]/);
       expect(html, path).not.toMatch(/pilot contact|contact that person/i);
@@ -246,6 +265,93 @@ describe("homepage install routes", () => {
     expect(
       readFileSync(new URL("../public/landing.js", import.meta.url), "utf8"),
     ).not.toMatch(/[\u2013\u2014]/);
+  });
+});
+
+describe("plain words for a first-time visitor", () => {
+  const visibleText = (html: string) =>
+    html
+      .replace(/<script\b[\s\S]*?<\/script>/g, " ")
+      .replace(/<svg\b[\s\S]*?<\/svg>/g, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ");
+  const section = (html: string, id: string) =>
+    html.match(
+      new RegExp(`<section\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</section>`),
+    )?.[1] ?? "";
+
+  it("leads the homepage with the benefit, the download and three things it does with examples", async () => {
+    const html = await (await fixture().app.request("/")).text();
+    const hero = html.match(
+      /<section\b[^>]*class="hero\b[^>]*>([\s\S]*?)<\/section>/,
+    )![1]!;
+    expect(visibleText(hero.match(/<h1[\s\S]*?<\/h1>/)![0]).trim()).toMatch(
+      /^Talk to your Mac\./,
+    );
+    // The download comes before the command, and the hero has no other button.
+    expect(hero.indexOf('href="/download"')).toBeLessThan(
+      hero.indexOf('id="hero-command"'),
+    );
+    expect(hero.match(/class="button\b/g)).toHaveLength(1);
+    const things = section(html, "what-it-does");
+    expect(things.match(/<article\b/g)).toHaveLength(3);
+    expect(things.match(/<q\b/g)).toHaveLength(3);
+    // The coding agent route is a later, secondary section.
+    expect(html.indexOf('id="what-it-does"')).toBeLessThan(
+      html.indexOf('id="coding-agents"'),
+    );
+    expect(html.indexOf('id="get-clawdtime"')).toBeLessThan(
+      html.indexOf('id="coding-agents"'),
+    );
+  });
+
+  it("keeps jargon off the homepage outside the coding agent section", async () => {
+    const html = await (await fixture().app.request("/")).text();
+    const text = visibleText(
+      html.replace(/<section\b[^>]*id="coding-agents"[\s\S]*?<\/section>/, ""),
+    );
+    for (const word of [
+      /\bline\b/i,
+      /pairing|paired/i,
+      /coordinator/i,
+      /walkthrough/i,
+      /\bpilot\b/i,
+      /unqualified|qualification/i,
+      /computer-use agent/i,
+    ])
+      expect(text, String(word)).not.toMatch(word);
+  });
+
+  it("offers Download in the header of every page, and no pilot or invitation wording", async () => {
+    const runtime = fixture();
+    for (const path of Object.keys(websitePages)) {
+      const html = await (await runtime.app.request(path)).text();
+      const header = html.match(
+        /<header class="site-header">([\s\S]*?)<\/header>/,
+      )![1]!;
+      expect(header, path).toContain('href="/download"');
+      expect(visibleText(html), path).not.toMatch(
+        /pilot availability|invitation|invited pilot|operator-provided|pilot contact/i,
+      );
+    }
+  });
+
+  it("gives the setup guide numbered steps for both routes, under ten each", async () => {
+    const html = (
+      await (await fixture().app.request("/guides/getting-started")).text()
+    ).replace(/<wbr \/>/g, "");
+    const lists = [
+      ...html.matchAll(/<ol class="guide-steps"[^>]*>([\s\S]*?)<\/ol>/g),
+    ].map((match) => match[1]!);
+    expect(lists).toHaveLength(2);
+    for (const list of lists) {
+      const steps = list.match(/<li\b/g)!.length;
+      expect(steps).toBeGreaterThanOrEqual(3);
+      expect(steps).toBeLessThan(10);
+    }
+    expect(lists[0]).toContain('href="/download"');
+    expect(lists[1]).toContain(installCommand);
   });
 });
 
@@ -511,6 +617,35 @@ describe("public browser measurement", () => {
       keepalive: true,
     });
   });
+  it.each(["download", "install_command", "copy_prompt"])(
+    "sends %s clicks from links and buttons to the collector",
+    async (action) => {
+      const { requests, listeners } = browserFixture();
+      const button = {
+        dataset: { metricAction: action },
+        closest: (selector: string) => selector === ".hero",
+      };
+      listeners.get("click")?.({
+        target: {
+          closest: (selector: string) =>
+            selector.includes("button[data-metric-action]") ? button : null,
+        },
+      });
+      expect(requests).toHaveLength(2);
+      const input = JSON.parse(requests[1]!.options.body);
+      expect(input).toMatchObject({
+        event: "pilot_cta_clicked",
+        action,
+        placement: "hero",
+      });
+      const runtime = fixture();
+      expect((await post(runtime, input)).status).toBe(202);
+      const data = await (await report(runtime)).json();
+      expect(data.rows).toEqual([
+        expect.objectContaining({ action, count: 1 }),
+      ]);
+    },
+  );
   it("never instruments operational paths, disabled pages, privacy opt-outs or automation", () => {
     for (const config of [
       { path: "/pair" },

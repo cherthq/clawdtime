@@ -11,39 +11,39 @@ export const macDownloadUrl =
 export const websitePages = {
   "/": {
     file: "index.html",
-    title: "ClawdTime | FaceTime calls from your coding agent",
+    title: "ClawdTime | Talk to your Mac. It does the work.",
     description:
-      "Review your coding agent’s screen and respond over FaceTime. Explore ClawdTime’s invited Mac pilot, tested agents, setup and current limitations.",
+      "ClawdTime is a free assistant for your Mac. Ask by chat or by voice, and it uses your apps and your browser for you. Download for Mac or install with one command.",
   },
   "/pricing": {
     file: "pricing.html",
-    title: "Pilot availability and planned pricing | ClawdTime",
+    title: "Pricing | ClawdTime",
     description:
-      "ClawdTime is invitation-only. See pilot requirements and proposed pricing. Public subscriptions, free-call allowances and dedicated plans are not yet available.",
+      "ClawdTime is free to download and use. You pay your model provider for what you use. Paid plans for phone calls are planned and not on sale.",
   },
   "/integrations/codex": {
     file: "codex.html",
-    title: "FaceTime calls from Codex | ClawdTime pilot",
+    title: "Use ClawdTime with Codex | ClawdTime",
     description:
-      "Learn how ClawdTime connects a running Codex session to FaceTime and iMessage, with tested surfaces, Mac requirements and current limitations.",
+      "See your Codex sessions in ClawdTime, answer their approval requests from the chat, and start a coding session for a job.",
   },
   "/integrations/claude-code": {
     file: "claude-code.html",
-    title: "Claude Code calling integration | ClawdTime pilot",
+    title: "Use ClawdTime with Claude Code | ClawdTime",
     description:
-      "Explore ClawdTime’s cooperative Claude Code connector: tested client version, invitation-only setup and what still needs live handset validation.",
+      "See your Claude Code sessions in ClawdTime, answer their permission requests from the chat, and start a coding session for a job.",
   },
   "/guides/getting-started": {
     file: "getting-started.html",
-    title: "Get started with the ClawdTime Mac pilot",
+    title: "Setup guide | ClawdTime",
     description:
-      "Check ClawdTime’s invitation, Mac, agent and permission requirements. Follow the supervised setup process for the current internal pilot.",
+      "Install ClawdTime with the Mac app or with one command. Each way has numbered steps and runs the same setup.",
   },
   "/privacy": {
     file: "privacy.html",
-    title: "Screen sharing, permissions and data | ClawdTime",
+    title: "Privacy and control | ClawdTime",
     description:
-      "Understand ClawdTime’s screen and control permissions, local Stop, transient media, operational receipts and optional aggregate website measurement.",
+      "What ClawdTime keeps on your Mac, what goes to your model provider, how to stop it, and what the website counts.",
   },
 } as const;
 export type WebsitePath = keyof typeof websitePages;
@@ -108,7 +108,7 @@ export function websitePage(
     <meta property="og:image" content="${websiteOrigin}/assets/social-card.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="ClawdTime. Your coding agent can FaceTime you. Invited Mac pilot." />
+    <meta property="og:image:alt" content="ClawdTime. Talk to your Mac. It does the work." />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${escape(page.title)}" />
     <meta name="twitter:description" content="${escape(page.description)}" />

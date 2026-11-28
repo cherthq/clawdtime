@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#f4f1e8" />
     <!-- WEBSITE_METADATA -->
     <link rel="stylesheet" href="/assets/landing.css" />
+    <script src="/assets/landing.js" defer></script>
     <script src="/assets/website-analytics.js" defer></script>
   </head>
   <body data-website-analytics="off" data-availability="preview">
@@ -15,156 +16,230 @@
         >clawdtime<span class="brand-dot">_</span></a
       >
       <nav aria-label="Main navigation">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup guide</a>
+        <a href="/#what-it-does">What it does</a
+        ><a href="/guides/getting-started" aria-current="page">Setup guide</a
+        ><a href="/pricing">Pricing</a>
       </nav>
       <a
         class="button button-small"
-        href="/#availability"
-        data-metric-action="availability"
-        >Pilot availability ↗</a
+        href="/download"
+        data-metric-action="download"
+        >Download</a
       >
     </header>
     <main id="main" class="section-wrap guide-page">
       <header class="guide-hero">
-        <p class="eyebrow">GETTING STARTED / PUBLIC GUIDE</p>
-        <h1>A guided start.<br />Your existing tools.</h1>
+        <p class="eyebrow">SETUP GUIDE</p>
+        <h1>Set up ClawdTime.</h1>
         <p class="lede">
-          Install ClawdTime with the Mac app or one command, then follow the
-          guided setup. This page explains prerequisites; it does not activate
-          your Mac or place a call.
+          Choose one of two ways. Both run the same setup. You need a Mac with
+          Apple silicon and macOS 14 or later, and a key from a model provider,
+          such as OpenAI or Anthropic.
         </p>
-        <p class="guide-date">ClawdTime team · Checked November 13, 2026</p>
+        <p class="guide-date">Version 0.4.0 · Updated 28 November 2026</p>
+        <p class="guide-jump">
+          <a href="#mac-app">Way 1: the Mac app</a
+          ><a href="#one-command">Way 2: one command</a
+          ><a href="#first-request">Your first request</a>
+        </p>
       </header>
       <div class="guide-body">
-        <section>
-          <h2>Before you begin</h2>
-          <ul class="checklist">
-            <li>A phone with FaceTime and iMessage.</li>
-            <li>A Mac with Apple silicon, running macOS 14 or later.</li>
-            <li>ClawdTime, from the Mac app or the install command.</li>
-            <li>
-              A supported, running coding session and the project you intend to
-              connect.
-            </li>
-            <li>
-              A display you are comfortable sharing, with private material
-              closed or hidden.
-            </li>
-          </ul>
-          <p>
-            Get ClawdTime only from <a href="/#get-clawdtime">this site</a> or
-            its GitHub releases. Do not download a similarly named package.
-          </p>
-        </section>
-        <section>
-          <h2>Set up</h2>
+        <section id="mac-app">
+          <h2>Way 1: the Mac app</h2>
+          <p>No Terminal. Everything that ClawdTime needs is inside the app.</p>
           <ol class="guide-steps">
             <li>
-              <strong>Install ClawdTime and run the guided setup.</strong>
-              Download for Mac and open the app, or paste the install command
-              into Terminal. The setup asks for your model key and each
-              permission.
-            </li>
-            <li>
-              <strong
-                >Give the setup prompt to the intended coding session.</strong
+              <strong>Download ClawdTime.</strong>
+              <a class="button" href="/download" data-metric-action="download"
+                >Download for Mac</a
               >
-              Your agent guides configuration while preserving its native
-              permissions.
             </li>
             <li>
-              <strong>Select the screen and grant permission locally.</strong>
-              Screen Recording is needed for viewing. Accessibility and separate
-              control consent are needed for supported computer input. View-only
-              is a valid choice.
+              <strong>Install it.</strong> Open the downloaded file. Drag
+              ClawdTime to Applications.
             </li>
             <li>
-              <strong>Enable the companion locally.</strong> Check the selected
-              display and session in the Mac Control Panel. Being connected is
-              not itself permission to share.
+              <strong>Open it.</strong> Open ClawdTime from Applications. Choose
+              <b>Set up ClawdTime</b>.
             </li>
             <li>
-              <strong>Authorize one supervised test call.</strong> Confirm the
-              correct screen, response delivery and continuation. If the call
-              fails or has an unknown outcome, do not repeatedly redial.
+              <strong>Add your model key.</strong> Choose your provider. Paste
+              the key in the secure field. Setup checks the key.
+            </li>
+            <li>
+              <strong>Turn on computer use.</strong> Say yes when setup asks.
+            </li>
+            <li>
+              <strong>Give two permissions.</strong> Choose
+              <b>Open System Settings</b>. In Accessibility, turn on ClawdTime.
+              In Screen Recording, turn on ClawdTime. Come back to setup. It
+              checks again.
+            </li>
+            <li>
+              <strong>Finish.</strong> Choose <b>Finish</b>. The mascot appears
+              on your desktop.
             </li>
           </ol>
-        </section>
-        <section>
-          <h2>How do I know setup worked?</h2>
-          <p>
-            A successful installation or connected call is only a milestone. In
-            the supervised test, check that the phone shows the intended screen,
-            your feedback reaches the intended agent, and the agent actually
-            continues the agreed work. A computer input being submitted is not
-            proof that the intended UI changed.
-          </p>
-          <p>
-            Local Stop ends ClawdTime sharing and input. End the call when
-            finished. Use Stop if the wrong screen, session or device appears.
+          <p class="guide-note">
+            On macOS 15 and later, the Screen Recording list is named Screen
+            &amp; System Audio Recording. <b>Skip for now</b> is on every step.
+            The last screen says what a skipped step leaves undone.
           </p>
         </section>
-        <section>
-          <h2>Choose your integration</h2>
-          <div class="fact-grid">
-            <article>
-              <h3>Codex</h3>
-              <p>
-                Limited live desktop observations, with separate synthetic CLI
-                checks.
-              </p>
-              <a
-                class="text-link"
-                href="/integrations/codex"
-                data-metric-action="guide"
-                >Codex requirements and limits ↗</a
-              >
-            </article>
-            <article>
-              <h3>Claude Code</h3>
-              <p>
-                Cooperative connector checks; the full live handset loop remains
-                unverified.
-              </p>
-              <a
-                class="text-link"
-                href="/integrations/claude-code"
-                data-metric-action="guide"
-                >Claude Code requirements and limits ↗</a
-              >
-            </article>
-          </div>
-        </section>
-        <section>
-          <h2>Ready to install?</h2>
+        <section id="one-command">
+          <h2>Way 2: one command</h2>
           <p>
-            Download the Mac app or paste one command. Both routes run the same
-            guided setup. There is no paid plan or active subscription yet.
+            For Terminal users. It installs ClawdTime for you only and never
+            uses sudo. You do not need Node, Git or Xcode.
           </p>
-          <a
-            class="button"
-            href="/#get-clawdtime"
-            data-metric-action="availability"
-            >Get ClawdTime ↗</a
-          >
+          <ol class="guide-steps">
+            <li>
+              <strong>Open Terminal.</strong> It is in Applications, Utilities.
+            </li>
+            <li>
+              <strong>Paste this command and press Return.</strong>
+              <div class="command-field guide-command">
+                <span class="command-prompt" aria-hidden="true">$</span>
+                <pre
+                  class="command-text"
+                  id="guide-command"
+                >curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
+                <button
+                  type="button"
+                  class="copy-button"
+                  data-copy-target="guide-command"
+                  data-metric-action="install_command"
+                >
+                  <span data-copy-label>Copy</span
+                  ><span class="visually-hidden"> the install command</span>
+                </button>
+              </div>
+              It checks every file before it installs it.
+            </li>
+            <li>
+              <strong>Add the command to your PATH, if asked.</strong> The
+              installer can print one line that does this. Run that line.
+            </li>
+            <li>
+              <strong>Answer the setup questions.</strong> Setup starts in the
+              same window. Type your model key at the hidden prompt. Say yes to
+              computer use.
+            </li>
+            <li>
+              <strong>Give two permissions.</strong> In System Settings, Privacy
+              &amp; Security, turn on Terminal in Accessibility and in Screen
+              Recording. Then choose Check again.
+            </li>
+            <li>
+              <strong>Finish.</strong> The mascot appears on your desktop. To
+              start ClawdTime later, run <code>clawdtime start</code>.
+            </li>
+          </ol>
+          <p class="guide-note">
+            When you use another terminal app, such as iTerm, turn on that app
+            instead of Terminal.
+          </p>
+        </section>
+        <section id="first-request">
+          <h2>Your first request</h2>
+          <p>Click the mascot to open the chat. Type a request, for example:</p>
+          <blockquote>
+            Open Wikipedia and tell me today's featured article.
+          </blockquote>
+          <p>
+            ClawdTime opens the page, reads it and answers in the chat. An
+            orange cursor shows each move. To stop it, press Stop in the bar at
+            the top of the screen, or hold Escape.
+          </p>
+          <p>
+            To speak instead of typing, press <b>Talk</b>. Voice uses an OpenAI
+            key, set as <code>OPENAI_API_KEY</code> when ClawdTime starts.
+            Typing works with every provider.
+          </p>
+        </section>
+        <section id="not-ready">
+          <h2>When a step is not ready</h2>
+          <p>
+            Run setup again. In the app, open Settings &gt; General, and choose
+            <b>Run setup again</b>. In Terminal, run
+            <code>clawdtime onboard</code>. Each step checks what is ready and
+            continues from where it stopped.
+          </p>
+          <p>
+            In Terminal, <code>clawdtime computer doctor</code> lists each part
+            and says what is missing.
+          </p>
+        </section>
+        <section id="update">
+          <h2>Update</h2>
+          <p>
+            The app: download it again and replace ClawdTime in Applications.
+            The command: run the same command again. Your settings and keys
+            stay.
+          </p>
+          <p>
+            macOS asks for the two permissions again after an update. Setup
+            checks this and tells you.
+          </p>
+        </section>
+        <section id="uninstall">
+          <h2>Uninstall</h2>
+          <p>
+            In the app, open Settings &gt; General, and choose
+            <b>Uninstall ClawdTime</b>. In Terminal, run
+            <code>clawdtime uninstall</code>. It lists what it moves to the
+            Trash and asks first. It deletes nothing.
+          </p>
+        </section>
+        <section id="phone">
+          <h2>Phone calls (preview)</h2>
+          <p>
+            ClawdTime can call your phone when a task needs you, and you can
+            call it on FaceTime. Today this needs the source install and a phone
+            line from Chert. Follow the
+            <a
+              href="https://github.com/cherthq/clawdtime/blob/main/SETUP_CLAWDTIME.md"
+              >phone line guide</a
+            >.
+          </p>
+        </section>
+        <section id="source">
+          <h2>Build from source</h2>
+          <p>
+            For developers. You need Node 24 or later, Git, and Swift 6 or later
+            (the Xcode command line tools). The installer checks each one.
+          </p>
+          <pre
+            class="install-command"
+          ><code>curl -fsSL https://www.clawdtime.com/install.sh | sh -s -- --source</code></pre>
+          <p>
+            <a href="https://github.com/cherthq/clawdtime/blob/main/INSTALL.md"
+              >Read INSTALL.md</a
+            >
+            for each step.
+          </p>
         </section>
         <section class="related-links">
-          <h2>More detail</h2>
-          <a href="/privacy">Screen access and data</a
-          ><a href="/pricing">Planned pricing</a
-          ><a href="/agents">Plain-text instructions for an invited agent</a>
+          <h2>More</h2>
+          <a href="/privacy">Privacy and control</a
+          ><a href="/pricing">Pricing</a
+          ><a href="/integrations/claude-code">Use it with Claude Code</a
+          ><a href="/integrations/codex">Use it with Codex</a
+          ><a
+            href="https://github.com/cherthq/clawdtime/blob/main/INSTRUCTIONS.md"
+            >The full user guide</a
+          >
         </section>
       </div>
+      <p class="visually-hidden" role="status" id="copy-status"></p>
     </main>
     <footer class="site-footer section-wrap">
       <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>
       <nav aria-label="Footer">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup</a
+        <a href="/guides/getting-started">Setup guide</a
         ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/integrations/codex">Codex</a
         ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
           >GitHub ↗</a
         >

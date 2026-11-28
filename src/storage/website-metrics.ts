@@ -31,7 +31,14 @@ export const websiteBrowserEventSchema = z.discriminatedUnion("event", [
         "footer",
         "content",
       ]),
-      action: z.enum(["availability", "setup", "guide"]),
+      action: z.enum([
+        "availability",
+        "setup",
+        "guide",
+        "download",
+        "install_command",
+        "copy_prompt",
+      ]),
     })
     .strict(),
 ]);
