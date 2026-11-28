@@ -207,6 +207,13 @@ No request opens with a fixed sentence. The code is in
 - On the way there is no message for each step. When the planner revises its
   plan, the first revision of a request that can be said gives one line in
   the planner's own words. The end is the planner's own summary, as before.
+- Long work says how it goes. When no line went to you for 15 seconds
+  (`progressMs` of the worker), the next action says one progress line: what
+  the worker does now, made from the planner's reason ("Still working: typing
+  the prices into the sheet."). A reason that names a send, a post, a delete
+  or another effect that may still need your yes gives the goal in its place
+  ('Still working on "Fill in the form".'). A request says at most 3
+  progress lines, and none after its end. A question counts as a line.
 - The chat of the panel, a spoken reply and a phone call have one answer for
   the message that started the request. That answer is the worker's first
   words: the supervisor waits up to 8 seconds for them (`firstWords`). The
@@ -260,9 +267,10 @@ The worker reads each message with `readMidTask` in
   press a key while the hands work, the worker pauses in the same way.
 - **Status.** A question about how the task goes, as the whole message: "are
   you done?", "what are you doing?", "how's it going?", "where are you?", "is
-  it done yet?", "done?", "r u stuck?". The answer is one short sentence:
-  'Still working on "open the editor", at step 3, and it is not done yet.'.
-  Nothing is kept, and nothing pauses.
+  it done yet?", "done?", "r u stuck?". The answer is short: the goal, what
+  the worker does now when its reason can be said, and that it is not done:
+  'Still working on "open the editor". Now typing the title. It is not done
+  yet.'. Nothing is kept, and nothing pauses.
 - **Go.** "continue", "go on", "ok", "thanks", a thumbs up: nothing to steer
   with. The task goes on, and the words are not kept.
 - **Steer.** Everything else. Negations, doubts, remarks, time words, other

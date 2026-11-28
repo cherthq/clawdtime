@@ -585,6 +585,8 @@ export interface ComputerWorkerOptions {
   notify?: (text: string) => void;
   /** How long the outline's line for the person may take before the planner's first reason stands in (`opening.ts`). */
   openingMs?: number;
+  /** Long work says a progress line when no line went to the person for this long (`opening.ts`). */
+  progressMs?: number;
   /** Hears the time of each step, for a person who looks for the slow part. */
   timing?: (entry: StepTiming) => void;
   now?: () => number;
@@ -1611,7 +1613,13 @@ export class ComputerWorker implements DesktopExecutorPort {
       halt,
       halted,
       ...(read ? { navigation: read } : {}),
-      opening: new Opening((line) => this.say(line), this.options.openingMs),
+      opening: new Opening((line) => this.say(line), this.options.openingMs, {
+        now: () => this.now(),
+        goal: clean(shown, 120),
+        ...(this.options.progressMs !== undefined
+          ? { everyMs: this.options.progressMs }
+          : {}),
+      }),
     };
     this.current = run;
     this.last = null;
@@ -1844,12 +1852,19 @@ export class ComputerWorker implements DesktopExecutorPort {
       ? `${guidanceFullText} ${goingOnText}`
       : kept.why;
   }
-  /** What the person hears about a task that runs, in one short sentence. It never says done. */
+  /**
+   * What the person hears about a task that runs: the goal, what the worker
+   * does now when its reason can be said, and that it is not done. It never
+   * says done.
+   */
   private statusText(run: Run) {
     const goal = clean(run.shown, 120);
+    const doing = run.opening.doing;
     return run.step === 0
-      ? `I am starting on "${goal}", and it is not done yet.`
-      : `Still working on "${goal}", at step ${run.step}, and it is not done yet.`;
+      ? `I am starting on "${goal}". It is not done yet.`
+      : doing
+        ? `Still working on "${goal}". Now ${doing} It is not done yet.`
+        : `Still working on "${goal}", at step ${run.step}. It is not done yet.`;
   }
   /** A pause says when it ends by itself: with the owner's trust, after a bounded time. */
   private pauseSays(text: string) {

@@ -3490,7 +3490,7 @@ describe("shared readWords routing, approval safety, stop handling, and screen t
       if (kind === "pause") return pausedText;
       if (kind === "go") return goingOnText;
       if (kind === "status")
-        return `Still working on "${goal}", at step 19, and it is not done yet.`;
+        return `Still working on "${goal}", at step 19. It is not done yet.`;
       return guidedText;
     };
     f.value.execution = {

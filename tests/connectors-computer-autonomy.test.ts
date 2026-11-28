@@ -244,7 +244,7 @@ describe("autonomy: each message while a task runs", () => {
       }
       case "status": {
         expect(reply).toBe(
-          'Still working on "Open the editor", at step 1, and it is not done yet.',
+          'Still working on "Open the editor", at step 1. It is not done yet.',
         );
         expect(run.journal.guidance("r1")).toEqual([]);
         run.release();

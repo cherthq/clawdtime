@@ -2726,7 +2726,7 @@ describe("what the person says while a task runs", () => {
     expect(
       (await status.worker.submit("h1", "hey wait, what are you doing"))
         .message,
-    ).toBe('I am starting on "Work on page", and it is not done yet.');
+    ).toBe('I am starting on "Work on page". It is not done yet.');
     asked.release();
     await status.worker.idle();
     expect(status.worker.snapshot().state).toBe("completed");

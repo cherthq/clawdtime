@@ -13,7 +13,9 @@ import { DecisionDesk } from "../connectors/agents/decisions.js";
 import { BoardFeed } from "../connectors/agents/feed.js";
 import { ComputerJournal } from "../connectors/computer/journal.js";
 import {
+  doingFromWhy,
   lineFromWhy,
+  Opening,
   openingLimits,
   spokenLine,
 } from "../connectors/computer/opening.js";
@@ -466,5 +468,153 @@ describe("the chat and the call show the first words", () => {
     await worker.idle();
     // Outside the call the adapter reads the worker's own ids.
     expect(await phone.execution.firstWords!("talk_x_execution", 5)).toBe("");
+  });
+});
+
+describe("long work says how it goes", () => {
+  /** An opening with a clock that the test moves. */
+  const clocked = (goal = "Fill in the order form") => {
+    let at = 1_000;
+    const said: string[] = [];
+    const opening = new Opening((line) => said.push(line), 4000, {
+      now: () => at,
+      goal,
+    });
+    return {
+      opening,
+      said,
+      pass: (ms: number) => {
+        at += ms;
+      },
+    };
+  };
+
+  it("says what it does now, in the middle of a sentence, and never names an effect that may need a yes", () => {
+    expect(doingFromWhy("Type the prices into the sheet")).toBe(
+      "typing the prices into the sheet.",
+    );
+    expect(doingFromWhy("Scroll down to the totals")).toBe(
+      "scrolling down to the totals.",
+    );
+    // An effect, a first person reason and a reason with no act give no line.
+    expect(doingFromWhy("Send the message to Sam")).toBeNull();
+    expect(doingFromWhy("Delete the old draft")).toBeNull();
+    expect(doingFromWhy("I open the menu of the app")).toBeNull();
+    expect(doingFromWhy("The page is still loading")).toBeNull();
+  });
+
+  it("says one progress line when no line went out for 15 seconds, at most 3, and none after the end", () => {
+    const f = clocked();
+    f.opening.outlined("Opening the order form.");
+    f.opening.acting("Type the name into the first field");
+    expect(f.said).toEqual(["Opening the order form."]);
+    f.pass(openingLimits.progressMs - 1);
+    f.opening.acting("Type the street into the next field");
+    expect(f.said).toHaveLength(1);
+    f.pass(1);
+    f.opening.acting("Type the city into the next field");
+    expect(f.said.at(-1)).toBe(
+      "Still working: typing the city into the next field.",
+    );
+    // A reason that names a send gives the goal in its place.
+    f.pass(openingLimits.progressMs);
+    f.opening.acting("Submit the form");
+    expect(f.said.at(-1)).toBe('Still working on "Fill in the order form".');
+    f.pass(openingLimits.progressMs);
+    f.opening.acting("Read the confirmation page");
+    expect(f.said.at(-1)).toBe("Still working: reading the confirmation page.");
+    // The limit: no fourth line.
+    f.pass(openingLimits.progressMs);
+    f.opening.acting("Scroll down to the order number");
+    expect(f.said).toHaveLength(1 + openingLimits.progress);
+    expect(f.opening.doing).toBe("scrolling down to the order number.");
+    // After the end, nothing more.
+    const g = clocked();
+    g.opening.outlined("Opening the order form.");
+    g.opening.end("Done. The form is sent.");
+    g.pass(openingLimits.progressMs);
+    g.opening.acting("Type the name into the first field");
+    expect(g.said).toEqual(["Opening the order form."]);
+  });
+
+  it("speaks after 15 seconds of work with no start line, and that line is the first words", async () => {
+    const f = clocked();
+    f.opening.outlined(undefined);
+    f.opening.acting("The person asked for it.");
+    expect(f.said).toEqual([]);
+    f.pass(openingLimits.progressMs);
+    f.opening.acting("The person asked for it.");
+    expect(f.said).toEqual(['Still working on "Fill in the order form".']);
+    expect(await f.opening.words(0)).toBe(
+      'Still working on "Fill in the order form".',
+    );
+    // The same line is never said twice in a row.
+    f.pass(openingLimits.progressMs);
+    f.opening.acting("The person asked for it.");
+    expect(f.said).toHaveLength(1);
+  });
+
+  it("counts a question as a line, so the next progress line waits again", () => {
+    const f = clocked();
+    f.opening.outlined("Opening the order form.");
+    f.pass(openingLimits.progressMs);
+    f.opening.spoke("Which size, small or large?");
+    f.opening.acting("Type the size into the field");
+    expect(f.said).toEqual(["Opening the order form."]);
+    f.pass(openingLimits.progressMs);
+    f.opening.acting("Type the size into the field");
+    expect(f.said.at(-1)).toBe(
+      "Still working: typing the size into the field.",
+    );
+  });
+
+  it("goes to the chat between the start line and the end, and the status names what it does now", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const turns: [Action, string][] = [
+      [save, "Click Save to keep the note"],
+      [pause, "Wait for the note to save"],
+      [{ kind: "key", combo: "cmd+s" }, "Post the note to the team"],
+      [{ kind: "wait", ms: 5 }, "Read the saved note"],
+      [done, ""],
+    ];
+    let turn = 0;
+    const planner: Planner = {
+      outline: async () => ({ subgoals, say }),
+      async next() {
+        turn++;
+        if (turn === 2) await gate;
+        const [action, why] = turns[turn - 1] ?? [done, ""];
+        return { action, why };
+      },
+    };
+    const root = home();
+    const said: string[] = [];
+    const worker = new ComputerWorker({
+      hands: new FakeHands([
+        observation([
+          element(1, { title: "Save" }),
+          element(2, { title: "Send" }),
+        ]),
+      ]),
+      planner,
+      journal: new ComputerJournal(root),
+      notify: (text) => said.push(text),
+      progressMs: 0,
+    });
+    await worker.submit("r1", "Save the budget note");
+    await until(() => turn === 2);
+    expect((await worker.submit("s1", "how's it going?")).message).toBe(
+      'Still working on "Save the budget note". Now clicking Save to keep the note. It is not done yet.',
+    );
+    release();
+    await worker.idle();
+    expect(said).toEqual([
+      say,
+      "Still working: clicking Save to keep the note.",
+      "Still working: waiting for the note to save.",
+      'Still working on "Save the budget note".',
+      "Done. The note is saved.",
+    ]);
   });
 });

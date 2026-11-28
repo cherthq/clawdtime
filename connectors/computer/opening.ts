@@ -20,6 +20,16 @@
  * one line in the planner's own words. Every line is checked here: one line of
  * at most 120 characters, no secret, and no word of how the worker works.
  *
+ * Long work says how it goes. When no line went to the person for
+ * `progressMs` (15 seconds) since the request began or since the last line,
+ * and the start line was said or its time passed with none, the next action
+ * says one progress line: what the worker does now ("Still working: typing
+ * the prices into the sheet."), made from the planner's reason as the start
+ * line is. A reason that cannot be said, or one that names a send, a post, a
+ * delete or another effect that may still need a yes, gives the goal in its
+ * place ("Still working on "Fill in the form"."). A request says at most 3
+ * progress lines, and none after its end.
+ *
  * Nothing here acts on the Mac. It keeps no text after the request.
  */
 import { looksSecretStrict } from "./journal.js";
@@ -31,6 +41,10 @@ export const openingLimits = {
   waitMs: 4000,
   /** The first actions whose reasons may make the line. */
   reasons: 3,
+  /** Long work: a progress line when no line went to the person for this long. */
+  progressMs: 15_000,
+  /** Progress lines in one request. */
+  progress: 3,
 } as const;
 
 /** Words of the worker's own machinery. A line with one of them is not said. */
@@ -166,6 +180,25 @@ const firstPerson =
 const saysWhatIs =
   /^\s+(?:\S+\s+)?(?:is|are|was|were|has|have|had|shows?|appears?|seems?|looks?|lists?|holds?|contains?|opened|loaded)\b/i;
 
+/**
+ * Verbs of an effect that may still wait for the person's yes. A progress line
+ * never names one as work that goes on: it gives the goal in its place.
+ */
+const effects = new Set([
+  "accepting",
+  "canceling",
+  "confirming",
+  "deleting",
+  "posting",
+  "rejecting",
+  "removing",
+  "replying",
+  "sending",
+  "sharing",
+  "submitting",
+  "uploading",
+]);
+
 const asDoing = (word: string) => {
   const lower = word.toLowerCase();
   if (gerunds.has(lower)) return lower;
@@ -205,9 +238,30 @@ export function lineFromWhy(raw: string): string | null {
 }
 
 /**
+ * What the worker does now, from the planner's reason, as the middle of a
+ * sentence: "typing the prices into the sheet." Null when the reason does not
+ * give such a line, or when it names an effect that may still need a yes.
+ */
+export function doingFromWhy(why: string): string | null {
+  const line = lineFromWhy(why);
+  const word = line ? /^[A-Za-z]+/.exec(line)?.[0]?.toLowerCase() : undefined;
+  if (!line || !word || !gerunds.has(word) || effects.has(word)) return null;
+  return `${line[0]!.toLowerCase()}${line.slice(1)}`;
+}
+
+/** How long work says how it goes (`progressLine`). */
+export interface ProgressOptions {
+  now?: () => number;
+  /** The goal as the person sees it, for a progress line with no reason that can be said. */
+  goal?: string;
+  everyMs?: number;
+}
+
+/**
  * The first words of one request. The worker tells it what happens; it says
  * the start line once, through `send`, and answers who waits for the first
- * words. It has one timer, which never holds the process.
+ * words. It has one timer, which never holds the process. On long work it
+ * also says a few progress lines.
  */
 export class Opening {
   /** The first words were said, or the request ended: no start line comes now. */
@@ -222,11 +276,32 @@ export class Opening {
   /** What was said first: the start line, a question or the end. "" when the request ended with nothing said. */
   private first?: string;
   private readonly waiting = new Set<(words: string) => void>();
+  /** The request ended: no progress line comes now. */
+  private ended = false;
+  /** When a line last went to the person, or the request began. */
+  private saidAt: number;
+  private progressed = 0;
+  private lastProgress?: string;
+  private now_: string | null = null;
+  private readonly clock: () => number;
+  private readonly everyMs: number;
+  private readonly goal: string;
 
   constructor(
     private readonly send: (line: string) => void,
     private readonly waitMs: number = openingLimits.waitMs,
-  ) {}
+    progress: ProgressOptions = {},
+  ) {
+    this.clock = progress.now ?? Date.now;
+    this.everyMs = Math.max(0, progress.everyMs ?? openingLimits.progressMs);
+    this.goal = oneLine(progress.goal ?? "");
+    this.saidAt = this.clock();
+  }
+
+  /** What the worker does now, from the newest reason that can be said ("typing the prices into the sheet."). Null when none can. */
+  get doing(): string | null {
+    return this.now_;
+  }
 
   /** The outline was asked for: its line has `waitMs` to come. */
   asked() {
@@ -248,13 +323,24 @@ export class Opening {
   }
   /** The planner chose an action of the screen, for this reason. */
   acting(why: string) {
-    if (this.over || this.fromReason) return;
-    if (this.reasons >= openingLimits.reasons) return;
-    this.reasons++;
-    const line = lineFromWhy(why);
-    if (!line) return;
-    this.fromReason = line;
-    if (this.due) this.tell(line);
+    this.now_ = doingFromWhy(why);
+    if (
+      !this.over &&
+      !this.fromReason &&
+      this.reasons < openingLimits.reasons
+    ) {
+      this.reasons++;
+      const line = lineFromWhy(why);
+      if (line) {
+        this.fromReason = line;
+        if (this.due) {
+          this.tell(line);
+          return;
+        }
+      }
+    }
+    // Once the start line was said, or its time passed with none: long work says how it goes.
+    if (this.over || this.due) this.progress();
   }
   /**
    * The plan was revised for this reason. The first revision of a request
@@ -267,10 +353,11 @@ export class Opening {
     if (!line) return;
     this.revised = true;
     if (!this.over) this.tell(line);
-    else this.send(line);
+    else this.sendLine(line);
   }
   /** The worker said something else to the person: a question. No start line follows it. */
   spoke(words: string) {
+    this.saidAt = this.clock();
     if (this.over) return;
     this.over = true;
     this.clear();
@@ -280,6 +367,7 @@ export class Opening {
   end(words: string) {
     this.spoke(words);
     this.revised = true;
+    this.ended = true;
   }
   /**
    * The first words, for a caller that shows or speaks one answer only. ""
@@ -305,10 +393,37 @@ export class Opening {
     this.over = true;
     this.clear();
     try {
-      this.send(line);
+      this.sendLine(line);
     } finally {
       this.settle(line);
     }
+  }
+  private sendLine(line: string) {
+    this.saidAt = this.clock();
+    this.send(line);
+  }
+  /**
+   * Long work: one progress line when no line went to the person for
+   * `everyMs`, at most `openingLimits.progress` in a request, and never the
+   * same line twice in a row.
+   */
+  private progress() {
+    if (this.ended || this.progressed >= openingLimits.progress) return;
+    if (this.clock() - this.saidAt < this.everyMs) return;
+    const goal = this.goal.length > 80 ? "" : this.goal;
+    const line = spokenLine(
+      this.now_
+        ? `Still working: ${this.now_}`
+        : goal
+          ? `Still working on "${goal.replace(/[.!?]+$/, "")}".`
+          : "",
+    );
+    if (!line || line === this.lastProgress) return;
+    this.progressed++;
+    this.lastProgress = line;
+    // With no first words yet, the progress line is the first words.
+    if (this.over) this.sendLine(line);
+    else this.tell(line);
   }
   private settle(words: string) {
     if (this.first !== undefined) return;
