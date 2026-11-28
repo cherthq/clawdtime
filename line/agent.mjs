@@ -19,13 +19,16 @@ import {
   ServerOptions,
   voice,
 } from "@livekit/agents";
-import { realtime } from "@livekit/agents-plugin-openai";
+import { realtime, TTS } from "@livekit/agents-plugin-openai";
 import {
+  AudioStream,
   LocalVideoTrack,
   RoomEvent,
+  TrackKind,
   VideoBufferType,
   VideoFrame,
   VideoSource,
+  VideoStream,
 } from "@livekit/rtc-node";
 import { jobDoneInstructions, readView, recall, watchJobs } from "./desk.mjs";
 import { makeEars } from "./ears.mjs";
@@ -53,6 +56,7 @@ import {
   reachInstructions,
   reachJob,
 } from "./reach-call.mjs";
+import { makeCallRecording } from "./recording.mjs";
 
 const instructions = `You are ClawdTime, the supervisor of the coding agents on this Mac. You are on a FaceTime video call with the person. You are an AI.
 Speak in one or two short sentences. Use plain words.
@@ -174,7 +178,9 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
       settingsTimer = null,
       timer = null,
       session = null,
-      warmMedia = null;
+      warmMedia = null,
+      // The recording of an ordinary call when the line turned it on (recording.mjs). Null otherwise.
+      recording = null;
     const setZoom = (action) => {
       if (ended) return false;
       video?.control(action);
@@ -273,12 +279,15 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
       // that could cancel unrelated local work. Close is reserved once.
       const desktopClosed = phone.close();
       const mediaClosed = warmMedia?.close();
+      // Every part of a recording stops here, at once. Its files close in the background.
+      const recordingClosed = recording?.close(reason);
       closing = (async () => {
         await quiet(() => session?.close());
         await quiet(() => mediaClosed);
         await quiet(() => track.close());
         await quiet(() => source.close());
         await quiet(() => desktopClosed);
+        await quiet(() => recordingClosed);
         log("call_ended");
       })();
       return closing;
@@ -364,6 +373,31 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
     // delay the greeting. Every request awaits its result and fails closed.
     if (!proactive) void phone.open();
     callStarted = Date.now();
+    // Recording is an internal switch of the line, off by default. Only an ordinary call can be recorded: never a
+    // call of the reach, a proactive call or a call on a shared line.
+    const ordinaryCall = !proactive && !shared;
+    recording = ordinaryCall
+      ? makeCallRecording({
+          room: ctx.room,
+          callerIdentity: caller.identity,
+          callStarted,
+          media: {
+            AudioStream,
+            VideoStream,
+            KIND_AUDIO: TrackKind.KIND_AUDIO,
+            KIND_VIDEO: TrackKind.KIND_VIDEO,
+            I420: VideoBufferType.I420,
+            events: RoomEvent,
+          },
+          // The consent line is speech of fixed text from this voice, never words of the realtime model.
+          synthesize: (text) =>
+            new TTS({
+              model: "gpt-4o-mini-tts",
+              voice: process.env.CLAWDTIME_LINE_VOICE || "marin",
+            }).synthesize(text),
+          log,
+        })
+      : null;
     video = shared
       ? shared.video()
       : proactive
@@ -564,6 +598,7 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
     // successful provider finals schedule responses after SDK history insertion.
     session.output.audio = audioOutput;
     callerRequest.bindSession(session);
+    recording?.attach(session, audioOutput);
     session.on(voice.AgentSessionEventTypes.Close, (event) => {
       log("session_closed", {
         code: event?.reason,
@@ -622,9 +657,13 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
                   ? proactiveInstructions({ computer: computerCall })
                   : instructions,
             pictureBrief[framing],
+            ...(recording?.instructions ? [recording.instructions] : []),
             ...(earlier ? [`Earlier:\n${earlier}`] : []),
           ].join("\n"),
-          tools,
+          tools: [
+            ...tools,
+            ...(recording?.tools(llm.tool, callerRequest) ?? []),
+          ],
         }),
         record: false,
         inputOptions: {
@@ -673,7 +712,11 @@ export async function callEntry(ctx, { proactive, shared } = {}) {
           } catch {
             void cleanup("greeting_authority_failed");
           }
-        } else say(shared ? shared.greeting() : greeting);
+        } else {
+          // A recorded call: the fixed consent line plays first, and the recording starts only after it ended.
+          void recording?.consent();
+          say(shared ? shared.greeting() : greeting);
+        }
       },
       {
         event: RoomEvent.RoomMetadataChanged,

@@ -53,6 +53,7 @@ import { sharedCli } from "./shared.js";
 import { startCli } from "./start.js";
 import { onboardCli } from "./onboard.js";
 import { uninstallCli } from "./uninstall.js";
+import { recordingsCli } from "./recordings.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
 
 function options(args: string[]) {
@@ -77,6 +78,10 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "keys") return keysCli(args.slice(1));
   if (command === "settings") return settingsCli(args.slice(1));
   if (command === "start") return startCli(args.slice(1));
+  if (command === "recordings") {
+    process.exitCode = await recordingsCli(args.slice(1));
+    return;
+  }
   if (command === "onboard") {
     process.exitCode = await onboardCli(args.slice(1));
     return;
