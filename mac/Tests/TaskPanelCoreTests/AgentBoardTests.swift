@@ -146,6 +146,27 @@ final class AgentBoardTests: XCTestCase {
       XCTAssertNil(PanelLaunch(arguments: arguments), arguments.joined(separator: " "))
     }
   }
+  func testLaunchArgumentsTakeTheChatSwitchAloneForTheEndOfSetup() {
+    for arguments in [["panel", "--config", "/p.json", "--chat"], ["panel", "--chat", "--config", "/p.json"]] {
+      let launch = PanelLaunch(arguments: arguments)
+      XCTAssertEqual(launch.map { [$0.configPath, String($0.chat), String($0.tucked)] }, ["/p.json", "true", "false"])
+    }
+    XCTAssertEqual(PanelLaunch(arguments: ["panel", "--config", "/p.json"])?.chat, false)
+    // Chat takes the keys and tucked takes none: never both. Each switch comes once.
+    for arguments in [["panel", "--config", "/p.json", "--chat", "--tucked"], ["panel", "--config", "/p.json", "--chat", "--chat"], ["panel", "--chat"]] {
+      XCTAssertNil(PanelLaunch(arguments: arguments), arguments.joined(separator: " "))
+    }
+    XCTAssertEqual(PanelLaunch.chatNotification(show: "com.clawdtime.task-panel.show.d.f"), "com.clawdtime.task-panel.show.d.f.chat")
+  }
+  func testTheFirstRequestPaysDeletesAndSendsNothingAndFitsComputerUse() {
+    XCTAssertEqual(FirstRequest.suggestion(computerUse: true), "Open Calculator and calculate 15 percent of 240.")
+    XCTAssertEqual(FirstRequest.suggestion(computerUse: false), "What can you do on this Mac?")
+    for on in [true, false] {
+      let text = FirstRequest.suggestion(computerUse: on).lowercased()
+      for word in ["pay", "buy", "delete", "send", "post", "remove"] { XCTAssertFalse(text.contains(word), word) }
+      XCTAssertLessThanOrEqual(text.split(separator: " ").count, 20)
+    }
+  }
   func testARequestThatIsShownInPartHasNoApprovalOnTheBubble() throws {
     let json = #"{"version":1,"away":false,"callReady":false,"pending":[{"id":"0123456789abcdef","agentLabel":"Claude Code","kind":"permission","tool":"Bash","summary":"git status","options":[],"project":"app","session":null,"sessionId":null,"createdAt":1,"holdUntil":2,"allowedBefore":0,"deniedBefore":0,"canRemember":false,"answerInTerminal":true}]}"#
     let cut = try JSONDecoder().decode(PendingDecisions.self, from: Data(json.utf8))

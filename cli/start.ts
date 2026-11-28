@@ -33,10 +33,11 @@ export const defaultProjectName = "clawdtime-work";
 export const installCommand =
   "curl -fsSL https://github.com/cherthq/clawdtime/releases/latest/download/install.sh | sh";
 export const startHelp = `clawdtime start: start the ClawdTime desktop, the service and the panel with the mascot
-  clawdtime start [--project PATH] [--tucked true] [--foreground]
+  clawdtime start [--project PATH] [--tucked true] [--chat] [--foreground]
   --project PATH   the folder where coding work runs. The first start chooses it and
                    later starts keep it. Without it, the first start uses ~/${defaultProjectName}
   --tucked true    start the panel as the mascot alone, with no focus
+  --chat           open the chat, ready for you to type, with one suggested first request
   --foreground     stay in the foreground and own the desktop: print {"type":"ready"} when it
                    is ready, {"type":"panel","state":"closed"} when the panel closes, and
                    stop the panel and the service on SIGTERM or Ctrl+C
@@ -46,7 +47,7 @@ of setup to use the ClawdTime of another install). When the service runs already
 the panel again. When it does not start, it says why; the service log is desktop-start.log
 in the state folder.`;
 const usage =
-  "Use: clawdtime start [--project PATH] [--tucked true|false] [--foreground]";
+  "Use: clawdtime start [--project PATH] [--tucked true|false] [--chat] [--foreground]";
 /** The line that --foreground writes on standard output when the desktop is ready. */
 export const readyLine = JSON.stringify({ type: "ready" });
 /** The line that --foreground writes when the panel closes while the desktop runs. */
@@ -170,15 +171,18 @@ export async function startCli(
 ) {
   const options: Record<string, string> = {};
   let foreground = false;
+  let chat = false;
   for (let i = 0; i < args.length; i++) {
     const name = args[i]!;
     if (name === "help" || name === "--help" || name === "-h")
       return (dependencies.print ?? console.log)(startHelp);
-    if (name === "--foreground") {
+    if (name === "--foreground" || name === "--chat") {
       const next = args[i + 1];
-      if (foreground || (next !== undefined && !next.startsWith("--")))
+      const seen = name === "--chat" ? chat : foreground;
+      if (seen || (next !== undefined && !next.startsWith("--")))
         throw new Error(usage);
-      foreground = true;
+      if (name === "--chat") chat = true;
+      else foreground = true;
       continue;
     }
     const value = args[i + 1];
@@ -201,6 +205,8 @@ export async function startCli(
   const tucked = options["--tucked"];
   if (tucked !== undefined && tucked !== "true" && tucked !== "false")
     throw new Error("Use --tucked true or --tucked false.");
+  if (chat && tucked === "true")
+    throw new Error("Use --chat or --tucked true, not both.");
   const env = dependencies.env ?? process.env;
   const home = dependencies.home ?? homedir();
   const cwd = dependencies.cwd ?? process.cwd();
@@ -270,6 +276,7 @@ export async function startCli(
         "--project",
         project,
         ...(tucked ? ["--tucked", tucked] : []),
+        ...(chat ? ["--chat", "true"] : []),
         "--panel-binary",
         panel,
       ],
@@ -284,7 +291,9 @@ export async function startCli(
     await launch();
     if (dependencies.panel !== false)
       print(
-        "Click the mascot to open the chat. clawdtime computer doctor says what is ready.",
+        chat
+          ? "The chat is open. Write or talk to ClawdTime. clawdtime computer doctor says what is ready."
+          : "Click the mascot to open the chat. clawdtime computer doctor says what is ready.",
       );
     return;
   }
