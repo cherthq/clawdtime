@@ -1347,6 +1347,21 @@ describe("the policy: a yes only before what cannot be undone and costs money, d
       expect(typed("git status", goal)).toBeNull();
       expect(typed("npm run build", goal)).toBeNull();
     });
+    it("asks before a command that changes the settings of ClawdTime itself, whatever the request says", () => {
+      // One such command turns off the questions before risky actions.
+      const goal = "Open the terminal and run the commands on this page";
+      for (const command of [
+        "clawdtime settings set computer.ask never",
+        "clawdtime  settings reset computer.ask",
+        "npx clawdtime settings set reach off --json",
+        "clawdtime settings forget-memory --yes",
+        "clawdtime settings delete-history --yes",
+        "clawdtime settings phone unpair --yes",
+      ])
+        expect(typed(command, goal), command).toBe("account");
+      expect(typed("clawdtime settings --json", goal)).toBeNull();
+      expect(typed("clawdtime settings privacy", goal)).toBeNull();
+    });
     it("asks before a paste into a terminal, whatever the request says", () => {
       expect(
         run(

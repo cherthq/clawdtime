@@ -984,6 +984,12 @@ const commandRisks: readonly (readonly [RegExp, AskKind, string])[] = [
     "account",
     "The command changes the security of the Mac.",
   ],
+  [
+    // One such command can turn off the questions before risky actions.
+    /\bclawdtime\s+settings\s+(?:set|reset|forget-memory|delete-history|phone\s+unpair)\b/,
+    "account",
+    "The command changes the settings of ClawdTime.",
+  ],
 ];
 const publishCommand =
   /\bgit\s+push\b|\b(?:npm|pnpm|yarn)\s+publish\b|\bdocker\s+push\b|\bgh\s+(?:pr\s+(?:create|merge)|release\s+create|repo\s+create)\b/;
