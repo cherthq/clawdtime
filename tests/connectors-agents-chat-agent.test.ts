@@ -158,6 +158,44 @@ describe("the chat agent acts first", () => {
     });
   });
 
+  it("tells the model in code that a question about the screen goes to computer_do, and never to the panel", async () => {
+    const screenNote =
+      /The owner's newest message asks about the screen as it is now.*call computer_do with their question as the goal.*Never send them to the panel/s;
+    const ask = async (words: string, computer: FakeComputer) => {
+      const model = scriptedModel([{ text: "Okay." }]);
+      const { agent } = setup({ computer, model });
+      await agent.answer([], words, "chat");
+      return model.requests[0]!.system;
+    };
+    // After a task ended, as in the report: the task list is there, and it
+    // still cannot say which app is in front.
+    const ended = new FakeComputer()
+      .run("search Aero 7 headphones prices")
+      .finish("Done. The Aero 7 headphones starts at 1,199 dollars.");
+    expect(
+      await ask(
+        "Which app is in front right now? Answer with its name only.",
+        ended,
+      ),
+    ).toMatch(screenNote);
+    expect(await ask("is Mail open?", new FakeComputer())).toMatch(screenNote);
+    // The rules say it for every turn too.
+    expect(await ask("is Mail open?", new FakeComputer())).toMatch(
+      /A question about the screen as it is now .* is screen work: call computer_do/,
+    );
+    // Not for the status of the work, nor while a task runs: then the
+    // rules for a running task hold.
+    expect(await ask("how's it going?", new FakeComputer())).not.toMatch(
+      screenNote,
+    );
+    expect(
+      await ask(
+        "which app is in front?",
+        new FakeComputer().run("search flights to Lisbon"),
+      ),
+    ).not.toMatch(screenNote);
+  });
+
   it("does not start a second computer task while one runs, and says which one runs", async () => {
     const computer = new FakeComputer().run("search flights to Lisbon");
     const model = scriptedModel([
