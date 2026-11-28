@@ -51,9 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       .appendingPathComponent("Logs/ClawdTime", isDirectory: true)
     owner = ProcessOwner(launcher: launcher, logs: logs, desktop: .desktop(app: appBundle))
     setup = SetupCoordinator(
-      makeEngine: { local in
+      makeEngine: { run in
         guard let layout else { throw RuntimeProblem.missing("runtime folder") }
-        return EngineProcess(executable: layout.launcher, arguments: SetupProtocol.arguments(local: local))
+        return EngineProcess(executable: layout.launcher, arguments: SetupProtocol.arguments(run))
       },
       owner: owner,
       open: { NSWorkspace.shared.open($0) },
@@ -119,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       busy: { [weak self] in self?.setup.engineIsRunning ?? false },
       openWindow: { [weak self] in self?.showWindow() },
       openSettings: { [weak self] in self?.showSettings(nil) },
+      phone: { [weak self] in self?.getCallsOnPhone() },
       stop: { [weak self] in self?.setup.stop() },
       start: { [weak self] in
         guard let self else { return }
@@ -127,6 +128,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !self.setupDone { self.showWindow() }
         self.setup.begin()
       })
+  }
+
+  /// Get calls on your phone: the later setup run, in the setup window. Each
+  /// step asks first: nothing is sent or paired before the person says yes.
+  func getCallsOnPhone() {
+    guard !setup.engineIsRunning else { showWindow(); return }
+    setup.finishWhenReady = false
+    showWindow()
+    setup.beginPhone()
   }
 
   /// `clawdtime://open`, `clawdtime://settings` and `clawdtime://stop`. Any other link does nothing.
@@ -153,7 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   func showWindow() {
     if window == nil {
-      let root = SetupRootView(setup: setup, owner: owner, loginItem: loginItem, close: { [weak self] in self?.window?.close() })
+      let root = SetupRootView(setup: setup, owner: owner, loginItem: loginItem, close: { [weak self] in self?.window?.close() },
+                               phone: { [weak self] in self?.getCallsOnPhone() })
       let hosting = NSHostingView(rootView: root)
       let window = NSWindow(
         contentRect: NSRect(origin: .zero, size: SetupRootView.size),

@@ -53,8 +53,10 @@ public struct SetupState: Equatable, Sendable {
   public var engineVersion: String?
   /// The latest event of each step.
   public private(set) var steps: [StepID: StepEvent] = [:]
-  /// The known steps in order, then any others in the order they came.
-  public private(set) var order: [StepID] = StepID.order
+  /// The steps of this run: the known ones in their fixed order, then any
+  /// others in the order they came. Only the steps that the engine names are
+  /// here, so the first run shows its own steps, not the phone steps.
+  public private(set) var order: [StepID] = []
   /// The step on screen: the latest one that is not pending.
   public private(set) var focus: StepID?
   public private(set) var report: [ReportEntry] = []
@@ -89,7 +91,7 @@ public struct SetupState: Equatable, Sendable {
       }
     case .step(let step):
       phase = .running
-      if !order.contains(step.id) { order.append(step.id) }
+      add(step.id)
       steps[step.id] = step
       if step.state != .pending { focus = step.id }
     case .log(let level, let message):
@@ -102,13 +104,21 @@ public struct SetupState: Equatable, Sendable {
         if let detail = entry.detail { step.detail = detail }
         step.input = nil
         step.question = nil
-        if !order.contains(entry.id) { order.append(entry.id) }
+        add(entry.id)
         steps[entry.id] = step
       }
       phase = .finished(ready: ready)
     case .unknown:
       break
     }
+  }
+
+  /// A step joins the order once: a known one at its place, another one at the end.
+  private mutating func add(_ id: StepID) {
+    guard !order.contains(id) else { return }
+    guard let place = StepID.order.firstIndex(of: id) else { order.append(id); return }
+    let at = order.firstIndex { other in StepID.order.firstIndex(of: other).map { $0 > place } ?? true } ?? order.endIndex
+    order.insert(id, at: at)
   }
 
   public mutating func unreadableLine() { unreadableLines += 1 }
