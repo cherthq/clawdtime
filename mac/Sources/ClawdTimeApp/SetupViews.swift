@@ -186,11 +186,14 @@ struct Card<Content: View>: View {
 
 struct WelcomeView: View {
   var begin: () -> Void
+  /// The words of the website's first screen: the headline, and the one line of what ClawdTime is.
+  static let title = "Talk to your Mac. It does the work."
+  static let ambition = "ClawdTime: a computer use agent you can FaceTime. [Built on Chert](https://www.trychert.com)."
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
-      Text("Welcome to ClawdTime").font(.system(size: 30, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
-      Text("ClawdTime uses your Mac for you. Type a task, or say it.")
-        .font(.system(size: 15)).foregroundStyle(Theme.secondaryText).fixedSize(horizontal: false, vertical: true)
+      Text(Self.title).font(.system(size: 30, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+      Text(LocalizedStringKey(Self.ambition))
+        .font(.system(size: 15)).foregroundStyle(Theme.secondaryText).tint(Theme.primary).fixedSize(horizontal: false, vertical: true)
       VStack(alignment: .leading, spacing: 12) {
         Row(symbol: "key.fill", title: "A model key", detail: "Setup looks for your key. If it finds no key, you paste one.")
         Row(symbol: "cursorarrow.click.2", title: "Your yes to computer use", detail: "ClawdTime asks you before an action that you cannot undo.")
@@ -586,8 +589,50 @@ struct FinishedView: View {
   var again: () -> Void
   var phone: () -> Void = {}
   var close: () -> Void
+  /// Puts text on the clipboard. Tests pass their own.
+  var copy: (String) -> Void = { FinishedView.copyToPasteboard($0) }
   @State private var openAtLogin = false
   @State private var loginNote: String?
+  @State private var promptCopied = false
+
+  /// The prompt that tells a coding agent how to give tasks to ClawdTime. The
+  /// website and the README show the same words.
+  static let agentPromptBody = """
+    ClawdTime runs on this Mac. It is a computer use agent. It uses the apps and the browser on this Mac for me.
+
+    To give ClawdTime a task, run this in your shell: clawdtime chat "TASK"
+    For example: clawdtime chat "Open Stonepad and make a note: buy milk."
+    ClawdTime answers in the shell. It can use the screen to do the task.
+
+    To see the coding agent sessions on this Mac, and which one waits for an answer, run:
+    clawdtime agents
+
+    To see every command, run: clawdtime help
+
+    Give ClawdTime one task at a time. If a command fails, show me its output. Never ask me for a key.
+    Now run clawdtime agents once, to check that the command works.
+    """
+
+  /// The prompt, with the full path of `command`: the app's own clawdtime,
+  /// for a shell that has none on its PATH.
+  static func agentPrompt(command: String?) -> String {
+    let path = command ?? "/Applications/ClawdTime.app/Contents/Resources/runtime/bin/clawdtime"
+    let plain = path.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || "/._-".unicodeScalars.contains($0) }
+    let shown = plain ? path : "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    return agentPromptBody + "\nIf your shell does not find clawdtime, use the full path: \(shown)"
+  }
+
+  /// The clawdtime command inside this app, when the app has one.
+  private static var bundledCommand: String? {
+    guard let command = RuntimeLayout.bundled()?.appendingPathComponent("bin/clawdtime"),
+          FileManager.default.isExecutableFile(atPath: command.path) else { return nil }
+    return command.path
+  }
+
+  static func copyToPasteboard(_ text: String, board: NSPasteboard = .general) {
+    board.clearContents()
+    board.setString(text, forType: .string)
+  }
 
   /// The words and buttons of the end of setup.
   struct Words: Equatable {
@@ -673,6 +718,16 @@ struct FinishedView: View {
       if let loginNote {
         Text(loginNote).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
       }
+      if ready {
+        // Quiet, under the report: a coding agent can give tasks to ClawdTime.
+        Button(action: copyPrompt) {
+          Label(promptCopied ? "Copied" : "Copy prompt for your coding agent", systemImage: promptCopied ? "checkmark" : "doc.on.doc")
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(Theme.primary)
+        .help("Copy a prompt that tells a coding agent how to give tasks to ClawdTime.")
+      }
       HStack(spacing: 10) {
         if words.offersAgain {
           Button(phoneRun ? "Try again" : "Run setup again", action: again).buttonStyle(PillStyle(kind: .secondary))
@@ -694,6 +749,16 @@ struct FinishedView: View {
     .onAppear {
       openAtLogin = loginItem.isEnabled
       loginNote = loginItem.needsApproval ? "Allow ClawdTime in System Settings, Login Items." : nil
+    }
+  }
+
+  private func copyPrompt() {
+    copy(Self.agentPrompt(command: Self.bundledCommand))
+    promptCopied = true
+    AccessibilityNotification.Announcement("Copied the prompt for your coding agent").post()
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(2))
+      promptCopied = false
     }
   }
 
