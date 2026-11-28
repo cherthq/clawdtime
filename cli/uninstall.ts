@@ -548,7 +548,7 @@ export function planUninstall(input: {
     ])
       if (existsSync(app))
         notes.push(
-          `${tilde(app, home)} stays. To remove it and its login item, open it and choose Settings, General, Uninstall ClawdTime.`,
+          `${tilde(app, home)} stays. To remove it and its login item, open it and choose Settings, About, Uninstall.`,
         );
   return { unpair, pairingProblem, move, keep, notes };
 }
@@ -723,7 +723,7 @@ async function stopDesktop(system: {
     const code = error instanceof Error ? error.message : "";
     throw new Refusal(
       code === "desktop_owned_in_foreground"
-        ? "The ClawdTime app, or clawdtime start --foreground, runs the desktop. Quit it first, or uninstall from the app: Settings, General, Uninstall ClawdTime."
+        ? "The ClawdTime app, or clawdtime start --foreground, runs the desktop. Quit it first, or uninstall from the app: Settings, About, Uninstall."
         : code === "desktop_did_not_stop"
           ? "The desktop service did not stop."
           : "The desktop service could not be identified, so it got no signal.",
@@ -791,7 +791,7 @@ export function macUninstallPorts(system: {
       }
       const folder = desktopStateFolder(system);
       if (folder && processLockHolder(join(folder, "desktop-owner.lock")))
-        return "The ClawdTime app, or clawdtime start --foreground, runs the desktop. Quit it first, or uninstall from the app: Settings, General, Uninstall ClawdTime.";
+        return "The ClawdTime app, or clawdtime start --foreground, runs the desktop. Quit it first, or uninstall from the app: Settings, About, Uninstall.";
       return null;
     },
     stop: async () => {

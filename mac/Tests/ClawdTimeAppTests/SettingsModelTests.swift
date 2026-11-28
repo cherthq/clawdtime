@@ -34,6 +34,69 @@ enum SettingsFixtures {
     #"{"version":1,"desktop":{"service":"\#(service)","chat":"connected","taskSession":"\#(session)","taskAdmission":"\#(admission)","computer":"configured","computerMode":"worker","physicalVerification":"required"},"checks":[]}"#
   }
   static let panelAccess = #"{"accessibility":true,"desktopShortcutsAvailable":true,"desktopSwitchingEnabled":false,"screenRecording":false,"version":1}"#
+
+  /// The settings that apply at once. Every other one applies when the desktop starts again.
+  static let now: Set<String> = ["mascot.style", "mascot.size", "mascot.eye", "voice.replies", "voice.speed", "memory", "away"]
+
+  static let voices = #"["alloy","ash","ballad","cedar","coral","echo","fable","marin","nova","onyx","sage","shimmer","verse"]"#
+
+  /// `clawdtime settings --json` of a made-up Mac. `speed` is the preset in use; `ask` and `browser` choose those rows.
+  static func settings(speed: String = "balanced", ask: String = "risky", browserFrom: String = "environment",
+                       presets: Bool = true) -> String {
+    func row(_ id: String, _ kind: String, _ value: String, _ def: String, _ from: String = "default", variable: String? = nil,
+             choices: String? = nil, range: (Double, Double)? = nil) -> String {
+      let applies = now.contains(id) ? "now" : "restart"
+      var text = #"{"id":"\#(id)","kind":"\#(kind)","value":\#(value),"default":\#(def),"from":"\#(from)","applies":"\#(applies)","variable":\#(variable.map { #""\#($0)""# } ?? "null")"#
+      if let choices { text += #","choices":\#(choices)"# }
+      if let range { text += #","min":\#(range.0),"max":\#(range.1)"# }
+      return text + "}"
+    }
+    let rows = [
+      row("mascot.style", "choice", #""jet""#, #""flint""#, "store", choices: #"["flint","jet","jade","lapis","amber","garnet","amethyst","pebble","core","neon","iris"]"#),
+      row("mascot.size", "number", "0.9", "0.7", "store", range: (0.5, 1.5)),
+      row("mascot.eye", "boolean", "false", "false"),
+      row("cursor.pace", "choice", #""auto""#, #""auto""#, variable: "CLAWDTIME_CURSOR_PACE", choices: #"["auto","calm","fast"]"#),
+      row("voice.replies", "boolean", "true", "true"),
+      row("voice.name", "choice", #""coral""#, #""alloy""#, "store", variable: "CLAWDTIME_VOICE", choices: voices),
+      row("voice.speed", "number", "1", "1", range: (0.5, 2)),
+      row("vocabulary", "text", #""Brightwave, Ledgerly""#, #""""#, "store", variable: "CLAWDTIME_VOCABULARY"),
+      row("memory", "boolean", "true", "false", "store"),
+      row("away", "boolean", "false", "false"),
+      row("speed", "choice", #""\#(speed)""#, #""best""#, choices: presets ? #"["fast","balanced","best"]"# : "[]"),
+      row("model.planner", "model", #""gpt-6.2-sol""#, #""gpt-6.2-astra""#, "store", variable: "CLAWDTIME_COMPUTER_MODEL"),
+      row("model.chat", "model", #""gpt-4.1-mini""#, #""gpt-6.2-astra""#, "store", variable: "CLAWDTIME_SUPERVISOR_MODEL"),
+      row("computer", "boolean", "true", "false", "store"),
+      row("computer.ask", "choice", #""\#(ask)""#, #""risky""#, ask == "risky" ? "default" : "store", variable: "CLAWDTIME_COMPUTER_TRUST", choices: #"["risky","never"]"#),
+      row("computer.browser", "choice", #""own""#, #""off""#, browserFrom, variable: "CLAWDTIME_COMPUTER_BROWSER", choices: #"["off","on","own"]"#),
+      row("reach", "boolean", "true", "true", variable: "CLAWDTIME_COMPUTER_REACH"),
+      row("reach.wait", "number", "45", "45", variable: "CLAWDTIME_COMPUTER_REACH_SECONDS", range: (0, 600)),
+    ]
+    let list = presets ? #"[{"id":"fast","planner":"gpt-5.4","chat":"gpt-4.1-mini","summary":"About 1.5 s for each step. 76 of 76 screens right, 22 of 23 long tasks done."},{"id":"balanced","planner":"gpt-6.2-sol","chat":"gpt-4.1-mini","summary":"About 2 s for each step. 74 of 76 screens right, 23 of 23 long tasks done."},{"id":"best","planner":"gpt-6.2-astra","chat":"gpt-6.2-astra","summary":"About 3 s for each step. 76 of 76 screens right, 23 of 23 long tasks done."}]"# : "[]"
+    return #"{"version":1,"store":"/Users/riverchat/.local/share/clawdtime/settings.json","problem":null,"settings":[\#(rows.joined(separator: ","))],"speed":{"provider":"\#(presets ? "openai" : "groq")","presets":\#(list)}}"#
+  }
+
+  static let privacy = #"""
+  {"version":1,"folder":"/Users/riverchat/.local/share/clawdtime","items":[
+  {"id":"chat","name":"Chat history","what":"Your conversations with ClawdTime.","path":"/Users/riverchat/.local/share/clawdtime/agents","exists":true,"count":4,"bytes":182340,"removable":true},
+  {"id":"voice","name":"Spoken replies","what":"The last recording and spoken answer of a talk.","path":"/Users/riverchat/.local/share/clawdtime/agents/voice","exists":true,"count":1,"bytes":48211,"removable":true},
+  {"id":"memory","name":"Memory","what":"What you told ClawdTime to keep, while memory is on.","path":"/Users/riverchat/.local/share/clawdtime/memory/facts.json","exists":true,"count":7,"bytes":2310,"removable":false},
+  {"id":"requests","name":"Record of computer requests","what":"Each request and its steps, by kind and name. No picture and no typed text.","path":"/Users/riverchat/.local/share/clawdtime/computer/journal.json","exists":true,"count":1,"bytes":40112,"removable":false},
+  {"id":"timing","name":"Step times","what":"The time of each step, when step timing is on.","path":"/Users/riverchat/.local/share/clawdtime/computer/timing.json","exists":false,"count":0,"bytes":0,"removable":true},
+  {"id":"keys","name":"Model keys","what":"The keys of your model providers. Only you can read the file.","path":"/Users/riverchat/.local/share/clawdtime/computer/keys.json","exists":true,"count":2,"bytes":310,"removable":false},
+  {"id":"settings","name":"Settings","what":"The choices that you make in Settings.","path":"/Users/riverchat/.local/share/clawdtime/settings.json","exists":true,"count":1,"bytes":240,"removable":false},
+  {"id":"pairing","name":"Phone pairing","what":"The pairing of this Mac with the shared number.","path":"/Users/riverchat/.config/clawdtime/shared/connection.json","exists":true,"count":1,"bytes":620,"removable":false},
+  {"id":"logs","name":"Logs","what":"What the desktop and the phone connection wrote.","path":"/Users/riverchat/Library/Logs/ClawdTime","exists":true,"count":3,"bytes":912003,"removable":false}]}
+  """#.replacingOccurrences(of: "\n", with: "")
+
+  static func phone(paired: Bool = true, connection: String = "running") -> String {
+    paired
+      ? #"{"version":1,"pairing":"paired","origin":"https://coordinator.example","view":true,"control":true,"connection":"\#(connection)","owner":{"ending":"ends in 00","consent":"yes"},"calls":"ready (Chert Calls API). When a question waits, ClawdTime reaches you this way","texts":"ready. When a question waits, ClawdTime reaches you this way"}"#
+      : #"{"version":1,"pairing":"none","origin":null,"view":null,"control":null,"connection":"off","owner":null,"calls":"not reported: start the desktop service with the computer worker on. It says this within a minute","texts":"not reported: start the desktop service with the computer worker on. It says this within a minute"}"#
+  }
+
+  static func update(newer: Bool, page: String? = "https://github.com/cherthq/clawdtime/releases/latest") -> String {
+    #"{"version":1,"current":"0.4.0","latest":"\#(newer ? "0.5.0" : "0.4.0")","commit":"\#(String(repeating: "a", count: 40))","newer":\#(newer),"page":\#(page.map { #""\#($0)""# } ?? "null")}"#
+  }
   static let capturePreflight = #"{"loginComplete":true,"locked":false,"onConsole":true,"screenPermission":true}"#
 }
 
@@ -51,6 +114,23 @@ final class FakeSettingsRuntime: CommandRunning, @unchecked Sendable {
     answer(["computer", "doctor", "--json"], SettingsFixtures.doctor())
     answer(["--check-access"], SettingsFixtures.panelAccess)
     answer(["--preflight"], SettingsFixtures.capturePreflight)
+    answer(["settings", "--json"], SettingsFixtures.settings())
+    answer(["settings", "privacy", "--json"], SettingsFixtures.privacy)
+    answer(["settings", "phone", "--json"], SettingsFixtures.phone())
+    answer(["settings", "update", "--json"], SettingsFixtures.update(newer: true))
+    answer(["settings", "forget-memory", "--yes", "--json"], #"{"version":1,"ok":true,"removed":7}"#)
+    answer(["settings", "delete-history", "--yes", "--json"], #"{"version":1,"ok":true,"moved":["/Users/riverchat/.local/share/clawdtime/agents/chat.jsonl"],"kept":["memory"],"applies":"restart"}"#)
+    answer(["settings", "phone", "unpair", "--yes", "--json"], #"{"version":1,"result":"unpaired","sentence":"This Mac is unpaired. The pairing file is in the Trash."}"#)
+  }
+
+  /// `settings set NAME VALUE --json` and `settings reset NAME --json`, as the runtime answers them.
+  private func change(_ arguments: [String]) -> CommandResult? {
+    guard arguments.count >= 4, arguments[0] == "settings", ["set", "reset"].contains(arguments[1]), arguments.last == "--json" else { return nil }
+    let id = arguments[2]
+    let value = arguments[1] == "set" ? arguments[3] : "default"
+    let json = Double(value) != nil || value == "on" || value == "off" ? (value == "on" ? "true" : value == "off" ? "false" : value) : #""\#(value)""#
+    let applies = SettingsFixtures.now.contains(id) ? "now" : "restart"
+    return CommandResult(status: 0, output: Data(#"{"version":1,"ok":true,"id":"\#(id)","value":\#(json),"from":"store","applies":"\#(applies)","shadowed":null}"#.utf8))
   }
 
   func answer(_ arguments: [String], _ json: String) {
@@ -65,7 +145,7 @@ final class FakeSettingsRuntime: CommandRunning, @unchecked Sendable {
   func run(_ executable: URL, _ arguments: [String], input: Data?) async -> CommandResult {
     lock.withLock {
       log.append(Call(executable: executable.lastPathComponent, arguments: arguments, input: input))
-      return answers[arguments.joined(separator: " ")] ?? CommandResult(status: 0)
+      return answers[arguments.joined(separator: " ")] ?? change(arguments) ?? CommandResult(status: 0)
     }
   }
 }
@@ -75,7 +155,13 @@ final class FakeDesktop: DesktopRestarting {
   var desktopStatus: OwnedStatus = .running
   var connectionStatus: OwnedStatus = .off
   var restarts = 0
+  var drops = 0
   func restartDesktop() { restarts += 1 }
+  func dropConnection(then: @escaping @MainActor () -> Void) {
+    drops += 1
+    connectionStatus = .off
+    then()
+  }
 }
 
 @MainActor
@@ -121,7 +207,7 @@ final class SettingsModelTests: XCTestCase {
     XCTAssertEqual(model.model?.key?.source, .store)
     XCTAssertEqual(model.permissions, PermissionStatus(panelAccessibility: true, panelScreenRecording: false, captureScreenRecording: true))
     XCTAssertNil(model.problem)
-    XCTAssertEqual(runtime.recorded.map(\.arguments), [["keys", "list", "--json"], ["computer", "model", "--json"], ["--check-access"], ["--preflight"]])
+    XCTAssertEqual(runtime.recorded.map(\.arguments), [["keys", "list", "--json"], ["computer", "model", "--json"], ["settings", "--json"], ["--check-access"], ["--preflight"]])
     XCTAssertEqual(runtime.recorded.suffix(2).map(\.executable), ["ClawdTimeTaskPanel", "ClawdTimeTaskCapture"])
     XCTAssertTrue(runtime.recorded.allSatisfy { $0.input == nil })
   }

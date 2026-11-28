@@ -60,34 +60,56 @@ The logs of the desktop and the connection are in `~/Library/Logs/ClawdTime/`.
 
 Open the Settings window in one of three ways: the gear at the top right of
 the setup window, **Settings…** in the menu bar menu (of the app or of the
-mascot), or Command-comma. It has four pages.
+mascot), or Command-comma. The sections are on the left:
 
-- **Model keys** lists every provider and whether its key is set. **Add** or
-  **Replace** opens a secure field for the key. **Remove** asks first. A key
-  from the environment shows as **Environment**: change it where it is set,
-  not here.
-- **Planner model** shows the model in use and what chose it. Choose a
-  provider and a model, or **Automatic**: the first provider with a key, with
-  its default model. The custom provider also takes a base address. A model
-  set in the environment (`CLAWDTIME_COMPUTER_MODEL`) wins over a choice here,
-  and the page says so.
-- **Permissions** shows whether the panel has Accessibility and Screen
-  Recording, and whether the capture helper has Screen Recording. The page
-  checks again every few seconds while it is open, and when you come back to
-  it. **Open System Settings** opens the right list.
-- **General** has **Open ClawdTime when you log in**, **Run setup again**,
-  **Stop**, **Uninstall ClawdTime…**, and the versions of the app and of its
-  runtime, with the runtime commit.
+- **General**: the style and the size of the mascot, the eye on Flint, the
+  pace of the cursor, **Open ClawdTime when you log in**, the keys to talk
+  and chat, **Run setup again** and **Stop**.
+- **Assistant**: **Speak replies**, the voice, the speaking speed, the names
+  that speech to text must hear right, memory with **Forget everything**, and
+  **Away: answer by phone**.
+- **Models**: **Speed** (Fast, Balanced or Best), the model keys, and under
+  **Advanced** the planner model and the chat model.
+- **Computer use**: computer use on or off, **Ask before acting** (before
+  risky actions, or never), and the browser.
+- **Permissions**: Accessibility and Screen Recording of the panel and the
+  capture helper. The page checks again every few seconds while it is open.
+  A red dot on the section says that a permission is off.
+- **Phone**: whether this Mac is paired, **Pair this Mac** or **Unpair…**,
+  the end of your number, and the calls and texts when a question waits.
+- **Privacy**: what ClawdTime keeps on this Mac, how much and where,
+  **Open the folder**, and **Delete history…**.
+- **About**: the versions of the app and its runtime, **Check now** for a
+  newer release, and **Uninstall…**.
 
-After you change a key or the model, the page says that the desktop restarts
-to use it. The desktop starts again by itself only while it is idle: no task
-runs and the phone connection is off. Otherwise the page shows **Restart
-now**, and the desktop keeps running until you choose it. A desktop that is
-not running uses the change when it starts.
+Use the keyboard:
+
+- Up and Down move through the sections. Command-1 to Command-8 open one.
+- Command-F goes to the search field. Type a word, such as "voice" or
+  "unpair". Return opens the first result. Escape clears the search.
+- Tab moves through the controls of a section.
+
+A change of the mascot, of the speaking speed, of **Speak replies**, of
+memory, of away and of turning computer use off works at once. Other changes
+work when the desktop starts again. The window then says so. The desktop
+starts again by itself only while it is idle: no task runs and the phone
+connection is off. Otherwise the window shows **Restart now**, and the
+desktop keeps running until you choose it. A desktop that is not running uses
+the change when it starts.
+
+A setting with a lock is set in the environment of the desktop service, for
+example `CLAWDTIME_COMPUTER_BROWSER`. The variable wins over a choice here.
+Change it where it is set.
+
+**Speed** picks a planner model and a chat model from the tests of
+ClawdTime. Each preset shows what the tests measured. Best is the default.
+With an Anthropic key alone there are two presets, Fast and Best. A provider
+that the tests did not measure has no preset: choose its models in
+**Advanced**. A change in **Advanced** shows Speed as Custom.
 
 ## Uninstall
 
-Open Settings, General, and choose **Uninstall ClawdTime…**. A sheet lists
+Open Settings, About, and choose **Uninstall…**. A sheet lists
 what goes to the Trash and what stays. Check **Keep my settings and keys** to
 keep your settings and model keys for a later install. Then choose
 **Uninstall**. ClawdTime:
@@ -236,36 +258,54 @@ the final report says is ready:
 ### Settings: the runtime commands
 
 The Settings window reads and changes settings only through the runtime's own
-commands and its two helpers. It reads their JSON:
+commands and its two helpers. It reads their JSON, and it edits no file
+itself:
 
-| Page          | Reads                                                                                         | Changes                                                                                     |
-| ------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Model keys    | `clawdtime keys list --json`                                                                  | `clawdtime keys set PROVIDER` (the key on stdin), `clawdtime keys remove PROVIDER`          |
-| Planner model | `clawdtime computer model --json`                                                             | `clawdtime computer model PROVIDER/MODEL [--base-url URL]`, `clawdtime computer model auto` |
-| Permissions   | `app/native/ClawdTimeTaskPanel --check-access`, `app/native/ClawdTimeTaskCapture --preflight` | nothing: **Open System Settings** opens `x-apple.systempreferences:` on the right list      |
-| General       | `clawdtime uninstall --plan --json`                                                           | `clawdtime uninstall --yes [--keep-settings]`, after the app stopped what it owns           |
+| Section       | Reads                                                                                         | Changes                                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every section | `clawdtime settings --json`                                                                   | `clawdtime settings set NAME VALUE --json`, `clawdtime settings reset NAME --json`                                                                                              |
+| Assistant     | the same                                                                                      | `clawdtime settings forget-memory --yes --json`                                                                                                                                 |
+| Models        | `clawdtime keys list --json`, `clawdtime computer model --json`                               | `clawdtime keys set PROVIDER` (the key on stdin), `clawdtime keys remove PROVIDER`, `clawdtime computer model PROVIDER/MODEL [--base-url URL]`, `clawdtime computer model auto` |
+| Permissions   | `app/native/ClawdTimeTaskPanel --check-access`, `app/native/ClawdTimeTaskCapture --preflight` | nothing: **Open System Settings** opens `x-apple.systempreferences:` on the right list                                                                                          |
+| Phone         | `clawdtime settings phone --json`                                                             | `clawdtime settings phone unpair --yes --json`, after the app ended the phone connection                                                                                        |
+| Privacy       | `clawdtime settings privacy --json`                                                           | `clawdtime settings delete-history --yes --json`                                                                                                                                |
+| About         | `clawdtime settings update --json`, only when you choose **Check now**                        | `clawdtime uninstall --yes [--keep-settings]`, after the app stopped what it owns                                                                                               |
+
+`clawdtime settings` keeps each setting where its part reads it:
+
+- Memory, away and computer use keep their own files in the state folder.
+  The service reads them on each use.
+- The mascot, **Speak replies** and the speaking speed are preferences of the
+  panel. The runtime writes them with `defaults` into the panel's domain
+  (`ClawdTimeTaskPanel`) and posts the Darwin notice
+  `com.clawdtime.panel.settings`. A running panel reads them again at once.
+- The planner model stays in `computer/model.json`.
+- Every other setting goes to `settings.json` in the state folder, for its
+  owner only. `clawdtime start` gives these to the service as the variables
+  that it reads (`CLAWDTIME_VOICE`, `CLAWDTIME_COMPUTER_TRUST`, and the
+  others). A variable that is set already wins. A damaged `settings.json` is
+  never written over, and `start` reads past it.
+
+Each answer of `settings set` says `applies`: `now`, or `restart` when the
+desktop reads it at its start. After a `restart` change, the app reads
+`clawdtime computer doctor --json`. It starts the desktop again, with its
+connection as it was, only when the service answers, takes new work and runs
+none, and the phone connection is off: the same rule as setup.
 
 - A key goes to `clawdtime keys set PROVIDER` on stdin, and nowhere else: not
   in an argument, the environment, a file or a log. The field lets go of the
   key as soon as it is sent.
-- `keys list --json` gives, for each provider, its id, its name, whether a key
-  is set, where it comes from (`store`, or `environment` with the variable),
-  whether the store holds one, its default model, and whether it needs a
-  chosen model or a base address. `computer model --json` gives the provider,
-  the model, where the choice comes from (`environment`, `store` or
-  `default`), the base address of a custom service, and where the key comes
-  from. Neither ever holds a key, nor a model setting that looks like one.
-- The app checks a provider id against the list, a model name against the
-  runtime's own shape, and refuses a model that looks like a key, before
-  anything runs.
+- No report of `clawdtime settings` holds a key, a device credential or a
+  whole phone number. The phone report gives only the end of the number.
+- The app checks a setting's name against the list, a choice against its
+  choices, and refuses text that looks like a key, starts with a dash or
+  holds a line break, before anything runs.
 - A failed command shows its last line of stderr, a fixed sentence of the
   runtime. A line that holds the key is never shown.
+- **Download** opens the release page only when it is an `https` address.
+  **Open the folder** opens only the state folder or the folder of the logs.
 - The permission checks ask macOS with no prompt. A helper that is not in the
   runtime shows **Not found**.
-- After a change, the app reads `clawdtime computer doctor --json`. It starts
-  the desktop again, with its connection as it was, only when the service
-  answers, takes new work and runs none, and the phone connection is off: the
-  same rule as setup.
 
 ### The self-test
 
@@ -351,7 +391,7 @@ python3 -m unittest discover -s mac/scripts -p 'test_package_app.py'
 The Swift tests run the protocol, the window state, the engine process against
 fake engine scripts, the runtime checks, the self-test and the process owner
 with real child processes. They build the views off screen: no window opens.
-To look at every setup screen and every Settings page in light and dark
+To look at every setup screen and every Settings section in light and dark
 mode, draw them into a folder:
 
 ```sh
