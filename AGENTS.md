@@ -4,8 +4,9 @@ Rules for coding agents that work in this repository.
 
 ## Purpose
 
-ClawdTime is a computer use agent for the Mac. A desktop service plans each
-action with a language model and checks it in code, a native panel sees the
+ClawdTime is an assistant on the Mac that you talk to, by chat or by voice, and
+that uses the computer for you: a computer use agent. A desktop service plans
+each action with a language model and checks it in code, a native panel sees the
 screen and sends the input, and a line agent puts ClawdTime on a FaceTime and
 iMessage line through Chert. It also supervises the coding agent sessions on
 the Mac. This file says where the code lives, how to build and test it, and the

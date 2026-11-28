@@ -1,10 +1,11 @@
 # ClawdTime instructions
 
-This guide shows how to use every part of ClawdTime. ClawdTime is a computer
-use agent: it works on your Mac for you, and you reach it in its chat, by
-voice, by text and on a FaceTime call. Every command in this guide is part of
-the `clawdtime` command. `clawdtime help` lists them, and most commands take
-`help` too, for example `clawdtime computer help`.
+This guide shows how to use every part of ClawdTime. ClawdTime is an assistant
+on your Mac. You ask it in plain words, by chat or by voice, and it uses your
+apps for you. It can also call your phone when it needs you (preview). Every
+command in this guide is part of the `clawdtime` command. `clawdtime help`
+lists them. Most commands take `help` too, for example
+`clawdtime computer help`.
 
 The examples use made-up names: `shop.example`, Stonepad and Riverchat stand
 for any site or app.
@@ -32,7 +33,22 @@ for any site or app.
 
 ## 1. Install
 
-What you need:
+You need a Mac with Apple silicon and macOS 14 or later, and a key from a model
+provider. Choose one of two ways. Both run the same setup: your model key,
+computer use and two permissions. Then the mascot appears.
+[INSTALL.md](INSTALL.md) has each step.
+
+| Way         | How                                                                                                                     |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| The Mac app | [Download it](https://www.clawdtime.com/download). Drag ClawdTime to Applications. Open it, choose **Set up ClawdTime** |
+| One command | Run `curl -fsSL https://www.clawdtime.com/install.sh \| sh` in Terminal                                                 |
+
+The release brings its own runtime. You do not need Node, Git or Xcode.
+
+### Build from the source
+
+Use the source build for development, and for calls and texts on a Chert line
+(preview). What you need:
 
 | Thing                                     | Check                                        |
 | ----------------------------------------- | -------------------------------------------- |
@@ -65,6 +81,9 @@ git pull --ff-only && npm ci && npm run build && (cd line && npm install)
 ```
 
 ## 2. Connect to Chert and get a line
+
+This step is for calls and texts, a preview. It needs the source build of
+section 1. ClawdTime works on the Mac without it.
 
 Chert gives ClawdTime a real phone line. You call the line on FaceTime or text
 it on iMessage, and ClawdTime answers. ClawdTime also uses the line to call or
@@ -120,6 +139,10 @@ again to renew it.
 that `clawdtime connect` writes, and how to host the line agent.
 
 ## 3. Start the desktop
+
+The Mac app and the setup start the desktop for you. To start it again in
+Terminal, run `clawdtime start`. The rest of this section is for a source
+checkout.
 
 The desktop is two parts: the desktop service, which does the work, and the
 panel, which shows the mascot, the chat and the cursor. The panel also holds
@@ -552,6 +575,9 @@ clawdtime browser text         # the visible text of the front page
 ```
 
 ## 9. Calls, texts and the reach
+
+Calls and texts are a preview. They need the source build and a Chert line
+([section 2](#2-connect-to-chert-and-get-a-line)).
 
 ### Call ClawdTime
 
