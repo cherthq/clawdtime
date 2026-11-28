@@ -10,8 +10,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agentsCli } from "../cli/agents.js";
+import { storeKey } from "../connectors/computer/keys.js";
+import { providerById } from "../connectors/computer/providers.js";
 import { talkLoop } from "../cli/supervisor.js";
 import {
   ChatLog,
@@ -844,6 +846,38 @@ describe("chat log and speech", () => {
     expect(
       readFileSync(join(directory, "agents", "chat.jsonl"), "utf8"),
     ).not.toContain(value);
+  });
+
+  it("uses the OpenAI key that setup saved when the environment has none", () => {
+    expect(speechSettings({}, { openai: "sk-saved-made-up" })).toMatchObject({
+      key: "sk-saved-made-up",
+    });
+    expect(
+      speechSettings(
+        { OPENAI_API_KEY: "sk-env" },
+        { openai: "sk-saved-made-up" },
+      ),
+    ).toMatchObject({ key: "sk-env" });
+    expect(speechSettings({}, { anthropic: "sk-other" })).toBeNull();
+  });
+
+  it("gives the desktop chat voice through the key store of its own folder", () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("CLAWDTIME_OPENAI_API_KEY", "");
+    try {
+      const empty = new BoardFeed({ root: root(), model: null });
+      expect(empty.chat().speech).toBe(false);
+      const directory = root();
+      storeKey(
+        directory,
+        providerById("openai")!,
+        "sk-proj-madeupmadeupmadeup1234567890",
+      );
+      const feed = new BoardFeed({ root: directory, model: null });
+      expect(feed.chat().speech).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("turns a recording into words and an answer into sound", async () => {
