@@ -2,15 +2,15 @@
  * The language model of the chat agent.
  *
  * The chat keeps its own model setting, `CLAWDTIME_SUPERVISOR_MODEL`: a bare
- * model of OpenAI (`gpt-6.2-astra` when it is not set, falling back to
- * `gpt-5.4` when a key may not use it), or `provider/model` for any provider
- * of the computer engine. The key comes from the same places as the planner's:
- * the environment first, then the key store of the state folder. The request
- * goes over the providers' own transports (`connectors/computer/providers.ts`):
- * the newest models of OpenAI go to its Responses route, and
- * `CLAWDTIME_OPENAI_API` can choose the route for any model of OpenAI. Each
- * has the retry layer of `model-call.ts`: a request of the model changes
- * nothing on the Mac, so it is the one thing that may be asked again.
+ * model of OpenAI (`gpt-5.4` when it is not set), or `provider/model` for
+ * any provider of the computer engine. The key comes from the same places as
+ * the planner's: the environment first, then the key store of the state
+ * folder. The request goes over the providers' own transports
+ * (`connectors/computer/providers.ts`): the newest models of OpenAI go to its
+ * Responses route, and `CLAWDTIME_OPENAI_API` can choose the route for any
+ * model of OpenAI. Each has the retry layer of `model-call.ts`: a request of
+ * the model changes nothing on the Mac, so it is the one thing that may be
+ * asked again.
  *
  * No message from here holds the key, the request or the body of an answer.
  */
@@ -25,7 +25,6 @@ import {
 import {
   ChatTransport,
   chatEndpoint,
-  defaultComputerModel,
   efforts,
   fallbackComputerModel,
   MessagesTransport,
@@ -44,8 +43,16 @@ import type { ModelClient } from "./brain.js";
 import type { LoopCall, LoopMessage, LoopModel } from "./agent-loop.js";
 import { looksSecret } from "./memory.js";
 
-/** The OpenAI model that the chat agent uses when `CLAWDTIME_SUPERVISOR_MODEL` is not set. */
-export const defaultChatAgentModel = defaultComputerModel;
+/**
+ * The OpenAI model that the chat agent uses when `CLAWDTIME_SUPERVISOR_MODEL`
+ * is not set. A chat turn chooses a tool and says one or two sentences, and
+ * the owner waits for every one. `gpt-5.4` answers a turn in a median of
+ * 1.06 s, where `gpt-6.2-astra`, the planner's model, takes 1.98 s, and the
+ * chat eval gives it the same first actions (55 of 55 in four runs; 54 to 55
+ * of 55 for the planner's model). Measured 28 Nov 2026: run `npm run
+ * eval:chat` before this line changes.
+ */
+export const defaultChatAgentModel = fallbackComputerModel;
 
 /** A chat turn waits for its answer this long, with its retries. */
 export const chatRetryPolicy: RetryPolicy = {
@@ -182,8 +189,11 @@ export function chatModelSetup(
         "CLAWDTIME_OPENAI_API is not responses or chat. Fix it or remove it.",
     };
   const now = () => Date.now();
+  // A default that is not the fallback goes to it, once, when a key may not use it.
   const fallback =
-    provider.id === "openai" && !chosen ? fallbackComputerModel : null;
+    provider.id === "openai" && !chosen && model !== fallbackComputerModel
+      ? fallbackComputerModel
+      : null;
   let transport: Transport;
   const wire = openaiWire(provider, model, api, effort);
   if (wire === "messages")

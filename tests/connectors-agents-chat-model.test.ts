@@ -467,64 +467,63 @@ describe("the chat's model setting", () => {
     expect(net.sent[0]!.body.model).toBe("llama-fixture");
   });
 
-  it("defaults to gpt-6.2-astra and falls back to gpt-5.4 on 403/404 only when unchosen", async () => {
-    expect(defaultChatAgentModel).toBe("gpt-6.2-astra");
+  it("defaults to gpt-5.4 on chat completions, and asks no other model on 403/404", async () => {
+    // A chat turn picks a tool and says one or two sentences. gpt-5.4 answers
+    // in about half the time of gpt-6.2-astra, with the same first actions in
+    // the chat eval (measured 28 Nov 2026).
+    expect(defaultChatAgentModel).toBe("gpt-5.4");
     expect(chatModelSetup({ OPENAI_API_KEY: key })).toMatchObject({
       ok: true,
-      name: "gpt-6.2-astra",
+      name: "gpt-5.4",
     });
 
+    const defaultNet = network({
+      choices: [{ message: { content: "Hi." }, finish_reason: "stop" }],
+    });
+    const unset = chatModelSetup(
+      { OPENAI_API_KEY: key },
+      undefined,
+      defaultNet.request,
+    );
+    if (!unset.ok) throw new Error(unset.problem);
+    expect(
+      await unset.model.next(
+        { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+        new AbortController().signal,
+      ),
+    ).toEqual({ text: "Hi.", calls: [] });
+    expect(defaultNet.sent.map((item) => [item.url, item.body.model])).toEqual([
+      ["https://api.openai.com/v1/chat/completions", "gpt-5.4"],
+    ]);
+    // No reasoning effort goes out when none is set.
+    expect(defaultNet.sent[0]!.body).not.toHaveProperty("reasoning_effort");
+
     for (const status of [403, 404]) {
-      const sent: { url: string; body: Record<string, unknown> }[] = [];
+      const sent: string[] = [];
       const request = (async (
-        url: string | URL | Request,
+        _url: string | URL | Request,
         init?: RequestInit,
       ) => {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        sent.push({ url: String(url), body });
-        if (body.model === "gpt-6.2-astra")
-          return new Response(
-            JSON.stringify({ error: { code: "model_not_found" } }),
-            { status, headers: { "content-type": "application/json" } },
-          );
+        sent.push((JSON.parse(String(init?.body)) as { model: string }).model);
         return new Response(
-          JSON.stringify({
-            status: "completed",
-            output: [
-              {
-                type: "message",
-                role: "assistant",
-                content: [{ type: "output_text", text: "Fallback worked." }],
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
+          JSON.stringify({ error: { code: "model_not_found" } }),
+          { status, headers: { "content-type": "application/json" } },
         );
       }) as typeof fetch;
       const setup = chatModelSetup({ OPENAI_API_KEY: key }, undefined, request);
       if (!setup.ok) throw new Error(setup.problem);
-      expect(
-        await setup.model.next(
-          { system: "R", messages: [{ role: "user", content: "hi" }], tools: [] },
+      await expect(
+        setup.model.next(
+          {
+            system: "R",
+            messages: [{ role: "user", content: "hi" }],
+            tools: [],
+          },
           new AbortController().signal,
         ),
-      ).toEqual({ text: "Fallback worked.", calls: [] });
-      await setup.model.next(
-        {
-          system: "R",
-          messages: [{ role: "user", content: "again" }],
-          tools: [],
-        },
-        new AbortController().signal,
-      );
-      expect(sent.map((item) => [item.url, item.body.model])).toEqual([
-        ["https://api.openai.com/v1/responses", "gpt-6.2-astra"],
-        ["https://api.openai.com/v1/responses", "gpt-5.4"],
-        ["https://api.openai.com/v1/responses", "gpt-5.4"],
-      ]);
-      // Unchosen fallback sends no forced reasoning effort on gpt-5.4.
-      expect(sent[0]!.body.reasoning).toEqual({ effort: "medium" });
-      expect(sent[1]!.body).not.toHaveProperty("reasoning");
+      ).rejects.toThrow(new RegExp(String(status)));
+      // The default is the model that a refused default fell back to: no other one is asked.
+      expect(sent).toEqual(["gpt-5.4"]);
     }
 
     // Explicitly chosen gpt-6.2-astra never falls back on 403/404.
@@ -535,10 +534,13 @@ describe("the chat's model setting", () => {
     ) => {
       const body = JSON.parse(String(init?.body)) as { model: string };
       chosenSent.push(body.model);
-      return new Response(JSON.stringify({ error: { code: "model_not_found" } }), {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ error: { code: "model_not_found" } }),
+        {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        },
+      );
     }) as typeof fetch;
     const explicit = chatModelSetup(
       {
