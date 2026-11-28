@@ -27,6 +27,14 @@
  * environment or the key store). It costs one or two model calls a case. It
  * also counts the answers that ask before acting.
  *
+ * Some cases also judge the words of the answer (`reply`): how ClawdTime
+ * talks. A start is one short line, a result keeps its exact numbers and
+ * ends with no offer, a question is one question, a failure says the next
+ * step, and no apology comes twice. In --check their ideal path answers with
+ * good words (`ideal`), and their wrong path takes the same first action and
+ * answers with bad ones (`wrongReply`): the check of the words alone must
+ * catch it. With a model, the model's own answer is judged.
+ *
  * ONLY names a part of a case's name; OUT names a file for every result.
  * It prints one line a case and a total, and exits with status 1 when one fails.
  */
@@ -51,8 +59,11 @@ import {
 import { fakeHost } from "./connectors-system-fixture.js";
 import { holdOpen } from "./computer-eval-report.js";
 
-type Setup = "idle" | "running" | "approval" | "question" | "job" | "done";
+type Setup =
+  "idle" | "running" | "approval" | "question" | "job" | "done" | "failed";
 type Expect = string[] | "stop" | "words";
+/** A check of the words of the answer: null when they are right, else why not. */
+type ReplyCheck = (text: string) => string | null;
 interface Case {
   name: string;
   say: string;
@@ -62,7 +73,95 @@ interface Case {
   history?: { role: "user" | "assistant"; text: string }[];
   /** The arguments of the ideal call, when the message is not the right one. */
   args?: Record<string, unknown>;
+  /** How the owner talks: the chat (default) or by voice. */
+  via?: "chat" | "voice";
+  /** The words of the answer must pass this check too. */
+  reply?: ReplyCheck;
+  /** --check: the words of the ideal path. */
+  ideal?: string;
+  /** --check: the wrong path takes the ideal first action and answers with these words. */
+  wrongReply?: string;
 }
+
+const sentencesOf = (text: string) =>
+  text
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+const wordsOf = (text: string) => text.split(/\s+/).filter(Boolean).length;
+/** Checks of the words. Each returns null when the words pass it. */
+const talk = {
+  /** One or two sentences of 20 words or fewer. */
+  short: (text: string) =>
+    sentencesOf(text).length > 2
+      ? "more than two sentences"
+      : sentencesOf(text).some((part) => wordsOf(part) > 20)
+        ? "a sentence of more than 20 words"
+        : null,
+  oneSentence: (text: string) =>
+    sentencesOf(text).length > 1 ? "more than one sentence" : null,
+  noFiller: (text: string) =>
+    /^(?:sure|great question|absolutely|of course|certainly|happy to help|no problem|i'?d be happy)\b/i.test(
+      text.trim(),
+    )
+      ? "opens with filler"
+      : null,
+  noOffer: (text: string) =>
+    /(?:want me to|should i|shall i|would you like|do you want|let me know|anything else|need anything)[^.!?]*[.!?]?\s*$/i.test(
+      text.trim(),
+    )
+      ? "ends with an offer"
+      : null,
+  /** A start line needs no sentence about what has not happened yet. */
+  noHedge: (text: string) =>
+    sentencesOf(text).some((part) =>
+      /\b(?:yet|so far)\b|\b(?:has|have|is|are)n['’]?t\b.*\b(?:been|happened|started|placed|sent|done|open)\b/i.test(
+        part,
+      ),
+    )
+      ? "a sentence about what has not happened yet"
+      : null,
+  noApology: (text: string) =>
+    /\b(?:sorry|apolog\w*)\b/i.test(text) ? "apologizes again" : null,
+  oneQuestion: (text: string) =>
+    (text.match(/\?/g) ?? []).length > 1 ? "more than one question" : null,
+  /** No answer of its own: no number, as a digit or a word. */
+  noNumber: (text: string) =>
+    /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/i.test(
+      text,
+    )
+      ? "gives an answer of its own"
+      : null,
+  /** The number as the tool gave it, and no word that rounds it. */
+  exact: (value: string) => (text: string) =>
+    !text.includes(value)
+      ? `does not give ${value} exactly`
+      : /\b(?:about|around|roughly|approximately|nearly|almost)\b|~/i.test(text)
+        ? "rounds the number"
+        : null,
+  /** It says that the task did not work. */
+  saysNo: (text: string) =>
+    /\b(?:no|not|couldn['’]?t|could not|didn['’]?t|did not|failed|unable)\b/i.test(
+      text,
+    )
+      ? null
+      : "does not say that it did not work",
+  /** A sentence that tells the owner what to do next. */
+  nextStep: (text: string) =>
+    /(?:^|[.!?,;:]\s+)(?:or\s+)?(?:you can|install|tell me|say|try|open|ask|use|type|check|add|choose|pick)\b/i.test(
+      text,
+    )
+      ? null
+      : "gives no next step",
+};
+/** Every check: null when all pass, else every reason. */
+const all =
+  (...checks: ReplyCheck[]): ReplyCheck =>
+  (text) =>
+    checks
+      .map((check) => check(text))
+      .filter(Boolean)
+      .join("; ") || null;
 
 const cases: Case[] = [
   // Searches.
@@ -453,6 +552,91 @@ const cases: Case[] = [
   },
   { name: "vague: hmm", say: "hmm", setup: "idle", expect: "words" },
   { name: "vague: thanks", say: "thanks!", setup: "idle", expect: "words" },
+  // How it talks: the words of the answer are judged too.
+  {
+    name: "talk: a start is one short line of what it does now",
+    say: "find a quiet cafe with wifi near Union Square",
+    setup: "idle",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noFiller, talk.noHedge, talk.noOffer),
+    ideal: "Searching for quiet cafes with wifi near Union Square.",
+    wrongReply:
+      "Sure! Searching for quiet cafes near Union Square, but I don't have any results yet.",
+  },
+  {
+    name: "talk: a start gives no answer of its own",
+    say: "google how many moons Neptune has",
+    setup: "idle",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noNumber),
+    ideal: "Searching for how many moons Neptune has.",
+    wrongReply: "Neptune has 16 known moons. The search is still running.",
+  },
+  {
+    name: "talk: a result keeps the exact number",
+    say: "how much were they?",
+    setup: "done",
+    expect: ["tasks", "computer_status"],
+    reply: all(talk.short, talk.exact("1,199"), talk.noOffer),
+    ideal: "The Aero 7 headphones start at 1,199 dollars.",
+    wrongReply: "They cost around 1,200 dollars.",
+  },
+  {
+    name: "talk: a result ends with no offer",
+    say: "what did you find?",
+    setup: "done",
+    expect: ["tasks", "computer_status"],
+    reply: all(talk.short, talk.noOffer),
+    ideal: "The Aero 7 headphones start at 1,199 dollars.",
+    wrongReply:
+      "The Aero 7 headphones start at 1,199 dollars. Want me to add a pair to your cart?",
+  },
+  {
+    name: "talk: a failure says what went wrong and the next step",
+    say: "did it work?",
+    setup: "failed",
+    expect: ["tasks", "computer_status"],
+    reply: all(talk.short, talk.saysNo, talk.nextStep),
+    ideal:
+      "No, Stonepad is not on this Mac, so the Q3 report did not open. Install Stonepad, or tell me another app to use.",
+    wrongReply: "Unfortunately, it didn't work.",
+  },
+  {
+    name: "talk: one clear question when the words say nothing",
+    say: "I need a hand with something",
+    setup: "idle",
+    expect: "words",
+    reply: all(talk.short, talk.noFiller, talk.oneQuestion),
+    ideal: "What do you need?",
+    wrongReply: "Sure, what is it? Is it on the Mac, or is it code?",
+  },
+  {
+    name: "talk: no apology loop after a correction",
+    say: "still the wrong site, I said brightwave.co",
+    setup: "done",
+    history: [
+      { role: "user", text: "open brightwave.co" },
+      {
+        role: "assistant",
+        text: "Sorry, I opened bright5.co by mistake. The page shows: This site can't be reached.",
+      },
+    ],
+    expect: ["computer_do"],
+    args: { goal: "Open brightwave.co" },
+    reply: all(talk.short, talk.noApology),
+    ideal: "Opening brightwave.co.",
+    wrongReply: "I'm so sorry again! Opening brightwave.co now.",
+  },
+  {
+    name: "talk: by voice, one sentence with the exact price",
+    say: "what was the price?",
+    setup: "done",
+    via: "voice",
+    expect: ["tasks", "computer_status"],
+    reply: all(talk.oneSentence, talk.exact("1,199")),
+    ideal: "They start at 1,199 dollars.",
+    wrongReply: "They start at 1,199 dollars. Other models cost more.",
+  },
 ];
 
 const asksFirst =
@@ -489,6 +673,8 @@ interface Outcome {
   askedFirst: boolean;
   /** A call of the model failed in the turn, so the turn ended with no reply of its own. */
   modelFailed: boolean;
+  /** Why the words of the answer fail the case's check. Null when they pass or the case has none. */
+  words?: string | null;
 }
 
 async function play(
@@ -515,6 +701,13 @@ async function play(
     computer
       .run("search Aero 7 headphones prices")
       .finish("Done. The Aero 7 headphones starts at 1,199 dollars.");
+  if (setup === "failed")
+    computer
+      .run("open the Q3 report in Stonepad")
+      .finish(
+        "I could not finish. Stonepad is not on this Mac. Tell me another way to try, or do this step yourself.",
+        "blocked",
+      );
   if (setup === "job") await jobs.start("fix the flaky checkout test");
   const world = chatWorld(root, {
     computer,
@@ -564,7 +757,7 @@ async function play(
     at: now - 60_000 + index,
     via: "chat",
   }));
-  const answer = await agent.answer(history, item.say, "chat");
+  const answer = await agent.answer(history, item.say, item.via ?? "chat");
   const calls: LoopCall[] = firstCalls ?? [];
   const first = trail[0] === "stop" ? "stop" : (calls[0]?.name ?? "words");
   const refusal =
@@ -577,6 +770,7 @@ async function play(
     reply: answer.text,
     askedFirst: asksFirst.test(answer.text),
     modelFailed,
+    words: item.reply ? item.reply(answer.text) : null,
   };
 }
 
@@ -600,7 +794,8 @@ const passes = (item: Case, outcome: Outcome) =>
     ? outcome.first === "stop"
     : item.expect === "words"
       ? outcome.first === "words"
-      : item.expect.includes(outcome.first) && outcome.refused === null);
+      : item.expect.includes(outcome.first) && outcome.refused === null) &&
+  !outcome.words;
 
 const args = process.argv.slice(2);
 for (const flag of args)
@@ -647,17 +842,29 @@ for (const item of chosen) {
       item,
       scriptedModel(
         item.expect === "words" || item.expect === "stop"
-          ? [{ text: "Okay." }]
+          ? [{ text: item.ideal ?? "Okay." }]
           : [
               { calls: [call(name, idealArgs(item, name))] },
-              { text: "On it." },
+              { text: item.ideal ?? "On it." },
             ],
       ),
     );
     // The wrong path: a question back where an action was right, an action
     // where words were right, and no task to stop where a stop was right.
-    const wrong =
-      item.expect === "stop"
+    // A case of the words keeps the right first action and says bad words.
+    const wrong = item.wrongReply
+      ? await play(
+          item,
+          scriptedModel(
+            item.expect === "words" || item.expect === "stop"
+              ? [{ text: item.wrongReply }]
+              : [
+                  { calls: [call(name, idealArgs(item, name))] },
+                  { text: item.wrongReply },
+                ],
+          ),
+        )
+      : item.expect === "stop"
         ? await play(item, scriptedModel([{ text: "Okay." }]), "idle")
         : item.expect === "words"
           ? await play(
@@ -693,7 +900,7 @@ for (const item of chosen) {
     if (good) ok++;
     if (told) caught++;
     console.log(
-      `${good && told ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; ideal ${ideal.first}${ideal.refused ? ` (refused: ${ideal.refused})` : ""}; wrong ${wrong.first}${broken ? `; broken ${broken.first}${passes(item, broken) ? " (passed)" : ""}` : ""}`,
+      `${good && told ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; ideal ${ideal.first}${ideal.refused ? ` (refused: ${ideal.refused})` : ""}${ideal.words ? ` (words: ${ideal.words})` : ""}; wrong ${wrong.first}${wrong.words ? ` (words: ${wrong.words})` : ""}${broken ? `; broken ${broken.first}${passes(item, broken) ? " (passed)" : ""}` : ""}`,
     );
     results.push({
       name: item.name,
@@ -721,7 +928,7 @@ for (const item of chosen) {
     if (good) ok++;
     if (outcome.askedFirst && Array.isArray(item.expect)) asked++;
     console.log(
-      `${good ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; got ${outcome.first}${outcome.refused ? ` (refused: ${outcome.refused})` : ""}${outcome.modelFailed ? " (a later call of the model failed)" : ""}. Reply: ${outcome.reply.slice(0, 120)}`,
+      `${good ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; got ${outcome.first}${outcome.refused ? ` (refused: ${outcome.refused})` : ""}${outcome.modelFailed ? " (a later call of the model failed)" : ""}${outcome.words ? ` (words: ${outcome.words})` : ""}. Reply: ${outcome.reply.slice(0, 120)}`,
     );
     results.push({ name: item.name, expected, ...outcome, good });
   }
