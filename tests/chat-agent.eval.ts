@@ -45,6 +45,7 @@ import {
   tempRoot,
 } from "./chat-agent-fixture.js";
 import { fakeHost } from "./connectors-system-fixture.js";
+import { holdOpen } from "./computer-eval-report.js";
 
 type Setup = "idle" | "running" | "approval" | "question" | "job" | "done";
 type Expect = string[] | "stop" | "words";
@@ -575,6 +576,10 @@ if (!checking) {
   real = setup.model;
   console.log(`Model: ${setup.name}`);
 }
+
+// A retry wait of the chat's model must not end the run. Each way out of
+// this script is a process.exit, which ends the hold too.
+holdOpen();
 
 const results: Record<string, unknown>[] = [];
 let ok = 0;

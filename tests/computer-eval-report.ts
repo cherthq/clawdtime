@@ -24,6 +24,19 @@ import {
 
 export type EvalName = "planner" | "request";
 
+/**
+ * Holds the process open while an eval waits for a model. The retry wait of
+ * a model call runs on an unreferenced timer (model-call.ts), so that it
+ * never keeps the desktop service alive on its own. An eval has nothing else
+ * open while it waits, so a 429 or 503 with a retry-after ended the run at
+ * once with an unsettled top-level await (exit code 13). Call the result to
+ * let go.
+ */
+export function holdOpen(): () => void {
+  const hold = setInterval(() => undefined, 60_000);
+  return () => clearInterval(hold);
+}
+
 export interface EvalFlags {
   check: boolean;
   newActions: boolean;

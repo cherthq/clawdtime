@@ -90,6 +90,7 @@ import { readAsk, toolAnswer, withEvalRequest } from "./computer-eval-model.js";
 import {
   compareFiles,
   evalFlags,
+  holdOpen,
   printResults,
   repeatsOf,
   results,
@@ -1638,9 +1639,15 @@ async function check(
 
 if (comparing) compareFiles(comparing, flags.split);
 else {
-  const seen = await render();
-  const closers = await renderClosers(seen);
-  if (checking) {
-    if (await check(seen, closers)) process.exitCode = 1;
-  } else await measure(seen, closers);
+  // A retry wait of the planner must not end the run (holdOpen).
+  const release = holdOpen();
+  try {
+    const seen = await render();
+    const closers = await renderClosers(seen);
+    if (checking) {
+      if (await check(seen, closers)) process.exitCode = 1;
+    } else await measure(seen, closers);
+  } finally {
+    release();
+  }
 }
