@@ -81,7 +81,14 @@ interface Case {
   ideal?: string;
   /** --check: the wrong path takes the ideal first action and answers with these words. */
   wrongReply?: string;
+  /**
+   * --check: more wrong paths, each a script of the model: a known way to
+   * get the case wrong. Each one must be caught too.
+   */
+  wrongPaths?: Step[][];
 }
+/** One answer of a scripted model. */
+type Step = { text?: string; calls?: LoopCall[] };
 
 const sentencesOf = (text: string) =>
   text
@@ -131,6 +138,16 @@ const talk = {
       text,
     )
       ? "gives an answer of its own"
+      : null,
+  /**
+   * The owner already talks to ClawdTime: it never sends them to the panel
+   * or to another ClawdTime screen to ask there.
+   */
+  noOtherSurface: (text: string) =>
+    /\b(?:open|use|check|go\s+to|switch\s+to|ask\s+(?:in|from|on))\s+(?:the\s+|your\s+)?(?:clawdtime\s+(?:panel|app|window|menu(?:\s+bar)?)|panel|menu\s+bar|task\s+list)\b|\bclawdtime\s+(?:panel|app|window|menu)\b/i.test(
+      text,
+    )
+      ? "sends the owner to another ClawdTime screen"
       : null,
   /** The number as the tool gave it, and no word that rounds it. */
   exact: (value: string) => (text: string) =>
@@ -414,6 +431,104 @@ const cases: Case[] = [
     say: "open a terminal window and show me the files in my Downloads folder",
     setup: "idle",
     expect: ["computer_do"],
+  },
+  // A question about the screen as it is now: only the computer task can see
+  // it. The task list and the process level cannot, and the owner already
+  // talks to ClawdTime, so it never sends them to the panel to ask there.
+  // A wrong path reads the task list, or says it cannot see, or starts the
+  // look and still sends the owner to the panel.
+  {
+    name: "screen: which app is in front, after a task ended",
+    say: "Which app is in front right now? Answer with its name only.",
+    setup: "done",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noOtherSurface),
+    ideal: "Checking which app is in front.",
+    wrongPaths: [
+      [
+        { calls: [call("tasks")] },
+        {
+          text: "I can't read the front app from the task list. Open the ClawdTime panel and ask there.",
+        },
+      ],
+      [
+        { calls: [call("computer_do", { goal: "Which app is in front?" })] },
+        { text: "Open the ClawdTime panel to see the front app." },
+      ],
+    ],
+  },
+  {
+    name: "screen: which app is in front",
+    say: "which app is in front?",
+    setup: "idle",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noOtherSurface),
+    ideal: "Checking which app is in front.",
+    wrongPaths: [
+      [{ text: "I can't see your screen. Open the ClawdTime panel and ask." }],
+      [
+        { calls: [call("system_look", { what: "processes" })] },
+        { text: "Mail runs." },
+      ],
+    ],
+  },
+  {
+    name: "screen: what a window says",
+    say: "what does this window say?",
+    setup: "idle",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noOtherSurface),
+    ideal: "Reading the window in front.",
+    wrongPaths: [
+      [{ calls: [call("tasks")] }, { text: "No task shows a window." }],
+    ],
+  },
+  {
+    name: "screen: whether an app is open",
+    say: "is Mail open?",
+    setup: "idle",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noOtherSurface),
+    ideal: "Checking whether Mail is open.",
+    wrongPaths: [
+      [
+        { calls: [call("system_look", { what: "processes" })] },
+        { text: "Mail runs." },
+      ],
+      [{ text: "Check the ClawdTime panel to see your apps." }],
+    ],
+  },
+  {
+    name: "screen: the title of a tab",
+    say: "what is the title of this tab?",
+    setup: "idle",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noOtherSurface),
+    ideal: "Reading the title of the tab in front.",
+    wrongPaths: [
+      [{ calls: [call("computer_status")] }, { text: "No task runs now." }],
+    ],
+  },
+  {
+    name: "screen: what a document says, while a job runs",
+    say: "what does the open Stonepad document say at the top?",
+    setup: "job",
+    expect: ["computer_do"],
+    reply: all(talk.short, talk.noOtherSurface),
+    ideal: "Reading the top of the Stonepad document.",
+    wrongPaths: [
+      [{ calls: [call("job_status")] }, { text: "The job fixes a test." }],
+    ],
+  },
+  {
+    name: "screen: which window is in front, by voice",
+    say: "which window is in front?",
+    setup: "idle",
+    via: "voice",
+    expect: ["computer_do"],
+    reply: all(talk.oneSentence, talk.noOtherSurface),
+    ideal: "Checking the window in front.",
+    wrongPaths: [[{ text: "Open the ClawdTime app and ask there." }]],
   },
   // Code.
   {
@@ -852,6 +967,7 @@ for (const item of chosen) {
     // The wrong path: a question back where an action was right, an action
     // where words were right, and no task to stop where a stop was right.
     // A case of the words keeps the right first action and says bad words.
+    // A case may name more wrong paths; each one must be caught too.
     const wrong = item.wrongReply
       ? await play(
           item,
@@ -895,18 +1011,24 @@ for (const item of chosen) {
               item.expect === "words" ? 0 : 1,
             ),
           );
+    // A case may name more wrong paths: each one must be caught too.
+    const wrongs = [wrong];
+    for (const path of item.wrongPaths ?? [])
+      wrongs.push(await play(item, scriptedModel(path)));
     const good = passes(item, ideal);
-    const told = !passes(item, wrong) && (!broken || !passes(item, broken));
+    const told =
+      wrongs.every((outcome) => !passes(item, outcome)) &&
+      (!broken || !passes(item, broken));
     if (good) ok++;
     if (told) caught++;
     console.log(
-      `${good && told ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; ideal ${ideal.first}${ideal.refused ? ` (refused: ${ideal.refused})` : ""}${ideal.words ? ` (words: ${ideal.words})` : ""}; wrong ${wrong.first}${wrong.words ? ` (words: ${wrong.words})` : ""}${broken ? `; broken ${broken.first}${passes(item, broken) ? " (passed)" : ""}` : ""}`,
+      `${good && told ? "ok  " : "FAIL"} ${item.name}: expected ${expected}; ideal ${ideal.first}${ideal.refused ? ` (refused: ${ideal.refused})` : ""}${ideal.words ? ` (words: ${ideal.words})` : ""}; wrong ${wrongs.map((outcome) => `${outcome.first}${outcome.words ? ` (words: ${outcome.words})` : ""}${passes(item, outcome) ? " (passed)" : ""}`).join(", ")}${broken ? `; broken ${broken.first}${passes(item, broken) ? " (passed)" : ""}` : ""}`,
     );
     results.push({
       name: item.name,
       expected,
       ideal,
-      wrong,
+      wrong: wrongs,
       broken,
       good,
       told,

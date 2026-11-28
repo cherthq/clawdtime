@@ -749,7 +749,7 @@ export function chatTools(
       {
         name: "computer_do",
         description:
-          "Start a task on this Mac now: work in an app, on a web page or in an account (search, shop, X, Instagram, mail, calendar, messages, files, settings). Call it at once when the owner asks for such work; do not ask first. goal: the owner's request in their own words, made whole from the conversation ('it' replaced by what it means). Add nothing they did not ask for.",
+          "Start a task on this Mac now: work in an app, on a web page or in an account (search, shop, X, Instagram, mail, calendar, messages, files, settings), or a look at the screen for a question about it (which app is in front, what a window or tab says, whether an app is open). Call it at once when the owner asks for such work; do not ask first. goal: the owner's request in their own words, made whole from the conversation ('it' replaced by what it means). Add nothing they did not ask for.",
         parameters: schema(
           { goal: text("The owner's request, whole, in their words.") },
           ["goal"],
