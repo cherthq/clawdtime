@@ -1127,6 +1127,52 @@ const requests: Request[] = [
     ],
   },
   {
+    id: "only the person knows: one short question at a time",
+    app: "login",
+    goal: "Sign in to Ledger with my work email. I will type the password myself.",
+    person: knowsEmail,
+    // Each question is one question of at most 25 words: the person can answer it at once.
+    done: (state, _said, _final, talk) =>
+      state.signedIn === "ada@example.com" &&
+      talk.asked.length > 0 &&
+      talk.asked.every(
+        (question) =>
+          (question.match(/\?/g) ?? []).length <= 1 &&
+          question.split(/\s+/).filter(Boolean).length <= 25,
+      ),
+    paths: [
+      ideal([
+        () => act.ask("What is your work email address?"),
+        (v) => {
+          const email = /the person answered: ([^\s()]+@[^\s()]+)/.exec(
+            v.ask.brief,
+          )?.[1];
+          if (!email) throw new Error("the answer did not reach the planner");
+          return act.type(email, named(v, "Email"));
+        },
+        askPassword,
+        clickNamed("Sign in", "AXButton"),
+        doneStep("You are signed in with your work email."),
+      ]),
+      wrong("asks three questions at once", [
+        () =>
+          act.ask(
+            "What is your work email address? Is it the work or the home account? Do you want to stay signed in?",
+          ),
+        (v) => {
+          const email = /the person answered: ([^\s()]+@[^\s()]+)/.exec(
+            v.ask.brief,
+          )?.[1];
+          if (!email) throw new Error("the answer did not reach the planner");
+          return act.type(email, named(v, "Email"));
+        },
+        askPassword,
+        clickNamed("Sign in", "AXButton"),
+        doneStep("You are signed in with your work email."),
+      ]),
+    ],
+  },
+  {
     id: "long work says how it goes",
     app: "settings",
     goal: "Turn on Bluetooth and dark mode.",
