@@ -15,167 +15,136 @@
         >clawdtime<span class="brand-dot">_</span></a
       >
       <nav aria-label="Main navigation">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup guide</a>
+        <a href="/#what-it-does">What it does</a
+        ><a href="/guides/getting-started">Setup guide</a
+        ><a href="/pricing">Pricing</a>
       </nav>
       <a
         class="button button-small"
-        href="/#availability"
-        data-metric-action="availability"
-        >Pilot availability ↗</a
+        href="/download"
+        data-metric-action="download"
+        >Download</a
       >
     </header>
     <main id="main" class="section-wrap guide-page">
       <header class="guide-hero">
-        <p class="eyebrow">SCREEN ACCESS / DATA</p>
-        <h1>Your screen.<br />Your permission.</h1>
+        <p class="eyebrow">PRIVACY AND CONTROL</p>
+        <h1>Your Mac.<br />Your control.</h1>
         <p class="lede">
-          ClawdTime separates calling, screen viewing and computer input. The
-          pilot shares only after explicit setup and local permission, and
-          provides a local Stop control.
+          ClawdTime works on your Mac only when you ask. This page says how to
+          stop it, what it keeps, and what leaves your Mac.
         </p>
-        <p class="guide-date">ClawdTime team · Checked November 13, 2026</p>
+        <p class="guide-date">Updated 28 November 2026</p>
       </header>
       <div class="guide-body">
-        <section>
+        <section id="stop">
+          <h2>How to stop it</h2>
+          <ul class="checklist">
+            <li>
+              Press <b>Stop</b> in the bar at the top of the screen. The bar
+              says “ClawdTime is using this Mac” while it works.
+            </li>
+            <li>Hold the Escape key.</li>
+            <li>Say or type “stop” in the chat.</li>
+          </ul>
+          <p>
+            It answers: “Stopped. An action that was already sent may have
+            finished.” A stopped task does not start again by itself.
+          </p>
+        </section>
+        <section id="asks">
+          <h2>What it asks before</h2>
+          <p>
+            It asks for your yes before a payment, a delete that you cannot
+            undo, a change to account security, a grant of access, and terms
+            that bind you. It asks before it sends or posts, unless your request
+            already said so, such as “reply to Sam”. A yes is for that one
+            action. A missed call or no answer is never a yes.
+          </p>
+          <p>
+            You type every password and code yourself. ClawdTime never types
+            into a password field.
+          </p>
+        </section>
+        <section id="keeps">
+          <h2>What it keeps on your Mac</h2>
+          <p>
+            Everything is in <code>~/.local/share/clawdtime</code>, in files for
+            you only:
+          </p>
+          <ul class="checklist">
+            <li>
+              The last 30 tasks: your words, and the kind and target of each
+              step. Never a picture, the text that it typed, or the text of a
+              page.
+            </li>
+            <li>The chat, your routines and your model keys.</li>
+            <li>Your memory, only while memory is on.</li>
+          </ul>
+          <p>Pictures of the screen are never written to disk.</p>
+        </section>
+        <section id="leaves">
+          <h2>What leaves your Mac</h2>
+          <ul class="checklist">
+            <li>
+              <b>To the model provider that you chose, for each action:</b> your
+              request, a picture of the screen, the names of the things on the
+              screen, and the text of a page when it reads one. Close what you
+              do not want in the picture before you start a task.
+            </li>
+            <li>
+              <b>To OpenAI, when you talk:</b> your voice while it turns into
+              text, and what you said.
+            </li>
+            <li>
+              <b>Through Chert, for phone calls (preview):</b> your calls and
+              texts, and the screen when you ask to see it on a call.
+            </li>
+          </ul>
+          <p>
+            Your passwords, codes and card numbers are never sent to a model and
+            never kept. Each key goes only to its own provider.
+          </p>
+        </section>
+        <section id="video">
           <h2>The demo video</h2>
           <p>
-            The homepage loads a thumbnail from YouTube. Choosing Play loads
-            YouTube's embedded player from youtube-nocookie.com. YouTube then
-            processes the playback request under its own policies. You can also
-            open the video directly on YouTube.
+            The homepage loads a picture from YouTube. When you choose Play, it
+            loads the YouTube player from youtube-nocookie.com. YouTube then
+            uses its own policies.
           </p>
         </section>
-        <section>
-          <h2>What can be shared?</h2>
+        <section id="website">
+          <h2>What this website counts</h2>
           <p>
-            You choose the Mac display and authorize the paired session. A
-            selected display may include every visible app on that display; it
-            is not application-level isolation. Close private material before
-            enabling sharing.
+            When counting is on, the website counts page views and clicks on the
+            Download and Copy buttons, for each day. It keeps the page name, the
+            kind of site that you came from (such as a search engine), the
+            button and its place, and a count. It keeps counts for 90 days.
           </p>
           <p>
-            Screen viewing does not grant input permission. Computer input needs
-            a separate supported control mode, macOS permission and current
-            session authorization. The connected agent keeps its own native
-            approval policy.
-          </p>
-        </section>
-        <section>
-          <h2>How do I stop it?</h2>
-          <p>
-            Use <strong>Stop sharing and control</strong> in the Mac Control
-            Panel. Local Stop, lock and sleep end ClawdTime capture/input.
-            Call-bound sharing ends with the call. Cancellation of a native tool
-            already running is cooperative and depends on that tool; a stop
-            request is not proof its action was undone.
-          </p>
-          <p>
-            Mute and End call are separate controls. Reconnecting does not
-            silently restore a revoked screen selection.
-          </p>
-        </section>
-        <section>
-          <h2>What data does the pilot handle?</h2>
-          <div
-            class="table-wrap"
-            tabindex="0"
-            role="region"
-            aria-label="Pilot data handling"
-          >
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Data</th>
-                  <th scope="col">Handling</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <th scope="row">Screen frames and audio</th>
-                  <td>
-                    Transient media, not saved by ClawdTime as recordings.
-                    Provider processing is part of the call path.
-                  </td>
-                </tr>
-                <tr>
-                  <th scope="row">Pairing and authorization</th>
-                  <td>
-                    Operational records bind the intended member, device,
-                    project and session and support revocation.
-                  </td>
-                </tr>
-                <tr>
-                  <th scope="row">Delivery and action outcomes</th>
-                  <td>
-                    Receipts and uncertain outcomes are retained to avoid
-                    duplicate calls, messages or inputs.
-                  </td>
-                </tr>
-                <tr>
-                  <th scope="row">Your coding agent and Messages</th>
-                  <td>
-                    Those applications and their providers have their own
-                    handling and retention. ClawdTime’s transient-media behavior
-                    does not erase their history.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p>
-            We do not claim that nothing is stored or that a submitted input
-            proves an action succeeded. Ask your pilot contact about the
-            configured services before sharing sensitive material.
-          </p>
-        </section>
-        <section>
-          <h2>Optional website measurement</h2>
-          <p>
-            When enabled, the public website counts page views and selected CTA
-            clicks in daily aggregates. It stores a fixed public-page name,
-            per-page referrer category, button placement, pilot availability and
-            count. Reports cover the past 90 days. Older counts are removed when
-            a new event or report is processed.
-          </p>
-          <p>
-            This measurement uses no cookies, persistent visitor IDs, raw
-            referrers or full URLs. It does not collect phone numbers, pairing
-            tokens, message text, screen/audio content or project paths. It
-            excludes the operational setup and pairing pages, ignores recognized
-            bot user agents, and honors Global Privacy Control and Do Not Track
-            signals.
-          </p>
-          <p>
-            Counts are not unique visitors or verified human activity. Download
-            clicks and copy-command clicks do not prove a completed download,
-            successful copy or installation. There is no session replay.
-          </p>
-        </section>
-        <section>
-          <h2>Questions about your pilot?</h2>
-          <p>
-            Contact the person who issued your invitation for setup, access or
-            data-handling questions. Keep personal links and credentials out of
-            public repository issues.
+            It uses no cookies and no visitor ID. It does not keep full page
+            addresses, the link that you came from, or what you type. It skips
+            bots, and it follows Global Privacy Control and Do Not Track.
           </p>
         </section>
         <section class="related-links">
-          <h2>Related information</h2>
-          <a href="/guides/getting-started">Setup checklist</a
-          ><a href="/integrations/codex">Codex compatibility</a
-          ><a href="/integrations/claude-code">Claude Code compatibility</a>
+          <h2>More</h2>
+          <a href="/guides/getting-started">Setup guide</a
+          ><a
+            href="https://github.com/cherthq/clawdtime/blob/main/INSTRUCTIONS.md#16-privacy"
+            >Privacy in the user guide</a
+          >
         </section>
       </div>
     </main>
     <footer class="site-footer section-wrap">
       <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>
       <nav aria-label="Footer">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup</a
+        <a href="/guides/getting-started">Setup guide</a
         ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/integrations/codex">Codex</a
         ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
           >GitHub ↗</a
         >

@@ -39,12 +39,6 @@
           fill="currentColor"
         />
       </symbol>
-      <symbol id="pixel-wave" viewBox="0 0 24 24">
-        <path
-          d="M1 10h3v4H1zm5-5h3v14H6zm5-4h3v22h-3zm5 6h3v10h-3zm5 3h3v4h-3z"
-          fill="currentColor"
-        />
-      </symbol>
       <symbol id="pixel-download" viewBox="0 0 24 24">
         <path
           d="M10 2h4v8h4v2h-2v2h-2v2h-4v-2H8v-2H6v-2h4z M2 15h3v4h14v-4h3v7H2z"
@@ -58,12 +52,6 @@
           fill-rule="evenodd"
         />
       </symbol>
-      <symbol id="pixel-arrow" viewBox="0 0 24 24">
-        <path
-          d="M12 3h3v3h3v3h3v6h-3v3h-3v3h-3v-6H2V9h10zm3 6v6h3V9z"
-          fill="currentColor"
-        />
-      </symbol>
     </svg>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
@@ -73,68 +61,126 @@
         >clawdtime<span class="brand-dot">_</span></a
       >
       <nav aria-label="Main navigation">
-        <a href="#get-clawdtime">Install</a
-        ><a href="#what-is-clawdtime">About</a
-        ><a href="/guides/getting-started">Setup guide</a>
+        <a href="#what-it-does">What it does</a
+        ><a href="/guides/getting-started">Setup guide</a
+        ><a href="/pricing">Pricing</a>
       </nav>
       <a
         class="button button-small"
-        href="#get-clawdtime"
-        data-metric-action="availability"
-        >Get ClawdTime <span aria-hidden="true">↗</span></a
+        href="/download"
+        data-metric-action="download"
+        >Download</a
       >
     </header>
     <main id="main">
       <section
-        class="hero hero-focused section-wrap"
+        class="hero hero-focused hero-plain section-wrap"
         aria-labelledby="hero-title"
       >
         <div class="hero-copy">
-          <p class="eyebrow">YOUR MAC. YOUR AGENT. YOUR DAY BACK.</p>
+          <p class="eyebrow">AN ASSISTANT FOR YOUR MAC</p>
           <h1 id="hero-title">
-            An agent for your Mac.<br />
-            A <span class="highlight">FaceTime</span> away.
+            Talk to your Mac.<br /><span class="highlight"
+              >It does the work.</span
+            >
           </h1>
           <p class="hero-description">
-            Give your Mac a task. ClawdTime works across your apps and browser.
-            When the work needs your judgment, bring it into a call.
+            Ask ClawdTime in plain words, by chat or by voice. It uses your apps
+            and your browser for you, and tells you when it is done.
           </p>
           <div class="hero-install">
-            <div class="hero-action">
-              <a
-                class="button button-primary"
-                href="/download"
-                data-metric-action="download"
-              >
-                <svg aria-hidden="true"><use href="#pixel-download" /></svg>
-                Download for Mac
-              </a>
-              <button
-                type="button"
-                class="button button-secondary"
-                data-copy-target="hero-command"
-                data-metric-action="install_command"
-              >
-                <span data-copy-label>Copy install command</span>
-              </button>
-            </div>
+            <a
+              class="button button-primary"
+              href="/download"
+              data-metric-action="download"
+            >
+              <svg aria-hidden="true"><use href="#pixel-download" /></svg>
+              Download for Mac
+            </a>
             <p class="install-requirements">
-              macOS 14 or later · Apple silicon · Guided setup included
+              Free · macOS 14 or later · Apple silicon ·
+              <a href="#availability">Early release</a>
             </p>
-            <div class="hero-command-preview">
-              <span class="command-prompt" aria-hidden="true">$</span>
-              <pre
-                class="command-text"
-                id="hero-command"
-              >curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
+            <div class="hero-or">
+              <p class="hero-or-label">Or paste this in Terminal:</p>
+              <div class="command-field">
+                <span class="command-prompt" aria-hidden="true">$</span>
+                <pre
+                  class="command-text"
+                  id="hero-command"
+                >curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
+                <button
+                  type="button"
+                  class="copy-button"
+                  data-copy-target="hero-command"
+                  data-metric-action="install_command"
+                >
+                  <span data-copy-label>Copy</span
+                  ><span class="visually-hidden"> the install command</span>
+                </button>
+              </div>
             </div>
           </div>
-          <p class="hero-details">
-            Your apps. Your browser. Your choice of model.
-            <a href="/guides/getting-started">Setup guide</a>
-          </p>
-          <a class="demo-jump" href="#demo">Watch ClawdTime at work</a>
         </div>
+      </section>
+      <section
+        class="section-wrap things-section"
+        id="what-it-does"
+        aria-labelledby="what-title"
+      >
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">WHAT IT DOES</p>
+            <h2 id="what-title">
+              Say what you want.<br />ClawdTime does it on your Mac.
+            </h2>
+          </div>
+        </div>
+        <div class="things">
+          <article class="thing">
+            <svg aria-hidden="true"><use href="#pixel-message" /></svg>
+            <h3>Ask in plain words.</h3>
+            <p>
+              Click the mascot to open the chat. Type, or press Talk and speak.
+              Your next words change the task.
+            </p>
+            <p class="thing-label">You say</p>
+            <q>Find a phone case on shop.example and put it in the cart.</q>
+          </article>
+          <article class="thing">
+            <svg aria-hidden="true"><use href="#pixel-screen" /></svg>
+            <h3>It uses your apps for you.</h3>
+            <p>
+              It opens apps, clicks, types and reads the screen. An orange
+              cursor shows each move before it acts.
+            </p>
+            <p class="thing-label">You say</p>
+            <q>Open Stonepad and make a note: call the dentist on Monday.</q>
+          </article>
+          <article class="thing">
+            <svg aria-hidden="true"><use href="#pixel-facetime" /></svg>
+            <h3>
+              It calls you when it needs you.
+              <span class="thing-tag">Preview</span>
+            </h3>
+            <p>
+              When a task needs your yes or your sign-in, it can call your phone
+              and ask. A missed call is never a yes.
+            </p>
+            <p class="thing-label">ClawdTime asks</p>
+            <q
+              >Place the order on shop.example? It costs 48 dollars. Say yes or
+              no.</q
+            >
+          </article>
+        </div>
+        <p class="things-more">
+          It also does a task at a set time, such as “every morning at 9, check
+          my inbox and tell me what is new”. It remembers what you tell it when
+          you turn memory on. Phone calls are a preview: today they need a phone
+          number from Chert and the
+          <a href="/guides/getting-started#phone">source install</a>.
+        </p>
       </section>
       <section
         class="demo-section section-wrap"
@@ -142,7 +188,7 @@
         aria-labelledby="demo-title"
       >
         <div class="demo-heading">
-          <h2 class="eyebrow" id="demo-title">SEE IT IN ACTION</h2>
+          <h2 class="eyebrow" id="demo-title">SEE IT WORK</h2>
         </div>
         <div class="demo-video">
           <div class="recorded-demo" id="recorded-demo">
@@ -154,7 +200,7 @@
             >
               <img
                 src="https://i.ytimg.com/vi/1DTf_1M67aw/hqdefault.jpg"
-                alt="ClawdTime demo: an AI agent calls its owner on FaceTime"
+                alt="ClawdTime demo: ClawdTime works on a Mac and calls its owner on FaceTime"
                 width="480"
                 height="360"
               />
@@ -163,31 +209,12 @@
             </button>
           </div>
           <p class="video-note">
-            My AI agent FaceTimes me when it needs me.
+            ClawdTime works on a Mac, then calls its owner on FaceTime.
             <a href="https://youtu.be/1DTf_1M67aw" rel="noopener"
               >Watch on YouTube</a
-            >. Playing loads YouTube's embedded player.
+            >. Play loads the YouTube player.
           </p>
         </div>
-      </section>
-      <section
-        class="answer-section section-wrap"
-        aria-labelledby="what-is-clawdtime"
-      >
-        <h2 id="what-is-clawdtime">What is ClawdTime?</h2>
-        <p>
-          ClawdTime is a computer-use agent for long tasks that FaceTimes you
-          when stuck. Give it a task and it runs it end to end, delegating to
-          specialist agents and tools such as Codex, Claude Code, and other apps
-          as needed. When it needs your judgment or has a result to review, it
-          prepares a walkthrough and FaceTimes you.
-        </p>
-        <p>
-          ClawdTime has its own reasoning and task engine. It handles the
-          planning, monitoring and decisions. Specialist agents and tools do the
-          hands-on work behind the scenes. Long-running work should continue
-          without depending on an existing Codex chat staying active.
-        </p>
       </section>
       <section
         class="section-wrap get-section"
@@ -197,12 +224,14 @@
         <span id="how-it-works"></span><span id="installation"></span>
         <div class="section-heading">
           <div>
-            <p class="eyebrow">INSTALL / ONE GUIDED SETUP</p>
-            <h2 id="get-clawdtime-title">Get ClawdTime.<br />Two ways in.</h2>
+            <p class="eyebrow">GET CLAWDTIME</p>
+            <h2 id="get-clawdtime-title">
+              Two ways to install.<br />One setup.
+            </h2>
           </div>
           <p>
-            Both routes run the same guided setup.<br />It asks for your model
-            key and each permission.
+            Setup asks for a model key and two Mac permissions. It shows you
+            each step.
           </p>
         </div>
         <div class="route-grid">
@@ -212,26 +241,23 @@
               MAC APP</span
             >
             <h3>Download for Mac.</h3>
-            <p>
-              Native setup screens, then a menu bar app. Everything it needs is
-              inside. No Terminal.
-            </p>
+            <p>No Terminal. Everything it needs is inside the app.</p>
             <ol class="route-steps" role="list">
               <li>Download ClawdTime.</li>
-              <li>Drag it to Applications and open it.</li>
-              <li>Follow the setup.</li>
+              <li>Drag it to Applications. Open it.</li>
+              <li>Follow the setup. Then click the mascot and ask.</li>
             </ol>
             <div class="route-action">
               <a class="button" href="/download" data-metric-action="download"
-                ><svg><use href="#pixel-download" /></svg> Download for Mac</a
+                ><svg aria-hidden="true"><use href="#pixel-download" /></svg>
+                Download for Mac</a
               >
             </div>
-            <p class="route-requirements">macOS 14 or later, Apple silicon.</p>
-            <p class="release-note">
-              The Mac app is signed and notarized by Apple.
+            <p class="route-requirements">
+              The app is signed and notarized by Apple.
               <a href="https://github.com/cherthq/clawdtime/releases/tag/v0.4.0"
-                >Read the release notes before installing</a
-              >.
+                >Release notes</a
+              >
             </p>
           </article>
           <article class="route-card">
@@ -239,15 +265,17 @@
               ><svg aria-hidden="true"><use href="#pixel-terminal" /></svg> ONE
               COMMAND</span
             >
-            <h3>Paste one line.</h3>
+            <h3>Paste one command.</h3>
             <p>
-              Installs for your user, without sudo, then starts the same setup
-              in Terminal. No Node, Git or Xcode needed.
+              For Terminal users. It installs for you only, with no sudo. You do
+              not need Node, Git or Xcode.
             </p>
             <ol class="route-steps" role="list">
               <li>Open Terminal.</li>
-              <li>Paste the command.</li>
-              <li>Follow the setup.</li>
+              <li>Paste the command. Press Return.</li>
+              <li>
+                Answer the setup questions. Then click the mascot and ask.
+              </li>
             </ol>
             <div class="route-action command-field">
               <span class="command-prompt" aria-hidden="true">$</span>
@@ -263,18 +291,77 @@ curl -fsSL https://www.clawdtime.com/<wbr />install.sh | sh</pre>
                 ><span class="visually-hidden"> the install command</span>
               </button>
             </div>
-            <p class="route-requirements">macOS 14 or later, Apple silicon.</p>
+            <p class="route-requirements">
+              Run it again to update. Your settings and keys stay.
+            </p>
           </article>
         </div>
-        <p class="section-footnote">
-          Local setup is available. Shared-number calls remain unqualified for
-          live use and have one simultaneous call slot. Shared inbound texting
-          is not available.
+        <p class="get-note">
+          You need a Mac with Apple silicon and macOS 14 or later, and a key
+          from a model provider, such as OpenAI or Anthropic.
+          <a href="/guides/getting-started">Read the setup guide</a>
+        </p>
+      </section>
+      <section
+        class="section-wrap control-section"
+        id="control"
+        aria-labelledby="control-title"
+      >
+        <div class="control-heading">
+          <svg aria-hidden="true"><use href="#pixel-lock" /></svg>
+          <p class="eyebrow">YOU STAY IN CONTROL</p>
+          <h2 id="control-title">
+            It asks first.<br />You can always stop it.
+          </h2>
+        </div>
+        <ul class="control-list" role="list">
+          <li>
+            <strong>It asks before it pays or deletes.</strong>
+            It asks you first before it pays, or deletes something for good. It
+            also asks before it sends or posts, unless you asked for that.
+          </li>
+          <li>
+            <strong>Your passwords stay with you.</strong>
+            You type them on the Mac. ClawdTime never asks for one.
+          </li>
+          <li>
+            <strong>You can stop it at any time.</strong>
+            Press Stop in the bar at the top of the screen, hold Escape, or say
+            “stop”.
+          </li>
+          <li>
+            <strong>No screen recordings.</strong>
+            Pictures of the screen go only to the model provider that you chose.
+            ClawdTime never saves them to disk.
+            <a href="/privacy">What leaves your Mac</a>
+          </li>
+        </ul>
+      </section>
+      <section
+        class="section-wrap dev-section"
+        id="coding-agents"
+        aria-labelledby="dev-title"
+      >
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">FOR DEVELOPERS</p>
+            <h2 id="dev-title">It works with your coding agents.</h2>
+          </div>
+          <p class="dev-links">
+            <a href="/integrations/claude-code">Claude Code</a
+            ><a href="/integrations/codex">Codex</a>
+          </p>
+        </div>
+        <p class="dev-lede">
+          ClawdTime lists the Claude Code and Codex sessions on your Mac, and
+          shows which one waits for you. Answer their permission requests from
+          the chat. Ask it to start a coding session for a job, such as “fix the
+          failing checkout test”.
         </p>
         <div class="agent-route">
           <svg aria-hidden="true"><use href="#pixel-message" /></svg>
           <div>
-            <h3>Or use a coding agent.</h3>
+            <h3>Let your coding agent install it.</h3>
             <p>
               Give Claude Code or Codex this prompt. It runs the install. Then
               you run <code>clawdtime onboard</code> in your own Terminal for
@@ -305,185 +392,103 @@ Install ClawdTime on this Mac. It needs macOS 14 or later on Apple silicon.
           </details>
         </div>
       </section>
-      <section class="highlights section-wrap">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">02 / A QUICK CALL &gt; ANOTHER NOTIFICATION</p>
-            <h2>A little face time.<br />A lot less wait time.</h2>
-          </div>
-          <span class="pixel-spark" aria-hidden="true">✳</span>
-        </div>
-        <div class="feature-grid">
-          <article>
-            <svg><use href="#pixel-screen" /></svg>
-            <h3>Work across your apps.</h3>
-            <p>
-              Read the screen, click, type and navigate. A visible cursor shows
-              each action, and the worker checks its steps as it goes.
-            </p>
-          </article>
-          <article>
-            <svg><use href="#pixel-message" /></svg>
-            <h3>Give it a task.</h3>
-            <p>
-              Chat with ClawdTime and steer the work with your next message. It
-              splits longer requests into smaller goals.
-            </p>
-          </article>
-          <article>
-            <svg><use href="#pixel-wave" /></svg>
-            <h3>Make it part of your day.</h3>
-            <p>
-              Schedule routines and turn on memory for preferences you want it
-              to keep. Choose the model provider that fits your work.
-            </p>
-          </article>
-          <article class="privacy-card">
-            <svg><use href="#pixel-lock" /></svg>
-            <h3>Your permissions. Your Stop.</h3>
-            <p>
-              Choose what can be viewed and controlled. Enter passwords yourself
-              on the Mac. Use local Stop to end sharing and input.
-            </p>
-            <a href="#screen-safety">Screen access and data</a>
-          </article>
-        </div>
-      </section>
-      <section class="section-wrap faq-section">
+      <section class="section-wrap faq-section" aria-labelledby="faq-title">
         <div>
-          <p class="eyebrow">A FEW THINGS BEFORE WE RING.</p>
-          <h2>Good questions.</h2>
+          <p class="eyebrow">QUESTIONS</p>
+          <h2 id="faq-title">Before you start.</h2>
         </div>
         <div class="faq-list">
           <details>
-            <summary>
-              Can my coding agent call me? <span aria-hidden="true">+</span>
-            </summary>
+            <summary>What do I need? <span aria-hidden="true">+</span></summary>
             <p>
-              ClawdTime provides an explicit attention request in a connected
-              pilot session. The agent can request a FaceTime call when it needs
-              input. It does not detect every blocked process or intercept every
-              native approval.
-              <a href="/guides/getting-started">See setup requirements</a>.
+              A Mac with Apple silicon and macOS 14 or later. A key from a model
+              provider, such as OpenAI, Anthropic or Google Gemini. Voice uses
+              an OpenAI key.
             </p>
           </details>
           <details>
             <summary>
-              Do I need a Mac and iPhone? <span aria-hidden="true">+</span>
+              Does it cost money? <span aria-hidden="true">+</span>
             </summary>
             <p>
-              The packaged app targets Apple silicon and macOS 14 or later. It
-              includes its runtime. Building from source requires Node 24 or
-              later, Git and Swift 6 or later. You can use ClawdTime locally;
-              phone features need an iMessage/FaceTime handset and line setup.
-              <a href="/guides/getting-started">Check setup requirements</a>.
+              ClawdTime is free to download and use. You pay your model provider
+              for what you use. We plan to offer paid plans for phone calls.
+              <a href="/pricing">See pricing</a>.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Which models can it use? <span aria-hidden="true">+</span>
+            </summary>
+            <p>
+              OpenAI, Anthropic, Google Gemini, Mistral, Groq, OpenRouter and
+              more, or your own endpoint. You choose in Settings.
             </p>
           </details>
           <details id="screen-safety">
             <summary>
-              Can I share or control my screen?
-              <span aria-hidden="true">+</span>
+              What leaves my Mac? <span aria-hidden="true">+</span>
             </summary>
             <p>
-              You select the Mac display and explicitly enable sharing. Computer
-              input needs separate permission and a supported control mode.
-              Local Stop ends ClawdTime capture and input; cancellation of a
-              native tool already running depends on that tool.
-              <a href="/privacy">Read the screen and data details</a>.
+              For each action, your request and a picture of the screen go to
+              the model provider that you chose. Your passwords stay on the Mac,
+              and each key goes only to its own provider. Close what you do not
+              want in the picture before you start a task.
+              <a href="/privacy">Read the details</a>.
             </p>
           </details>
           <details>
             <summary>
-              What happens if I don’t answer? <span aria-hidden="true">+</span>
+              Can it call my phone? <span aria-hidden="true">+</span>
             </summary>
             <p>
-              A missed call is not approval. ClawdTime preserves the request
-              outcome; it does not blindly redial or treat silence as permission
-              to act.
+              Yes, as a preview. When a task needs your yes and nobody answers
+              in the chat, it calls you once and asks. If the call does not
+              connect, it sends you one text. Today this needs a phone number
+              from Chert and the
+              <a href="/guides/getting-started#phone">source install</a>.
             </p>
           </details>
           <details>
             <summary>
-              Can I call or text it to start new work?
-              <span aria-hidden="true">+</span>
+              How do I remove it? <span aria-hidden="true">+</span>
             </summary>
             <p>
-              Start work in the desktop chat. Phone and text capabilities depend
-              on your line setup. The shared-number implementation has automated
-              coverage but is not yet qualified for live calls. Shared inbound
-              texting is not implemented.
-            </p>
-          </details>
-          <details>
-            <summary>
-              Are screens and audio recorded? <span aria-hidden="true">+</span>
-            </summary>
-            <p>
-              Screen frames and audio are transient, not saved as recordings.
-              ClawdTime retains operational records needed for pairing,
-              authorization and delivery outcomes. That is different from saying
-              nothing is stored.
-              <a href="/privacy">See what the pilot handles</a>.
-            </p>
-          </details>
-          <details>
-            <summary>
-              Can I install it today? <span aria-hidden="true">+</span>
-            </summary>
-            <p>
-              Yes. Version 0.4.0 includes the guided installer and Mac app for
-              Apple silicon and macOS 14 or later. The Mac app is signed and
-              notarized by Apple. Read the
-              <a href="/guides/getting-started">setup guide</a> and
-              <a href="#availability">release status</a> before installing.
+              In the app, open Settings &gt; General. Choose Uninstall
+              ClawdTime. In Terminal, run <code>clawdtime uninstall</code>. It
+              moves the files to the Trash and asks first.
             </p>
           </details>
         </div>
       </section>
-      <section class="final-cta section-wrap">
+      <section class="final-cta section-wrap" id="availability">
         <svg aria-hidden="true"><use href="#pixel-facetime" /></svg>
-        <h2>Give your Mac a task.<br />Keep your day moving.</h2>
+        <h2>Try ClawdTime on your Mac.</h2>
         <a
           class="button button-primary"
-          href="#availability"
-          data-metric-action="availability"
-          ><svg><use href="#pixel-message" /></svg> See pilot availability
-          <span class="button-arrow" aria-hidden="true">↗</span></a
-        ><span class="micro-label"
-          >YOUR MAC. YOUR APPS. YOUR CHOICE OF MODEL.</span
+          href="/download"
+          data-metric-action="download"
+          ><svg aria-hidden="true"><use href="#pixel-download" /></svg> Download
+          for Mac</a
         >
-      </section>
-      <section id="availability" class="section-wrap availability-section">
-        <div>
-          <p class="eyebrow">VERSION 0.4.0 / EARLY RELEASE</p>
-          <h2>Available to install.<br />Check the release notes.</h2>
-          <p>
-            The installer, runtime and Mac app are published. The Mac app is
-            signed and notarized by Apple. Shared calls still need live
-            qualification before public use; local setup can run independently.
-          </p>
-        </div>
-        <div>
-          <a
-            class="button"
-            href="https://github.com/cherthq/clawdtime/releases/tag/v0.4.0"
-            >Read release notes</a
+        <p class="final-note">
+          Version 0.4.0 is an early release.
+          <a href="https://github.com/cherthq/clawdtime/releases/tag/v0.4.0"
+            >Release notes</a
           >
-          <p>
-            <a href="/guides/getting-started">Read the installation guide</a>
-            for requirements, source builds and current limits.
-          </p>
-        </div>
+          ·
+          <a href="/guides/getting-started">Setup guide</a>
+        </p>
       </section>
       <p class="visually-hidden" role="status" id="copy-status"></p>
     </main>
     <footer class="site-footer section-wrap">
       <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>
       <nav aria-label="Footer">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup</a
+        <a href="/guides/getting-started">Setup guide</a
         ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/integrations/codex">Codex</a
         ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
           >GitHub ↗</a
         >

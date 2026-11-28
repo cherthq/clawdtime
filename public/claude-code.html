@@ -15,109 +15,101 @@
         >clawdtime<span class="brand-dot">_</span></a
       >
       <nav aria-label="Main navigation">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup guide</a>
+        <a href="/#what-it-does">What it does</a
+        ><a href="/guides/getting-started">Setup guide</a
+        ><a href="/pricing">Pricing</a>
       </nav>
       <a
         class="button button-small"
-        href="/#availability"
-        data-metric-action="availability"
-        >Pilot availability ↗</a
+        href="/download"
+        data-metric-action="download"
+        >Download</a
       >
     </header>
     <main id="main" class="section-wrap guide-page">
       <header class="guide-hero">
-        <p class="eyebrow">CLAUDE CODE / CONNECTOR PREVIEW</p>
-        <h1>Keep Claude Code.<br />Add a way to reach you.</h1>
+        <p class="eyebrow">FOR DEVELOPERS / CLAUDE CODE</p>
+        <h1>Use ClawdTime with Claude Code.</h1>
         <p class="lede">
-          ClawdTime’s cooperative Claude Code connector lets an active session
-          request human attention. Connector checks have passed; the full live
-          Claude handset workflow still needs qualification.
+          ClawdTime shows your Claude Code sessions and which one waits for you.
+          Answer a permission request from the chat. Ask it to start a coding
+          session for a job.
         </p>
-        <p class="guide-date">ClawdTime team · Checked November 13, 2026</p>
+        <p class="guide-date">Updated 28 November 2026</p>
       </header>
       <div class="guide-body">
-        <section id="tested">
-          <h2>What has been tested?</h2>
-          <p>
-            The connector was checked with Claude Code
-            <code>2.1.311</code> using synthetic multi-turn feedback. This
-            establishes the tested connector interaction, not a completed
-            FaceTime call, successful screen control or reconnect on a handset.
-          </p>
-          <p>
-            <strong>Live Claude Code calling remains unverified.</strong>
-            Codex’s limited live evidence does not establish Claude
-            compatibility. Your pilot contact must confirm the scope of your
-            test.
-          </p>
-        </section>
         <section>
-          <h2>How does the integration work?</h2>
+          <h2>Set it up</h2>
           <ol class="guide-steps">
             <li>
-              <strong>Use a trusted pilot build.</strong> Your invitation
-              provides the setup path; there is no verified public npm
-              installation.
+              <strong>Install ClawdTime.</strong> Follow the
+              <a href="/guides/getting-started">setup guide</a>.
             </li>
             <li>
-              <strong>Connect the intended project and running session.</strong>
-              The cooperative skill and tools bind feedback to that workflow.
+              <strong>Add the hook.</strong> Run
+              <code>clawdtime agents hooks install --agent claude-code</code>.
             </li>
             <li>
-              <strong>Request a specific review.</strong> The agent invokes an
-              attention request when a question needs your input. Installing a
-              skill does not automatically catch every approval or blocked
-              process.
-            </li>
-            <li>
-              <strong>Keep native approvals intact.</strong> Voice or text does
-              not bypass Claude Code’s permission policy. A missed call does not
-              authorize an action.
+              <strong>See your sessions.</strong> Run
+              <code>clawdtime agents</code>, or ask in the chat: “what needs
+              me?”
             </li>
           </ol>
         </section>
         <section>
-          <h2>What are the current limits?</h2>
-          <p>
-            Physical calls, screen control and reconnect need separate Claude
-            qualification. The shared pilot voice path takes turns, and its
-            latency is still being improved. ClawdTime does not promise
-            background wake-up of any idle Claude chat or unrestricted computer
-            input.
-          </p>
+          <h2>What you can do</h2>
+          <ul class="checklist">
+            <li>
+              Approve or deny a request from the chat, the mascot's bubble or
+              <code>clawdtime agents approve ID</code>.
+            </li>
+            <li>
+              Answer a question of a session:
+              <code>clawdtime agents answer ID 2</code> picks the second choice.
+            </li>
+            <li>
+              Start a coding session for a job: “fix the failing checkout test”.
+              <code>clawdtime jobs</code> lists that work.
+            </li>
+          </ul>
         </section>
         <section>
-          <h2>Can I try it?</h2>
-          <p>
-            Access is invitation-only and operator-assisted. You need macOS 14+,
-            Node 24+, an approved Mac companion and gateway, and the intended
-            iMessage/FaceTime handset. The setup guide explains what to have
-            ready before a supervised test.
-          </p>
-          <a
-            class="button"
-            href="/guides/getting-started"
-            data-metric-action="guide"
-            >Read the setup checklist ↗</a
-          >
+          <h2>Limits</h2>
+          <ul class="checklist">
+            <li>
+              Claude Code shows its own prompt at the same time. The first
+              answer wins: in ClawdTime or in the terminal.
+            </li>
+            <li>
+              A request waits in ClawdTime for 45 seconds, or 9 minutes in away
+              mode. After that, only the terminal answers.
+            </li>
+            <li>
+              A request that ClawdTime cannot show in full is allowed only in
+              its terminal. You can still deny it from ClawdTime.
+            </li>
+            <li>The permission rules of Claude Code still apply.</li>
+          </ul>
         </section>
         <section class="related-links">
-          <h2>Related information</h2>
-          <a href="/integrations/codex">Codex integration and evidence</a
-          ><a href="/privacy">Screen access and data</a
-          ><a href="/pricing">Pilot availability and planned pricing</a>
+          <h2>More</h2>
+          <a href="/integrations/codex">Use it with Codex</a
+          ><a href="/guides/getting-started">Setup guide</a
+          ><a href="/privacy">Privacy and control</a
+          ><a
+            href="https://github.com/cherthq/clawdtime/blob/main/docs/SUPERVISOR.md"
+            >Answers to coding agents in detail</a
+          >
         </section>
       </div>
     </main>
     <footer class="site-footer section-wrap">
       <a class="wordmark" href="/">clawdtime<span class="brand-dot">_</span></a>
       <nav aria-label="Footer">
-        <a href="/integrations/codex">Codex</a
-        ><a href="/integrations/claude-code">Claude Code</a
-        ><a href="/guides/getting-started">Setup</a
+        <a href="/guides/getting-started">Setup guide</a
         ><a href="/pricing">Pricing</a><a href="/privacy">Privacy</a
+        ><a href="/integrations/claude-code">Claude Code</a
+        ><a href="/integrations/codex">Codex</a
         ><a href="https://github.com/cherthq/clawdtime" rel="noopener"
           >GitHub ↗</a
         >

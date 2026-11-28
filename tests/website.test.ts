@@ -257,7 +257,7 @@ describe("homepage install routes", () => {
 
   it("keeps em and en dashes and contact instructions out of the changed pages", async () => {
     const runtime = fixture();
-    for (const path of ["/", "/pricing", "/guides/getting-started"]) {
+    for (const path of Object.keys(websitePages)) {
       const html = await (await runtime.app.request(path)).text();
       expect(html, path).not.toMatch(/[\u2013\u2014]/);
       expect(html, path).not.toMatch(/pilot contact|contact that person/i);
@@ -265,6 +265,93 @@ describe("homepage install routes", () => {
     expect(
       readFileSync(new URL("../public/landing.js", import.meta.url), "utf8"),
     ).not.toMatch(/[\u2013\u2014]/);
+  });
+});
+
+describe("plain words for a first-time visitor", () => {
+  const visibleText = (html: string) =>
+    html
+      .replace(/<script\b[\s\S]*?<\/script>/g, " ")
+      .replace(/<svg\b[\s\S]*?<\/svg>/g, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ");
+  const section = (html: string, id: string) =>
+    html.match(
+      new RegExp(`<section\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</section>`),
+    )?.[1] ?? "";
+
+  it("leads the homepage with the benefit, the download and three things it does with examples", async () => {
+    const html = await (await fixture().app.request("/")).text();
+    const hero = html.match(
+      /<section\b[^>]*class="hero\b[^>]*>([\s\S]*?)<\/section>/,
+    )![1]!;
+    expect(visibleText(hero.match(/<h1[\s\S]*?<\/h1>/)![0]).trim()).toMatch(
+      /^Talk to your Mac\./,
+    );
+    // The download comes before the command, and the hero has no other button.
+    expect(hero.indexOf('href="/download"')).toBeLessThan(
+      hero.indexOf('id="hero-command"'),
+    );
+    expect(hero.match(/class="button\b/g)).toHaveLength(1);
+    const things = section(html, "what-it-does");
+    expect(things.match(/<article\b/g)).toHaveLength(3);
+    expect(things.match(/<q\b/g)).toHaveLength(3);
+    // The coding agent route is a later, secondary section.
+    expect(html.indexOf('id="what-it-does"')).toBeLessThan(
+      html.indexOf('id="coding-agents"'),
+    );
+    expect(html.indexOf('id="get-clawdtime"')).toBeLessThan(
+      html.indexOf('id="coding-agents"'),
+    );
+  });
+
+  it("keeps jargon off the homepage outside the coding agent section", async () => {
+    const html = await (await fixture().app.request("/")).text();
+    const text = visibleText(
+      html.replace(/<section\b[^>]*id="coding-agents"[\s\S]*?<\/section>/, ""),
+    );
+    for (const word of [
+      /\bline\b/i,
+      /pairing|paired/i,
+      /coordinator/i,
+      /walkthrough/i,
+      /\bpilot\b/i,
+      /unqualified|qualification/i,
+      /computer-use agent/i,
+    ])
+      expect(text, String(word)).not.toMatch(word);
+  });
+
+  it("offers Download in the header of every page, and no pilot or invitation wording", async () => {
+    const runtime = fixture();
+    for (const path of Object.keys(websitePages)) {
+      const html = await (await runtime.app.request(path)).text();
+      const header = html.match(
+        /<header class="site-header">([\s\S]*?)<\/header>/,
+      )![1]!;
+      expect(header, path).toContain('href="/download"');
+      expect(visibleText(html), path).not.toMatch(
+        /pilot availability|invitation|invited pilot|operator-provided|pilot contact/i,
+      );
+    }
+  });
+
+  it("gives the setup guide numbered steps for both routes, under ten each", async () => {
+    const html = (
+      await (await fixture().app.request("/guides/getting-started")).text()
+    ).replace(/<wbr \/>/g, "");
+    const lists = [
+      ...html.matchAll(/<ol class="guide-steps"[^>]*>([\s\S]*?)<\/ol>/g),
+    ].map((match) => match[1]!);
+    expect(lists).toHaveLength(2);
+    for (const list of lists) {
+      const steps = list.match(/<li\b/g)!.length;
+      expect(steps).toBeGreaterThanOrEqual(3);
+      expect(steps).toBeLessThan(10);
+    }
+    expect(lists[0]).toContain('href="/download"');
+    expect(lists[1]).toContain(installCommand);
   });
 });
 
