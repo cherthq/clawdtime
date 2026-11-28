@@ -47,6 +47,11 @@ import {
   withOwnerWords,
 } from "../connectors/computer/reach.js";
 import { mountReachCalls } from "../connectors/computer/calls-api.js";
+import {
+  adminTokenFile,
+  mountRecordingsAdmin,
+} from "../src/recordings/admin.js";
+import { Recordings, recordingsFolder } from "../src/recordings/store.js";
 import { ChatLog } from "../connectors/agents/brain.js";
 import { Memory } from "../connectors/agents/memory.js";
 import { browserFromEnvironment } from "../connectors/computer/browser.js";
@@ -727,6 +732,24 @@ const app = createTaskApp(
 // The line agent of a reach call over the Calls API: its capability for that
 // one call, then the owner's words, the stop and the end of the call.
 if (owner?.calls) mountReachCalls(app, owner.calls);
+// The admin page of the line's call recordings, with its own admin token
+// (src/recordings/admin.ts). It is off until `clawdtime recordings admin`.
+if (desktopSetup)
+  mountRecordingsAdmin(app, {
+    recordings: () => {
+      const root = recordingsFolder(process.env, homedir());
+      return root ? new Recordings(root) : null;
+    },
+    tokenFile: adminTokenFile(directory),
+    port,
+    otherTokens: () => [
+      config.operatorToken,
+      desktopSetup.config.token,
+      desktopSetup.config.sessionToken,
+      lineRuntimeConfig?.token,
+      executorConfig?.token,
+    ],
+  });
 const proactiveWatch = proactive
   ? setInterval(() => {
       void proactive.service.pump().catch(() => {
