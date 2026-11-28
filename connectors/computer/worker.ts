@@ -881,6 +881,22 @@ interface Run {
   transientWaits: number;
   /** The abort of the planner call that runs now. */
   plannerAbort?: AbortController;
+  /**
+   * The worker's own reading of the request, while it runs beside the first
+   * look and the first turn (`readAside`). Gone once it is read.
+   */
+  reading?: {
+    intent: Promise<NavigationIntent>;
+    /** True once the reading settled, whatever came of it. */
+    done: boolean;
+    abort: AbortController;
+  };
+  /**
+   * Settles once the planner goes on after the worker's own reading: the
+   * reading said "none", or a move came back to the planner. It never settles
+   * when the move ended the request. The outline's first line waits for it.
+   */
+  readGate?: { open: () => void; opened: Promise<void> };
   /** What the worker did to get moving since the last timing entry, and how long it waited. */
   recovery: string[];
   waitMs: number;
@@ -1974,6 +1990,7 @@ export class ComputerWorker implements DesktopExecutorPort {
       run.stop = true;
       // Stop does not wait for the planner, and the planner need not go on.
       run.plannerAbort?.abort();
+      run.reading?.abort.abort();
       if (run.question)
         this.finish(run, "canceled", "stopped", stoppedText, false);
       else {
@@ -2558,69 +2575,17 @@ export class ComputerWorker implements DesktopExecutorPort {
   private async loop(run: Run) {
     try {
       // A reading that came with the request stands. Else the worker reads
-      // the request itself, when its planner can.
+      // the request itself, when its planner can. The reading is a call of
+      // the language model: it runs beside the first look and the first turn
+      // of the planner, and no input goes out before it is in
+      // (`readAside`). A reading that is in at once, as a reader in code,
+      // goes first, as before.
       if (run.navigation === undefined && this.planner.navigation) {
-        const controller = new AbortController();
-        run.plannerAbort = controller;
-        try {
-          const intent = await Promise.race([
-            within(
-              this.reading(run.goal, controller.signal),
-              Math.max(1, run.deadline - this.now()),
-            ),
-            run.halted,
-          ]);
-          if (this.halted(run) || !intent) return;
-          run.navigation = navigationIntentSchema.parse(intent);
-        } catch {
-          if (this.halted(run)) return;
-          return this.finish(
-            run,
-            "blocked",
-            "navigation_unavailable",
-            "I could not interpret the navigation request reliably. Nothing was sent; please ask again.",
-          );
-        } finally {
-          // The worker waits no more for this reading, whatever came of it.
-          controller.abort();
-          if (run.plannerAbort === controller) delete run.plannerAbort;
-        }
-        if (run.navigation.kind === "clarify")
-          return this.finish(
-            run,
-            "blocked",
-            "navigation_ambiguous",
-            run.navigation.question,
-          );
-      }
-      // Only an app that the hands refused to open comes back from here to
-      // the planner. Every other end of a navigation request is final.
-      if (
-        run.navigation &&
-        run.navigation.kind !== "none" &&
-        run.navigation.kind !== "clarify"
-      ) {
-        if (run.hold) {
-          run.hold = false;
-          delete run.approval;
-          const reply = await this.ask(
-            run,
-            "continue",
-            pausedText,
-            stoppedText,
-            "hold",
-          );
-          if (reply.kind !== "yes") return;
-        }
-        // The person's newest words win over the reading of the first ones:
-        // with words added before the move went out, the planner plans.
-        if (run.guidance.length > 0) run.navigation = { kind: "none" };
-        if (
-          run.navigation.kind !== "none" &&
-          (await this.navigate(run, run.navigation)) !== "plan"
-        )
+        this.readAside(run);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (run.reading?.done && (await this.afterReading(run)) === "over")
           return;
-      }
+      } else if ((await this.moveFirst(run)) === "over") return;
       for (;;) {
         if (this.halted(run)) return;
         // The pause comes at once, before the next look, plan, or step-limit end.
@@ -2808,6 +2773,15 @@ export class ComputerWorker implements DesktopExecutorPort {
         }
         this.notLoaded(run);
         this.remind(run);
+        // A reading that came in during the look goes first: a move needs no turn.
+        if (run.reading?.done) {
+          const read = await this.afterReading(run);
+          if (read === "over") return;
+          if (read === "moved") {
+            run.fresh = false;
+            continue;
+          }
+        }
         const planFrom = this.now();
         // Plan: a goal that names two apps or more waits for its outline once,
         // before its first turn. With no plan, the first turns kept nothing
@@ -2892,6 +2866,16 @@ export class ComputerWorker implements DesktopExecutorPort {
             delete run.wake;
             controller.abort();
             if (run.plannerAbort === controller) delete run.plannerAbort;
+          }
+        }
+        // The turn ran beside the reading of the request. Nothing of it goes
+        // out before the reading is in, and a move drops it.
+        if (run.reading) {
+          const read = await this.afterReading(run);
+          if (read === "over") return;
+          if (read === "moved") {
+            run.fresh = false;
+            continue;
           }
         }
         if (failure) {
@@ -3937,6 +3921,108 @@ export class ComputerWorker implements DesktopExecutorPort {
     }
   }
   /**
+   * Starts the worker's own reading of the request, and does not wait for
+   * it. The first look and the first turn of the planner run beside it: they
+   * send nothing. The loop reads what came (`afterReading`) before any input,
+   * and a reading that says to move wakes a turn that still runs, so the move
+   * does not wait for it. The time of the reading, about one turn of the
+   * model, is no longer added to the first action of every request.
+   */
+  private readAside(run: Run) {
+    const abort = new AbortController();
+    let open = () => {};
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    run.readGate = { open, opened };
+    const intent = within(
+      this.reading(run.goal, abort.signal),
+      Math.max(1, run.deadline - this.now()),
+    );
+    const reading: NonNullable<Run["reading"]> = { intent, done: false, abort };
+    run.reading = reading;
+    const over = () => abort.abort();
+    void run.halted.then(over, over);
+    intent.then(
+      (value) => {
+        reading.done = true;
+        if (value?.kind !== "none") run.wake?.();
+      },
+      () => {
+        reading.done = true;
+        run.wake?.();
+      },
+    );
+  }
+
+  /**
+   * What the reading of the request says, once it is in: work for the
+   * planner ("none"), a move that the hands made and that came back to the
+   * planner ("moved": the turn beside it is old), or the end of the request.
+   */
+  private async afterReading(run: Run): Promise<"none" | "moved" | "over"> {
+    const reading = run.reading!;
+    delete run.reading;
+    try {
+      const intent = await Promise.race([reading.intent, run.halted]);
+      if (this.halted(run) || !intent) return "over";
+      run.navigation = navigationIntentSchema.parse(intent);
+    } catch {
+      if (this.halted(run)) return "over";
+      this.finish(
+        run,
+        "blocked",
+        "navigation_unavailable",
+        "I could not interpret the navigation request reliably. Nothing was sent; please ask again.",
+      );
+      return "over";
+    } finally {
+      // The worker waits no more for this reading, whatever came of it.
+      reading.abort.abort();
+    }
+    if (run.navigation.kind === "clarify") {
+      this.finish(
+        run,
+        "blocked",
+        "navigation_ambiguous",
+        run.navigation.question,
+      );
+      return "over";
+    }
+    const moves = run.navigation.kind !== "none";
+    if ((await this.moveFirst(run)) === "over") return "over";
+    run.readGate?.open();
+    return moves && run.step > 0 ? "moved" : "none";
+  }
+
+  /**
+   * A move that the reading names goes first, before any turn of the
+   * planner. Only an app that the hands refused to open comes back from here
+   * to the planner ("plan"). Every other end of a move is final ("over").
+   */
+  private async moveFirst(run: Run): Promise<"plan" | "over"> {
+    const move = run.navigation;
+    if (!move || move.kind === "none" || move.kind === "clarify") return "plan";
+    if (run.hold) {
+      run.hold = false;
+      delete run.approval;
+      const reply = await this.ask(
+        run,
+        "continue",
+        pausedText,
+        stoppedText,
+        "hold",
+      );
+      if (reply.kind !== "yes") return "over";
+    }
+    // The person's newest words win over the reading of the first ones:
+    // with words added before the move went out, the planner plans.
+    if (run.guidance.length > 0) {
+      run.navigation = { kind: "none" };
+      return "plan";
+    }
+    return (await this.navigate(run, move)) === "plan" ? "plan" : "over";
+  }
+
+  /**
    * The planner's reading of the request, with the signal of the worker. It
    * reads as the planner in front does: a request that only opens one web
    * address needs no reading. The planner behind gets the signal.
@@ -4860,7 +4946,13 @@ export class ComputerWorker implements DesktopExecutorPort {
           ? TaskPlan.from(Array.isArray(outline) ? outline : outline.subgoals)
           : null;
         if (plan) run.plan = plan;
-        run.opening.outlined(Array.isArray(outline) ? undefined : outline?.say);
+        const say = Array.isArray(outline) ? undefined : outline?.say;
+        // The first line waits for the reading of the request: a move says its own.
+        if (run.readGate)
+          void run.readGate.opened.then(() => {
+            if (this.current === run) run.opening.outlined(say);
+          });
+        else run.opening.outlined(say);
       },
       // What the planner threw can hold what was sent to it: it is not passed on.
       () => {
