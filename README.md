@@ -125,8 +125,9 @@ evals open no window and touch nothing on your screen.
 | gemini-3.8-flash       | 62/76                         | 4.6 s         | 22/23           | 896 s       |
 
 On a real Mac, 42 of 44 apps passed a read-only task. The other 2 were
-correct stops: a sign-in page, and Mail with no account. 11 of 14 tasks of
-real work were right. 2 of the misses were apps that the Mac does not have.
+correct stops: a sign-in page, and Mail with no account. 9 of 14 tasks of
+real work were right. Of the 5 misses, 2 were pauses because the owner used
+the Mac, and 1 was a correct question before an overwrite.
 Run the evals with `npm run eval:computer:planner` and
 `npm run eval:computer:request`. Add `--check` to test the checks with no
 model and no key.
